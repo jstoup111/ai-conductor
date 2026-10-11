@@ -121,6 +121,19 @@ async function readRewriteMap(worktree: string): Promise<{ map: Record<string, s
   }
 }
 
+async function hasLeafMovedMarker(slug: string, git: GitRunner): Promise<boolean | 'git-error'> {
+  const marker = await runGit(git, ['show-ref', '--verify', '--quiet', `refs/conductor/${slug}/leaf-moved`]);
+  if (!marker || (marker.exitCode !== 0 && marker.exitCode !== 1)) return 'git-error';
+  return marker.exitCode === 0;
+}
+
+async function writeLeafMovedMarker(slug: string, git: GitRunner): Promise<boolean> {
+  const leaf = await runGit(git, ['rev-parse', '--verify', `refs/heads/${leafBranchFor(slug)}`]);
+  if (!leaf || leaf.exitCode !== 0 || !leaf.stdout.trim()) return false;
+  const written = await runGit(git, ['update-ref', `refs/conductor/${slug}/leaf-moved`, leaf.stdout.trim()]);
+  return written?.exitCode === 0;
+}
+
 /**
  * Produces the local comparison base for a child region. This intentionally
  * reads only local refs: child branches and their closure refs are daemon
@@ -236,7 +249,13 @@ export async function resolveActiveChild(
   if (closed === 'git-error') return { kind: 'git-error' };
   const rewrites = await readRewriteMap(worktree);
   if (rewrites === 'git-error') return { kind: 'git-error' };
+  let leafMoved = await hasLeafMovedMarker(slug, git);
+  if (leafMoved === 'git-error') return { kind: 'git-error' };
   let leafMovePending = false;
+  const lastClosed = closed.reduce<ClosedChild | undefined>((last, closure) => (
+    last === undefined || positions.indexOf(closure.child) > positions.indexOf(last.child) ? closure : last
+  ), undefined);
+  let lastClosureRewriteOnLeaf = false;
 
   for (const closure of closed) {
     const branch = childBranchFor(slug, closure.child);
@@ -265,10 +284,13 @@ export async function resolveActiveChild(
     const nextExists = await runGit(git, ['show-ref', '--verify', '--quiet', `refs/heads/${nextBranch}`]);
     if (!nextExists || (nextExists.exitCode !== 0 && nextExists.exitCode !== 1)) return { kind: 'git-error' };
     if (nextExists.exitCode === 1 && next !== positions.at(-1)) continue;
-    const ancestry = await runGit(git, ['merge-base', '--is-ancestor', resolveThroughMap(closure.tip, rewrites.map), `refs/heads/${nextBranch}`]);
+    const closureImage = resolveThroughMap(closure.tip, rewrites.map);
+    const ancestry = await runGit(git, ['merge-base', '--is-ancestor', closureImage, `refs/heads/${nextBranch}`]);
     if (!ancestry || (ancestry.exitCode !== 0 && ancestry.exitCode !== 1)) return { kind: 'git-error' };
+    if (next === positions.at(-1) && ancestry.exitCode === 0 && lastClosed?.child === closure.child &&
+      Object.hasOwn(rewrites.map, closure.tip)) lastClosureRewriteOnLeaf = true;
     if (ancestry.exitCode === 1) {
-      if (next === positions.at(-1) && !rewrites.present) leafMovePending = true;
+      if (next === positions.at(-1) && !leafMoved) leafMovePending = true;
       else if (next !== positions.at(-1)) return { kind: 'divergent', child: closure.child };
     }
   }
@@ -278,9 +300,13 @@ export async function resolveActiveChild(
   const child = positions.slice(0, -1).find((position) => !closedSet.has(position)) ?? leaf;
   const isLeaf = child === leaf;
   if (isLeaf) {
+    if (!leafMoved && !leafMovePending && lastClosureRewriteOnLeaf) {
+      if (!await writeLeafMovedMarker(slug, git)) return { kind: 'git-error' };
+      leafMoved = true;
+    }
     return {
       kind: 'active', child, position: child, isLeaf, branch: leafBranchFor(slug),
-      ...(leafMovePending || rewrites.present ? { leafMovePending } : {}),
+      ...(leafMovePending || leafMoved ? { leafMovePending } : {}),
     };
   }
   const branch = childBranchFor(slug, child);

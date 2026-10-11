@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
+// Covers: task:4, task:5, task:20, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -235,7 +235,7 @@ describe('resolveActiveChild', () => {
     await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
   });
 
-  it('allows a halt-record-only commit after closure and clears leafMovePending after a leaf rewrite map', async () => {
+  it('writes the in-flight leaf marker when the leaf already contains the last closure rewrite image', async () => {
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);
     const closure = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
@@ -256,6 +256,28 @@ describe('resolveActiveChild', () => {
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
       kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', leafMovePending: false,
+    });
+    await expect(git(['rev-parse', '--verify', 'refs/conductor/demo/leaf-moved']))
+      .resolves.toBe(`${translatedClosure}\n`);
+  });
+
+  it('keeps the leaf move pending when a rewrite map exists but the leaf was left in place', async () => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2]);
+    const closure = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', closure]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
+    await git(['checkout', '-q', 'main']);
+    await writeFile(join(repository, 'base-refresh.txt'), 'new base\n');
+    await git(['add', 'base-refresh.txt']);
+    await git(['commit', '-qm', 'base refresh image']);
+    const translatedClosure = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['checkout', '-q', 'feat/c1/demo']);
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'rebase-rewrites.json'), JSON.stringify({ [closure]: translatedClosure }));
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', leafMovePending: true,
     });
   });
 });

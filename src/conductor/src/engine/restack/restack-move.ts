@@ -1,4 +1,5 @@
 import type { ChildId } from '../child-context.js';
+import { leafBranchFor } from '../feature-branch-identity.js';
 import { writeHaltMarker, type HaltMarkerWriteResult } from '../halt-marker.js';
 import {
   confirmUntrackedRebasePaths,
@@ -204,6 +205,15 @@ function moveLines(moves: readonly RestackMoveRef[]): string[] {
   return moves.map((move) => `update ${move.ref} ${move.newSha} ${move.oldSha}`);
 }
 
+function leafMovedLine(journal: StoredRestackJournal, moves: readonly RestackMoveRef[]): string | undefined {
+  const leaf = journal.journal.ranges.find((range) => range.kind === 'leaf-active');
+  if (!leaf) return undefined;
+  const leafRef = `refs/heads/${leafBranchFor(journal.slug)}`;
+  const move = moves.find((candidate) => candidate.child === leaf.child && candidate.ref === leafRef);
+  if (!move || move.oldSha === move.newSha) return undefined;
+  return `update refs/conductor/${journal.slug}/leaf-moved ${move.newSha}`;
+}
+
 function oldValueRef(stderr: string): string | undefined {
   const matched = /cannot lock ref '([^']+)'/.exec(stderr);
   return matched?.[1];
@@ -288,10 +298,12 @@ export async function applyRestackMove(
     return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
   }
   const retries = Math.max(0, dependencies.retries ?? 2);
+  const marker = leafMovedLine(journal, moves);
   let lastLock = '';
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const moved = await runGit(git, ['update-ref', '--stdin'], transaction([
       ...moveLines(moves),
+      ...(marker === undefined ? [] : [marker]),
       `update ${journalRefFor(journal.slug)} ${nextBlob} ${journal.blob}`,
     ]));
     if (moved?.exitCode === 0) return { kind: 'moved', journal: { slug: journal.slug, blob: nextBlob, journal: next } };
