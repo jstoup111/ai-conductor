@@ -430,7 +430,7 @@ describe('runRestack (real local Git)', () => {
     }
   });
 
-  it('returns unavailable without a journal or ref move when the cursor rejects an active range outside its closed parent', async () => {
+  it('halts needs-human with range-not-ancestor and no journal or ref move when the cursor rejects an active range outside its closed parent', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'restack-executor-refusal-'));
     repositories.push(repo);
     const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -463,11 +463,14 @@ describe('runRestack (real local Git)', () => {
 
     const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: makeGitRunner(repo) });
 
-    expect(result).toEqual({ kind: 'unavailable', detail: 'cannot resolve restack cursor: divergent' });
-    expect(refusals).toEqual([]);
-    expect((await git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).toBe(active);
+    // Task 8: a diverged stack halts needs-human through haltRestack naming the child.
+    expect(result).toEqual({ kind: 'halted' });
+    expect(refusals).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'range-not-ancestor', child: 2 })]);
+    expect((await git(['merge-base', '--is-ancestor', active, 'feat/c2/demo']).then(() => true))).toBe(true);
+    expect((await git(['diff', '--name-only', active, 'feat/c2/demo'])).stdout.trim().split('\n').filter(Boolean)
+      .every((path) => path.startsWith('.docs/halted/'))).toBe(true);
     await expect(git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
-    await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   });
 
   it('discards halt-record-only commits after a closed child while retaining them in its reflog', async () => {

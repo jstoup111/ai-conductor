@@ -37,6 +37,9 @@ async function haltRecordStack(mixed: boolean) {
   if (mixed) await subject.write('src/c.ts', 'lower child source\n');
   await subject.git(['add', '-A']);
   await subject.git(['commit', '-qm', 'lower child halt record']);
+  // Appended work makes child 1 a repair origin (Task 5): a halt record alone
+  // keeps a moved child out of every replay range.
+  await subject.commit('C1 appended', 'c1-appended.txt', 'appended\n');
   await subject.git(['checkout', '-q', 'feat/daemon-demo']);
   await sealStack(subject.repo);
   return subject;
