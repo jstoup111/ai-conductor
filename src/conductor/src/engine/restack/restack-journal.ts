@@ -238,7 +238,9 @@ export async function readRestackJournal(
 ): Promise<ReadRestackJournalResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const ref = journalRefFor(slug);
-  const resolved = await runGit(git, ['rev-parse', '--verify', ref]);
+  // A deleted journal is the normal post-recovery condition. `-q` gives it
+  // Git's distinct exit status 1 instead of an error diagnostic/128.
+  const resolved = await runGit(git, ['rev-parse', '-q', '--verify', ref]);
   if (resolved?.exitCode === 1) return { kind: 'missing' };
   const blob = resolved?.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
   if (!blob) return { kind: 'unreadable', blob: '' as CommitSha };
