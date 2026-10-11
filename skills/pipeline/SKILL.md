@@ -392,6 +392,8 @@ this marker; a missing or malformed line 1 blocks the dispatch. Provide the eval
 Do NOT send full story files, full plan files, or unrelated source files. The evaluator
 runs the full 3-stage review from the `code-review` skill on this scoped context.
 
+Immediately before dispatching the evaluator, run `ai-conductor closeout-event start evaluator`.
+
 **Evaluator frequency + model scaling by complexity tier:**
 
 | Tier | Intermediate batches | Final batch | Intermediate model | Final model |
@@ -427,7 +429,7 @@ atomically before advancing one single token further:
 3. Stat-check `test -s .pipeline/audit-trail/batch-N/review.json` — non-empty file must
    exist before the next batch starts
 4. Record the completed `evaluator` closeout obligation with
-   `ai-conductor closeout-event evaluator <started-at-ms> <ended-at-ms>`, then verify that
+   `ai-conductor closeout-event end evaluator`, then verify that
    `.pipeline/pipeline-events.jsonl` contains a parseable `pipeline_closeout` record whose
    `obligation` is exactly `evaluator`. An event for another obligation does not satisfy this check.
 
@@ -435,7 +437,9 @@ A missing or empty `review.json` remains an independent hard gate: the pipeline 
 dispatch the evaluator again rather than advancing. A missing, malformed, or non-matching
 closeout record is a second hard gate: the pipeline MUST halt with
 `Batch N blocked: missing recorded closeout event for evaluator` and record the matching event
-before advancing. Do NOT trust "the evaluator ran successfully in the transcript" as evidence —
+before advancing. If `end` is refused because no start is open, halt with that message; recover by
+running `start`, re-dispatching the evaluator, and running `end` — never record a back-to-back
+start and end. Do NOT trust "the evaluator ran successfully in the transcript" as evidence —
 only the required files on disk count. Past runs have silently bypassed 4+ evaluator gates
 because the subagent result was summarized back to the orchestrator but the write step was
 skipped; the file checks are the only reliable safeguard.
