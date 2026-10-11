@@ -251,9 +251,9 @@ export async function checkCascadeCap(
   worktree: string,
   slug: string,
   originatingChildren: readonly ChildId[],
-  limit = MAX_RESTACK_CASCADES_PER_CHILD,
   dependencies: CascadeCapDependencies = {},
 ): Promise<CascadeCapResult> {
+  const limit = MAX_RESTACK_CASCADES_PER_CHILD;
   const state = await readCascadeCounts(worktree, slug, dependencies);
   const first = [...new Set(originatingChildren)].sort((left, right) => left - right)[0];
   if (first === undefined) return { kind: 'clear', counts: state.kind === 'counts' ? state.counts : emptyCounts(), limit };

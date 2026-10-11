@@ -37,11 +37,8 @@ import { cleanClearedAbortedRestackJournal } from './restack-recovery.js';
 import {
   cascadeUpdateLines,
   checkCascadeCap,
-  MAX_RESTACK_CASCADES_PER_CHILD,
-  readCascadeCounts,
-  type ReadCascadeCountsResult,
 } from './cascade-cap.js';
-import { readKickbackLedger, recordKickbackCapEvidence } from '../kickback-ledger.js';
+import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
   isLegalJournalTransition,
@@ -238,20 +235,6 @@ export async function transitionAppliedWithCascade(
   return { slug: journal.slug, blob, journal: next };
 }
 
-type RestackCascadeLimit =
-  | { readonly kind: 'limit'; readonly limit: number }
-  | Extract<ReadCascadeCountsResult, { readonly kind: 'unreadable' }>;
-
-async function restackCascadeLimit(worktree: string, slug: string, activeChild: ChildId): Promise<RestackCascadeLimit> {
-  const cascades = await readCascadeCounts(worktree, slug);
-  if (cascades.kind === 'unreadable') return cascades;
-  const durableLimit = cascades.counts.limits?.[String(activeChild)];
-  if (durableLimit !== undefined) return { kind: 'limit', limit: durableLimit };
-  const ledger = await readKickbackLedger(worktree, activeChild);
-  if (ledger.unreadable) throw new Error('cannot read active child kickback ledger for restack cascade cap');
-  return { kind: 'limit', limit: ledger.gates.restack?.effectiveLimit ?? MAX_RESTACK_CASCADES_PER_CHILD };
-}
-
 async function cleanAppliedJournal(journal: StoredRestackJournal, git: GitRunner): Promise<void> {
   const lines = [
     `delete ${journalRefFor(journal.slug)} ${journal.blob}`,
@@ -367,16 +350,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     if (plan.kind === 'unavailable') throw new Error(plan.detail);
 
     if (options.cause === 'feature-repair') {
-      const configuredLimit = await restackCascadeLimit(options.worktree, options.slug, active.child);
-      const cap = configuredLimit.kind === 'unreadable'
-        ? {
-            kind: 'exhausted' as const,
-            child: [...new Set(plan.originating)].sort((left, right) => left - right)[0] ?? active.child,
-            count: MAX_RESTACK_CASCADES_PER_CHILD,
-            limit: MAX_RESTACK_CASCADES_PER_CHILD,
-            detail: `${configuredLimit.detail} (${configuredLimit.ref})`,
-          }
-        : await checkCascadeCap(options.worktree, options.slug, plan.originating, configuredLimit.limit, { git });
+      const cap = await checkCascadeCap(options.worktree, options.slug, plan.originating, { git });
       if (cap.kind === 'exhausted') {
         const entry = await recordKickbackCapEvidence(options.worktree, 'restack', {
           consumed: cap.count,

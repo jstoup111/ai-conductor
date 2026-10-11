@@ -1,13 +1,15 @@
+// Covers: task:rem-as-built-R24
 // Covers: task:22
 // Covers: task:rem-prd-audit-R19
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import {
@@ -21,6 +23,12 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
+const envelopeFilesystem = {
+  readFile: (path: string) => readFile(path, 'utf8'),
+  mkdir: (path: string) => mkdir(path, { recursive: true }).then(() => undefined),
+  writeFile: (path: string, contents: string) => writeFile(path, contents, 'utf8'),
+  rename,
+};
 
 afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
@@ -52,12 +60,21 @@ async function fixture() {
   await commit('repair child', 'repair.txt');
   await git(['checkout', '-qb', 'feat/daemon-demo', closed]);
   await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
+  await writeCoverageBindingEnvelope(repo, {
+    version: 1,
+    slug: 'demo',
+    runId: 'run-1',
+    status: 'done',
+    entries: [],
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
+    storyOwnership: { S1: 1, S2: 2 },
+  }, envelopeFilesystem);
   return { repo, git };
 }
 
-async function writeCascadeCounts(repo: string, counts: Record<string, number>) {
+async function writeCascadeCounts(repo: string, counts: Record<string, number>, limits?: Record<string, number>) {
   const git = makeGitRunner(repo);
-  const blob = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ version: 1, counts }) })).stdout.trim();
+  const blob = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ version: 1, counts, ...(limits === undefined ? {} : { limits }) }) })).stdout.trim();
   await git(['update-ref', cascadesRefFor('demo'), blob]);
 }
 
@@ -83,7 +100,7 @@ describe('restack cascade cap (real local Git)', () => {
     const blob = (await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], { input: '{not-json' })).stdout.trim();
     await subject.git(['update-ref', cascadesRefFor('demo'), blob]);
     await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'unreadable', ref: cascadesRefFor('demo') });
-    await expect(checkCascadeCap(subject.repo, 'demo', [child(1)], 3)).resolves.toMatchObject({ kind: 'exhausted', child: 1, count: 3, limit: 3 });
+    await expect(checkCascadeCap(subject.repo, 'demo', [child(1)])).resolves.toMatchObject({ kind: 'exhausted', child: 1, count: 3, limit: 3 });
   });
 
   it('halts before journal creation when an originating child reaches its cap, persisting child-scoped evidence and the refusal event', async () => {
@@ -110,6 +127,27 @@ describe('restack cascade cap (real local Git)', () => {
     expect(halt).toContain('3/3 consumed');
     await expect(readKickbackLedger(subject.repo, child(2))).resolves.toMatchObject({
       gates: { restack: { capEvidence: { allowance: 'restacks', consumed: 3, limit: 3 } } },
+    });
+  });
+
+  it('keeps child 1 at its default cascade cap when child 2 has a raised limit', async () => {
+    const subject = await fixture();
+    await writeCascadeCounts(subject.repo, { 1: 3 }, { 2: 5 });
+    const records: Array<{ type: string; reason?: string; child?: number }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('restack_refused', (event) => { records.push(event); });
+
+    const result = await runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      events,
+      git: makeGitRunner(subject.repo),
+    });
+
+    expect({ result, records }).toMatchObject({
+      result: { kind: 'halted' },
+      records: [{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }],
     });
   });
 
