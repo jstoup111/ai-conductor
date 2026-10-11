@@ -26,7 +26,13 @@ const FEATURE_TAG_DISPLAY_LENGTH = 24;
 const featureOwnership = new AsyncLocalStorage<string>();
 const projectDiagnosticOwnership: OperationalLogOwnership = Object.freeze({ scope: 'project' });
 
-type DaemonActivityLogger = (message: string, featureOwned?: boolean, ownership?: OperationalLogOwnership) => void;
+type DaemonActivityLogger = (
+  message: string,
+  featureOwned?: boolean,
+  ownership?: OperationalLogOwnership,
+  /** Raw source text for structured capture; display formatting stays in `message`. */
+  capturedMessage?: string,
+) => void;
 
 /** Return the immutable project ownership used outside a feature executor. */
 export function daemonProjectDiagnosticOwnership(): OperationalLogOwnership {
@@ -125,14 +131,16 @@ export function createDaemonModeLogger(sinks: {
   const lastStatus = new Map<string, string>();
   const formatActivityLine = sinks.formatActivityLine ?? formatDaemonActivityLine;
 
-  return (msg: string, featureOwned = false, ownership?: OperationalLogOwnership) => {
+  return (msg: string, featureOwned = false, ownership?: OperationalLogOwnership, capturedMessage?: string) => {
     // Subprocess output is commonly a single captured string containing many
     // lines. Attribute and persist each physical line independently: otherwise
     // only the first one receives the daemon/feature prefix and timestamp.
     const lines = msg.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
-    for (const lineMessage of lines) {
-      sinks.onMessage?.(lineMessage, ownership ?? captureDaemonDiagnosticOwnership());
+    const capturedLines = (capturedMessage ?? msg).split(/\r?\n/);
+    if (capturedLines.at(-1) === '') capturedLines.pop();
+    for (const [index, lineMessage] of lines.entries()) {
+      sinks.onMessage?.(capturedLines[index] ?? lineMessage, ownership ?? captureDaemonDiagnosticOwnership());
       writeDaemonMessage(lineMessage, featureOwned, lastStatus, formatActivityLine, sinks);
     }
   };
@@ -199,7 +207,7 @@ export function createFeatureDaemonLogger(
   return (message) => {
     const lines = message.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
-      for (const line of lines) baseLog(`${tag} ${line}`, true, ownership);
+      for (const line of lines) baseLog(`${tag} ${line}`, true, ownership, line);
   };
 }
 

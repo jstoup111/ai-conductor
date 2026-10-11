@@ -21,6 +21,7 @@ import { allInstalledProviderDiscoveryRunner } from './engine/boot-test-helpers.
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type WireDaemonOtel = typeof import('../src/engine/otel/wire.js').wireDaemonOtel;
+type WireOtelLogs = typeof import('../src/engine/otel/wire.js').wireOtelLogs;
 type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
 type HarnessConfig = import('../src/types/config.js').HarnessConfig;
 type LoadMergedConfig = typeof import('../src/engine/config.js').loadMergedConfig;
@@ -40,10 +41,12 @@ const fixture = vi.hoisted(() => ({
   constructorError: null as Error | null,
   sameStopPromise: false,
   emitOtelEvents: false,
+  emitOperationalDiagnostic: false,
   runnerSessionIds: [] as string[],
 }));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
 const wireDaemonOtel = vi.hoisted(() => vi.fn<WireDaemonOtel>(() => null));
+const wireOtelLogs = vi.hoisted(() => vi.fn<WireOtelLogs>(async () => null));
 const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
 const resolveEngineVersion = vi.hoisted(() => vi.fn<ResolveEngineVersion>(() => 'dev'));
 const resolveHarnessVersion = vi.hoisted(() => vi.fn<ResolveHarnessVersion>(async () => '0.0.0'));
@@ -51,7 +54,7 @@ const buildExporters = vi.hoisted(() => vi.fn<BuildExporters>());
 
 vi.mock('../src/engine/otel/wire.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/otel/wire.js')>();
-  return { ...actual, wireOtelVisualizer, wireDaemonOtel };
+  return { ...actual, wireOtelVisualizer, wireDaemonOtel, wireOtelLogs };
 });
 vi.mock('../src/engine/otel/transport.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/otel/transport.js')>();
@@ -107,6 +110,9 @@ vi.mock('../src/engine/daemon-runner.js', async (importOriginal) => {
             await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
             await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
             await events.emit({ type: 'feature_complete', featureDesc: 'fake feature complete' });
+          }
+          if (fixture.emitOperationalDiagnostic) {
+            (scope.log as (message: string) => void)('feature source diagnostic');
           }
           await events.emit({ type: 'loop_halt', reason: 'fake HALT' });
           return scope;
@@ -173,11 +179,14 @@ beforeEach(async () => {
   fixture.constructorError = null;
   fixture.sameStopPromise = false;
   fixture.emitOtelEvents = false;
+  fixture.emitOperationalDiagnostic = false;
   fixture.runnerSessionIds = [];
   loadMergedConfig.mockClear();
   wireOtelVisualizer.mockClear();
   wireDaemonOtel.mockReset();
   wireDaemonOtel.mockReturnValue(null);
+  wireOtelLogs.mockReset();
+  wireOtelLogs.mockResolvedValue(null);
   buildExporters.mockReset();
   resolveEngineVersion.mockReset();
   resolveEngineVersion.mockReturnValue('dev');
@@ -237,6 +246,45 @@ async function dispatchWithSessionId(
 }
 
 describe('daemon OTel visualizer wiring', () => {
+  it('attaches one root log owner before forwarded lifecycle and feature diagnostics without changing daemon-log output', async () => {
+    const captured: Array<{ type: string; featureSlug?: string; body?: string; ownership?: unknown }> = [];
+    const stop = vi.fn(async () => {});
+    wireOtelLogs.mockImplementation(async (_config, _context, rootEvents) => {
+      rootEvents.on('step_started', (event) => { captured.push(event); });
+      rootEvents.on('step_completed', (event) => { captured.push(event); });
+      rootEvents.on('feature_complete', (event) => { captured.push(event); });
+      rootEvents.on('operational_log', (event) => { captured.push(event); });
+      return { flush: async () => {}, stop };
+    });
+    fixture.emitOtelEvents = true;
+    fixture.emitOperationalDiagnostic = true;
+
+    const { repo } = await dispatchWithSessionId(undefined, {
+      otel: {
+        exporter: 'otlp',
+        endpoint: 'http://collector.invalid:4318',
+        logs: { enabled: true },
+      },
+    } as HarnessConfig);
+
+    expect(wireOtelLogs).toHaveBeenCalledTimes(1);
+    expect(wireOtelLogs.mock.calls[0]?.[2]).not.toBe(fixture.scopes[0]?.events);
+    expect(captured).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'step_started' }),
+      expect.objectContaining({ type: 'step_completed' }),
+      expect.objectContaining({ type: 'feature_complete' }),
+      expect.objectContaining({
+        type: 'operational_log',
+        body: 'feature source diagnostic',
+        ownership: { scope: 'feature', featureSlug: 'feature-a' },
+      }),
+    ]));
+    expect(await readFile(join(repo, '.daemon', 'daemon.log'), 'utf8')).toContain(
+      'feature source diagnostic',
+    );
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it('exports the daemon module engine identity for source and installed builds', async () => {
     const daemonModuleDirectory = dirname(fileURLToPath(new URL('../src/daemon-cli.ts', import.meta.url)));
     const engineVersions: unknown[] = [];

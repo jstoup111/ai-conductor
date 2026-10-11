@@ -1457,18 +1457,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     slug: string,
     worktreeRoot: string,
     dispatchId: string,
+    eventTarget: ConductorEventEmitter,
   ): Promise<ProviderExecutionContext> => {
-    const scopedEvents = new ConductorEventEmitter();
     const scopedLog = createFeatureDaemonLogger(
       slug,
-      (message, _featureOwned, ownership) => log(message, true, ownership),
+      (message, _featureOwned, ownership, capturedMessage) => log(message, true, ownership, capturedMessage),
       formatDaemonFeatureTag(slug),
     );
-    scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
-    subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
-    const providerExecution = createProviderExecution(scopedEvents, scopedLog);
+    // Recovery work has an existing feature persistence/forwarding scope. Emit
+    // through that scope rather than a detached bus: its local ledger remains
+    // canonical and the forwarded copy is what the daemon-root log owner sees.
+    eventTarget.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
+    eventTarget.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
+    eventTarget.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
+    subscribeRecoverySessionOccurrences(eventTarget, scopedLog);
+    const providerExecution = createProviderExecution(eventTarget, scopedLog);
     const provider = providerExecution.configuredProviders[0];
     if (!provider) throw new Error('daemon recovery dispatch requires a configured provider');
     const managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
@@ -1511,7 +1514,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (!featureLog) {
       featureLog = createFeatureDaemonLogger(
         slug,
-        (message, _featureOwned, ownership) => log(message, true, ownership),
+        (message, _featureOwned, ownership, capturedMessage) => log(message, true, ownership, capturedMessage),
         formatDaemonFeatureTag(slug),
       );
       featureLogs.set(slug, featureLog);
@@ -2812,7 +2815,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   featureEvents,
                   createFeatureDaemonLogger(
                     entry.slug,
-                    (message, _featureOwned, ownership) => log(message, true, ownership),
+                    (message, _featureOwned, ownership, capturedMessage) => log(message, true, ownership, capturedMessage),
                     formatDaemonFeatureTag(entry.slug),
                   ),
                 );
@@ -2842,6 +2845,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                           entry.slug,
                           ctx.projectRoot,
                           dispatchId,
+                          featureEvents,
                         );
                         const selectedRuntime = providerExecution.runtimes.get(
                           providerExecution.configuredProviders[0],
@@ -2858,7 +2862,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                             providerExecution,
                             log: createFeatureDaemonLogger(
                               entry.slug,
-                              (message, _featureOwned, ownership) => log(message, true, ownership),
+                              (message, _featureOwned, ownership, capturedMessage) => log(message, true, ownership, capturedMessage),
                               formatDaemonFeatureTag(entry.slug),
                             ),
                           },
@@ -2919,7 +2923,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 featureEvents,
                 createFeatureDaemonLogger(
                   entry.slug,
-                  (message, _featureOwned, ownership) => log(message, true, ownership),
+                  (message, _featureOwned, ownership, capturedMessage) => log(message, true, ownership, capturedMessage),
                   formatDaemonFeatureTag(entry.slug),
                 ),
               );
@@ -2956,6 +2960,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                           ctx.entry.slug,
                           ctx.worktreePath,
                           dispatchId,
+                          featureEvents,
                         );
                         const selectedRuntime = providerExecution.runtimes.get(
                           providerExecution.configuredProviders[0],
@@ -2972,7 +2977,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                             providerExecution,
                             log: createFeatureDaemonLogger(
                               ctx.entry.slug,
-                              (message, _featureOwned, ownership) => log(message, true, ownership),
+                              (message, _featureOwned, ownership, capturedMessage) => log(message, true, ownership, capturedMessage),
                               formatDaemonFeatureTag(ctx.entry.slug),
                             ),
                           },

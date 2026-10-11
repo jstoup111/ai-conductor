@@ -296,6 +296,24 @@ describe('engine/daemon-log', () => {
       ]);
       expect(persisted).toEqual(live);
     });
+
+    it('captures the unformatted source text while retaining feature-tagged local output', () => {
+      const live: string[] = [];
+      const captured: string[] = [];
+      const logger = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: () => {},
+        onMessage: (message) => captured.push(message),
+      });
+
+      createFeatureDaemonLogger('feature-a', logger)('first source line\nsecond source line');
+
+      expect(captured).toEqual(['first source line', 'second source line']);
+      expect(live).toEqual([
+        '[daemon][feature-a] first source line',
+        '[daemon][feature-a] second source line',
+      ]);
+    });
   });
 
   describe('daemon ownership attribution', () => {
