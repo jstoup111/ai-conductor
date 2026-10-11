@@ -144,7 +144,7 @@ export type RemediationProjectionResult =
 /** Largest observed serialized structured sections in the repository corpus at BUILD. */
 export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
   requiredReferencesBytes: 3_911,
-  tasksBytes: 53_431,
+  tasksBytes: 62_737,
   pendingAsBuiltFindingsBytes: 9_989,
   priorLapsBytes: 111,
   refusalsBytes: 0,
@@ -169,7 +169,7 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
     REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
   )),
-  // `.docs/plans/a-change-to-one-stacked-child-cannot-be-carried-in.md`: 53,431 B for all tasks; D7.2 floor → 262,144 B.
+  // `.docs/plans/a-change-to-one-stacked-child-cannot-be-carried-in.md`: 62,737 B for all tasks; D7.2 floor → 262,144 B.
   tasksBytes: roundUpPowerOfTwo(Math.max(
     REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,

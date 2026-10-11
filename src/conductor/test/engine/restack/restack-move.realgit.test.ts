@@ -146,12 +146,14 @@ describe('journaled restack move (real local Git)', () => {
       retries: 0,
     });
     expect(result.kind).toBe('refused');
-    expect(input).toHaveLength(1);
+    expect(input).toHaveLength(2);
     expect(input[0]).toContain('start\n');
     for (const move of fixture.moves) {
       expect(input[0]).toContain(`update ${move.ref} ${move.newSha} ${move.oldSha}`);
     }
     expect(input[0]).toContain(`update ${journalRefFor('demo')}`);
+    expect(input[1]).toContain('start\n');
+    expect(input[1]).toContain(`update ${journalRefFor('demo')}`);
     for (const entry of fixture.refs) {
       expect((await fixture.git(['rev-parse', entry.ref])).stdout.trim()).toBe(entry.oldSha);
     }

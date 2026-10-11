@@ -96,7 +96,7 @@ describe('resolveActiveChild', () => {
     await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
 
     expect(await resolveActiveChild(repository, 'demo')).toEqual({
-      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo',
+      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo', nextChild: 2,
     });
   });
 
@@ -108,7 +108,7 @@ describe('resolveActiveChild', () => {
     await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
-      kind: 'active', child: 2, position: 2, isLeaf: false, branch: 'feat/c2/demo',
+      kind: 'active', child: 2, position: 2, isLeaf: false, branch: 'feat/c2/demo', nextChild: 3,
     });
   });
 
@@ -144,7 +144,7 @@ describe('resolveActiveChild', () => {
     await git(['update-ref', 'refs/conductor/demo/closed/c01', tip]);
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
-      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo',
+      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo', nextChild: 2,
     });
   });
 
@@ -243,7 +243,7 @@ describe('resolveActiveChild', () => {
     await mkdir(join(repository, '.pipeline', 'children', '1'), { recursive: true });
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
-      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo',
+      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo', nextChild: 2,
     });
   });
 

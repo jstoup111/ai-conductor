@@ -87,9 +87,9 @@ const CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS: Readonly<Record<string, Classific
  * for the restack directory.
  */
 const RESTACK_REGION_ACCESS_CLASSIFICATIONS: Readonly<Record<string, Classification>> = {
-  'engine/daemon-rekick.ts:269:readKickbackLedger': 'child-aware',
-  'engine/restack/restack-executor.ts:239:readKickbackLedger': 'child-aware',
-  'engine/restack/restack-transition.ts:320:readVerdict': 'child-aware',
+  'engine/daemon-rekick.ts:readKickbackLedger(path,child)': 'child-aware',
+  'engine/restack/restack-executor.ts:readKickbackLedger(worktree,activeChild)': 'child-aware',
+  'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)': 'child-aware',
 };
 
 /**
@@ -166,6 +166,16 @@ function conductorWriteVerdictIdentity(args: readonly string[]): string | undefi
   return undefined;
 }
 
+/**
+ * Restack's deliberately routed reads are identified by their argument shape,
+ * not a source line.  Insertions in an unrelated path must not erase a
+ * classification, while a changed child argument remains a new audit site.
+ */
+function restackAccessIdentity({ site, arguments: args }: CallSite): string {
+  const [path, _line, accessor] = site.split(':');
+  return `${path}:${accessor}(${args.map((argument) => argument.replace(/\s+/g, '')).join(',')})`;
+}
+
 function childArgumentCarriesActiveRegionChild({ arguments: args, source }: CallSite): boolean {
   const childArgument = args[3];
   if (childArgument === undefined) return false;
@@ -218,19 +228,22 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
       `active-region conductor writeVerdict sites missing child: ${activeRegionWritesMissingChild.join(', ') || 'none'}`,
     ].join('\n'));
   }
-  const unclassifiedRestackAccesses = sites.filter((site) => {
+  const restackAccesses = calls.filter(({ site }) => {
     const path = site.split(':', 1)[0] ?? '';
     return (path === 'engine/daemon-rekick.ts' || path.startsWith('engine/restack/')) &&
-      RESTACK_REGION_ACCESS_CLASSIFICATIONS[site] === undefined;
+      FLAT_REGION_ACCESSORS.has(site.split(':').at(-1) ?? '');
   });
+  const unclassifiedRestackAccesses = restackAccesses
+    .filter((call) => RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] === undefined)
+    .map(({ site }) => site);
   if (unclassifiedRestackAccesses.length > 0) {
     throw new Error(`unclassified restack region access sites: ${unclassifiedRestackAccesses.join(', ')}`);
   }
-  return sites.map((site) => WHOLE_FEATURE_ONLY_SITES.has(site)
-    ? { site, classification: 'whole-feature-only' as const, reason: 'The rebase and coverage-binding gates remain feature-wide.' }
+  return calls.map((call) => WHOLE_FEATURE_ONLY_SITES.has(call.site)
+    ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'The rebase and coverage-binding gates remain feature-wide.' }
     : {
-      site,
-      classification: RESTACK_REGION_ACCESS_CLASSIFICATIONS[site] ?? 'child-aware' as const,
+      site: call.site,
+      classification: RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] ?? 'child-aware' as const,
     });
 }
 
@@ -258,9 +271,9 @@ describe('child-region flat-access audit', () => {
       for (const snippet of requiredSnippets) expect(source).toContain(snippet);
     }
     expect(Object.keys(RESTACK_REGION_ACCESS_CLASSIFICATIONS)).toEqual([
-      'engine/daemon-rekick.ts:269:readKickbackLedger',
-      'engine/restack/restack-executor.ts:239:readKickbackLedger',
-      'engine/restack/restack-transition.ts:320:readVerdict',
+      'engine/daemon-rekick.ts:readKickbackLedger(path,child)',
+      'engine/restack/restack-executor.ts:readKickbackLedger(worktree,activeChild)',
+      'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)',
     ]);
   });
 });
