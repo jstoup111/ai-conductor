@@ -182,8 +182,14 @@ type RestackActiveChild =
   | { readonly child: ChildId; readonly branchRef: RefName; readonly isLeaf: true }
   | { readonly child: ChildId; readonly branchRef: RefName; readonly isLeaf: false; readonly unenteredLeaf: ChildId };
 
-async function activeFor(worktree: string, slug: string, git: GitRunner): Promise<RestackActiveChild> {
+/** A stack the cursor proved divergent: a planner refusal, never an unavailable cursor. */
+interface RestackCursorDivergence {
+  readonly divergent: { readonly child: ChildId; readonly check: 'closed-child-rewritten' | 'range-not-ancestor' };
+}
+
+async function activeFor(worktree: string, slug: string, git: GitRunner): Promise<RestackActiveChild | RestackCursorDivergence> {
   const cursor = await resolveActiveChild(worktree, slug, { git });
+  if (cursor.kind === 'divergent') return { divergent: { child: cursor.child, check: cursor.check } };
   if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
     const branch = ref(`refs/heads/${cursor.branch}`);
     if (cursor.isLeaf) return { child: cursor.child, branchRef: branch, isLeaf: true };
@@ -344,6 +350,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const staleCleanup = await cleanClearedAbortedRestackJournal(options.worktree, options.slug, { git });
     if (staleCleanup === 'unavailable') return { kind: 'unavailable', detail: 'cannot remove cleared aborted restack journal' };
     const active = await activeFor(options.worktree, options.slug, git);
+    if ('divergent' in active) {
+      await haltRestack(options.worktree, active.divergent.check, options.events, { child: active.divergent.child });
+      terminal = true;
+      return { kind: 'halted' };
+    }
     // A repair's default is unchanged. Resolve that local default before
     // planning instead of borrowing the active child's closure, which is an
     // intermediate stack tip rather than the whole feature's base.
