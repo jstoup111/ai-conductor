@@ -1,4 +1,4 @@
-// Covers: task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
+// Covers: task:14, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -196,7 +196,7 @@ interface FixtureOptions {
   readonly buildPending?: boolean;
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** A clean lap. The adjudication coordinator never runs for one. */
-  readonly rawVerdict?: 'PASS' | 'FAIL';
+  readonly rawVerdict?: 'PASS' | 'FAIL' | 'invalid';
   /** Models an operator disposition arriving through the event spine mid-lap. */
   readonly acceptedFindingIds?: () => readonly string[];
   /** Models the effective-verdict projection of sub-floor findings. */
@@ -234,7 +234,9 @@ async function fixture(options: FixtureOptions = {}) {
   const mixed = options.infrastructure && options.infrastructure !== 'none';
   const scopeIncomplete = options.scopeIncomplete !== undefined;
   const clean = options.rawVerdict === 'PASS';
-  const raw = clean ? passAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
+  const raw = options.rawVerdict === 'invalid'
+    ? { invalid: true }
+    : clean ? passAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -303,6 +305,7 @@ async function fixture(options: FixtureOptions = {}) {
   const gateVerdicts: Array<{ step: StepName; satisfied: boolean }> = [];
   const lifecycle: ConductorEvent[] = [];
   const adjudications: Extract<ConductorEvent, { type: 'build_review_adjudicated' }>[] = [];
+  const logs: string[] = [];
   const loopHalts: ConductorEvent[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') { kickbacks.push({ from: event.from, to: event.to }); kickbackEvidence.push(event.evidence ?? ''); } });
   events.on('gate_verdict', (event) => {
@@ -343,6 +346,7 @@ async function fixture(options: FixtureOptions = {}) {
     },
     buildReviewEffectiveResolver: resolver,
     buildReviewChargeEffect: options.chargeEffect,
+    log: (message: string) => { logs.push(message); },
     resolveFeatureCreationMutation: async () => options.featureCreationAuthorized === false ? undefined : ({
       provenance: {
         repository: 'acme/conductor', defaultBranch: 'origin/main', specBranch: 'feature/adjudicated-feature',
@@ -367,7 +371,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   return {
-    projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, gateVerdicts, lifecycle, loopHalts, adjudications, ghCalls, resolver,
+    projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, gateVerdicts, lifecycle, loopHalts, adjudications, logs, ghCalls, resolver,
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
@@ -455,6 +459,17 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       `decision stop \\S+ \\(owner: plan; sources: ${sourceId}\\): The source cannot be repaired under the current approved plan\\.`,
     ));
     expect(run.loopHalts).toEqual([expect.objectContaining({ reason: expect.stringContaining('owner: plan') })]);
+    expect(run.adjudications).toEqual([expect.objectContaining({ outcome: 'decision-stop' })]);
+  });
+
+  it('emits one overturned pass verdict with the rejected finding title and no raw trace log', async () => {
+    const run = await fixture({ judgement: deferralJudgement() });
+
+    expect(run.adjudications).toEqual([expect.objectContaining({
+      outcome: 'pass', overturned: true,
+      findings: [expect.objectContaining({ title: FINDING.summary })],
+    })]);
+    expect(run.logs.some((line) => /^route:/.test(line) || /\[[^\]]+\/[^\]]+\]/.test(line))).toBe(false);
   });
 
   it('carries a remaining infrastructure fault into the admitted-repair kickback and BUILD hint', async () => {
@@ -476,6 +491,17 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     expect({ dispatched: run.dispatched, charges: charge.mock.calls.length }).toEqual({ dispatched: ['build_review', 'remediate'], charges: 1 });
     expect(await run.haltMarker()).toContain('build_review adjudication halted:');
+    expect(run.adjudications).toEqual([expect.objectContaining({ outcome: 'halt' })]);
+  });
+
+  it('emits no final verdict when adjudication is disabled or the aggregate is unparseable', async () => {
+    const [disabled, invalid] = await Promise.all([
+      fixture({ adjudicationEnabled: false }),
+      fixture({ rawVerdict: 'invalid' }),
+    ]);
+
+    expect(disabled.adjudications).toEqual([]);
+    expect(invalid.adjudications).toEqual([]);
   });
 
   it('does not convert an action failure accepted during failure delivery into a needs-human HALT', async () => {
@@ -950,8 +976,28 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     }
   });
 
-  it('takes the mechanical lane for a non-action lap with uncovered infrastructure, spending no semantic kickback', async () => {
-    const run = await fixture({ judgement: deferralJudgement(), reportUncoveredInfrastructure: true });
+  // Covers: task:14
+  it('emits one final verdict after two mechanical re-land rounds in one lap', async () => {
+    const run = await fixture({
+      judgement: deferralJudgement(),
+      reportUncoveredInfrastructure: true,
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {
+            build_review: {
+              count: 0,
+              cumulative: 0,
+              mechanicalFaults: 1,
+              treeHash: null,
+              lastReason: '',
+              priorVerdict: false,
+              resolvedBefore: 0,
+            },
+          },
+        }), 'utf8');
+      },
+    });
 
     // adr-2026-08-29 D3.2: the content was adjudicated and finalized, so the
     // legacy raw kickback would have re-sent settled content to BUILD and
@@ -959,7 +1005,8 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.remediateDispatches()).toBeGreaterThanOrEqual(1);
     expect(run.dispatched).not.toContain('build');
     expect(run.kickbacks).toEqual([]);
-    expect(run.adjudications.map((event) => event.outcome)).toEqual(['retry', 'retry', 'retry', 'halt']);
+    expect(run.dispatched.filter((step) => step === 'build_review')).toHaveLength(3);
+    expect(run.adjudications.map((event) => event.outcome)).toEqual(['halt']);
     const ledger = await run.readJson('.pipeline/kickback-ledger.json') as { gates: { build_review?: { count?: number; mechanicalFaults?: number } } };
     expect(ledger.gates.build_review?.count ?? 0).toBe(0);
     // The mechanical allowance bounds the re-land loop and then halts.

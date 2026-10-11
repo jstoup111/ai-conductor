@@ -12866,7 +12866,9 @@ export class Conductor {
                     await this.emitLoopHalt(reason);
                     return;
                   }
-                  await emitAdjudicated('retry', outcome.cases);
+                  // A mechanical re-land remains part of this lap, not a
+                  // final adjudicated verdict. Emit only the terminal route
+                  // after the bounded re-land sequence settles or halts.
                   await this.saveConductorStepStatus(state, step.name, 'failed');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review
