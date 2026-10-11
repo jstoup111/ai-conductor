@@ -52,7 +52,7 @@ describe('closeout-event CLI', () => {
     await expect(dispatch(['node', 'conduct-ts', 'closeout-event', 'end', 'evaluator'], root, () => T4)).resolves.toBe(0);
     await expect(dispatch(['node', 'conduct-ts', 'closeout-event', 'end', 'summary'], root, () => T4 + 10)).resolves.toBe(0);
 
-    const ledger = await records(root) as Array<Record<string, unknown>>;
+    const ledger = await records(root) as Array<{ startedAt?: unknown; endedAt?: unknown; ts: unknown }>;
     expect(ledger.slice(-2)).toEqual([
       { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: T3, endedAt: T4, ts: T4 },
       { type: 'pipeline_closeout', obligation: 'summary', startedAt: T1 + 10, endedAt: T4 + 10, ts: T4 + 10 },
