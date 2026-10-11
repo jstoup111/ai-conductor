@@ -4795,6 +4795,106 @@ TIER: M`,
       expect(failure.retainedResponsePath).toBe(retainedResponsePath);
     });
 
+    it('keeps the built-in rejection fault outcome when response retention is unavailable', async () => {
+      await scopedPlan();
+      const findings = [{ concernKind: 'test-insensitive' }];
+      const response = {
+        success: true,
+        exitCode: 0,
+        output: 'reviewer final message',
+        finalStructuredResult: { findings },
+      };
+      const baselineProvider = createMockProvider();
+      (baselineProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+      const baselineEvents = new ConductorEventEmitter();
+      const baselineFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+      baselineEvents.on('build_review_rubric_infrastructure_failure', (event) => {
+        if (event.type === 'build_review_rubric_infrastructure_failure') baselineFailures.push(event);
+      });
+      const baselineRunner = new DefaultStepRunner(baselineProvider, 'session-1', dir, {
+        events: baselineEvents,
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const baselineResult = await baselineRunner.run('build_review', emptyState);
+      const baselineLedger = await readKickbackLedger(dir);
+      const baselineFailure = baselineFailures[0]!;
+      const blockedDir = await mkdtemp(join(tmpdir(), 'build-review-retention-blocked-'));
+      try {
+        const blockedPlanPath = join(blockedDir, 'plan.md');
+        await scopedPlan(blockedPlanPath);
+        await mkdir(join(blockedDir, '.pipeline'), { recursive: true });
+        await writeFile(join(blockedDir, '.pipeline', 'build-review-rejections'), 'not a directory\n', 'utf-8');
+        const blockedProvider = createMockProvider();
+        (blockedProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+        const blockedEvents = new ConductorEventEmitter();
+        const blockedFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+        blockedEvents.on('build_review_rubric_infrastructure_failure', (event) => {
+          if (event.type === 'build_review_rubric_infrastructure_failure') blockedFailures.push(event);
+        });
+        const blockedRunner = new DefaultStepRunner(blockedProvider, 'session-1', blockedDir, {
+          events: blockedEvents,
+          gitRunner: scopedGit(),
+          planPath: blockedPlanPath,
+          ...testQualityOptIn(),
+          ...currentBuildReviewProof(),
+        });
+
+        const blockedResult = await blockedRunner.run('build_review', emptyState);
+        const blockedLedger = await readKickbackLedger(blockedDir);
+        const blockedFailure = blockedFailures[0]!;
+
+        expect(blockedResult.output).toBe(baselineResult.output);
+        expect(blockedResult.currentLapMechanicalFault).toBe(true);
+        expect({
+          mechanicalFaults: blockedLedger.gates.build_review?.mechanicalFaults,
+          lastMechanicalFault: blockedLedger.gates.build_review?.lastMechanicalFault,
+        }).toEqual({
+          mechanicalFaults: 1,
+          lastMechanicalFault: baselineLedger.gates.build_review?.lastMechanicalFault,
+        });
+        expect({
+          reason: blockedFailure.reason,
+          cause: blockedFailure.cause,
+          rejection: blockedFailure.rejection,
+          excerpt: blockedFailure.excerpt,
+        }).toEqual({
+          reason: baselineFailure.reason,
+          cause: baselineFailure.cause,
+          rejection: baselineFailure.rejection,
+          excerpt: baselineFailure.excerpt,
+        });
+        expect(blockedFailure).not.toHaveProperty('retainedResponsePath');
+        await expect(access(join(blockedDir, '.pipeline/build-review.json'))).rejects.toThrow();
+      } finally {
+        await rm(blockedDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not create a retention directory for an accepted test-quality judgment', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        exitCode: 0,
+        output: '{"findings":[]}',
+        finalStructuredResult: { findings: [] },
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result.output).toContain('"verdict":"PASS"');
+      await expect(access(join(dir, '.pipeline/build-review-rejections'))).rejects.toThrow();
+    });
+
     it('retains final failed-grader exit facts through the exhausted mechanical-fault aggregate', async () => {
       await scopedPlan();
       const provider = createMockProvider();
