@@ -1509,7 +1509,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (!featureLog) {
       featureLog = createFeatureDaemonLogger(
         slug,
-        (message) => log(message, true),
+        log,
         formatDaemonFeatureTag(slug),
       ) as FeatureDaemonLogger;
       featureLogs.set(slug, featureLog);
@@ -3141,7 +3141,7 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
     presenter = createDaemonEventPresenter({
       // The exported compatibility seam takes a string sink, while real
       // daemon dispatches pass DaemonLogEntry through their feature logger.
-      log: (entry) => log(composeDaemonLineBody(entry)),
+      log: (entry) => log(`${composeDaemonLineBody(entry)}${entry.suffix ?? ''}`),
       verbose: options.verbose ?? false,
       // The legacy dispatcher is deliberately transitional. Subsequent tasks
       // migrate its cases to the presenter's typed output API one group at a time.
@@ -3237,7 +3237,11 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
     case 'step_failed': {
       if (event.provisional === 'pending-adjudication') {
         output.warning(`${renderedExecutionSubject(event, event.step)} provisional FAIL (try ${event.retryCount}) — pending adjudication: ${event.error.split('\n')[0] ?? ''}`, { kind: 'none', why: 'adjudication decides the route and a final verdict line follows' });
-      } else output.info(`✗ ${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${event.error}`);
+      } else output.warning({
+        kind: 'forwarded',
+        moreAt: '.pipeline/events.jsonl',
+        text: `✗ ${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${event.error}`,
+      }, { kind: 'none', why: 'the step retries' });
       return;
     }
     case 'provider_attempt': {
@@ -3264,7 +3268,7 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
       output.warning(`${event.reason === 'usage-exhausted' ? 'usage exhausted' : 'rate limited'}: waiting ${event.waitSeconds}s`, { kind: 'none', why: `waiting ${event.waitSeconds}s` });
       return;
     case 'loop_halt':
-      output.halt(`loop halted: ${event.reason.split('\n')[0] ?? event.reason} (details: .pipeline/HALT)`, { kind: 'operator', action: 'ai-conductor monitor' });
+      output.halt({ kind: 'forwarded', moreAt: '.pipeline/HALT', text: `loop halted: ${event.reason}` }, { kind: 'operator', action: 'ai-conductor monitor' });
       return;
     case 'session_command_refused':
       output.halt(formatSessionOccurrence(event, false), { kind: 'operator', action: 'ai-conductor monitor all' });

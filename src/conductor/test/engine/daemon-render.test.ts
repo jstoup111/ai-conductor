@@ -57,7 +57,7 @@ describe('renderDaemonEvent', () => {
 
   it('renders failures', () => {
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 })).toEqual([
-      '· ✗ build failed (try 2): boom',
+      '· ⚠ ✗ build failed (try 2): boom — no action needed: the step retries',
     ]);
     expect(lines({
       type: 'step_refused',
@@ -330,7 +330,7 @@ describe('renderDaemonEvent', () => {
 
   it('renders halt and convergence', () => {
     expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual([
-      '· ✋ loop halted: cap (details: .pipeline/HALT) — next: ai-conductor monitor',
+      '· ✋ loop halted: cap — next: ai-conductor monitor',
     ]);
     expect(lines({
       type: 'halt_marker_write_failed',
@@ -606,7 +606,7 @@ describe('renderDaemonEvent coloring', () => {
     chalk.level = 0;
     const [line] = lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 });
     expect(line).not.toMatch(ANSI);
-    expect(line).toBe('· ✗ build failed (try 2): boom');
+    expect(line).toBe('· ⚠ ✗ build failed (try 2): boom — no action needed: the step retries');
   });
 
   it('emits ANSI color for kickback lines with text preserved underneath', () => {

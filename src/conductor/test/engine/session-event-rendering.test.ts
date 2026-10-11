@@ -25,7 +25,7 @@ const occurrences: readonly SessionOccurrence[] = [
 ];
 
 describe('session event daemon rendering', () => {
-  it('renders every declared session occurrence with scope, bounded status, and its occurrence id', () => {
+  it('renders every declared session occurrence without UUID-bearing transport ids by default', () => {
     const output: string[] = [];
     for (const event of occurrences) renderDaemonEvent(event, (line) => output.push(line));
     const rendered = output.join('\n');
@@ -38,23 +38,15 @@ describe('session event daemon rendering', () => {
     expect(rendered).toContain('project');
     expect(rendered).toContain('possible bypass');
     expect(rendered).toContain('write-failed');
-    expect(rendered).toContain('refusal-1');
-    expect(rendered).toContain('result-1');
-    expect(rendered).toContain('possible-1');
-    expect(rendered).toContain('delivery-1');
+    expect(rendered).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     expect(rendered).not.toContain('verified remote mutation');
   });
 
-  it('renders repeated ids and correlated attempt/result ids without collapsing distinct occurrences', () => {
+  it('puts dispatch and event ids in verbose detail only', () => {
     const output: string[] = [];
-    const attempt = occurrences[1];
-    const result = occurrences[2];
-    renderDaemonEvent(attempt, (line) => output.push(line));
-    renderDaemonEvent(attempt, (line) => output.push(line));
-    renderDaemonEvent(result, (line) => output.push(line));
-
-    expect(output.filter((line) => line.includes('attempt-1'))).toHaveLength(3);
-    expect(output.some((line) => line.includes('result-1'))).toBe(true);
+    renderDaemonEvent({ ...occurrences[0], eventId: '123e4567-e89b-12d3-a456-426614174000', dispatchId: '123e4567-e89b-12d3-a456-426614174001' }, (line) => output.push(line), { verbose: true });
+    expect(output.join('\n')).toContain('123e4567-e89b-12d3-a456-426614174000');
+    expect(output.join('\n')).toContain('123e4567-e89b-12d3-a456-426614174001');
   });
 
   it('derives all session occurrence subscriptions from the render registry', () => {

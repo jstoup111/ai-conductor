@@ -35,6 +35,8 @@ export interface DaemonLogEntry {
   /** Forwarded process output is summarized unless daemon verbosity is enabled. */
   kind?: 'authored' | 'forwarded';
   moreAt?: string;
+  /** A severity suffix that must remain on the first rendered line. */
+  suffix?: string;
   /** Internal feature ownership tag, composed only after message presentation. */
   featureTag?: string;
 }
@@ -185,7 +187,7 @@ export function createDaemonModeLogger(sinks: {
       if (lines.length > 1) {
         const location = entry.moreAt ? `full text in ${entry.moreAt} or ` : '';
         writeDaemonMessage(
-          { ...entry, text: `${lines[0]} (+${lines.length - 1} more lines; ${location}set daemon_verbose: true to show them)` },
+        { ...entry, text: `${lines[0]} (+${lines.length - 1} more lines; ${location}set daemon_verbose: true to show them)${entry.suffix ?? ''}` },
           featureOwned,
           lastStatus,
           formatActivityLine,
@@ -197,7 +199,7 @@ export function createDaemonModeLogger(sinks: {
 
     for (const [index, lineMessage] of lines.entries()) {
       writeDaemonMessage(
-        { ...entry, text: index === 0 ? lineMessage : `│ ${lineMessage}` },
+        { ...entry, text: index === 0 ? `${lineMessage}${entry.suffix ?? ''}` : `│ ${lineMessage}` },
         featureOwned,
         lastStatus,
         formatActivityLine,
@@ -264,7 +266,7 @@ function writeDaemonMessage(
       lastStatus.set(slug, outcomeStatus);
     }
 
-    const line = formatActivityLine(renderedText, featureOwned);
+    const line = formatActivityLine(renderedText, featureOwned || entry.featureTag !== undefined);
     sinks.writeLive(line);
     sinks.writePersisted(line);
 }

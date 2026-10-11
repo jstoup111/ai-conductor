@@ -73,9 +73,9 @@ export const DAEMON_EVENT_PRESENTATION = {
 } as const satisfies Record<RenderedEventType, DaemonEventPresentation>;
 
 type Output = {
-  info(text: string): void;
-  warning(text: string, next: NextAction): void;
-  halt(text: string, next: NextAction): void;
+  info(text: string | DaemonLogEntry): void;
+  warning(text: string | DaemonLogEntry, next: NextAction): void;
+  halt(text: string | DaemonLogEntry, next: NextAction): void;
   detail(text: string): void;
   once(key: string): Output;
   whenChanged(key: string, value: unknown): Output;
@@ -102,13 +102,19 @@ export function createDaemonEventPresenter({
   const outputFor = (type: RenderedEventType): Output => {
     const presentation = DAEMON_EVENT_PRESENTATION[type];
     const enabled = presentation.level !== 'verbose' || verbose;
-    const emit = (text: string): void => {
-      if (enabled) log({ depth: presentation.depth, text });
+    const emit = (text: string | DaemonLogEntry): void => {
+      if (enabled) log(typeof text === 'string'
+        ? { depth: presentation.depth, text }
+        : { ...text, depth: presentation.depth });
     };
     const output: Output = {
       info: emit,
-      warning: (text, next) => emit(`⚠ ${text}${formatNextAction(next)}`),
-      halt: (text, next) => emit(`✋ ${text}${formatNextAction(next)}`),
+      warning: (text, next) => emit(typeof text === 'string'
+        ? `⚠ ${text}${formatNextAction(next)}`
+        : { ...text, text: `⚠ ${text.text}`, suffix: `${text.suffix ?? ''}${formatNextAction(next)}` }),
+      halt: (text, next) => emit(typeof text === 'string'
+        ? `✋ ${text}${formatNextAction(next)}`
+        : { ...text, text: `✋ ${text.text}`, suffix: `${text.suffix ?? ''}${formatNextAction(next)}` }),
       // Detail is subordinate to the event's declared line.  Keep it one
       // visual level deeper without letting an already-deep event escape the
       // three-column daemon log grammar.

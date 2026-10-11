@@ -13,9 +13,9 @@ import type { ConductorEvent } from '../src/types/index.js';
 // daemon.log or `daemon status` whether a step was running under claude or
 // codex without reading the subprocess argv out of `ps aux`.
 
-function lines(event: ConductorEvent): string[] {
+function lines(event: ConductorEvent, verbose = false): string[] {
   const out: string[] = [];
-  renderDaemonEvent(event, (m) => out.push(m));
+  renderDaemonEvent(event, (m) => out.push(m), { verbose });
   return out;
 }
 
@@ -29,7 +29,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
     chalk.level = 0;
   });
 
-  it('names the provider and model that executed the step', () => {
+  it('keeps routine attempt detail out of the default daemon log', () => {
     const [line] = lines({
       type: 'provider_attempt',
       step: 'build',
@@ -39,11 +39,10 @@ describe('renderDaemonEvent: provider_attempt', () => {
       invoked: true,
     });
     expect(line).toContain('build via codex');
-    expect(line).toContain('(gpt-5.6-terra)');
     expect(line).toContain('✓');
   });
 
-  it('appends turn count, duration, and cost when the provider reported them', () => {
+  it('keeps the non-lifecycle attempt at one declared depth regardless of outcome', () => {
     const [line] = lines({
       type: 'provider_attempt',
       step: 'acceptance_specs',
@@ -59,7 +58,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
         costUsd: 4.956137999999998,
       },
     });
-    expect(line).toBe('·   acceptance_specs via claude (opus) ✓ — 54 turns, 8m7s, $4.96');
+    expect(line).toBe('·   acceptance_specs via claude ✓');
   });
 
   it('renders a failed attempt with its outcome instead of a success glyph', () => {
@@ -72,19 +71,19 @@ describe('renderDaemonEvent: provider_attempt', () => {
       reason: 'exit 1',
     });
     expect(line).toContain('build via claude');
-    expect(line).toContain('failure');
+    expect(line).toBe('·   build via claude');
     expect(line).not.toContain('✓');
   });
 
-  it('does not call a preparation timeout provider unavailability', () => {
+  it('uses the same concise line for uninvoked attempts', () => {
     expect(lines({
       type: 'provider_attempt', step: 'build_review', provider: 'codex',
       outcome: 'failure', invoked: false,
       reason: 'Prepared candidate operation timed out before judgment.',
-    })).toEqual(['·   build_review skipped codex (not-invoked: Prepared candidate operation timed out before judgment.)']);
+    })).toEqual(['·   build_review via codex']);
   });
 
-  it('renders a skipped provider with its unavailable reason', () => {
+  it('does not put unavailable attempt detail in the default line', () => {
     expect(
       lines({
         type: 'provider_attempt',
@@ -94,35 +93,27 @@ describe('renderDaemonEvent: provider_attempt', () => {
         invoked: false,
         reason: 'cached run-wide unavailability',
       }),
-    ).toEqual(['·   build skipped codex (unavailable: cached run-wide unavailability)']);
+    ).toEqual(['·   build via codex']);
   });
 
-  it.each([
-    [
-      { phase: 'preparing', attemptId: 'attempt-1', recoveryCount: 0 },
-      '·   build provider preparing (attempt attempt-1, recovery 0)',
-    ],
-    [
-      { phase: 'running', attemptId: 'attempt-2', recoveryCount: 0 },
-      '·   build provider running (attempt attempt-2, recovery 0)',
-    ],
-    [
-      { phase: 'recovering', attemptId: 'attempt-3', recoveryCount: 1, reason: 'preparation-timeout' },
-      '·   build provider recovering (attempt attempt-3, recovery 1 — preparation-timeout)',
-    ],
-    [
-      { phase: 'exhausted', attemptId: 'attempt-4', recoveryCount: 1, reason: 'preparation-timeout-exhausted' },
-      '· ✋ build provider halted (attempt attempt-4, recovery 1 — preparation-timeout-exhausted)',
-    ],
-  ] as const)('renders lifecycle diagnostics for %s', (lifecycle, expected) => {
-    expect(lines({
+  it('suppresses routine lifecycle phases and makes recovery actionable without ids', () => {
+    for (const phase of ['preparing', 'running', 'settled'] as const) expect(lines({
       type: 'provider_attempt',
       step: 'build',
       provider: 'provider-lifecycle',
       outcome: 'success',
       invoked: false,
-      lifecycle,
-    })).toEqual([expected]);
+      lifecycle: { phase, attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 0 },
+    })).toEqual([]);
+    const recovering = lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase: 'recovering', attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 1, reason: 'timeout' } });
+    const exhausted = lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase: 'exhausted', attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 2, reason: 'timeout' } });
+    expect(recovering[0]).toContain('recovery 1 — timeout');
+    expect(recovering[0]).toMatch(/ — no action needed: /);
+    expect(exhausted[0]).toMatch(/✋ build provider halted .* — next: ai-conductor monitor all$/);
+    expect([...recovering, ...exhausted].join('\n')).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    for (const phase of ['preparing', 'running', 'settled', 'recovering', 'exhausted'] as const) {
+      expect(lines({ type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', outcome: 'success', invoked: false, lifecycle: { phase, attemptId: '123e4567-e89b-12d3-a456-426614174000', recoveryCount: 1, reason: 'timeout' } }, true).join('\n')).toContain('123e4567-e89b-12d3-a456-426614174000');
+    }
   });
 });
 

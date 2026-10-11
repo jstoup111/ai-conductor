@@ -45,10 +45,8 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
       stop: () => void;
     }>;
   }) => async (item: { slug: string }) => {
-    const scope = await deps.beginFeatureRun(
-      { path: fixture.worktreePath, branch: `feat/${item.slug}` },
-      item,
-    );
+    const start = () => deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
+    const scope = await start();
     scope.log?.('setup complete');
     await scope.events.emit({ type: 'step_started', step: 'build' });
     // These all have established daemon render cases. They must remain wired
@@ -65,7 +63,18 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
     scope.log?.('WARNING: provider unavailable');
     scope.log?.('retrying build (2/3)');
     scope.log?.('subprocess diagnostic: exit 1');
-    scope.stop();
+    await scope.stop();
+    // A second feature dispatch must start with fresh presenter memory.  Each
+    // event is duplicated within a dispatch to prove the scoped renderer, not
+    // the event bus, owns de-duplication.
+    for (const dispatch of [await start(), await start()]) {
+      for (let i = 0; i < 2; i += 1) {
+        await dispatch.events.emit({ type: 'self_host_containment_verdict', contained: true, evidence: 'bwrap read-only root' });
+        await dispatch.events.emit({ type: 'self_host_boundary_fingerprint', surfaces: [{ label: 'live', elapsedMs: 1, fileCount: 2 }] });
+        await dispatch.events.emit({ type: 'session_policy', step: 'build', provider: 'codex', reason: 'fresh session' });
+      }
+      await dispatch.stop();
+    }
     return { slug: item.slug, status: 'done' };
   },
 }));
@@ -153,5 +162,8 @@ describe('daemon-mode feature log integration', () => {
       .filter((line) => line.includes('▶ build')).length;
     expect(buildLineOccurrences).toBe(1);
     expect(live).not.toContain('[daemon] · ▶ build');
+    for (const phrase of ['self-host containment verified', 'self-host boundary fingerprint', 'codex session policy']) {
+      expect(live.split('\n').filter((line) => line.includes(phrase))).toHaveLength(2);
+    }
   });
 });
