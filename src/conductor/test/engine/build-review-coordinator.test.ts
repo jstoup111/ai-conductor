@@ -153,6 +153,7 @@ describe("build-review coordinator: registered dispatch", () => {
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         { kind: 'skipped', rubric: 'security', reason: 'leaf-only' },
+        disabledImplementationQualityBranch,
       ],
     });
   });
