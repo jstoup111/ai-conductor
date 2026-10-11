@@ -374,6 +374,51 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  describe('Claude remote-settings.json semantic-empty equivalence (#3096)', () => {
+    const verify = (baseline: Awaited<ReturnType<typeof fingerprintLiveBoundary>>) =>
+      verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' });
+
+    it('treats a zero-byte root remote-settings.json rewritten to {} as unchanged', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-zero-to-object-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const settings = join(provider, 'remote-settings.json');
+      await writeFile(settings, '');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(settings, '{}');
+      try {
+        expect(await verify(baseline)).toEqual({ ok: true });
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('treats each semantic-empty root remote-settings.json rewrite as unchanged', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-empty-rewrites-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const settings = join(provider, 'remote-settings.json');
+      await writeFile(settings, '{}');
+      try {
+        for (const content of ['', '{}\n', ' \t\n ']) {
+          const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+          await writeFile(settings, content);
+          expect(await verify(baseline)).toEqual({ ok: true });
+          await writeFile(settings, '{}');
+        }
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('accepts an unchanged non-empty managed-settings object', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-managed-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      await writeFile(join(provider, 'remote-settings.json'), '{"permissions":{"deny":["Bash"]}}');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      try {
+        expect(await verify(baseline)).toEqual({ ok: true });
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+  });
+
   describe('claude.ai skill-sync round marker', () => {
     const bucket = '0b7c2f1e-5d3a-4c8e-9f21-6a4d8e0c1b37';
     const setup = async (label: string) => {
