@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:9
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
@@ -1021,5 +1021,26 @@ describe('engineer claim: priority-banded ordering (#461)', () => {
     // The banded walk actually read labels — not just deferral-by-luck.
     const labelCalls = calls.filter((c) => c.some((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a)));
     expect(labelCalls.length).toBeGreaterThan(0);
+  });
+
+  it('defers an unavailable Jira idea and claims an unblocked unlabeled GitHub idea', async () => {
+    await seedInbox([
+      { sourceRef: 'PROJ-9', receivedAt: '2026-07-01T00:00:00.000Z', text: 'Jira, oldest' },
+      { sourceRef: 'acme/app#2', receivedAt: '2026-07-02T00:00:00.000Z', text: 'GitHub, unlabeled' },
+    ]);
+    const { run } = createFakeGh();
+    const { out, opts } = captureOut();
+
+    await dispatchEngineer({ kind: 'claim' }, opts({ gh: run }));
+    await dispatchEngineer({ kind: 'claim' }, opts({ gh: run }));
+
+    expect(out.map((line) => JSON.parse(line))).toMatchObject([
+      { kind: 'claim', sourceRef: 'acme/app#2' },
+      {
+        kind: 'claim',
+        allBlocked: true,
+        entries: [{ sourceRef: 'PROJ-9', verdict: { kind: 'indeterminate', detail: 'no ordering adapter for jira reference PROJ-9' } }],
+      },
+    ]);
   });
 });
