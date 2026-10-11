@@ -7,9 +7,10 @@ Technical track (no PRD). Source: jstoup111/ai-conductor#1540. Tier: S. Scope: s
 engine, parser or gate change.
 
 **Intent.** Two plan tasks whose fixtures or assertions invalidate each other are caught during
-DECIDE, before the spec lands. `/coherence-check` is the only DECIDE sweep that runs after `/plan`,
-so it owns task-versus-task pairs. It records a grounded finding as `fail` on the existing `task`
-row, which the land-time coherence gate already blocks. An acyclic dependency graph stops being read
+DECIDE, before the spec lands. At Medium and Large tier, plan review (the `plan_review` step after
+`/coherence-check`) is the independent sweep that runs over the final plan, so it owns
+task-versus-task pairs. It records a grounded finding as a blocking contradiction finding in the
+review artifact, which the land-time plan-review gate blocks. An acyclic dependency graph stops being read
 as evidence that tasks do not interfere. Each sweep states which layer pairs it owns, so a layer
 nobody sweeps shows up in the skill text.
 
@@ -18,9 +19,9 @@ locked `classifyGateInvalidation`'s gate set for a delta containing excluded pat
 moved `agents/*.md` from excluded to source. The two tasks sat on independent dependency chains,
 and the spec passed a clean conflict-check and a fully covered coherence-check.
 
-## Story 1: coherence-check sweeps task pairs and blocks on a grounded interference
+## Story 1: plan review sweeps task pairs and blocks on a grounded interference
 
-As an operator landing a Medium or Large spec, I want `/coherence-check` to ask the
+As an operator landing a Medium or Large spec, I want plan review to ask the
 both-directions question of task pairs, so that two tasks that invalidate each other block land
 instead of reaching BUILD.
 
@@ -28,32 +29,31 @@ instead of reaching BUILD.
 
 #### Happy Path
 - Given a plan where one task locks an assertion or fixture and another task changes the behavior
-  that assertion or fixture depends on, as in #1535's Task 3 and Task 9, when an agent follows
-  `skills/coherence-check/SKILL.md`, then the skill directs it to ask, for each task pair sharing a
+  that assertion or fixture depends on, as in #1535's Task 3 and Task 9, when the reviewer follows
+  `skills/plan-review/SKILL.md`, then the skill directs it to ask, for each task pair sharing a
   behavior, entity, file or fixture, "if I fully complete task A, does task B's `Done when` still
   hold?", in both directions.
-- Given an agent that finds such an invalidation, when it records the finding, then the skill
-  directs it to set the affected `task` row's verdict to `fail`. The Notes must quote the opposing
-  text from both tasks, and the `fail` row then blocks at land through the existing coherence gate.
+- Given a reviewer that finds such an invalidation, when it records the finding, then the skill
+  directs it to record a blocking contradiction finding naming both tasks. The evidence must quote
+  the opposing text from both tasks, and the finding then blocks at land through the plan-review gate.
 - Given a pair that fails in both directions, when the skill classifies it, then it is named an
   oscillation. Given a pair that fails in only one direction, it is named a contradiction. Both are
-  recorded as `fail`, because the dependency graph does not stop the build from completing the two
+  recorded as blocking findings, because the dependency graph does not stop the build from completing the two
   tasks in either order.
 
 #### Negative Paths
-- Given an agent that suspects two tasks interfere but cannot quote opposing text from both tasks,
-  when it follows the skill, then it raises the suspicion to the operator as an assumption and
-  records no `fail` verdict for it.
-- Given an agent tempted to record a precise-sounding verdict word such as `oscillation` or
-  `interference` on the `task` row, when it follows the skill, then the skill directs it to use
-  `fail` instead. This preserves the existing rule that any word outside the blocking set silently
-  passes the legacy gate.
+- Given a reviewer that suspects two tasks interfere but cannot quote opposing text from both tasks,
+  when it follows the skill, then it records the suspicion as an advisory finding at most and records
+  no blocking finding for it.
+- Given a reviewer that records a severity word outside the closed set, such as `oscillation` or
+  `interference`, when the engine validates the result, then that finding is rejected rather than
+  silently passing.
 
 ### Done When
-- [ ] `skills/coherence-check/SKILL.md` contains a task-versus-task sweep. It states the
+- [ ] `skills/plan-review/SKILL.md` contains a task-versus-task sweep. It states the
       both-directions question, the shared behavior/entity/file/fixture pairing criterion, and the
-      `fail`-on-the-`task`-row recording rule, with opposing quotes from both tasks.
-- [ ] The skill's verification checklist contains an item for the task-versus-task sweep.
+      blocking-finding recording rule, with opposing quotes from both tasks.
+- [ ] The plan-review skill's verification checklist contains an item for the task-versus-task sweep.
 - [ ] The existing coherence-check verdict vocabulary (`covered` / `gap` / `fail`) is unchanged.
 
 ## Story 2: Independent tasks and S-tier specs gain no new ceremony
@@ -65,17 +65,18 @@ artifacts or steps, so that the new sweep costs nothing where there is nothing t
 
 #### Happy Path
 - Given a Medium or Large plan whose tasks share no behavior, entity, file or fixture, when
-  `/coherence-check` follows its skill, then the sweep adds no row, section or verdict. Existing
-  `task` rows keep their current coverage verdicts.
+  plan review runs, then the sweep adds no finding. Existing coherence `task` rows keep their
+  current coverage verdicts.
 
 #### Negative Paths
-- Given an S-tier spec, which skips `/coherence-check`, when its DECIDE chain runs, then no skill
-  makes a task-versus-task sweep or artifact required. `skills/plan/SKILL.md` names the sweep only
-  as `/coherence-check`'s work at Medium and Large tier.
+- Given an S-tier spec, which skips `/coherence-check` and plan review, when its DECIDE chain runs,
+  then no skill makes a task-versus-task sweep or artifact required beyond the plan's tier-S §7b
+  contradiction judge. `skills/plan/SKILL.md` names the sweep as plan review's work at Medium and
+  Large tier.
 
 ### Done When
-- [ ] The sweep text in `skills/coherence-check/SKILL.md` states that pairs with nothing shared need
-      no entry.
+- [ ] The sweep text in `skills/plan-review/SKILL.md` states that pairs with nothing shared need
+      no finding.
 - [ ] No skill adds a required step or artifact for S-tier specs. The tier-required artifact list
       is unchanged.
 
@@ -89,7 +90,7 @@ the tasks are independent, so that interference is not assumed away by a passing
 #### Happy Path
 - Given `skills/plan/SKILL.md`, when an agent reads its verification checklists, then
   "dependencies are acyclic" and "tasks do not invalidate each other's fixtures or assertions" are
-  separate items. The second names `/coherence-check` as the sweep that checks it at Medium and
+  separate items. The second names plan review as the sweep that checks it at Medium and
   Large tier.
 
 #### Negative Paths
@@ -99,7 +100,7 @@ the tasks are independent, so that interference is not assumed away by a passing
 
 ### Done When
 - [ ] Both plan verification checklists (the in-template one and the skill's own) carry the
-      acyclic item and a distinct non-interference item that points to `/coherence-check`.
+      acyclic item and a distinct non-interference item that points to plan review.
 - [ ] Existing plan skill-contract tests, including
       `src/conductor/test/engine/plan-slices-skill-contract.test.ts` and
       `src/conductor/test/engine/plan-task-count-skill-contract.test.ts`, still pass.
@@ -112,19 +113,19 @@ a layer nobody sweeps is visible from the skill text instead of being found in a
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `skills/conflict-check/SKILL.md` and `skills/coherence-check/SKILL.md`, when an agent reads
-  either one, then it finds the same ownership statement. Story versus story belongs to
-  `/conflict-check`. Cross-layer pairs and task versus task belong to `/coherence-check`.
+- Given `skills/conflict-check/SKILL.md`, `skills/coherence-check/SKILL.md` and
+  `skills/plan-review/SKILL.md`, when an agent reads any one, then it finds the same ownership
+  statement. Story versus story belongs to `/conflict-check`. Cross-layer pairs and task versus task
+  belong to plan review at Medium and Large tier, and to the plan's §7b judge at Small tier.
   `/conflict-check` runs before `/plan` and cannot see tasks.
 
 #### Negative Paths
-- Given `skills/coherence-check/SKILL.md`, when an agent reads its oscillation guidance and its
-  checklist, then no sentence says that all same-layer pairs belong to `/conflict-check`. The
-  deferral is limited to story versus story. The current wording at the oscillation heuristic and
-  the checklist item ("same-layer pairs are `/conflict-check`'s sweep") is corrected.
+- Given `skills/coherence-check/SKILL.md`, when an agent reads it, then no sentence says that all
+  same-layer pairs belong to `/conflict-check`, and no sentence directs coherence-check itself to run
+  a contradiction or oscillation sweep.
 
 ### Done When
-- [ ] Both skills carry a consistent layer-ownership statement naming story↔story, cross-layer and
-      task↔task with their owning skill.
+- [ ] All three skills carry a consistent layer-ownership statement naming story↔story, cross-layer
+      and task↔task with their owner.
 - [ ] `skills/coherence-check/SKILL.md` no longer defers every same-layer pair to
       `/conflict-check`.

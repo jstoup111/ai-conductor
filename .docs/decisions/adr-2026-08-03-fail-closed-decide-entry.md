@@ -84,6 +84,15 @@ Rules, in order:
 7. A valid, in-scope operator grant names this step → `enter`, and the grant is consumed.
 8. Otherwise (`satisfied === false`, or `'unknown'` from a predicate that threw) → `halt`.
 
+> **Amended 2026-10-10 by #3038:** a step may declare the structural field
+> `absentArtifactDisposition: 'skipped'` in its `StepDefinition`. In daemon mode, when such a step's
+> completion artifact is wholly absent, it fast-forwards as `skipped` instead of falling through to
+> rule 8. An artifact that is present but unsatisfied still halts under rule 8. The rule is computed
+> from the step table, not from a name list. The first and only declarer is `plan_review`, because
+> land refuses every new Medium/Large spec without its artifact, so a merged spec lacking one
+> predates the step (`adr-2026-10-10-source-grounded-adversarial-plan-review-step` D9). Interactive
+> runs are unaffected (rule 1).
+
 Rule 2 preceding rule 3 is deliberate: an unresolvable target's phase is unknown, so it can
 never be proven to be a safe BUILD target.
 
