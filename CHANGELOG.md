@@ -29,6 +29,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - PRD audits now exempt requirements explicitly discharged by a coherence waiver. ([implementation PR #3084](https://github.com/jstoup111/ai-conductor/pull/3084)).
 - Users can distinguish gate telemetry and metrics by complexity tier. ([implementation PR #3089](https://github.com/jstoup111/ai-conductor/pull/3089)).
 - Build-review operators can inspect retained rejected reviewer responses and their diagnostic context. ([implementation PR #3180](https://github.com/jstoup111/ai-conductor/pull/3180)).
+- Operators see remediation-gate budget consumption before a halt. ([implementation PR #3148](https://github.com/jstoup111/ai-conductor/pull/3148)).
 
 ### Changed
 
