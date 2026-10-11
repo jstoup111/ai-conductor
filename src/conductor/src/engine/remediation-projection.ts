@@ -144,7 +144,7 @@ export type RemediationProjectionResult =
 /** Largest observed serialized structured sections in the repository corpus at BUILD. */
 export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
   requiredReferencesBytes: 3_911,
-  tasksBytes: 39_490,
+  tasksBytes: 53_431,
   pendingAsBuiltFindingsBytes: 1_383,
   priorLapsBytes: 111,
   refusalsBytes: 0,
