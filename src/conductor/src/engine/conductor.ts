@@ -414,6 +414,7 @@ import {
 } from './task-progress.js';
 import { supersedeHaltRecord } from './halt-record.js';
 import { runStackPreflight } from './restack/stack-preflight.js';
+import { runRestack } from './restack/restack-executor.js';
 import {
   makeGitRunner,
   performRebase,
@@ -428,6 +429,8 @@ import {
   assertNeverRebaseOutcome,
   ProtectedArtifactSealRejection,
   originDefaultBranch,
+  resolveBase,
+  filterCodeOrTestPaths,
   type RebaseOutcome,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
@@ -15230,6 +15233,88 @@ export class Conductor {
 
     const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
+
+    // A stacked feature is one history, not a collection of independently
+    // rebased branches.  Repair any durable stack state before judging the
+    // leaf, then replay the complete stack onto the resolved default tip.
+    // `applyRestackTransition` owns the resulting verdict/operation write;
+    // this boundary records the FINISH completion and emits the ordinary
+    // rebase observation for that whole-stack operation.
+    const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
+      const preflight = await runStackPreflight({
+        worktree: this.projectRoot,
+        slug: stackSlug,
+        events: this.events,
+      });
+      if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
+        const reason = preflight.kind === 'unavailable'
+          ? `stack preflight unavailable: ${preflight.detail}`
+          : 'stack preflight halted';
+        return { success: false, output: reason };
+      }
+
+      const base = await resolveBase(git, localBase);
+      const defaultTip = await git(['rev-parse', '--verify', base.ref]);
+      const oldLeaf = await git(['rev-parse', '--verify', 'HEAD']);
+      const mergeBase = await git(['merge-base', 'HEAD', base.ref]);
+      if (defaultTip.exitCode !== 0 || oldLeaf.exitCode !== 0 || mergeBase.exitCode !== 0) {
+        return { success: false, output: 'cannot resolve the stacked rebase tuple' };
+      }
+      const previous = oldLeaf.stdout.trim();
+      const target = defaultTip.stdout.trim();
+      const oldBase = mergeBase.stdout.trim();
+
+      // The executor deliberately avoids a no-op transaction: replaying an
+      // already-contained default would manufacture new commit identities.
+      const current = await git(['merge-base', '--is-ancestor', target, previous]);
+      let outcome: RebaseOutcome;
+      if (current.exitCode === 0) {
+        outcome = { kind: 'noop', baseSha: target, allChangedPaths: [] };
+      } else {
+        const restacked = await runRestack({
+          worktree: this.projectRoot,
+          slug: stackSlug,
+          cause: 'base-refresh',
+          newDefault: target,
+          events: this.events,
+          git,
+        });
+        if (restacked.kind !== 'applied') {
+          const reason = restacked.kind === 'unavailable'
+            ? `stack base refresh unavailable: ${restacked.detail}`
+            : 'stack base refresh halted';
+          return { success: false, output: reason };
+        }
+        const head = await git(['rev-parse', '--verify', 'HEAD']);
+        const delta = await git(['diff', '--name-only', oldBase, target]);
+        const featureSurface = await git(['diff', '--name-only', oldBase, previous]);
+        if (head.exitCode !== 0 || delta.exitCode !== 0 || featureSurface.exitCode !== 0) {
+          return { success: false, output: 'cannot inspect completed stacked rebase' };
+        }
+        const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+        outcome = {
+          kind: 'changed',
+          baseSha: target,
+          changedCodePaths: filterCodeOrTestPaths(allChangedPaths),
+          allChangedPaths,
+          featureSurface: featureSurface.stdout.split('\n').map((path) => path.trim()).filter(Boolean),
+          documentInputs: [],
+          replay: {
+            preRebaseHead: previous,
+            mergeBase: oldBase,
+            target,
+            completedHead: head.stdout.trim(),
+          },
+        };
+      }
+      this.lastRebaseOutcome = outcome;
+      state.rebase_base_sha = target;
+      await this.persistPendingStateChanges(state, 'persist stacked rebase base provenance');
+      await emitRebaseEvent(this.events, outcome);
+      await recordRebaseStepCompletion(this.stateFilePath, outcome);
+      return { success: true };
+    }
 
     // ── Merged-PR guard: rebase backstop ────────────────────────────────────
     // A merged PR is only eligible to skip rebase when strict durable evidence
