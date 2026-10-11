@@ -73,6 +73,17 @@ function positionsFromEnvelope(
     .sort((left, right) => left - right);
 }
 
+/** Returns the terminal position declared by the completed sealed envelope. */
+export async function resolveSealedLeaf(worktree: string): Promise<ChildId | undefined> {
+  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
+  try {
+    envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
+  } catch {
+    return undefined;
+  }
+  return positionsFromEnvelope(envelope).at(-1);
+}
+
 type ClosedChild = { child: ChildId; tip: string };
 
 async function runGit(git: GitRunner, args: string[]) {

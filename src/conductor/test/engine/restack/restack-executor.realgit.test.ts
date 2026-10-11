@@ -1,5 +1,6 @@
 // Covers: task:rem-prd-audit-R18
 // Covers: task:rem-prd-audit-R15
+// Covers: task:rem-as-built-R21
 // Covers: task:8
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -64,6 +65,15 @@ async function fixture() {
   await git(['checkout', '-q', 'main']);
   const advancedDefault = await commit('B-prime', 'base.txt', 'base advanced\n');
   await git(['checkout', '-q', 'feat/daemon-demo']);
+  await writeCoverageBindingEnvelope(repo, {
+    version: 1,
+    slug: 'demo',
+    runId: 'run-1',
+    status: 'done',
+    entries: [],
+    sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+    storyOwnership: { S1: 1, S2: 2, S3: 3 },
+  }, envelopeFilesystem);
   return { repo, git, base, oldDefault, a1, a2, c1, c2, l1, advancedDefault };
 }
 
@@ -125,6 +135,8 @@ describe('runRestack (real local Git)', () => {
     await git(['init', '-q', '-b', 'main']);
     await git(['config', 'user.email', 'restack@example.test']);
     await git(['config', 'user.name', 'Restack Executor']);
+    await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
     const base = await commit('base', 'base.txt');
     await git(['checkout', '-qb', 'feat/c1/demo']);
     const closed = await commit('closed', 'closed.txt');
@@ -134,6 +146,11 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'advance.txt');
     await git(['checkout', '-q', 'feat/c2/demo']);
+    await writeCoverageBindingEnvelope(repo, {
+      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+      storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    }, envelopeFilesystem);
 
     const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, git: makeGitRunner(repo) });
 
@@ -173,6 +190,11 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'feat/c2/demo']);
     await mkdir(join(repo, '.pipeline'), { recursive: true });
     await writeFile(join(repo, '.pipeline', 'conduct-state.json'), '{}');
+    await writeCoverageBindingEnvelope(repo, {
+      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+      storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    }, envelopeFilesystem);
 
     await expect(runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }))
       .resolves.toMatchObject({ kind: 'applied' });
@@ -217,7 +239,7 @@ describe('runRestack (real local Git)', () => {
   });
 
   // Covers: task:rem-prd-audit-R15
-  it('moves an unentered pre-region halt-record leaf to its owning child rewrite', async () => {
+  it('uses the sealed highest position for an unentered leaf when checkout differs from the cursor', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'restack-executor-unentered-leaf-'));
     repositories.push(repo);
     const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -244,16 +266,22 @@ describe('runRestack (real local Git)', () => {
       runId: 'run-1',
       status: 'done',
       entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Child 2'] },
-      storyOwnership: { S1: 1, S2: 2 },
+      sliceMembership: { taskSlices: { '1': 1, '2': 3, '3': 5 }, titles: ['Child 1', 'Child 3', 'Leaf 5'] },
+      storyOwnership: { S1: 1, S2: 3, S3: 5 },
     }, envelopeFilesystem);
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'base.txt', 'advanced\n');
-    await git(['checkout', '-q', 'feat/c1/demo']);
+    await git(['checkout', '-q', 'feat/daemon-demo']);
 
-    const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, git: makeGitRunner(repo) });
+    const events = new ConductorEventEmitter();
+    const planned: number[][] = [];
+    events.on('restack_planned', (event) => {
+      if (event.type === 'restack_planned') planned.push([...event.children]);
+    });
+    const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: makeGitRunner(repo) });
 
     expect(result.kind).toBe('applied');
+    expect(planned).toEqual([[1, 5]]);
     const [newChild, newLeaf] = await Promise.all([
       git(['rev-parse', 'feat/c1/demo']).then((result) => result.stdout.trim()),
       git(['rev-parse', 'feat/daemon-demo']).then((result) => result.stdout.trim()),
@@ -262,7 +290,20 @@ describe('runRestack (real local Git)', () => {
     expect(newLeaf).not.toBe(haltRecord);
     expect((await git(['show', '-s', '--format=%s', newLeaf])).stdout.trim()).toBe('halt record');
     expect((await git(['merge-base', '--is-ancestor', advanced, newLeaf])).stdout).toBe('');
-    expect((await git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(newChild);
+    expect((await git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(newLeaf);
+  });
+
+  it('refuses a durable child stack without its sealed envelope', async () => {
+    const subject = await fixture();
+    await rm(join(subject.repo, '.pipeline', 'coverage-binding.json'));
+
+    await expect(runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: subject.advancedDefault,
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'unavailable', detail: 'cannot resolve restack cursor: envelope-missing' });
   });
 
   it('persists a merge audit after flattening an uncarried side of a child range', async () => {
@@ -296,7 +337,7 @@ describe('runRestack (real local Git)', () => {
     }
   });
 
-  it('halts without a journal or ref move when an active range is not based on its closed parent', async () => {
+  it('returns unavailable without a journal or ref move when the cursor rejects an active range outside its closed parent', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'restack-executor-refusal-'));
     repositories.push(repo);
     const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -318,17 +359,22 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'advance.txt');
     await git(['checkout', '-q', 'feat/c2/demo']);
+    await writeCoverageBindingEnvelope(repo, {
+      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
+      storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    }, envelopeFilesystem);
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
     events.on('restack_refused', (event) => refusals.push(event));
 
     const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: makeGitRunner(repo) });
 
-    expect(result.kind).toBe('halted');
-    expect(refusals).toEqual([expect.objectContaining({ reason: 'range-not-ancestor', child: 2 })]);
+    expect(result).toEqual({ kind: 'unavailable', detail: 'cannot resolve restack cursor: divergent' });
+    expect(refusals).toEqual([]);
     expect((await git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).toBe(active);
     await expect(git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
-    await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).rejects.toThrow();
   });
 
   it('discards halt-record-only commits after a closed child while retaining them in its reflog', async () => {

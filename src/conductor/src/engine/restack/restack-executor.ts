@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
-import { parseChildId, type ChildId } from '../child-context.js';
-import { resolveActiveChild } from '../child-cursor.js';
-import { childBranchFor, leafBranchFor, parseFeatureBranch } from '../feature-branch-identity.js';
+import { type ChildId } from '../child-context.js';
+import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
+import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
@@ -162,30 +162,20 @@ async function checkedOutRef(git: GitRunner): Promise<RefName> {
   return parsed;
 }
 
-async function activeFor(worktree: string, slug: string, git: GitRunner): Promise<{ child: ChildId; branchRef: RefName; isLeaf: boolean; unenteredLeaf?: ChildId }> {
+type RestackActiveChild =
+  | { readonly child: ChildId; readonly branchRef: RefName; readonly isLeaf: true }
+  | { readonly child: ChildId; readonly branchRef: RefName; readonly isLeaf: false; readonly unenteredLeaf: ChildId };
+
+async function activeFor(worktree: string, slug: string, git: GitRunner): Promise<RestackActiveChild> {
   const cursor = await resolveActiveChild(worktree, slug, { git });
   if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
     const branch = ref(`refs/heads/${cursor.branch}`);
-    // The sealed cursor, rather than the checkout, is authoritative.  This
-    // also preserves declared gaps such as c1 -> c3.
-    return { child: cursor.child, branchRef: branch, isLeaf: cursor.isLeaf, ...(cursor.nextChild === undefined ? {} : { unenteredLeaf: cursor.nextChild }) };
+    if (cursor.isLeaf) return { child: cursor.child, branchRef: branch, isLeaf: true };
+    const unenteredLeaf = await resolveSealedLeaf(worktree);
+    if (unenteredLeaf === undefined) throw new Error('cannot resolve restack cursor: envelope-missing');
+    return { child: cursor.child, branchRef: branch, isLeaf: false, unenteredLeaf };
   }
-  // N=1/older stack records predate the sealed envelope. Keep their existing
-  // ref-only recovery path, but never use it when a sealed cursor exists.
-  if (cursor.kind !== 'envelope-missing' && cursor.kind !== 'no-child') throw new Error(`cannot resolve restack cursor: ${cursor.kind}`);
-  const head = await checkedOutRef(git);
-  const identity = parseFeatureBranch(head.slice('refs/heads/'.length));
-  if (identity.kind === 'child' && identity.slug === slug) return { child: identity.child, branchRef: head, isLeaf: false };
-  if (identity.kind !== 'leaf' || identity.slug !== slug) throw new Error('restack requires this feature\'s checked-out branch');
-  const closed = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]);
-  if (closed.exitCode !== 0) throw new Error('cannot inspect closed child refs');
-  const ids = closed.stdout.split('\n').flatMap((entry) => {
-    const matched = /\/closed\/c([1-9][0-9]*)$/.exec(entry.trim());
-    return matched ? [Number(matched[1])] : [];
-  });
-  const child = parseChildId(Math.max(0, ...ids) + 1);
-  if (!child) throw new Error('cannot determine active leaf child');
-  return { child, branchRef: head, isLeaf: true };
+  throw new Error(`cannot resolve restack cursor: ${cursor.kind}`);
 }
 
 function branchRefForRange(slug: string, range: ChildRange): RefName {
@@ -362,7 +352,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       cause: options.cause,
       active,
       ...(active.isLeaf ? {} : {
-        unenteredLeaf: { child: active.unenteredLeaf ?? parseChildId(active.child + 1)!, branchRef: ref(`refs/heads/${leafBranchFor(options.slug)}`) },
+        unenteredLeaf: { child: active.unenteredLeaf, branchRef: ref(`refs/heads/${leafBranchFor(options.slug)}`) },
       }),
     }, { git });
     if (plan.kind === 'refused') {
