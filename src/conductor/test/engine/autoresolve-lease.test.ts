@@ -1,3 +1,4 @@
+// Covers: task:37
 /**
  * Tests for `publishResolution` in src/engine/autoresolve.ts (Task 14).
  *
@@ -35,6 +36,9 @@ function fakeGit(
   const calls: string[][] = [];
   const git: GitRunner = async (args: string[]) => {
     calls.push([...args]);
+    if (args[0] === 'rev-parse' && args.some((arg) => arg.startsWith('refs/remotes/origin/'))) {
+      return { exitCode: 0, stdout: 'a'.repeat(40), stderr: '' };
+    }
     return handler(args);
   };
   return { git, calls };
@@ -102,7 +106,7 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
     // Exactly one push attempt — no retry.
     const pushCalls = gitCalls.filter((c) => c[0] === 'push');
     expect(pushCalls.length).toBe(1);
-    expect(pushCalls[0]).toContain('--force-with-lease');
+    expect(pushCalls[0].some((arg) => arg.startsWith('--force-with-lease=refs/heads/'))).toBe(true);
     expect(pushCalls[0]).not.toContain('--force');
     // No second attempt with any variant of a forcing flag.
     expect(gitCalls.filter((c) => c[0] === 'push').length).toBe(1);
@@ -187,7 +191,11 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
 
     // Exactly one push call — no compensating/rollback git call afterward.
     expect(gitCalls.filter((c) => c[0] === 'push').length).toBe(1);
-    expect(gitCalls.length).toBe(1);
+    // The expected-SHA decision reads the local tracking state and performs
+    // one branch-scoped fetch before its single mutating push.
+    expect(gitCalls.filter((c) => c[0] === 'fetch')).toEqual([[
+      'fetch', 'origin', '+refs/heads/feat/widget:refs/remotes/origin/feat/widget',
+    ]]);
 
     // The raw read transport cannot restore a label without a guarded runner.
     const restoreAttempt = ghCalls.find(

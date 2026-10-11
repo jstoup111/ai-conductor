@@ -9,6 +9,7 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
+import { forcePushWithExpectedLease, type PushLeaseGitRunner } from './push-lease.js';
 import type { ChildId } from './child-context.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
@@ -213,16 +214,28 @@ export async function publishHaltRecord(
     git: (args) => git(args, { cwd: root }),
     gh: remote.gh ?? makeProductionGh(),
   });
-  return (remote.remoteGit ?? executeRemoteGit)(
-    ['push', 'origin', `HEAD:refs/heads/${branch}`, '--force-with-lease'],
-    {
+  const localGit: PushLeaseGitRunner = async (args) => {
+    try {
+      const result = await git([...args], { cwd: root });
+      return { stdout: result.stdout, exitCode: 0 };
+    } catch (error) {
+      return { stdout: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
+  };
+  return forcePushWithExpectedLease({
+    cwd: root,
+    slug,
+    branch,
+    git: localGit,
+    remoteGit: (args) => (remote.remoteGit ?? executeRemoteGit)(args, {
       cwd: root,
       config: (args) => git(args, { cwd: root }),
       runRemoteGit: git,
       mutation,
       events: remote.events,
-    },
-  );
+    }),
+    events: remote.events,
+  });
 }
 
 function haltRecordRemoteFailure(result: HaltRecordPublicationResult): string {

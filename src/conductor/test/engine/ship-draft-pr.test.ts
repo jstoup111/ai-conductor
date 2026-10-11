@@ -1,3 +1,4 @@
+// Covers: task:37
 /**
  * Tests for the SHIP-phase-entry draft PR publisher (`openShipDraftPr`).
  *
@@ -63,6 +64,9 @@ function fakeGit(
   const git: GitRunner = async (args) => {
     calls.push([...args]);
     if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'https://github.com/acme/repo.git\n' };
+    if (args[0] === 'rev-parse' && args.some((arg) => arg.startsWith('refs/remotes/origin/'))) {
+      return { stdout: 'a'.repeat(40) + '\n' };
+    }
     const result = handler(args);
     if (result instanceof Error) throw result;
     return result;
@@ -483,12 +487,12 @@ describe('openShipDraftPr', () => {
     expect(gitCalls.flat()).not.toContain('--force');
   });
 
-  it('publishes a rewritten branch with --force-with-lease when pushMode is lease', async () => {
+  it('publishes a rewritten branch with an explicit expected-SHA lease when pushMode is lease', async () => {
     const { git, calls: gitCalls } = fakeGit((args) => {
       if (args[0] === 'rev-list') return { stdout: '31\n' };
       if (args[0] === 'push') {
         // A rebased branch can never be published by a plain push.
-        if (!args.includes('--force-with-lease')) {
+        if (!args.some((arg) => arg.startsWith('--force-with-lease=refs/heads/'))) {
           return new Error('! [rejected] feat/widget-import -> feat/widget-import (non-fast-forward)');
         }
         return { stdout: '' };
@@ -509,7 +513,10 @@ describe('openShipDraftPr', () => {
 
     expect(result).toEqual({ outcome: 'published', prUrl: PR_URL });
     const push = gitCalls.find((c) => c[0] === 'push');
-    expect(push).toEqual(['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`, '--force-with-lease']);
+    expect(push).toEqual([
+      'push', 'origin', `HEAD:refs/heads/${BRANCH}`,
+      `--force-with-lease=refs/heads/${BRANCH}:${'a'.repeat(40)}`,
+    ]);
     // A lease, never a bare force: a genuinely-moved remote must still fail closed.
     expect(gitCalls.flat()).not.toContain('--force');
   });

@@ -14,7 +14,7 @@ import {
 import type { RemoteGitExecutionResult, RemoteGitOperationDependencies } from '../../src/engine/remote-git-operations.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
-// Covers: task:1
+// Covers: task:1, task:37
 // After a local rewrite with an unmoved remote, writeHaltMarker publishes the halted record at
 // the local HEAD and emits exactly one halt_record_written event for its path, with no
 // halt_record_push_failed event. halt-record-commit.test.ts locks recordHalt and
@@ -91,7 +91,7 @@ describe('halt record lease publication', () => {
       .toBe(`.docs/halted/${slug}.md`);
     expect(failedEvents).toEqual([{
       path: `.docs/halted/${slug}.md`,
-      reason: expect.stringContaining('stale info'),
+      reason: expect.stringContaining('remote tip'),
     }]);
     expect(writtenPaths).toEqual([]);
   });
@@ -149,7 +149,7 @@ describe('halt record lease publication', () => {
     const foreignSha = await advanceBranchFromForeignClone(remote);
 
     await expect(supersedeHaltRecord(worktree, input.slug, 'operator', realGitRemote()))
-      .resolves.toMatchObject({ kind: 'pushFailed', reason: expect.stringContaining('stale info') });
+      .resolves.toMatchObject({ kind: 'pushFailed', reason: expect.stringContaining('remote tip') });
 
     expect(await gitDirValue(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(foreignSha);
     await expect(gitValue(worktree, ['show', `HEAD:.docs/halted/${input.slug}.md`]))
