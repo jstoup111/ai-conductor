@@ -14,6 +14,7 @@ import type { RemoteGitExecutionResult, RemoteGitOperationDependencies } from '.
 // Covers: task:1
 // Locks the lease argv and rejects bare force forms for halt-record publication.
 const scratchRoots: string[] = [];
+const leaseTip = 'a'.repeat(40);
 const input = {
   slug: 'operator-decision',
   haltClass: 'needs-human' as const,
@@ -63,7 +64,10 @@ describe('recordHalt', () => {
 
     await expect(recordHalt(worktree, input, successfulRemote(pushes))).resolves.toEqual({ kind: 'written' });
 
-    expect(pushes).toEqual([['push', 'origin', `HEAD:refs/heads/${input.branch}`, '--force-with-lease']]);
+    expect(pushes).toEqual([[
+      'push', 'origin', `HEAD:refs/heads/${input.branch}`,
+      `--force-with-lease=refs/heads/${input.branch}:${leaseTip}`,
+    ]]);
     expect(pushes.flat()).not.toContain('--force');
     expect(pushes.flat()).not.toContain('-f');
     expect(pushes.flat().some((argument) => argument.startsWith('+'))).toBe(false);
@@ -76,7 +80,10 @@ describe('recordHalt', () => {
     await expect(recordHalt(worktree, input, successfulRemote())).resolves.toEqual({ kind: 'written' });
     await expect(supersedeHaltRecord(worktree, input.slug, 'operator', successfulRemote(pushes))).resolves.toEqual({ kind: 'written' });
 
-    expect(pushes).toEqual([['push', 'origin', `HEAD:refs/heads/${input.branch}`, '--force-with-lease']]);
+    expect(pushes).toEqual([[
+      'push', 'origin', `HEAD:refs/heads/${input.branch}`,
+      `--force-with-lease=refs/heads/${input.branch}:${leaseTip}`,
+    ]]);
     expect(pushes.flat()).not.toContain('--force');
     expect(pushes.flat()).not.toContain('-f');
     expect(pushes.flat().some((argument) => argument.startsWith('+'))).toBe(false);
@@ -150,6 +157,7 @@ async function configureBareRemote(worktree: string): Promise<string> {
 
 function successfulRemote(pushes: string[][] = []): HaltRecordRemoteOptions {
   return {
+    git: leaseReadyGit(),
     remoteGit: async (args: readonly string[], _dependencies: RemoteGitOperationDependencies): Promise<RemoteGitExecutionResult> => {
       pushes.push([...args]);
       return { kind: 'executed', targets: [] };
@@ -159,6 +167,13 @@ function successfulRemote(pushes: string[][] = []): HaltRecordRemoteOptions {
 
 function failingRemote(error: string): HaltRecordRemoteOptions {
   return {
+    git: leaseReadyGit(),
     remoteGit: async (): Promise<RemoteGitExecutionResult> => ({ kind: 'failed', error, targets: [] }),
   };
+}
+
+function leaseReadyGit() {
+  return async (args: string[]) => ({
+    stdout: args[0] === 'rev-parse' ? `${leaseTip}\n` : '',
+  });
 }
