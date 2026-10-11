@@ -700,3 +700,139 @@ Every criterion row below was judged by an independent coverage judge (three rou
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-refusal-4ec42d50-f74a-4c13-8d31-580759f26f22: In src/conductor/src/daemon-cli.ts, restore the pre-feature content of the non-lifecycle provider_attempt `via <provider>` line: model, usage (turns, duration, cost), failure outcome and skip/unavailable reason. Keep only the presenter depth prefix. Revert the expectations in src/conductor/test/daemon-render-provider-attempt.test.ts to the original content, e.g. `acceptance_specs via claude (opus) ✓ — 54 turns, 8m7s, $4.96` and `build skipped codex (unavailable: cached run-wide unavailability)`, each with the depth prefix.
+**Gate:** prd-audit
+**Rationale:** Removal-only rework (verified, 98%). Plan Task 7 Step 3 (plan line 232) says the non-lifecycle `via <provider>` provider_attempt line must stay unchanged in content. The current test still expects the stripped forms, `·   acceptance_specs via claude ✓` and `·   build via codex` (daemon-render-provider-attempt.test.ts:41,61,96). The repair restores the pre-feature text and its test expectations. Only the depth prefix that Task 7 requires is kept, and no new behavior is added.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 4ec42d50-f74a-4c13-8d31-580759f26f22 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 4ec42d50-f74a-4c13-8d31-580759f26f22 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-4ec42d50-f74a-4c13-8d31-580759f26f22 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S3.1-a: In src/conductor/src/daemon-cli.ts, move scratch_cleanup_reclaimed, scratch_cleanup_retained and scratch_cleanup_failed onto the presenter (Task 10). Run and attempt identifiers move to verbose detail and leave the default line.
+**Gate:** prd-audit
+**Rationale:** Verified implementation gap (95%). The legacy scratch_cleanup_* cases in daemon-cli.ts still interpolate `run ${event.runId}` into default lines. The UUID-free fixture contract required by Task 11 does not exist. Task 10 (housekeeping events) and Task 11 (contract fixtures) admit this work.
+**Criterion:** S3.1
+**Parent task:** 11
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S3.1-a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S3.1-b: Add the Task 11 presentation contract test (e.g. src/conductor/test/engine/daemon-presentation-contract.test.ts). It must hold a fixture for every type in renderedEventTypes() with a UUID-shaped value in every identifier field, and assert that no default-verbosity line matches the UUID regex.
+**Gate:** prd-audit
+**Rationale:** Verified implementation gap (95%). The legacy scratch_cleanup_* cases in daemon-cli.ts still interpolate `run ${event.runId}` into default lines. The UUID-free fixture contract required by Task 11 does not exist. Task 10 (housekeeping events) and Task 11 (contract fixtures) admit this work.
+**Criterion:** S3.1
+**Parent task:** 11
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S3.1-b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S6.7: In src/conductor/src/daemon-cli.ts (~1397), pass the presenter's structured entry to the daemon-wide logger unchanged, with kind, moreAt and suffix intact, instead of composeDaemonLineBody(entry). Add a test that sends a 40-line step_failed through the global event subscriber and asserts one collapsed line with `+39 more lines` and the next-action suffix.
+**Gate:** prd-audit
+**Rationale:** Verified (97%): daemon-cli.ts:1397 wires the daemon-wide subscriber as `globalSubscriberLog(composeDaemonLineBody(entry))`. This flattens the structured entry and discards kind 'forwarded', moreAt and suffix, so global-subscriber payloads are never collapsed. Task 2 owns forwarded collapse through the daemon-wide logger.
+**Criterion:** S6.7
+**Parent task:** 2
+**Done when:**
+- [test] S6.7 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S6.7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S7.1-8: In src/conductor/src/daemon-cli.ts, move the step lifecycle warnings (step_failed, step_interrupted, step_refused, step_status_write_refused, step_inapplicable_ignored, step_inapplicable_refused, rejected setup_repair) onto the presenter's warning() with a NextAction. Update the step_refused expectation in test/engine/daemon-render.test.ts to the suffixed form.
+**Gate:** prd-audit
+**Rationale:** Verified (95%). Unmigrated warning/halt types still fall through renderDaemonEventUnsafe to output.info with no NextAction, among them step_retry, step_refused, step_interrupted, halt_marker_write_failed, worktree_reclaim_failed, build_no_progress and scratch_cleanup_failed. The Task 11 suffix-contract fixture is absent. Tasks 8, 9, 10 and 11 already assign these migrations and the contract.
+**Criterion:** S7.1
+**Parent task:** 11
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S7.1-8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S7.1-9: In src/conductor/src/daemon-cli.ts, move the halt/finish/rebase/CI warnings and halts (including halt_marker_write_failed) onto presenter warning()/halt() with a NextAction (Task 9).
+**Gate:** prd-audit
+**Rationale:** Verified (95%). Unmigrated warning/halt types still fall through renderDaemonEventUnsafe to output.info with no NextAction, among them step_retry, step_refused, step_interrupted, halt_marker_write_failed, worktree_reclaim_failed, build_no_progress and scratch_cleanup_failed. The Task 11 suffix-contract fixture is absent. Tasks 8, 9, 10 and 11 already assign these migrations and the contract.
+**Criterion:** S7.1
+**Parent task:** 11
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S7.1-9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S7.1-10: In src/conductor/src/daemon-cli.ts, move the housekeeping warnings (worktree_reclaim_failed, build_no_progress, scratch_cleanup_failed and the rest) onto presenter warning() with a NextAction (Task 10).
+**Gate:** prd-audit
+**Rationale:** Verified (95%). Unmigrated warning/halt types still fall through renderDaemonEventUnsafe to output.info with no NextAction, among them step_retry, step_refused, step_interrupted, halt_marker_write_failed, worktree_reclaim_failed, build_no_progress and scratch_cleanup_failed. The Task 11 suffix-contract fixture is absent. Tasks 8, 9, 10 and 11 already assign these migrations and the contract.
+**Criterion:** S7.1
+**Parent task:** 11
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S7.1-10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S7.1-11: In the Task 11 contract test, assert that every warning/halt fixture line ends with ` — next: ` or ` — no action needed: ` plus non-empty text, and that no info line contains either suffix.
+**Gate:** prd-audit
+**Rationale:** Verified (95%). Unmigrated warning/halt types still fall through renderDaemonEventUnsafe to output.info with no NextAction, among them step_retry, step_refused, step_interrupted, halt_marker_write_failed, worktree_reclaim_failed, build_no_progress and scratch_cleanup_failed. The Task 11 suffix-contract fixture is absent. Tasks 8, 9, 10 and 11 already assign these migrations and the contract.
+**Criterion:** S7.1
+**Parent task:** 11
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S7.1-11 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S7.3: In src/conductor/src/daemon-cli.ts, move step_retry onto the presenter as a warning with NextAction {kind:'none', why:<retry reason>}. Add a test asserting the line ends with ` — no action needed: <reason>`.
+**Gate:** prd-audit
+**Rationale:** Verified (97%): daemon-cli.ts:3509 still renders step_retry through the legacy path with no ` — no action needed: <reason>` suffix. Task 8 explicitly requires this.
+**Criterion:** S7.3
+**Parent task:** 8
+**Done when:**
+- [test] S7.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S7.3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S7.5-a: Convert the raw WARNING/✋ lines listed in Task 20 to formatDaemonWarning/formatDaemonHalt: src/conductor/src/engine/conductor.ts (4324, 4361, 4367, 4372, 4380, the halt-marker-write-failure line ending ` — next: ai-conductor monitor all`, 12404, 12952), halt-pr-rehabilitation.ts and halt-pr-reconciliation.ts (sweep lines ending ` — no action needed: the next sweep retries`). Add or extend the site tests.
+**Gate:** prd-audit
+**Rationale:** Verified (95%). conductor.ts:4324-4380 still emits raw `WARNING:` lines without a suffix. The halt-pr sweep lines lack `no action needed: the next sweep retries`, and the Task 20 warning-marker audit test is absent. Task 20 Steps list exactly these sites.
+**Criterion:** S7.5
+**Parent task:** 20
+**Done when:**
+- [test] S7.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S7.5-a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-S7.5-b: Add the Task 20 warning-marker source audit test. It fails on fixture sources containing log(`WARNING: x`), log(`⚠ x`) and log(`✋ x`), and passes on the repository's scanned files.
+**Gate:** prd-audit
+**Rationale:** Verified (95%). conductor.ts:4324-4380 still emits raw `WARNING:` lines without a suffix. The halt-pr sweep lines lack `no action needed: the next sweep retries`, and the Task 20 warning-marker audit test is absent. Task 20 Steps list exactly these sites.
+**Criterion:** S7.5
+**Parent task:** 20
+**Done when:**
+- [test] S7.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-S7.5-b is committed and its targeted tests pass.
+
+### Task rem-as-built-R2-AB1: In src/conductor/src/daemon-cli.ts, repair the three recovery logger adapters (~1458, 2821, 2933) to forward structured presenter entries with the daemon logger's marker, matching the repaired main feature adapter (~1513). Add a test that drives a structured entry through each recovery path without a TypeError.
+**Gate:** as-built
+**Rationale:** Conforming implementation drift (99%, verified by as-built). The recovery logger adapters at daemon-cli.ts:1458,2821,2933 drop the daemon logger's structured-entry marker, so presenter entries hit the TypeError at daemon-log.ts:291. The approved architecture already specifies this edge, and Task 5 owns the wiring.
+**Parent task:** 5
+**Governing clause:** Task 5
+**Done when:**
+- Task 5 is satisfied by this task.
+- The repair for task rem-as-built-R2-AB1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2-AB2: In src/conductor/src/daemon-cli.ts, migrate every remaining warning/halt case on the legacy fallback (as-built list :3321 through :3941) onto presenter warning()/halt() with a NextAction, so the fallback no longer emits warning or halt severity as info.
+**Gate:** as-built
+**Rationale:** Conforming drift (99%). The legacy fallback at daemon-cli.ts:3286 routes warnings and halts as info and bypasses NextAction. The listed lines are the remaining unmigrated event families that Tasks 8-10 already assign, under Task 4's presenter ownership. No architectural decision is needed.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- The repair for task rem-as-built-R2-AB2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2-AB3: Convert the raw warning/halt lines at src/conductor/src/engine/daemon-runner.ts:817,822,847 and src/conductor/src/engine/daemon-rekick.ts:218,226,230,322,329,459,870 to formatDaemonWarning/formatDaemonHalt with a NextAction. Assert the suffix in each site's test.
+**Gate:** as-built
+**Rationale:** Conforming drift (99%): raw sites in daemon-runner.ts (817, 822, 847) and daemon-rekick.ts (218, 226, 230, 322, 329, 459, 870) still omit the severity helpers. Task 19's Steps list these sites.
+**Parent task:** 19
+**Governing clause:** Task 19
+**Done when:**
+- Task 19 is satisfied by this task.
+- The repair for task rem-as-built-R2-AB3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2-AB4: Convert every raw failure/refusal/partial line at src/conductor/src/engine/halt-pr-rehabilitation.ts (184 through 1002, per the as-built list) and halt-pr-reconciliation.ts:119,241 to formatDaemonWarning with ` — no action needed: the next sweep retries`, and conductor.ts:12404,12952 to the severity helpers with a next-action suffix. Cover them in tests.
+**Gate:** as-built
+**Rationale:** Conforming drift (99%): halt-pr-rehabilitation.ts, halt-pr-reconciliation.ts and conductor.ts:12404,12952 still emit raw failure lines without suffixes. Task 20 explicitly assigns them, and the work is covered by R2-S7.5-a.
+**Parent task:** 20
+**Governing clause:** Task 20
+**Done when:**
+- Task 20 is satisfied by this task.
+- The repair for task rem-as-built-R2-AB4 is committed and its targeted tests pass.
