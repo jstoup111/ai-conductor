@@ -6,11 +6,10 @@
 
 import type { BlockerVerdict } from '../../blocker-resolver.js';
 import {
-  parsePriorityLabels,
   PRIORITY_BAND_RANK,
-  type IssueLabelReader,
   type PriorityBand,
 } from '../../backlog-priority.js';
+import type { OrderingSource } from '../../ordering-source.js';
 
 /** Minimal envelope shape this module cares about. */
 export interface ClaimableEnvelope {
@@ -36,7 +35,7 @@ export interface DependencyClaimLedger {
 }
 
 /** Resolves priority bands for a batch of sourceRefs — typically
- * `resolveClaimBands` bound to an IssueLabelReader. Absent ⇒ FIFO (today's
+ * `resolveClaimBands` bound to an OrderingSource. Absent ⇒ FIFO (today's
  * behavior, byte-for-byte). Throws propagate as a single logged warning; the
  * walk falls back to drain order rather than failing the claim. */
 export type ResolveBands = (refs: string[]) => Promise<Map<string, PriorityBand>>;
@@ -75,26 +74,30 @@ export type ClaimOutcome =
  */
 /**
  * Resolve the priority band for each of the given sourceRefs, via a single
- * batched call to the injected IssueLabelReader. TR-1: a 404 (`not-found`)
- * or a ref absent from the reader's result both default to `unlabeled`;
- * when a ref carries multiple priority labels, the highest band wins (via
- * parsePriorityLabels). A throwing reader propagates the throw untouched —
- * this helper does not catch or degrade to a fallback mode.
+ * batched call to the injected OrderingSource. Missing facts, `not-found`,
+ * and `unavailable` all default to `unlabeled`. A throwing source propagates
+ * the throw untouched — this helper does not catch or degrade to a fallback
+ * mode.
  */
 export async function resolveClaimBands(
-  reader: IssueLabelReader,
+  source: OrderingSource,
   refs: string[],
 ): Promise<Map<string, PriorityBand>> {
   const uniqueRefs = [...new Set(refs)];
-  const readerResult = await reader(uniqueRefs);
+  const facts = await source.readFacts(uniqueRefs);
 
   const bands = new Map<string, PriorityBand>();
   for (const ref of uniqueRefs) {
-    const labels = readerResult.get(ref);
-    if (!labels || labels === 'not-found') {
-      bands.set(ref, 'unlabeled');
-    } else {
-      bands.set(ref, parsePriorityLabels(labels) ?? 'unlabeled');
+    const outcome = facts.get(ref) ?? 'not-found';
+    if (typeof outcome !== 'string') {
+      bands.set(ref, outcome.priority ?? 'unlabeled');
+      continue;
+    }
+    switch (outcome) {
+      case 'not-found':
+      case 'unavailable':
+        bands.set(ref, 'unlabeled');
+        break;
     }
   }
   return bands;

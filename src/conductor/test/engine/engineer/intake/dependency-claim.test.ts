@@ -1,3 +1,4 @@
+// Covers: task:6
 // Unit RED spec for Task 19: intake claim defers blocked entries
 // (oldest-unblocked wins). FR-8 happy path.
 //
@@ -6,6 +7,8 @@
 // This file exercises just the Task 19 slice in isolation.
 
 import { describe, it, expect } from 'vitest';
+import { createOrderingSource, type OrderingSource } from '../../../../src/engine/ordering-source.js';
+import type { GhRunner } from '../../../../src/engine/tracker-client.js';
 
 async function loadClaimModule() {
   return import('../../../../src/engine/engineer/intake/dependency-claim.js') as Promise<any>;
@@ -99,32 +102,33 @@ describe('Task 19: dependency-claim — oldest-unblocked wins', () => {
 });
 
 describe('Task 2: resolveClaimBands — labels to band map', () => {
-  function makeFakeReader(byRef: Record<string, string[] | 'not-found'>) {
-    return async (refs: string[]) => {
-      const result = new Map<string, string[] | 'not-found'>();
-      for (const ref of refs) {
-        if (Object.prototype.hasOwnProperty.call(byRef, ref)) {
-          result.set(ref, byRef[ref]);
-        }
+  function makeFakeSource(byRef: Record<string, string[] | 'not-found'>): OrderingSource {
+    const run: GhRunner = async (args) => {
+      const match = args[1]?.match(/^repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/);
+      const ref = match ? `${match[1]}#${match[2]}` : '';
+      const labels = byRef[ref];
+      if (labels === 'not-found') {
+        throw Object.assign(new Error('missing'), { status: 404 });
       }
-      return result;
+      return { stdout: JSON.stringify({ labels: (labels ?? []).map((name) => ({ name })) }) };
     };
+    return createOrderingSource({ run });
   }
 
   it('returns critical for a priority: critical ref', async () => {
     const { resolveClaimBands } = await loadClaimModule();
-    const reader = makeFakeReader({ 'acme/app#1': ['priority: critical'] });
+    const source = makeFakeSource({ 'acme/app#1': ['priority: critical'] });
 
-    const bands = await resolveClaimBands(reader, ['acme/app#1']);
+    const bands = await resolveClaimBands(source, ['acme/app#1']);
 
     expect(bands.get('acme/app#1')).toBe('critical');
   });
 
   it('returns unlabeled for a not-found ref and for a ref absent from the reader result', async () => {
     const { resolveClaimBands } = await loadClaimModule();
-    const reader = makeFakeReader({ 'acme/app#1': 'not-found' });
+    const source = makeFakeSource({ 'acme/app#1': 'not-found' });
 
-    const bands = await resolveClaimBands(reader, ['acme/app#1', 'acme/app#2']);
+    const bands = await resolveClaimBands(source, ['acme/app#1', 'acme/app#2']);
 
     expect(bands.get('acme/app#1')).toBe('unlabeled');
     expect(bands.get('acme/app#2')).toBe('unlabeled');
@@ -132,38 +136,67 @@ describe('Task 2: resolveClaimBands — labels to band map', () => {
 
   it('returns highest band for a multi-label ref', async () => {
     const { resolveClaimBands } = await loadClaimModule();
-    const reader = makeFakeReader({
+    const source = makeFakeSource({
       'acme/app#1': ['priority: low', 'priority: high', 'priority: medium'],
     });
 
-    const bands = await resolveClaimBands(reader, ['acme/app#1']);
+    const bands = await resolveClaimBands(source, ['acme/app#1']);
 
     expect(bands.get('acme/app#1')).toBe('high');
   });
 
-  it('a throwing reader propagates the throw', async () => {
+  it('a throwing source propagates the throw', async () => {
     const { resolveClaimBands } = await loadClaimModule();
-    const reader = async () => {
-      throw new Error('reader boom');
-    };
+    const run: GhRunner = async () => { throw new Error('source boom'); };
+    const source = createOrderingSource({ run });
 
-    await expect(resolveClaimBands(reader, ['acme/app#1'])).rejects.toThrow('reader boom');
+    await expect(resolveClaimBands(source, ['acme/app#1'])).rejects.toThrow('source boom');
   });
 
   it('calls the reader exactly once with unique refs', async () => {
     const { resolveClaimBands } = await loadClaimModule();
     let calls = 0;
     let receivedRefs: string[] = [];
-    const reader = async (refs: string[]) => {
-      calls += 1;
-      receivedRefs = refs;
-      return new Map<string, string[] | 'not-found'>();
+    const backing = createOrderingSource({ run: async () => {
+      return { stdout: JSON.stringify({ labels: [] }) };
+    } });
+    const source: OrderingSource = {
+      async readFacts(refs) {
+        calls += 1;
+        receivedRefs = refs;
+        return backing.readFacts(refs);
+      },
+      readBlockers: backing.readBlockers,
     };
 
-    await resolveClaimBands(reader, ['acme/app#1', 'acme/app#2', 'acme/app#1']);
+    await resolveClaimBands(source, ['acme/app#1', 'acme/app#2', 'acme/app#1']);
 
     expect(calls).toBe(1);
     expect(receivedRefs).toEqual(['acme/app#1', 'acme/app#2']);
+  });
+});
+
+describe('Task 6: resolveClaimBands — ordering source facts', () => {
+  it('bands unavailable PROJ-9 and an unlabeled GitHub ref as unlabeled, then claims the earlier entry', async () => {
+    const { claimUnblocked, resolveClaimBands } = await loadClaimModule();
+    const jira = makeEnvelope('PROJ-9', '2026-07-01T00:00:00.000Z');
+    const github = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
+    const queue = makeFakeQueue([jira, github]);
+    const source = createOrderingSource({
+      run: async () => ({ stdout: JSON.stringify({ labels: [] }) }),
+    });
+    const resolveBands = (refs: string[]) => resolveClaimBands(source, refs);
+
+    const outcome = await claimUnblocked({
+      queue,
+      resolveDependency: makeResolveDependency({
+        'PROJ-9': { kind: 'unblocked' },
+        'acme/app#2': { kind: 'unblocked' },
+      }),
+      resolveBands,
+    });
+
+    expect(outcome).toMatchObject({ kind: 'claim', envelope: { sourceRef: 'PROJ-9' } });
   });
 });
 
@@ -258,17 +291,17 @@ describe('Task 6: dependency-claim — reader throw fails open to FIFO, one warn
     // refs it was given (on the 2nd ref) rather than ever returning a partial
     // Map. This proves the walk sees either the whole map or a throw — never
     // a half-populated band map driving a partial sort.
-    const reader = async (refs: string[]) => {
-      const result = new Map<string, string[] | 'not-found'>();
-      for (let i = 0; i < refs.length; i++) {
-        if (i === 1) {
-          throw new Error('reader boom mid-map');
+    let reads = 0;
+    const source = createOrderingSource({
+      run: async () => {
+        reads += 1;
+        if (reads === 2) {
+          throw new Error('source boom mid-map');
         }
-        result.set(refs[i], ['priority: critical']);
-      }
-      return result;
-    };
-    const resolveBands = (refs: string[]) => resolveClaimBands(reader, refs);
+        return { stdout: JSON.stringify({ labels: [{ name: 'priority: critical' }] }) };
+      },
+    });
+    const resolveBands = (refs: string[]) => resolveClaimBands(source, refs);
 
     const warnings: unknown[][] = [];
     const log = (...args: unknown[]) => warnings.push(args);
@@ -289,10 +322,10 @@ describe('Task 6: dependency-claim — reader throw fails open to FIFO, one warn
     const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z');
     const queue = makeFakeQueue([A, B]);
     const resolveDependency = makeResolveDependency({});
-    const reader = async (_refs: string[]) => {
-      throw new Error('reader boom');
-    };
-    const resolveBands = (refs: string[]) => resolveClaimBands(reader, refs);
+    const source = createOrderingSource({
+      run: async () => { throw new Error('source boom'); },
+    });
+    const resolveBands = (refs: string[]) => resolveClaimBands(source, refs);
     const warnings: unknown[][] = [];
     const log = (...args: unknown[]) => warnings.push(args);
 
