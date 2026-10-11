@@ -121,6 +121,11 @@ describe('reduceBuildReviewAdjudication', () => {
     const source = projectBuildReviewAggregateSources(aggregate)?.[0];
     if (!source) throw new Error('expected implementation-quality source');
     const sourceId = buildReviewAdjudicationSourceId(source);
+    const sourceCharge = {
+      findingId: source.findingId,
+      rubric: source.rubric,
+      sourceId,
+    };
     const judgement: RemediationCaseJudgement = {
       mode: 'case-v2', domain: 'build_review',
       sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'implementation-quality-case' }],
@@ -156,7 +161,11 @@ describe('reduceBuildReviewAdjudication', () => {
       readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '8', status: 'in_progress' }] }),
     });
 
-    expect(source).toMatchObject({ rubric: 'implementationQuality' });
+    expect(sourceCharge).toMatchObject({
+      findingId: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      rubric: 'implementationQuality',
+      sourceId: `implementationQuality:${source.findingId}`,
+    });
     expect(result).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['case-implementation-quality'] } });
     expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review-work-order.json'), 'utf8'))).toMatchObject({
       effectId: 'effect-implementation-quality',
@@ -167,7 +176,7 @@ describe('reduceBuildReviewAdjudication', () => {
     });
     await expect(new RemediationCaseStore(projectRoot, { version: 'v1', repository: 'acme/repo', feature: 'implementation-quality' }).read())
       .resolves.toMatchObject({ ok: true, state: { cases: [{
-        sources: [{ sourceId, outcome: 'acted' }],
+        sources: [{ sourceId: sourceCharge.sourceId, outcome: 'acted' }],
         effect: { id: 'effect-implementation-quality', kind: 'action', status: 'applied' },
       }] } });
     await expect(readKickbackLedger(projectRoot)).resolves.toMatchObject({ gates: { build_review: {
