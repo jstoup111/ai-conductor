@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:7, task:8, task:10, task:11, task:12, task:17
+// Covers: task:1, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -7,7 +7,7 @@ import { basename, join } from 'node:path';
 import { execa } from 'execa';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
-import type { ConductState, ExecutionContext, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
@@ -4746,6 +4746,153 @@ TIER: M`,
       expect(prompt).toContain('Build Review Test Quality rubric');
       // The provider prompt only prefixes the skill command; the rest is byte-identical.
       expect(dispatched!.endsWith(prompt!)).toBe(true);
+    });
+
+    it('retains a rejected built-in reviewer response and links it from the infrastructure fault event', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      const findings = [{ concernKind: 'test-insensitive' }];
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        exitCode: 0,
+        output: 'reviewer final message',
+        finalStructuredResult: { findings },
+      });
+      const events = new ConductorEventEmitter();
+      const failures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+      events.on('build_review_rubric_infrastructure_failure', (event) => {
+        if (event.type === 'build_review_rubric_infrastructure_failure') failures.push(event);
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        events,
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      await runner.run('build_review', emptyState);
+
+      expect(failures).toHaveLength(1);
+      const failure = failures[0]!;
+      const [lapId] = (await readdir(join(dir, '.pipeline/build-review'))).filter((lap) => lap.startsWith('lap-'));
+      expect(lapId).toBeDefined();
+      const retainedResponsePath = `.pipeline/build-review-rejections/${lapId}/testQuality.1.json`;
+      const record = JSON.parse(await readFile(join(dir, retainedResponsePath), 'utf8'));
+      const ledger = await readKickbackLedger(dir);
+
+      expect(record).toMatchObject({
+        version: 1,
+        rubric: 'testQuality',
+        rubricKind: 'builtin',
+        attempt: 1,
+        reason: 'invalid-structured-result',
+        output: 'reviewer final message',
+        structuredResult: { findings },
+        detail: ledger.gates.build_review?.lastMechanicalFault?.detail,
+        rejection: failure.rejection,
+      });
+      expect(failure.retainedResponsePath).toBe(retainedResponsePath);
+    });
+
+    it('keeps the built-in rejection fault outcome when response retention is unavailable', async () => {
+      await scopedPlan();
+      const findings = [{ concernKind: 'test-insensitive' }];
+      const response = {
+        success: true,
+        exitCode: 0,
+        output: 'reviewer final message',
+        finalStructuredResult: { findings },
+      };
+      const baselineProvider = createMockProvider();
+      (baselineProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+      const baselineEvents = new ConductorEventEmitter();
+      const baselineFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+      baselineEvents.on('build_review_rubric_infrastructure_failure', (event) => {
+        if (event.type === 'build_review_rubric_infrastructure_failure') baselineFailures.push(event);
+      });
+      const baselineRunner = new DefaultStepRunner(baselineProvider, 'session-1', dir, {
+        events: baselineEvents,
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const baselineResult = await baselineRunner.run('build_review', emptyState);
+      const baselineLedger = await readKickbackLedger(dir);
+      const baselineFailure = baselineFailures[0]!;
+      const blockedDir = await mkdtemp(join(tmpdir(), 'build-review-retention-blocked-'));
+      try {
+        const blockedPlanPath = join(blockedDir, 'plan.md');
+        await scopedPlan(blockedPlanPath);
+        await mkdir(join(blockedDir, '.pipeline'), { recursive: true });
+        await writeFile(join(blockedDir, '.pipeline', 'build-review-rejections'), 'not a directory\n', 'utf-8');
+        const blockedProvider = createMockProvider();
+        (blockedProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+        const blockedEvents = new ConductorEventEmitter();
+        const blockedFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+        blockedEvents.on('build_review_rubric_infrastructure_failure', (event) => {
+          if (event.type === 'build_review_rubric_infrastructure_failure') blockedFailures.push(event);
+        });
+        const blockedRunner = new DefaultStepRunner(blockedProvider, 'session-1', blockedDir, {
+          events: blockedEvents,
+          gitRunner: scopedGit(),
+          planPath: blockedPlanPath,
+          ...testQualityOptIn(),
+          ...currentBuildReviewProof(),
+        });
+
+        const blockedResult = await blockedRunner.run('build_review', emptyState);
+        const blockedLedger = await readKickbackLedger(blockedDir);
+        const blockedFailure = blockedFailures[0]!;
+
+        expect(blockedResult.output).toBe(baselineResult.output);
+        expect(blockedResult.currentLapMechanicalFault).toBe(true);
+        expect({
+          mechanicalFaults: blockedLedger.gates.build_review?.mechanicalFaults,
+          lastMechanicalFault: blockedLedger.gates.build_review?.lastMechanicalFault,
+        }).toEqual({
+          mechanicalFaults: 1,
+          lastMechanicalFault: baselineLedger.gates.build_review?.lastMechanicalFault,
+        });
+        expect({
+          reason: blockedFailure.reason,
+          cause: blockedFailure.cause,
+          rejection: blockedFailure.rejection,
+          excerpt: blockedFailure.excerpt,
+        }).toEqual({
+          reason: baselineFailure.reason,
+          cause: baselineFailure.cause,
+          rejection: baselineFailure.rejection,
+          excerpt: baselineFailure.excerpt,
+        });
+        expect(blockedFailure).not.toHaveProperty('retainedResponsePath');
+        await expect(access(join(blockedDir, '.pipeline/build-review.json'))).rejects.toThrow();
+      } finally {
+        await rm(blockedDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not create a retention directory for an accepted test-quality judgment', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        exitCode: 0,
+        output: '{"findings":[]}',
+        finalStructuredResult: { findings: [] },
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result.output).toContain('"verdict":"PASS"');
+      await expect(access(join(dir, '.pipeline/build-review-rejections'))).rejects.toThrow();
     });
 
     it('retains final failed-grader exit facts through the exhausted mechanical-fault aggregate', async () => {

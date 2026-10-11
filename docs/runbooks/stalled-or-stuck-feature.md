@@ -1591,6 +1591,13 @@ failed attempt's `step_retry` / `step_failed` events carry it as `providerExit`
 (for example `signal=SIGKILL`) from a provider crash (`exitCode=1` with empty output) before
 recording reduced coverage.
 
+When the cause is `invalid-structured-result`, the reviewer answered but its result failed the
+rubric contract. Open the record named by the fault event's `retainedResponsePath`
+(`.pipeline/build-review-rejections/<lap>/<rubric>.<attempt>.json`) to see the rejected result, the
+raw output, and, for a custom rubric, the delivered prompt and each cited region's comparison with
+the frozen commit ([artifact reference](../reference/artifacts.md#verdict-and-evidence-artifacts)).
+A missing record means retention failed; the fault itself is unaffected.
+
 **Recovery:** the halt body names both required steps.
 
 1. Record the decision — this requires an interactive terminal and a resolvable local operator

@@ -30,7 +30,7 @@ import {
 import { redactSafetyText } from './safety-diagnostics.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode } from '../types/index.js';
-import { admitBuildReviewCustomSourceRegions } from './build-review-source-region-admission.js';
+import { admitBuildReviewCustomSourceRegions, compareBuildReviewCitedSourceRegions } from './build-review-source-region-admission.js';
 import { BuildReviewScopeSource } from './build-review-scope-source.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection } from './prd-audit-routing.js';
@@ -205,6 +205,7 @@ import {
   classifyBuildReviewPolicyIncompatibility,
   type BuildReviewLapId,
 } from './build-review-domain.js';
+import { retainBuildReviewRejectedResponse } from './build-review-rejection-retention.js';
 import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
 import { renderBuildReviewFrozenInputScope } from './build-review-materialization.js';
@@ -3159,7 +3160,7 @@ export class DefaultStepRunner implements StepRunner {
         customEntries.length,
         async (_id, entry) => {
           try {
-            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor);
+            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir);
           } finally {
             lapGate?.arrive(entry.id);
           }
@@ -3551,6 +3552,7 @@ export class DefaultStepRunner implements StepRunner {
     tier: ConductState['complexity_tier'],
     lapGate?: BuildReviewLapGate,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
+    pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline'),
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -3834,15 +3836,32 @@ export class DefaultStepRunner implements StepRunner {
         // D5.3: no reviewer starts until every lap member's baseline exists.
         await lapGate?.waitForBaseline(entry.id);
         const dispatchWithinLap = <T>(run: () => Promise<T>): Promise<T> => lapGate === undefined ? run() : lapGate.withReviewerSlot(run);
+        const customPrompt = `${renderBuildReviewPolicyContract({
+          bundle, question: entry.question, contract: entry.contract,
+          scope: renderBuildReviewFrozenInputScope({
+            ...projection,
+          }),
+        })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`;
+        // Keep the exact bytes delivered to a custom reviewer beside its lap
+        // artifact.  This is intentionally best-effort: prompt retention is
+        // diagnostic evidence, never a reason to skip a judgement.
+        const retainedPrompt = await (async () => {
+          const path = join(pipelineDir, 'build-review', lapId, `${entry.id}.prompt.txt`);
+          try {
+            await mkdir(dirname(path), { recursive: true });
+            await writeFile(path, customPrompt, 'utf8');
+            return {
+              path: relative(this.projectDir, path).split('\\').join('/'),
+              sha256: `sha256:${createHash('sha256').update(customPrompt, 'utf8').digest('hex')}`,
+            };
+          } catch {
+            return undefined;
+          }
+        })();
         const dispatched = await dispatchWithinLap(() => dispatchRubricContract({
           descriptor: entry.contract,
           options: {
-            prompt: `${renderBuildReviewPolicyContract({
-            bundle, question: entry.question, contract: entry.contract,
-            scope: renderBuildReviewFrozenInputScope({
-              ...projection,
-            }),
-            })}\n\n${renderAuxiliarySkillInvocation(entry.skill, context.candidate.providerKey)}`,
+            prompt: customPrompt,
             cwd: source?.headPath ?? this.projectDir,
             readOnlyReview: true,
             reviewDispatch: true,
@@ -3911,9 +3930,30 @@ export class DefaultStepRunner implements StepRunner {
             reason: 'invalid-structured-result',
             detail: [renderBuildReviewJudgedResultRejection(rejection), detail].filter(Boolean).join('; '),
           };
+          const regionComparison = await compareBuildReviewCitedSourceRegions(
+            value,
+            inputs.sourceSnapshot.sourceChanges ?? [],
+            { read: (side, path) => new BuildReviewScopeSource(this.gitRunner, inputs.sourceSnapshot.headSha).readAtOptional(side === 'head' ? inputs.sourceSnapshot.headSha : inputs.sourceSnapshot.mergeBase, path) },
+          ).catch(() => undefined);
+          const retainedResponsePath = await retainBuildReviewRejectedResponse({
+            pipelineDir,
+            worktreeRoot: this.projectDir,
+            lapId,
+            rubric: entry.id,
+            rubricKind: 'custom',
+            detail: failure.detail,
+            rejection,
+            provider: context.candidate.providerKey,
+            model: actualModel,
+            structuredResult: value ?? null,
+            output: invoked.output,
+            ...(retainedPrompt === undefined ? {} : { promptPath: retainedPrompt.path, promptSha256: retainedPrompt.sha256 }),
+            ...(regionComparison === undefined ? {} : { regionComparison }),
+          });
           await this.events?.emit({
             type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
             reason: 'invalid-structured-result', cause: 'invalid-structured-result', rejection, excerpt: failure.detail,
+            ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
           });
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
@@ -3946,9 +3986,31 @@ export class DefaultStepRunner implements StepRunner {
           if (parsed?.kind === 'unsupported-policy') {
             coverageFailure = true;
             failure = { reason: 'invalid-structured-result', detail: `unsupported-policy: ${parsed.requirement}` };
+            const rejection = diagnoseBuildReviewCustomReviewerPayloadRejection(invoked.finalStructuredResult);
+            const regionComparison = await compareBuildReviewCitedSourceRegions(
+              invoked.finalStructuredResult,
+              inputs.sourceSnapshot.sourceChanges ?? [],
+              { read: (side, path) => new BuildReviewScopeSource(this.gitRunner, inputs.sourceSnapshot.headSha).readAtOptional(side === 'head' ? inputs.sourceSnapshot.headSha : inputs.sourceSnapshot.mergeBase, path) },
+            ).catch(() => undefined);
+            const retainedResponsePath = await retainBuildReviewRejectedResponse({
+              pipelineDir,
+              worktreeRoot: this.projectDir,
+              lapId,
+              rubric: entry.id,
+              rubricKind: 'custom',
+              detail: failure.detail,
+              rejection,
+              provider: context.candidate.providerKey,
+              model: actualModel,
+              structuredResult: invoked.finalStructuredResult ?? null,
+              output: invoked.output,
+              ...(retainedPrompt === undefined ? {} : { promptPath: retainedPrompt.path, promptSha256: retainedPrompt.sha256 }),
+              ...(regionComparison === undefined ? {} : { regionComparison }),
+            });
             await this.events?.emit({
               type: 'build_review_rubric_infrastructure_failure', rubric: entry.id, lapId,
-              reason: 'invalid-structured-result', cause: 'invalid-structured-result', excerpt: failure.detail,
+              reason: 'invalid-structured-result', cause: 'invalid-structured-result', rejection, excerpt: failure.detail,
+              ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
             });
             await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
             return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
@@ -4698,9 +4760,16 @@ export class DefaultStepRunner implements StepRunner {
         branch.rubric,
         { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
       );
-      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, {
+      const detail = 'root: a structured result is required';
+      const retainedResponsePath = await retainBuildReviewRejectedResponse({
+        pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+        lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
+        structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
+      });
+      return makeBuildReviewDispatchFailure(detail, undefined, {
         cause: 'invalid-structured-result',
         rejection,
+        ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
       });
     }
     if (!initial.success && initial.output?.startsWith(`${CODEX_DISPLAY_NAME} native schema scratch home failed:`)) {
@@ -4717,9 +4786,16 @@ export class DefaultStepRunner implements StepRunner {
         branch.rubric,
         { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
       );
-      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, {
+      const detail = 'root: a structured result is required';
+      const retainedResponsePath = await retainBuildReviewRejectedResponse({
+        pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+        lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
+        structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
+      });
+      return makeBuildReviewDispatchFailure(detail, undefined, {
         cause: 'invalid-structured-result',
         rejection,
+        ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
       });
     }
     const initialResult = validateBuildReviewDispatchedResult(initial.finalStructuredResult, branch.rubric, projection);
@@ -4731,8 +4807,15 @@ export class DefaultStepRunner implements StepRunner {
       buildReviewFindingReferenceContext(projection),
       buildReviewCandidateScopeResolutionContext(projection),
     );
-    return makeBuildReviewDispatchFailure(renderBuildReviewJudgedResultRejection(rejection), undefined, {
+    const detail = renderBuildReviewJudgedResultRejection(rejection);
+    const retainedResponsePath = await retainBuildReviewRejectedResponse({
+      pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+      lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
+      structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
+    });
+    return makeBuildReviewDispatchFailure(detail, undefined, {
       cause: 'invalid-structured-result', rejection,
+      ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
     });
   }
 

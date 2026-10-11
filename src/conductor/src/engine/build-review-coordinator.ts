@@ -104,6 +104,8 @@ export type BuildReviewCoordinatedBranch =
       readonly providerSetupExhaustion?: ProviderSetupExhaustion;
       /** Typed structured-output rejection retained for the mechanical-fault event. */
       readonly rejection?: import('./build-review-domain.js').BuildReviewJudgedResultRejection;
+      /** Best-effort retained reviewer response record, relative to the worktree root. */
+      readonly retainedResponsePath?: string;
     };
 
 /**
@@ -276,12 +278,14 @@ function infrastructure(
   detail?: string,
   setupExhaustion?: ProviderSetupExhaustion,
   rejection?: import('./build-review-domain.js').BuildReviewJudgedResultRejection,
+  retainedResponsePath?: string,
 ): BuildReviewCoordinatedBranch {
   return {
     kind: "infrastructure-failure", rubric, reason,
     ...(detail === undefined ? {} : { detail }),
     ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
     ...(rejection ? { rejection } : {}),
+    ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
   };
 }
 
@@ -826,6 +830,7 @@ export async function coordinateBuildReviewRubrics(
               detail,
               failure?.providerSetupExhaustion,
               failure?.cause === 'native-schema-unsupported' ? undefined : structuredResultWasRejected ? rejection : undefined,
+              failure?.retainedResponsePath,
             ),
           };
         }
@@ -881,6 +886,7 @@ export async function coordinateBuildReviewRubrics(
         reason: outcome.branch.reason,
         cause: deriveBuildReviewInfrastructureFailureReason(outcome.branch),
         ...(outcome.branch.rejection !== undefined ? { rejection: outcome.branch.rejection } : {}),
+        ...(outcome.branch.retainedResponsePath !== undefined ? { retainedResponsePath: outcome.branch.retainedResponsePath } : {}),
         ...(outcome.branch.detail !== undefined ? { excerpt: outcome.branch.detail } : {}),
       });
     }

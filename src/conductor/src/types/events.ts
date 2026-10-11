@@ -712,6 +712,8 @@ type ConductorEventBody =
       cause?: BuildReviewInfrastructureFailureReason;
       /** Field-named native structured-result contract rejection, when present. */
       rejection?: BuildReviewJudgedResultRejection;
+      /** Best-effort retained reviewer response record, relative to the worktree root. */
+      retainedResponsePath?: string;
       excerpt?: string;
       /** Present only when the canonical rubric projection exceeded its configured byte bound. */
       measuredBytes?: number;

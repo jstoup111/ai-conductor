@@ -925,6 +925,8 @@ export interface BuildReviewDispatchFailure {
   readonly cause?: 'invalid-provider-result' | 'invalid-structured-result' | 'native-schema-unsupported' | 'read-only-review-unavailable';
   /** Kept typed so the existing fault event can carry it once its union admits the field. */
   readonly rejection?: BuildReviewJudgedResultRejection;
+  /** Best-effort retained response record, relative to the worktree root. */
+  readonly retainedResponsePath?: string;
 }
 export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, unresolvedCommandName: string): string {
   const commandDetail = unresolvedCommandName.trim()
@@ -936,13 +938,13 @@ function providerSetupExhaustion(value: unknown): ProviderSetupExhaustion | unde
 export function makeBuildReviewDispatchFailure(
   detail: string,
   setupExhaustion?: ProviderSetupExhaustion,
-  structuredFailure?: { readonly cause: 'invalid-provider-result' } | { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection } | { readonly cause: 'native-schema-unsupported' } | { readonly cause: 'read-only-review-unavailable' },
+  structuredFailure?: { readonly cause: 'invalid-provider-result' } | { readonly cause: 'invalid-structured-result'; readonly rejection: BuildReviewJudgedResultRejection; readonly retainedResponsePath?: string } | { readonly cause: 'native-schema-unsupported' } | { readonly cause: 'read-only-review-unavailable' },
 ): BuildReviewDispatchFailure {
   return {
     kind: 'dispatch-failure', detail,
     ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
     ...(structuredFailure?.cause === 'invalid-structured-result'
-      ? { cause: structuredFailure.cause, rejection: structuredFailure.rejection }
+      ? { cause: structuredFailure.cause, rejection: structuredFailure.rejection, ...(structuredFailure.retainedResponsePath === undefined ? {} : { retainedResponsePath: structuredFailure.retainedResponsePath }) }
       : structuredFailure ? { cause: structuredFailure.cause } : {}),
   };
 }
@@ -955,6 +957,7 @@ export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDisp
   const invalidStructuredResult = source?.cause === 'invalid-structured-result' && source.rejection !== undefined
     ? source.rejection as BuildReviewJudgedResultRejection
     : undefined;
+  const retainedResponsePath = text(source?.retainedResponsePath) ? source.retainedResponsePath : undefined;
   const nativeSchemaUnsupported = source?.cause === 'native-schema-unsupported';
   const readOnlyReviewUnavailable = source?.cause === 'read-only-review-unavailable';
   const invalidProviderResult = source?.cause === 'invalid-provider-result';
@@ -962,7 +965,7 @@ export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDisp
     ? {
         kind: 'dispatch-failure', detail: source.detail,
         ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}),
-        ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult } : {}),
+        ...(invalidStructuredResult ? { cause: 'invalid-structured-result' as const, rejection: invalidStructuredResult, ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }) } : {}),
         ...(invalidProviderResult ? { cause: 'invalid-provider-result' as const } : {}),
         ...(nativeSchemaUnsupported ? { cause: 'native-schema-unsupported' as const } : {}),
         ...(readOnlyReviewUnavailable ? { cause: 'read-only-review-unavailable' as const } : {}),
