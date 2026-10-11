@@ -91,6 +91,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked-delivery features no longer halt with "Expected last_step to match before record last completed step" when moving between a slice and a feature-wide step. ([implementation PR #3182](https://github.com/jstoup111/ai-conductor/pull/3182)).
 - A refused over-scope finding whose remediation allowance is spent now halts as a recoverable budget cap that `kickback-budget raise` accepts, instead of looping on the same refusal prompt; validation-group refusal halts also keep the underlying cause. ([implementation PR #3183](https://github.com/jstoup111/ai-conductor/pull/3183)).
 - Remediation tasks shared by several audit findings are now appended once and charged once against plan growth, instead of being duplicated across PRD and as-built prefixes and over-charged. ([implementation PR #3184](https://github.com/jstoup111/ai-conductor/pull/3184)).
+- Refused over-scope findings now route to BUILD rework when the same audit round also carries remediable as-built findings, instead of halting on an unexpected-finding fault. ([implementation PR #3186](https://github.com/jstoup111/ai-conductor/pull/3186)).
 
 ## Migration
 
