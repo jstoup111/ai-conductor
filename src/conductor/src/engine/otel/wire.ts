@@ -124,9 +124,17 @@ export async function wireOtelLogs(
     }
     return null;
   }
-  const policy = await readLogPolicy(context.project ?? dirname(context.pipelineDir), {
-    warn: (message) => { void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] ${message}` }); },
-  });
+  let policy: Awaited<ReturnType<typeof readLogPolicy>>;
+  try {
+    policy = await readLogPolicy(context.project ?? dirname(context.pipelineDir), {
+      warn: (message) => { void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] ${message}` }); },
+    });
+  } catch {
+    // Policy is logs-only authorization. An unexpected reader failure must
+    // never block otherwise independent trace, metric, or local diagnostics.
+    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] log policy setup failed; logs remain local' }).catch(() => undefined);
+    return null;
+  }
   if (!policy.sendable) {
     void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] ${policy.reason}; logs remain local` }).catch(() => undefined);
     return null;
