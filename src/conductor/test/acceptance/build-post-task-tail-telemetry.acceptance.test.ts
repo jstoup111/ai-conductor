@@ -1,3 +1,4 @@
+// Covers: task:6
 /**
  * RED acceptance specs for `.docs/stories/build-post-task-tail-telemetry.md`.
  *

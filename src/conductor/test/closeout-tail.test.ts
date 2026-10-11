@@ -1,3 +1,4 @@
+// Covers: task:5
 import { existsSync } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
