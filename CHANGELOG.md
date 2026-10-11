@@ -88,6 +88,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A rejected custom build_review rubric result now names only the cited source regions that failed frozen-source admission, instead of reporting every cited region as mismatched. ([implementation PR #3155](https://github.com/jstoup111/ai-conductor/pull/3155)).
 - A config that still sets the retired `conflict_check` block is now ignored with a warning instead of failing validation. ([implementation PR #3157](https://github.com/jstoup111/ai-conductor/pull/3157)).
 - Builds no longer halt for a human decision when an as-built review returns more than a handful of findings; the remediation input limit for pending as-built findings now matches the other criterion-bearing inputs. ([implementation PR #3181](https://github.com/jstoup111/ai-conductor/pull/3181)).
+- Stacked-delivery features no longer halt with "Expected last_step to match before record last completed step" when moving between a slice and a feature-wide step. ([implementation PR #3182](https://github.com/jstoup111/ai-conductor/pull/3182)).
 
 ## Migration
 
