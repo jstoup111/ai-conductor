@@ -310,6 +310,31 @@ describe('buildResource', () => {
       ]);
     });
 
+    it('the log scope carries the stable project/worker resource without creating a session identity', async () => {
+      const resource = buildResource(ctx(), 'logs');
+
+      // Logs are owned by the long-lived project/worker exporter.  A feature
+      // or run resource here would both misattribute project diagnostics and
+      // cause this otherwise read-only construction to create a session file.
+      expect(Object.keys(resource.attributes).sort()).toEqual([
+        'conductor.project',
+        'conductor.worker',
+        'host.name',
+        'service.instance.id',
+        'service.name',
+        'service.version',
+      ]);
+      expect(resource.attributes).toMatchObject({
+        'service.instance.id': 'project-a/worker-a',
+        'conductor.project': '/workspace/project-a',
+        'conductor.worker': 'worker-a',
+        'service.version': '0.105.0',
+      });
+      expect(resource.attributes['conductor.feature']).toBeUndefined();
+      expect(resource.attributes['conductor.run.id']).toBeUndefined();
+      await expect(readFile(join(pipelineDir, 'conduct-session-id'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('the trace scope adds the run id and the engine version', () => {
       const resource = buildResource(ctx(), 'traces');
 
@@ -406,7 +431,7 @@ describe('buildResource', () => {
       expect(buildResource(broken, 'metrics').attributes['service.instance.id']).toBe('project-a/worker-a');
     });
 
-    it('carries custom attributes on both signals without allowing conductor-key collisions or changing the pre-attributes resources', () => {
+    it('carries custom attributes on every signal without allowing conductor-key collisions or changing the pre-attributes resources', () => {
       const custom = {
         'deployment.environment.name': 'staging',
         'team.name': 'platform',
@@ -428,8 +453,10 @@ describe('buildResource', () => {
       expect({
         customTrace: buildResource({ ...withoutAttributes, attributes: custom }, 'traces').attributes,
         customMetric: buildResource({ ...withoutAttributes, attributes: custom }, 'metrics').attributes,
+        customLog: buildResource({ ...withoutAttributes, attributes: custom }, 'logs').attributes,
         traceWithoutAttributes: buildResource(withoutAttributes, 'traces').attributes,
         metricWithoutAttributes: buildResource(withoutAttributes, 'metrics').attributes,
+        logWithoutAttributes: buildResource(withoutAttributes, 'logs').attributes,
       }).toEqual({
         customTrace: {
           'deployment.environment.name': 'staging',
@@ -453,6 +480,16 @@ describe('buildResource', () => {
           'host.name': expect.any(String),
           'service.version': '0.105.0',
         },
+        customLog: {
+          'deployment.environment.name': 'staging',
+          'team.name': 'platform',
+          'service.name': 'ai-conductor',
+          'service.instance.id': 'project-a/worker-a',
+          'conductor.project': '/workspace/project-a',
+          'conductor.worker': 'worker-a',
+          'host.name': expect.any(String),
+          'service.version': '0.105.0',
+        },
         traceWithoutAttributes: {
           'service.name': 'ai-conductor',
           'service.instance.id': 'project-a/feature-a',
@@ -464,6 +501,14 @@ describe('buildResource', () => {
           'service.version': '0.105.0',
         },
         metricWithoutAttributes: {
+          'service.name': 'ai-conductor',
+          'service.instance.id': 'project-a/worker-a',
+          'conductor.project': '/workspace/project-a',
+          'conductor.worker': 'worker-a',
+          'host.name': expect.any(String),
+          'service.version': '0.105.0',
+        },
+        logWithoutAttributes: {
           'service.name': 'ai-conductor',
           'service.instance.id': 'project-a/worker-a',
           'conductor.project': '/workspace/project-a',
