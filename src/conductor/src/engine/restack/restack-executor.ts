@@ -127,6 +127,12 @@ async function commitsInRange(git: GitRunner, range: string, context: string): P
   });
 }
 
+async function descendsFrom(git: GitRunner, ancestor: CommitSha, descendant: CommitSha): Promise<boolean> {
+  const result = await runGit(git, ['merge-base', '--is-ancestor', ancestor, descendant]);
+  if (result.exitCode > 1) throw new Error(`cannot inspect ancestry of ${descendant}`);
+  return result.exitCode === 0;
+}
+
 async function leafIsInsideRange(git: GitRunner, leafTip: CommitSha, range: ChildRange): Promise<boolean> {
   if (leafTip === range.oldParent) return false;
   const [afterParent, beforeTip] = await Promise.all([
@@ -464,9 +470,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         continue;
       }
       // Repair leaves all existing lower tips intact. Only descendants of the
-      // highest originating child are rebuilt on the new closure chain.
-      if (options.cause === 'feature-repair' && rangeIndex <= lastOriginIndex) {
-        const adopted = await requiredSha(git, branchRefForRange(options.slug, range), `branch for child ${range.child}`);
+      // highest originating child are rebuilt on the new closure chain. A
+      // lower child whose branch no longer descends from its (adopted)
+      // parent, such as a second originating child above an appended one, is
+      // replayed onto that parent so one repair carries both appends.
+      const adoptable = options.cause === 'feature-repair' && rangeIndex <= lastOriginIndex
+        ? await requiredSha(git, branchRefForRange(options.slug, range), `branch for child ${range.child}`)
+        : undefined;
+      if (adoptable !== undefined && (rangeIndex === 0 || await descendsFrom(git, parent, adoptable))) {
+        const adopted = adoptable;
         const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', adopted, new Map(), { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while adopting child' : updated.detail);
         journal = updated.journal;

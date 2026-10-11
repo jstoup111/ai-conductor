@@ -446,9 +446,18 @@ async function resumePlanned(
     }
     // Feature repair retains every existing tip through the highest
     // originating child. Only descendants beyond that point are rebuilt.
-    if (current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex) {
-      const adopted = await resolveSha(git, branchRefForRange(current.slug, range));
-      if (!adopted) return { kind: 'unavailable' };
+    // A lower child that no longer descends from its adopted parent is
+    // replayed onto it, exactly as the executor does.
+    const adoptable = current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex
+      ? await resolveSha(git, branchRefForRange(current.slug, range))
+      : undefined;
+    if (current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex && !adoptable) return { kind: 'unavailable' };
+    const parentContained = adoptable === undefined || rangeIndex === 0
+      ? true
+      : await runGit(git, ['merge-base', '--is-ancestor', parent, adoptable]);
+    if (parentContained !== true && (!parentContained || parentContained.exitCode > 1)) return { kind: 'unavailable' };
+    if (adoptable !== undefined && (parentContained === true || parentContained.exitCode === 0)) {
+      const adopted = adoptable;
       const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', adopted, new Map(), { git });
       if (updated.kind !== 'updated') return { kind: 'unavailable' };
       current = updated.journal;
