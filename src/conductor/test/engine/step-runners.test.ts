@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2, task:rem-prd-audit-9-R3
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -34,7 +34,7 @@ import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
-import { deriveEffectiveBuildReviewVerdict, joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdict, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
@@ -94,8 +94,6 @@ function createMockProvider(): LLMProvider {
 }
 
 describe('build_review declared replication suppressions', () => {
-  const lapId = 'lap-replication' as never;
-  const snapshotDigest = 'sha256:replication-snapshot';
   const sourcePath = 'src/source-widget.ts';
   const targetPath = 'src/target-widget.ts';
   const duplication = (path = targetPath, evidence = `${sourcePath}:8`) => ({
@@ -103,22 +101,14 @@ describe('build_review declared replication suppressions', () => {
     evidenceLocations: [evidence],
     anchor: { rubric: 'implementationQuality' as const, locus: { path, contentHash: `sha256:${'a'.repeat(64)}`, display: 'declared target copy' } },
   });
-  const aggregate = (finding = duplication(), declaredReplicationSuppressions: readonly { findingId: string; sourcePath: string; targetPath: string }[] = []) =>
-    joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest,
-      results: {
-        testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
-        security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
-        implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v3', findings: [finding], verdict: 'FAIL' },
-      },
-      declaredReplicationSuppressions,
-    });
-
   const otherPath = 'src/other-widget.ts';
-  const runDeclaredReplication = async (makeFinding: (loci: { target: any; other: any }) => ReturnType<typeof duplication>) => {
+  const declaredPlanBody = `# Plan\n\n**Pattern-source:** ${sourcePath}\n**Rename-map:** source-widget -> target-widget\n`;
+  const runDeclaredReplication = async (
+    makeFinding: (loci: { target: any; other: any }) => ReturnType<typeof duplication>,
+    planBody = declaredPlanBody,
+  ) => {
     const projectDir = await mkdtemp(join(tmpdir(), 'declared-replication-runner-'));
     const planPath = join(projectDir, '.docs/plans/feature.md');
-    const planBody = `# Plan\n\n**Pattern-source:** ${sourcePath}\n**Rename-map:** source-widget -> target-widget\n`;
     let effective!: ReturnType<typeof deriveEffectiveBuildReviewVerdict>;
     let finding: ReturnType<typeof duplication> | undefined;
 
@@ -215,8 +205,14 @@ describe('build_review declared replication suppressions', () => {
     expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
   });
 
-  it('keeps a plan without Pattern-source at an empty declaredReplicationSuppressions list', () => {
-    expect(aggregate()).toMatchObject({ verdict: 'FAIL', declaredReplicationSuppressions: [] });
+  it('does not suppress a source-only duplication when the plan has no Pattern-source declaration', async () => {
+    const { persisted, effective, identity } = await runDeclaredReplication(({ target }) => ({
+      ...duplication(),
+      anchor: { rubric: 'implementationQuality', locus: target },
+    }), '# Plan\n\nThis plan declares no replication source.\n');
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([]);
+    expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
   });
 });
 
