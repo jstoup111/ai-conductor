@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-R15
 // Covers: task:8
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -139,6 +140,7 @@ describe('runRestack (real local Git)', () => {
     expect((await git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).not.toBe(base);
   });
 
+  // Covers: task:rem-prd-audit-R15
   it('moves an unentered pre-region halt-record leaf to its owning child rewrite', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'restack-executor-unentered-leaf-'));
     repositories.push(repo);
