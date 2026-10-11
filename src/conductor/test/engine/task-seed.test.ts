@@ -1856,4 +1856,73 @@ Keep the other boundary stable.
     });
   });
 
+  describe('plan amendment that predates the task implementation (#3177)', () => {
+    const original = '# Plan\n\n## Task 1: Amended task\nOriginal text.\n';
+    const amended = '# Plan\n\n## Task 1: Amended task\nAmended text.\n';
+
+    async function commitAt(when: string, args: string[]): Promise<void> {
+      const env = { GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when };
+      await execa('git', args, { cwd: dir, env });
+    }
+
+    async function seedAfter(order: 'amend-then-implement' | 'implement-then-amend') {
+      const planPath = join(dir, '.docs/plans/test.md');
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'task-seed@example.test'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Task Seed Test'], { cwd: dir });
+      await fsPromises.writeFile(planPath, original);
+      await execa('git', ['add', '.'], { cwd: dir });
+      await commitAt('2026-10-10T20:00:00Z', ['commit', '-q', '-m', 'initial plan']);
+      await execa('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], { cwd: dir });
+
+      const amend = async () => {
+        await fsPromises.writeFile(planPath, amended);
+        await execa('git', ['add', '.docs/plans/test.md'], { cwd: dir });
+        await commitAt('2026-10-10T22:02:00Z', ['commit', '-q', '-m', 'amend task 1']);
+      };
+      const implement = async (when: string) => {
+        await fsPromises.writeFile(join(dir, 'impl.txt'), when);
+        await execa('git', ['add', 'impl.txt'], { cwd: dir });
+        await commitAt(when, ['commit', '-q', '-m', 'implement task 1', '-m', 'Task: 1']);
+      };
+      if (order === 'amend-then-implement') {
+        await amend();
+        await implement('2026-10-10T22:07:00Z');
+      } else {
+        await implement('2026-10-10T21:00:00Z');
+        await amend();
+      }
+
+      await fsPromises.writeFile(statusPath, JSON.stringify({
+        tasks: [{ id: '1', name: 'Amended task', status: 'completed' }],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        taskDigests: { version: 1, byPlan: { '.docs/plans/test.md': { '1': planTaskDigests(original).get('1')! } } },
+      }));
+
+      await seedTaskStatus(dir, planPath);
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      const engineState = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
+      return { status, engineState };
+    }
+
+    it('keeps a task completed when its Task commit was authored after the amendment that introduced its current text', async () => {
+      const { status, engineState } = await seedAfter('amend-then-implement');
+
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'completed' })]);
+      expect(engineState.repairObligations?.currentByPlan?.['.docs/plans/test.md']?.['1']).toBeUndefined();
+      expect(engineState.taskDigests.byPlan['.docs/plans/test.md']['1']).toBe(planTaskDigests(amended).get('1'));
+    });
+
+    it('still reopens a task whose only Task commit predates the amendment', async () => {
+      const { status } = await seedAfter('implement-then-amend');
+
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '1', status: 'pending' })]);
+    });
+  });
+
 });
