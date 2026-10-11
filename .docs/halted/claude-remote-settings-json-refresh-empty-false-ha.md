@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-11T11:57:34.187Z
 Slug: claude-remote-settings-json-refresh-empty-false-ha
 Class: needs-human
 Halting step: prd_audit
