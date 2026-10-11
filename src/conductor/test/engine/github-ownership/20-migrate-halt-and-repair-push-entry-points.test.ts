@@ -35,6 +35,8 @@ function mutationContext(ref = 'refs/heads/feature/owned') {
 function guardedGit(pushes: string[][]) {
   return vi.fn(async (args: string[]) => {
     if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/rocket.git\n' };
+    if (args[0] === 'rev-parse' && args.some((arg) => arg.startsWith('refs/remotes/origin/'))) return { stdout: `${'a'.repeat(40)}\n`, exitCode: 0 };
+    if (args[0] === 'rev-parse' && args.at(-1) === 'HEAD^{commit}') return { stdout: `${'a'.repeat(40)}\n`, exitCode: 0 };
     if (args[0] === 'push') pushes.push([...args]);
     return { stdout: '' };
   });
@@ -50,12 +52,18 @@ describe('engine remote Git publication callers', () => {
       mutation: haltMutation,
     }, 'feature');
     expect(haltMutation.dependencies.resolveMachineOwner).toHaveBeenCalledOnce();
-    expect(haltPushes).toEqual([['push', 'origin', 'HEAD:refs/heads/feature/halted', '--force-with-lease']]);
+    expect(haltPushes).toEqual([[
+      'push', 'origin', 'HEAD:refs/heads/feature/halted',
+      `--force-with-lease=refs/heads/feature/halted:${'a'.repeat(40)}`,
+    ]]);
 
     const repairPushes: string[][] = [];
     const repairMutation = mutationContext('refs/heads/feature/repaired');
+    const remoteTip = 'a'.repeat(40);
     const repairGit = vi.fn(async (args: string[]) => {
       if (args[0] === 'config' || args.join(' ') === 'remote get-url --push origin') return { exitCode: 0, stdout: 'git@github.com:acme/rocket.git\n', stderr: '' };
+      if (args[0] === 'rev-parse' && args.some((arg) => arg.startsWith('refs/remotes/origin/'))) return { exitCode: 0, stdout: `${remoteTip}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' && args.at(-1) === 'HEAD^{commit}') return { exitCode: 0, stdout: `${remoteTip}\n`, stderr: '' };
       if (args[0] === 'push') repairPushes.push([...args]);
       return { exitCode: 0, stdout: '', stderr: '' };
     });
@@ -66,7 +74,7 @@ describe('engine remote Git publication callers', () => {
       { mutation: repairMutation },
     )).resolves.toEqual({ pushed: true });
     expect(repairMutation.dependencies.provenanceDiscovery.readCommittedRecords).toHaveBeenCalledOnce();
-    expect(repairPushes).toEqual([['push', 'origin', 'HEAD:refs/heads/feature/repaired', '--force-with-lease']]);
+    expect(repairPushes).toEqual([['push', 'origin', 'HEAD:refs/heads/feature/repaired', `--force-with-lease=refs/heads/feature/repaired:${remoteTip}`]]);
 
     const conductorPushes: string[][] = [];
     const conductorMutation = mutationContext('refs/heads/feature/finished');
