@@ -139,7 +139,7 @@ describe('restack merge-bearing children sweep (real local Git)', () => {
   });
 
   // Covers: S2.4, S2.5, task:12
-  it('replays child 2 without conflict when main later edited D1 to D2 or reverted it, keeping main\'s later state', async () => {
+  it("replays child 2 without conflict when main later edited D1 to D2 or reverted it, keeping main's later state", async () => {
     for (const [mainAfterMerge, expected] of [['edit', 'D2\n'], ['revert', 'base\n']] as const) {
       const subject = await mergeBearingStack('automatic', mainAfterMerge);
       const events = new ConductorEventEmitter();

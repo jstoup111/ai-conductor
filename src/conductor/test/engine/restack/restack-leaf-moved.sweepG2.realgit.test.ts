@@ -58,7 +58,7 @@ describe('leaf-moved marker sweep (real local Git)', () => {
   });
 
   // Covers: S1.10, task:20
-  it('moves an unentered leaf at pre-region halt record H to H\' in the same restack without leaf-moved, so moveLeaf later completes', async () => {
+  it("moves an unentered leaf at pre-region halt record H to H' in the same restack without leaf-moved, so moveLeaf later completes", async () => {
     const subject = await createSweepRepository('restack-leaf-unentered-sweep-', cleanup);
     const base = await subject.commit('base', 'base.txt', 'base\n');
     await subject.git(['update-ref', 'refs/remotes/origin/main', base]);

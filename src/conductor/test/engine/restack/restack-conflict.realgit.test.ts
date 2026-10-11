@@ -244,6 +244,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     expect(persisted).toContainEqual(expect.objectContaining({ type: 'restack_refused', reason: 'replay-mismatch', child: 2, detail: expect.stringContaining('src/unowned.ts') }));
   });
 
+  // Covers: task:13
   it('hands a rename collision to the resolver instead of accepting it as a clean replay', async () => {
     const subject = await fixture('rename');
     const contexts: { readonly conflicts: readonly string[] }[] = [];

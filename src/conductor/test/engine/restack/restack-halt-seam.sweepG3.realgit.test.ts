@@ -320,7 +320,7 @@ describe('restack halt seam, sweep (real local Git)', () => {
   });
 
   // Covers: task:28
-  it('writeHaltMarker at a dead owner\'s moved journal recovers with target synced before committing the record at the post-recovery HEAD, and leaves a live owner\'s journal untouched', async () => {
+  it("writeHaltMarker at a dead owner's moved journal recovers with target synced before committing the record at the post-recovery HEAD, and leaves a live owner's journal untouched", async () => {
     const subject = await singleChildFixture();
     const { newTip } = await crashAtMoved(subject);
     const events = new ConductorEventEmitter();

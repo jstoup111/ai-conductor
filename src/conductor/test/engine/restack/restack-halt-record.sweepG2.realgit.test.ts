@@ -47,7 +47,7 @@ async function haltRecordStack(mixed: boolean) {
 
 describe('restack halt-record conflicts sweep (real local Git)', () => {
   // Covers: S6.4, task:16
-  it('keeps child 2\'s halt record and dispatches no resolver when child 1\'s and child 2\'s ranges conflict only on the halt record', async () => {
+  it("keeps child 2's halt record and dispatches no resolver when child 1's and child 2's ranges conflict only on the halt record", async () => {
     const subject = await haltRecordStack(false);
     let dispatched = 0;
     const resolver: RestackResolver = async () => { dispatched += 1; return { resolved: false, reason: 'must not be dispatched' }; };

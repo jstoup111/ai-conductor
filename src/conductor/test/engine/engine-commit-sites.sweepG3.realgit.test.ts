@@ -332,7 +332,7 @@ const SITES: readonly CommitSite[] = [
 
 describe('engine commit sites sweep (real local Git)', () => {
   // Covers: task:27
-  it('recordHalt in a stacked worktree commits only its record through the guard with today\'s co-author and Task trailers, a verifiable signature and only prepare-commit-msg', async () => {
+  it("recordHalt in a stacked worktree commits only its record through the guard with today's co-author and Task trailers, a verifiable signature and only prepare-commit-msg", async () => {
     const trailersBySite: Record<'stacked' | 'flat', string> = { stacked: '', flat: '' };
     for (const shape of ['stacked', 'flat'] as const) {
       const { root, worktree } = await featureRepo(shape === 'stacked');
@@ -385,7 +385,7 @@ describe('engine commit sites sweep (real local Git)', () => {
   });
 
   // Covers: task:27
-  it('commits exactly a setup-triage retained repair\'s captured paths and a superseded halt record while unrelated staged changes stay staged', async () => {
+  it("commits exactly a setup-triage retained repair's captured paths and a superseded halt record while unrelated staged changes stay staged", async () => {
     const { worktree } = await featureRepo(true);
     const before = await git(worktree, ['rev-parse', 'HEAD']);
     gitCalls.length = 0;
@@ -416,7 +416,7 @@ describe('engine commit sites sweep (real local Git)', () => {
   });
 
   // Covers: task:27
-  it('every enumerated commit site keeps today\'s git commit argv without durable child state, commits through the guarded helper with it, and is refused without moving HEAD in each fenced journal state', async () => {
+  it("every enumerated commit site keeps today's git commit argv without durable child state, commits through the guarded helper with it, and is refused without moving HEAD in each fenced journal state", async () => {
     for (const site of SITES) {
       // Flat feature: today's argv, unchanged.
       const flat = await featureRepo(false);
