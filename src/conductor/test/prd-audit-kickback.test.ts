@@ -436,6 +436,8 @@ async function createAsBuiltRemediationCapFixture(input: {
   prdAuditPriorLaps?: number;
   /** Exercise a provider answer the typed contract rejects before persistence. */
   allowUnprojectedFixture?: boolean;
+  /** Per-finding planner tasks, e.g. an as-built finding bound to the PRD task. */
+  plannerTasks?: Record<string, Array<{ id: string; title: string }>>;
 }) {
   const root = await mkdtemp(join(tmpdir(), 'as-built-remediation-cap-'));
   dirs.push(root);
@@ -556,7 +558,7 @@ async function createAsBuiltRemediationCapFixture(input: {
           disposition: 'build',
           category: null,
           rationale: `Repair ${id}.`,
-          tasks: [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
+          tasks: input.plannerTasks?.[id] ?? [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
           })),
       ];
       try {
@@ -3364,6 +3366,27 @@ describe('prd_audit kickback', () => {
    * kickback) is covered by the parallel-validation acceptance suite; this
    * matrix owns the planRemediation-level inputs.
    */
+  it('appends and charges a planner task shared by PRD and as-built findings once', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({
+      withPrdEvidence: true,
+      appendCap: 4,
+      plannerFindingIds: ['AB-1', 'AB-2'],
+      plannerTasks: { 'AB-1': [{ id: 'prd-fix', title: 'Satisfy S1.1' }] },
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
+    const plan = await readFile(fixture.planPath, 'utf8');
+    expect(plan.match(/^### Task rem-prd-audit-prd-fix:/gm)).toHaveLength(1);
+    expect(plan).not.toContain('rem-as-built-prd-fix');
+    expect(plan).toContain('rem-as-built-fix-ab-2');
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.pendingRepair?.taskIds).toEqual(['rem-prd-audit-prd-fix', 'rem-as-built-fix-ab-2']);
+    expect(ledger.pendingRepair?.charges).toEqual({
+      prd_audit: { laps: 1, growth: 1 },
+      architecture_review_as_built: { laps: 1, growth: 1 },
+    });
+  });
+
   describe('as-built remediation kill switch (decision 6)', () => {
     for (const withPrdEvidence of [false, true]) {
       const round = withPrdEvidence ? 'mixed PRD/as-built' : 'as-built-only';

@@ -4082,6 +4082,16 @@ export class Conductor {
       prdAuditAdmits: prdAuditValidated && prdAuditFindings.has(gapId.toUpperCase()),
       asBuiltAdmits: asBuiltValidated && asBuiltFindings.has(gapId),
     });
+    // A planner task id names one piece of work even when several findings
+    // bind it. A task any admitted PRD gap names is PRD-owned, so an as-built
+    // gap naming it appends under the same PRD id (one plan task) and plan
+    // growth counts it once, not once per binding gap.
+    const prdOwnedTaskIds = new Set(gaps
+      .filter((gap) => !admittedRefusalGapIds.has(gap.id) &&
+        remediationDispositionAppendsToPlan(gap.disposition) &&
+        gateAdmissions(gap.id).prdAuditAdmits)
+      .flatMap((gap) => gap.tasks.map((task) => task.id)));
+    const growthTaskIds = new Set<string>();
     for (const gap of gaps) {
       // Admitted refusal gaps were already bound above through their decision
       // id; the criterion-id ladder below would re-admit them with the wrong
@@ -4206,17 +4216,21 @@ export class Conductor {
           // A single planner gap can name both findings. Preserve both
           // rendered bindings, but charge its one appended task to the PRD
           // source that owns mixed-source plan growth.
-          gateSource: prdAuditAdmits ? PRD_AUDIT_REMEDIATION_GATE_SOURCE : 'as-built',
+          gateSource: prdAuditAdmits || gap.tasks.some((task) => prdOwnedTaskIds.has(task.id))
+            ? PRD_AUDIT_REMEDIATION_GATE_SOURCE
+            : 'as-built',
         };
         appendGaps.push(admittedGap);
         admittedGaps.push(admittedGap);
         allTasks.push(...gap.tasks);
         if (asBuiltAdmits) asBuiltTasks.push(...gap.tasks);
-        if (prdAuditAdmits) {
-          prdAuditTasks.push(...gap.tasks);
-          prdAuditGrowthTasks.push(...gap.tasks);
+        if (prdAuditAdmits) prdAuditTasks.push(...gap.tasks);
+        for (const task of gap.tasks) {
+          if (growthTaskIds.has(task.id)) continue;
+          growthTaskIds.add(task.id);
+          if (prdOwnedTaskIds.has(task.id)) prdAuditGrowthTasks.push(task);
+          else if (asBuiltAdmits) asBuiltGrowthTasks.push(task);
         }
-        else if (asBuiltAdmits) asBuiltGrowthTasks.push(...gap.tasks);
       }
     }
 
