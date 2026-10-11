@@ -63,7 +63,7 @@ run_fixture() {
   fixture_status=$?
   set -e
 
-  if [ "$fixture_status" -eq 0 ] || ! grep -Fxq "$expected" <<<"$fixture_output"; then
+  if [ "$fixture_status" -eq 0 ] || ! grep -Fxq "$expected" <<<"$fixture_output" || grep -Fq 'scripts classified' <<<"$fixture_output"; then
     printf 'FAIL %s: expected exit 1 and %s\n%s\n' "$fixture_name" "$expected" "$fixture_output" >&2
     exit 1
   fi
@@ -119,3 +119,60 @@ run_fixture reasonless-invoked 'MISSING REASON: reasonless-invoked.sh' write_rea
 run_fixture reasonless-helper 'MISSING REASON: reasonless-helper.sh' write_reasonless_helper_fixture
 
 printf 'PASS invalid shell-test declarations are rejected\n'
+
+write_comment_only_integrity_fixture() {
+  local fixture_test_dir=$1 fixture_manifest=$2 fixture_integrity=$3
+  printf '#!/usr/bin/env bash\n' > "$fixture_test_dir/comment-only.sh"
+  printf '# bash comment-only.sh\n' >> "$fixture_integrity"
+  printf 'test_harness_integrity.sh integrity entry point\ncomment-only.sh integrity comment-only reference\n' > "$fixture_manifest"
+}
+
+write_unverified_parent_fixture() {
+  local fixture_test_dir=$1 fixture_manifest=$2 _fixture_integrity=$3
+  printf '#!/usr/bin/env bash\n' > "$fixture_test_dir/parent.sh"
+  printf '#!/usr/bin/env bash\n' > "$fixture_test_dir/child.sh"
+  printf 'test_harness_integrity.sh integrity entry point\nparent.sh integrity integrity invokes parent\nchild.sh invoked-by:parent.sh parent invokes child\n' > "$fixture_manifest"
+}
+
+write_unlisted_parent_fixture() {
+  local fixture_test_dir=$1 fixture_manifest=$2 _fixture_integrity=$3
+  printf '#!/usr/bin/env bash\nbash child.sh\n' > "$fixture_test_dir/parent.sh"
+  printf '#!/usr/bin/env bash\n' > "$fixture_test_dir/child.sh"
+  printf 'test_harness_integrity.sh integrity entry point\nchild.sh invoked-by:parent.sh parent invokes child\n' > "$fixture_manifest"
+}
+
+write_helper_parent_fixture() {
+  local fixture_test_dir=$1 fixture_manifest=$2 _fixture_integrity=$3
+  printf '#!/usr/bin/env bash\nbash child.sh\n' > "$fixture_test_dir/helper.sh"
+  printf '#!/usr/bin/env bash\n' > "$fixture_test_dir/child.sh"
+  printf 'test_harness_integrity.sh integrity entry point\nhelper.sh sourced-helper helper names child\nchild.sh invoked-by:helper.sh helper invokes child\n' > "$fixture_manifest"
+}
+
+write_cycle_fixture() {
+  local fixture_test_dir=$1 fixture_manifest=$2 _fixture_integrity=$3
+  printf '#!/usr/bin/env bash\nbash second.sh\n' > "$fixture_test_dir/first.sh"
+  printf '#!/usr/bin/env bash\nbash first.sh\n' > "$fixture_test_dir/second.sh"
+  printf 'test_harness_integrity.sh integrity entry point\nfirst.sh invoked-by:second.sh cycle member\nsecond.sh invoked-by:first.sh cycle member\n' > "$fixture_manifest"
+}
+
+write_empty_enumeration_fixture() {
+  local fixture_test_dir=$1 fixture_manifest=$2 fixture_integrity=$3
+  rm -f "$fixture_integrity"
+  printf 'test_harness_integrity.sh integrity entry point\n' > "$fixture_manifest"
+}
+
+write_unreadable_manifest_fixture() {
+  local fixture_test_dir=$1 fixture_manifest=$2 _fixture_integrity=$3
+  printf '#!/usr/bin/env bash\n' > "$fixture_test_dir/runner.sh"
+  rm -f "$fixture_manifest"
+}
+
+run_fixture comment-only-integrity 'UNVERIFIED integrity: comment-only.sh' write_comment_only_integrity_fixture
+run_fixture unverified-parent 'UNVERIFIED invoked-by: child.sh parent parent.sh' write_unverified_parent_fixture
+run_fixture unlisted-parent 'UNVERIFIED invoked-by: child.sh parent parent.sh' write_unlisted_parent_fixture
+run_fixture helper-parent 'UNVERIFIED invoked-by: child.sh parent helper.sh' write_helper_parent_fixture
+run_fixture cycle 'UNVERIFIED invoked-by: first.sh parent second.sh' write_cycle_fixture
+run_fixture empty-enumeration 'EMPTY ENUMERATION' write_empty_enumeration_fixture
+run_fixture unreadable-manifest "UNREADABLE MANIFEST: $TMP_ROOT/unreadable-manifest/shell_tests.manifest" write_unreadable_manifest_fixture
+
+printf 'PASS unverified invocations and unreadable inputs are rejected\n'

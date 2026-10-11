@@ -29,6 +29,11 @@ declare -A MANIFEST_SEEN
 
 violations=0
 
+if [ ! -f "$MANIFEST" ] || [ ! -r "$MANIFEST" ]; then
+  printf 'UNREADABLE MANIFEST: %s\n' "$MANIFEST" >&2
+  exit 1
+fi
+
 while IFS=$'\t' read -r name class third fourth; do
   [ -n "$name" ] || continue
   if [[ "$class" == invoked-by:* ]]; then
@@ -66,6 +71,44 @@ while IFS=$'\t' read -r name class third fourth; do
   fi
 done < <(shell_test_manifest_entries "$MANIFEST")
 
+invoked_by_chain_is_verified() {
+  local child=$1
+  local node=$child
+  local parent parent_class
+  declare -A visited=()
+
+  while :; do
+    if [ -n "${visited[$node]+present}" ]; then
+      return 1
+    fi
+    visited["$node"]=1
+
+    parent=${PARENT_BY_NAME[$node]-}
+    parent_class=${CLASS_BY_NAME[$parent]-}
+    if [ -z "$parent_class" ] || ! shell_test_parent_invokes_child "$TEST_DIR/$parent" "$node"; then
+      return 1
+    fi
+
+    case "$parent_class" in
+      shell-runner)
+        return 0
+        ;;
+      integrity)
+        if [ "$parent" = "${INTEGRITY##*/}" ] || shell_test_parent_invokes_child "$INTEGRITY" "$parent"; then
+          return 0
+        fi
+        return 1
+        ;;
+      invoked-by:*)
+        node=$parent
+        ;;
+      sourced-helper|*)
+        return 1
+        ;;
+    esac
+  done
+}
+
 script_count=0
 while IFS= read -r script; do
   name=${script##*/}
@@ -79,7 +122,7 @@ while IFS= read -r script; do
       ;;
     invoked-by:*)
       parent=${PARENT_BY_NAME[$name]}
-      if ! shell_test_parent_invokes_child "$TEST_DIR/$parent" "$name"; then
+      if ! invoked_by_chain_is_verified "$name"; then
         printf 'UNVERIFIED invoked-by: %s parent %s\n' "$name" "$parent" >&2
         violations=1
       fi
@@ -92,6 +135,11 @@ while IFS= read -r script; do
   esac
   script_count=$((script_count + 1))
 done < <(find "$TEST_DIR" -maxdepth 1 -type f -name '*.sh' -printf '%f\n' | LC_ALL=C sort)
+
+if [ "$script_count" -eq 0 ]; then
+  printf 'EMPTY ENUMERATION\n' >&2
+  violations=1
+fi
 
 if [ "$violations" -ne 0 ]; then
   exit 1
