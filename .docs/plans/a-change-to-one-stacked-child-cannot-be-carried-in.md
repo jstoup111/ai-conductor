@@ -1552,3 +1552,99 @@ outcomes as one feature (track scope boundary).
 **Done when:**
 - adr-2026-10-10-stacked-restack-journaled-replay decision 11 is satisfied by this task.
 - The repair for task rem-as-built-R10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R15: In restack-executor.ts (and restack-plan.ts), resolve an unentered leaf's new SHA as the rewrite of its original tip commit from the owning child's exact replay map, not by replaying an empty range onto the preceding child's tip; add a real-git runRestack executor test with a pre-region halt-record leaf asserting the leaf moves to H'
+**Gate:** prd-audit
+**Rationale:** Code drift from approved ADR D2 and task rem-as-built-R3. Verified at 100%: restack-plan.ts:224 adds the unentered leaf as an empty range, and the executor replays it onto the preceding child's tip. The fix is concrete executor work and needs no decision.
+**Criterion:** S1.10
+**Parent task:** rem-as-built-R3
+**Done when:**
+- [test] S1.10 is satisfied by this task.
+- The repair for task rem-prd-audit-R15 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R14: Default runRestack's resolver to the provider-backed resolveRestackConflict and its cap to the configured resolver budget in restack-executor.ts, and thread both from conductor.ts FINISH, daemon-rekick.ts resumeRebaseFirst, stack-preflight.ts (both calls) and restack-recovery.ts; add a test proving each production caller reaches resolveRestackConflict on a conflicting replay
+**Gate:** prd-audit
+**Rationale:** Wiring gap against Task 15 and rem-as-built-R11. Verified at 100%: restack-executor.ts:467-468 defaults to an always-failing resolver with a budget of 0, and no production caller supplies either. This is implementation work.
+**Criterion:** S6.1
+**Parent task:** rem-as-built-R11
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R14 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R16: Retain each child's exact rewrite map from replayChildRange and from the resolver's rewritten list in restack-executor.ts, persist it in the restack journal for restack-recovery.ts, and pass it from restack-transition.ts to translateAfterRebase instead of the patch-id rebuild in rebase-translate.ts; add tests with an empty evidence commit and a resolver-modified commit
+**Gate:** prd-audit
+**Rationale:** Drift from ADR D8 and rem-as-built-R5. The exact rewrites from replay and the resolver are discarded. Translation then rebuilds the map by patch-id, which loses empty evidence commits. This is a concrete code repair.
+**Criterion:** S11.4
+**Parent task:** rem-as-built-R5
+**Done when:**
+- [test] S11.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R16 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R18: In restack-executor.ts, pass the true old default (unchanged for feature-repair; the journaled old/new pair for base-refresh) to applyRestackTransition, and in restack-transition.ts compute the whole-feature base against the old default; add executor-level tests for a feature-repair on an intermediate active child and for a base-refresh tuple
+**Gate:** prd-audit
+**Rationale:** Drift from ADR D8 and rem-as-built-R6. A feature repair derives planningDefault from the active closure or merge-base(active, HEAD) and passes it as newDefault, so the whole-feature tuple is wrong. The ADR already fixes the required tuple, so no decision is needed.
+**Criterion:** S11.8
+**Parent task:** rem-as-built-R6
+**Done when:**
+- [test] S11.8 is satisfied by this task.
+- The repair for task rem-prd-audit-R18 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R17: In restack-transition.ts, skip translateAfterRebase for a child whose own range is unchanged (closure-only move or identity rewrite) so that persistRewriteMap writes no identity entries; add a feature-repair test asserting rebase-rewrites.json has no entry for any child-1 or default-branch commit
+**Gate:** prd-audit
+**Rationale:** Task 19 requires that a feature-repair writes no rewrite-map entry for child 1. Child 1's closure-only move still runs translateAfterRebase, which writes an X→X identity entry. This is a code and test gap.
+**Criterion:** S11.10
+**Parent task:** 19
+**Done when:**
+- [test] S11.10 is satisfied by this task.
+- The repair for task rem-prd-audit-R17 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R19: In restack-executor.ts, treat an unreadable or malformed refs/conductor/<slug>/cascades read (including restackCascadeLimit) as an exhausted cap that routes through the cascade-cap haltRestack, writing needs-human and naming the ref, before any journal; add an executor test with a corrupt cascades blob
+**Gate:** prd-audit
+**Rationale:** Task 22 requires an unreadable cascades ref to count as an exhausted cap that halts needs-human. Instead, restackCascadeLimit throws, and the outer catch returns 'unavailable' without a halt. This is a code fix.
+**Criterion:** S13.9
+**Parent task:** 22
+**Done when:**
+- [test] S13.9 is satisfied by this task.
+- The repair for task rem-prd-audit-R19 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R20: In kickback-budget-cli.ts reconcilePendingAdjustments, for gate restack perform the cascades compare-and-swap (idempotent by adjustment id) before applyKickbackBudgetAdjustment installs authorization, and leave authorization uninstalled when the CAS fails; test a crash between event append and CAS and then a rerun, plus a stale CAS on rerun
+**Gate:** prd-audit
+**Rationale:** Drift from Task 31.2 and rem-as-built-R13. Verified at 100%: reconcilePendingAdjustments in kickback-budget-cli.ts:90-108 applies a recorded adjustment without the cascades CAS. This is a code fix.
+**Criterion:** S13.11
+**Parent task:** rem-as-built-R13
+**Done when:**
+- [test] S13.11 is satisfied by this task.
+- The repair for task rem-prd-audit-R20 is committed and its targeted tests pass.
+
+### Task rem-as-built-R21: In restack-executor.ts, derive the unentered leaf from the sealed envelope's highest declared position (child-cursor.ts), not cursor.nextChild, and remove the checkout/max(closed)+1 fallback so that a missing envelope fails closed; test nonconsecutive declared positions and a checkout differing from the cursor
+**Gate:** as-built
+**Rationale:** Drift from per-child-build-region D1. The executor takes cursor.nextChild as the leaf, although child-cursor.ts distinguishes it from the highest declared position. It also keeps a checkout/max+1 fallback. The ADR already defines identity, so this is a code fix.
+**Governing clause:** adr-2026-10-07-per-child-build-region decision 1
+**Done when:**
+- adr-2026-10-07-per-child-build-region decision 1 is satisfied by this task.
+- The repair for task rem-as-built-R21 is committed and its targeted tests pass.
+
+### Task rem-as-built-R22: In restack-recovery.ts, seed pending replay from the journaled newDefault (or the last staged child's tip) instead of ranges[0].oldParent; add a real-git base-refresh recovery test that crashes at planned before the first child is staged
+**Gate:** as-built
+**Rationale:** Task 24 drift. The journal now records newDefault, but restack-recovery.ts:322 still seeds pending replay from ranges[0].oldParent. This is a concrete code fix.
+**Parent task:** 24
+**Governing clause:** Task 24
+**Done when:**
+- Task 24 is satisfied by this task.
+- The repair for task rem-as-built-R22 is committed and its targeted tests pass.
+
+### Task rem-as-built-R23: In restack-recovery.ts, carry the child and path diagnosis from the ownership refusal arm, abort the journal and halt through haltRestack with restack_refused reason replay-mismatch; have stack-preflight.ts surface that halt; add a recovery test with a non-owned path
+**Gate:** as-built
+**Rationale:** ADR D3 drift. The recovery ownership refusal discards its diagnosis and returns a generic 'unavailable'. That leaves the journal planned without the required replay-mismatch halt. This is a code fix.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 3
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R23 is committed and its targeted tests pass.
+
+### Task rem-as-built-R24: In restack-executor.ts and cascade-cap.ts, resolve each originating child's limit from that child's own cascades entry, falling back to the default 3 rather than the active child's limit; test that a raised limit on child 2 does not change child 1's cap
+**Gate:** as-built
+**Rationale:** ADR D10 drift. The fallback limit comes from the active child, so another child's raised limit can replace the default of 3 for origins with no override. This is a code fix.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 10
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 10 is satisfied by this task.
+- The repair for task rem-as-built-R24 is committed and its targeted tests pass.
