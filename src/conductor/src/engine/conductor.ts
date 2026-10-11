@@ -9429,6 +9429,7 @@ export class Conductor {
           let settlementLedger: Awaited<ReturnType<typeof readKickbackLedger>> | undefined;
           let settlementGrowth: PlanGrowth | undefined;
           let growthCap: number | undefined;
+          let settlementAuthoredSource: 'plan' | 'ledger' | 'unresolved' | undefined;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
             const budgets = await pendingRepairSettlementBudgets(
@@ -9438,6 +9439,7 @@ export class Conductor {
             );
             growthCap = budgets[0]?.growthCap;
             settlementGrowth = budgets[0]?.growth;
+            settlementAuthoredSource = budgets[0]?.authoredSource;
             settlement = await settlePendingRepair(
               this.projectRoot,
               budgets,
@@ -9471,7 +9473,7 @@ export class Conductor {
                 ).join('; ')}`
               : '';
             const fallbackLapCap = remediationLapCapForGate(gate, this.config);
-            const growthView = settlementGrowth === undefined || growthCap === undefined
+            const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
               : {
                   ...settlementGrowth,
@@ -9479,6 +9481,7 @@ export class Conductor {
                   capSource: settlementLedger?.effectiveGrowthCap === undefined
                     ? 'config-derived' as const
                     : 'raised' as const,
+                  authoredSource: settlementAuthoredSource,
                 };
             const detail = settlementFailure === undefined
               ? renderKickbackBudgetView(

@@ -150,6 +150,9 @@ describe('pendingRepairSettlementBudgets', () => {
       });
 
       const budgets = await pendingRepairSettlementBudgets(root, STORY_TWO_CONFIG, await readKickbackLedger(root));
+      expect(budgets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ authoredSource: 'plan' }),
+      ]));
 
       await expect(settlePendingRepair(root, budgets)).resolves.toEqual({ kind: 'settled' });
       await expect(readKickbackLedger(root)).resolves.toMatchObject({
@@ -199,6 +202,9 @@ describe('pendingRepairSettlementBudgets', () => {
       }, false);
 
       const budgets = await pendingRepairSettlementBudgets(root, {}, await readKickbackLedger(root));
+      expect(budgets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ authoredSource: 'unresolved' }),
+      ]));
 
       await expect(settlePendingRepair(root, budgets)).resolves.toEqual({
         kind: 'exhausted', gate: 'prd_audit', allowance: 'growth',

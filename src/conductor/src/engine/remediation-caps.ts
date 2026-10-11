@@ -100,12 +100,13 @@ export async function pendingRepairSettlementBudgets(
   config: HarnessConfig,
   ledger: KickbackLedger,
 ): Promise<PendingRepairSettlementBudget[]> {
-  const { cap: growthCap, growth } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
+  const { cap: growthCap, growth, authoredSource } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
   return (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
     gate,
     lapCap: ledger.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(gate, config),
     growthCap,
     growth,
+    authoredSource,
   }));
 }
 

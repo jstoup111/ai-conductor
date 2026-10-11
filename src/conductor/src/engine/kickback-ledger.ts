@@ -138,6 +138,7 @@ export interface PendingRepairSettlementBudget {
   lapCap: number;
   growthCap: number;
   growth: PlanGrowth;
+  authoredSource: 'plan' | 'ledger' | 'unresolved';
 }
 
 export type PendingRepairSettlementResult =
