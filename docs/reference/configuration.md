@@ -914,6 +914,10 @@ the persisted and rendered `tracker_backend_unavailable` event for that exclusio
 selection for projects with no config file, no `tracker` block, or an invalid unrelated configuration
 key.
 
+Priority and dependency reads for a Jira work reference also report `tracker_backend_unavailable`,
+once per reference per daemon run. The item sorts in the unlabeled priority band, and its blocker check is
+indeterminate, so the daemon holds it as waiting instead of dispatching it.
+
 `tracker` rejects unknown nested keys. The GitHub block accepts only `backend`; Jira-only fields on a
 GitHub block are errors. `tracker.site` must use `https:`.
 
