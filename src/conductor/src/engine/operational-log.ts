@@ -3,8 +3,24 @@ import type {
   OperationalLogOwnership,
   OperationalLogSeverity,
 } from '../types/events.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 type OperationalLogOccurrence = Extract<ConductorEvent, { type: 'operational_log' }>;
+
+/**
+ * Rendering event-derived output can reach the same diagnostic adapters that
+ * create operational records. Keep that output local without suppressing
+ * unrelated diagnostics running in another async execution context.
+ */
+const logRenderSuppression = new AsyncLocalStorage<boolean>();
+
+export function withLogRenderSuppressed<TResult>(render: () => TResult): TResult {
+  return logRenderSuppression.run(true, render);
+}
+
+function isLogRenderSuppressed(): boolean {
+  return logRenderSuppression.getStore() === true;
+}
 
 export interface OperationalLoggerOptions<TResult> {
   emit: (occurrence: OperationalLogOccurrence) => void | Promise<void>;
@@ -32,18 +48,20 @@ export function createOperationalLogger<TResult>(
     : Object.freeze({ scope: 'feature', featureSlug: options.ownership.featureSlug });
 
   const write = (severity: OperationalLogSeverity, body: string): TResult => {
-    try {
-      void Promise.resolve(options.emit({
-        type: 'operational_log',
-        severity,
-        body,
-        occurredAt: options.now(),
-        ownership,
-      })).catch(() => {
+    if (!isLogRenderSuppressed()) {
+      try {
+        void Promise.resolve(options.emit({
+          type: 'operational_log',
+          severity,
+          body,
+          occurredAt: options.now(),
+          ownership,
+        })).catch(() => {
+          // The original diagnostic must not be disrupted by event delivery.
+        });
+      } catch {
         // The original diagnostic must not be disrupted by event delivery.
-      });
-    } catch {
-      // The original diagnostic must not be disrupted by event delivery.
+      }
     }
     return options.localSink(severity, body);
   };

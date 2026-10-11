@@ -8,7 +8,8 @@ import {
   withDaemonLogFeatureOwnership,
 } from '../../src/engine/daemon-log.js';
 import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
-import { createOperationalLogger } from '../../src/engine/operational-log.js';
+import { createOperationalLogger, withLogRenderSuppressed } from '../../src/engine/operational-log.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
 
 describe('operational logger', () => {
   it('persists operational occurrences without rendering them and enables log projection', () => {
@@ -160,5 +161,56 @@ describe('operational logger', () => {
         },
       ],
     });
+  });
+
+  it('keeps event-rendered diagnostics local without suppressing concurrent diagnostics', async () => {
+    const occurrences: unknown[] = [];
+    const localSink = vi.fn(() => 'locally-rendered');
+    const logger = createOperationalLogger({
+      emit: (occurrence) => { occurrences.push(occurrence); },
+      localSink,
+      now: () => 1_700_000_000_000,
+      ownership: { scope: 'project' },
+    });
+    let releaseRendered!: () => void;
+    const rendered = withLogRenderSuppressed(async () => {
+      await new Promise<void>((resolve) => { releaseRendered = resolve; });
+      return logger.warn('event-derived delivery health');
+    });
+
+    const unrelated = logger.error('unrelated concurrent diagnostic');
+    releaseRendered();
+
+    await expect(rendered).resolves.toBe('locally-rendered');
+    expect(unrelated).toBe('locally-rendered');
+    expect(localSink).toHaveBeenCalledWith('error', 'unrelated concurrent diagnostic');
+    expect(localSink).toHaveBeenCalledWith('warn', 'event-derived delivery health');
+    expect(occurrences).toEqual([
+      expect.objectContaining({
+        type: 'operational_log',
+        severity: 'error',
+        body: 'unrelated concurrent diagnostic',
+      }),
+    ]);
+  });
+
+  it('does not recapture a delivery-health line rendered by the daemon', async () => {
+    const occurrences: unknown[] = [];
+    const localSink = vi.fn();
+    const logger = createOperationalLogger({
+      emit: (occurrence) => { occurrences.push(occurrence); },
+      localSink,
+      now: () => 1_700_000_000_000,
+      ownership: { scope: 'project' },
+    });
+
+    renderDaemonEvent({
+      type: 'renderer_error',
+      rendererName: 'otel',
+      error: '[otel] log delivery network; records remain local',
+    }, (line) => logger.warn(line));
+
+    expect(localSink).toHaveBeenCalledOnce();
+    expect(occurrences).toEqual([]);
   });
 });

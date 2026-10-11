@@ -13,6 +13,7 @@ import type { UIRenderer } from '../../src/ui/types.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
+import { createOperationalLogger } from '../../src/engine/operational-log.js';
 
 type RendererMock = UIRenderer & { handle: ReturnType<typeof vi.fn> };
 
@@ -75,6 +76,26 @@ describe('TerminalSubscriber', () => {
     // Marking is kept out of the event payload; this test owns only ordinary fan-out.
     await events.emit({ type: 'gate_verdict', step: 'plan', satisfied: false, reason: 'x' });
     expect(target.handle).toHaveBeenCalledOnce();
+  });
+
+  it('does not recapture terminal-rendered event output as an operational log', async () => {
+    const occurrences: unknown[] = [];
+    const logger = createOperationalLogger({
+      emit: (occurrence) => { occurrences.push(occurrence); },
+      localSink: () => undefined,
+      now: () => 1_700_000_000_000,
+      ownership: { scope: 'project' },
+    });
+    const target = renderer(vi.fn(async () => { logger.warn('event-derived terminal output'); }));
+    const events = new ConductorEventEmitter();
+    const subscriber = new TerminalSubscriber(events);
+    subscribers.push(subscriber);
+    subscriber.start([target]);
+
+    await events.emit({ type: 'renderer_error', rendererName: 'otel', error: 'delivery degraded' });
+
+    expect(target.handle).toHaveBeenCalledOnce();
+    expect(occurrences).toEqual([]);
   });
 
   it('fans an allowance-bearing retry to every renderer exactly once', async () => {

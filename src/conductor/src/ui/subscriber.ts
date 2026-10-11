@@ -2,6 +2,7 @@ import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from './events.js';
 import { renderedEventTypes } from '../engine/event-sinks.js';
 import { isForwardedFromFeature } from '../engine/event-persister.js';
+import { withLogRenderSuppressed } from '../engine/operational-log.js';
 import type { UIRenderer, UISubscriber, UIEventHandler } from './types.js';
 
 export type { UISubscriber, UIEventHandler } from './types.js';
@@ -62,7 +63,7 @@ export class TerminalSubscriber implements UISubscriber {
         // this second sink must honour it too, or every feature gate verdict
         // prints a second, untagged copy in the daemon pane.
         if (isForwardedFromFeature(event)) return;
-        await render(this.renderers);
+        await withLogRenderSuppressed(() => render(this.renderers));
       };
       this.handlers.push({ type, handler });
       this.eventEmitter.on(type, handler);

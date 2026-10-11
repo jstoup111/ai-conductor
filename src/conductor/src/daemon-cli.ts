@@ -135,7 +135,7 @@ import {
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import { createOperationalLogger } from './engine/operational-log.js';
+import { createOperationalLogger, withLogRenderSuppressed } from './engine/operational-log.js';
 import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import {
@@ -3122,7 +3122,7 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   // (e.g. from a future event kind whose formatter assumes a field that
   // isn't there) degrades to a dropped line, not a process crash.
   try {
-    renderDaemonEventUnsafe(event, log);
+    withLogRenderSuppressed(() => renderDaemonEventUnsafe(event, log));
   } catch {
     // Best-effort: rendering a daemon.log line must never disrupt the run.
   }
