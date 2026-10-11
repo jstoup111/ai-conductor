@@ -1,8 +1,9 @@
+// Covers: task:rem-prd-audit-rem-prd-audit-R27
 // Covers: task:rem-prd-audit-rem-prd-audit-R26
 // Covers: task:31.2
 // Covers: task:rem-prd-audit-rem-prd-audit-R25
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -52,23 +53,26 @@ async function realCascadeCapCliFixture() {
   const root = await mkdtemp(join(tmpdir(), 'kickback-budget-restack-cli-'));
   repos.push(root);
   const repo = join(root, '.worktrees', 'demo');
-  await mkdir(repo, { recursive: true });
-  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  const childWorktree = join(root, '.worktrees', 'c1');
+  const git = (args: string[], cwd = root) => execFile('git', args, { cwd });
   const commit = async (message: string, path: string) => {
-    await writeFile(join(repo, path), `${message}\n`);
-    await git(['add', path]);
-    await git(['commit', '-qm', message]);
-    return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(childWorktree, path), `${message}\n`);
+    await git(['add', path], childWorktree);
+    await git(['commit', '-qm', message], childWorktree);
+    return (await git(['rev-parse', 'HEAD'], childWorktree)).stdout.trim();
   };
   await git(['init', '-q', '-b', 'main']);
   await git(['config', 'user.email', 'cascade@example.test']);
   await git(['config', 'user.name', 'Cascade cap']);
-  await commit('base', 'base.txt');
-  await git(['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
+  await git(['add', 'base.txt']);
+  await git(['commit', '-qm', 'base']);
+  await git(['worktree', 'add', '-qb', 'feat/c1/demo', childWorktree, 'main']);
   const closed = await commit('closed child', 'child.txt');
   await git(['update-ref', 'refs/conductor/demo/closed/c1', closed]);
   await commit('repair child', 'repair.txt');
-  await git(['checkout', '-qb', 'feat/daemon-demo', closed]);
+  await git(['branch', 'feat/daemon-demo', closed]);
+  await git(['worktree', 'add', '-q', repo, 'feat/daemon-demo']);
   await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
   await writeCoverageBindingEnvelope(repo, {
     version: 1,
@@ -214,6 +218,63 @@ describe('restack kickback budget storage', () => {
           resumeAuthorization: { consumed: false },
         },
       },
+    });
+  });
+
+  it('raises the cascade budget after recreating the halted feature worktree without child 1 state', async () => {
+    const subject = await realCascadeCapCliFixture();
+
+    await expect(runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    const activeLedger = await readFile(join(subject.repo, '.pipeline', 'children', '2', 'kickback-ledger.json'));
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'));
+    const haltClass = await readFile(join(subject.repo, '.pipeline', 'HALT.class'));
+    await execFile('git', ['worktree', 'remove', '--force', subject.repo], { cwd: subject.root });
+    await execFile('git', ['worktree', 'add', '-q', subject.repo, 'feat/daemon-demo'], { cwd: subject.root });
+
+    await writeCoverageBindingEnvelope(subject.repo, {
+      version: 1,
+      slug: 'demo',
+      runId: 'run-2',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
+      storyOwnership: { S1: 1, S2: 2 },
+    }, envelopeFilesystem);
+    await mkdir(join(subject.repo, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'children', '2', 'kickback-ledger.json'), activeLedger);
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), halt);
+    await writeFile(join(subject.repo, '.pipeline', 'HALT.class'), haltClass);
+    await expect(access(join(subject.repo, '.pipeline', 'children', '1'))).rejects.toThrow();
+
+    expect(await dispatchKickbackBudgetCommand(
+      {
+        kind: 'kickback-budget',
+        action: 'raise',
+        feature: 'demo',
+        gate: 'restack',
+        child: '1',
+        by: 2,
+        rationale: 'repair the recreated worktree cascade',
+        format: 'human',
+      },
+      {
+        cwd: subject.root,
+        resolveMainRoot: async () => subject.root,
+        isInteractive: () => true,
+        resolveOperator: () => 'operator',
+        print: () => {},
+      },
+    )).toBe(0);
+
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts',
+      counts: { counts: { 1: 3 }, limits: { 1: 5 } },
     });
   });
 });
