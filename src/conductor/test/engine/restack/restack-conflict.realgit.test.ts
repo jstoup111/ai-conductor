@@ -12,6 +12,7 @@ import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { journalRefFor, readRestackJournal, stagingRefFor } from '../../../src/engine/restack/restack-journal.js';
 import type { RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
@@ -139,19 +140,22 @@ describe('runRestack conflict resolver (real local Git)', () => {
     const subject = await fixture();
     const before = await refs(subject);
     const events = new ConductorEventEmitter();
-    const conflicts: unknown[] = [];
-    const refusals: unknown[] = [];
-    events.on('restack_conflict', (event) => conflicts.push(event));
-    events.on('restack_refused', (event) => refusals.push(event));
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver: async () => ({ resolved: false, reason: 'budget exhausted' }), resolverCap: 1,
     })).resolves.toEqual({ kind: 'halted' });
+    persister.stop();
 
     expect(await refs(subject)).toBe(before);
-    expect(conflicts).toEqual([expect.objectContaining({ child: 2, commit: subject.c2, paths: ['src/c.ts'] })]);
-    expect(refusals).toEqual([]);
+    const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; child?: number; commit?: string; paths?: string[] });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'restack_conflict', child: 2, commit: subject.c2, paths: ['src/c.ts'] }));
+    expect(persisted.some((event) => event.type === 'restack_refused')).toBe(false);
     const child = parseChildId(2);
     if (!child) throw new Error('child 2 must parse');
     expect((await subject.git(['rev-parse', stagingRefFor('demo', child)])).stdout.trim()).toBe(subject.c2);
@@ -181,6 +185,9 @@ describe('runRestack conflict resolver (real local Git)', () => {
 
   it.each(['skip', 'wrong-base'] as const)('rejects a resolver result with %s acceptance failure', async (mode) => {
     const subject = await fixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
     const resolver: RestackResolver = async ({ projectRoot, environment }) => {
       const git = (args: string[]) => execFile('git', args, { cwd: projectRoot, env: { ...process.env, ...environment } });
       if (mode === 'skip') await git(['rebase', '--skip']);
@@ -193,23 +200,36 @@ describe('runRestack conflict resolver (real local Git)', () => {
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
-      git: makeGitRunner(subject.repo), resolver, resolverCap: 1,
+      git: makeGitRunner(subject.repo), events, resolver, resolverCap: 1,
     })).resolves.toEqual({ kind: 'halted' });
+    persister.stop();
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(`commit ${subject.c2}; paths: src/c.ts`);
+    const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; child?: number; commit?: string; paths?: string[] });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'restack_conflict', child: 2, commit: subject.c2, paths: ['src/c.ts'] }));
+    expect(persisted.some((event) => event.type === 'restack_refused')).toBe(false);
   });
 
   it('refuses an accepted-base resolver result that changes an unowned path', async () => {
     const subject = await fixture();
     const events = new ConductorEventEmitter();
-    const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver: resolverThatContinues('one\nchild\n', 'src/unowned.ts'), resolverCap: 1,
     })).resolves.toEqual({ kind: 'halted' });
+    persister.stop();
 
-    expect(refusals).toContainEqual(expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: expect.stringContaining('src/unowned.ts') }));
+    const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; child?: number; reason?: string; detail?: string });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'restack_refused', reason: 'replay-mismatch', child: 2, detail: expect.stringContaining('src/unowned.ts') }));
   });
 
   it('hands a rename collision to the resolver instead of accepting it as a clean replay', async () => {
