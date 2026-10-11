@@ -187,14 +187,24 @@ export class SpoolDrainer {
   private async deliver(signal: SpoolSignal, body: Buffer) {
     const controller = new AbortController();
     this.inFlight.add(controller);
-    const timeout = setTimeout(() => controller.abort(), this.exportTimeoutMs);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<undefined>((resolve) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        resolve(undefined);
+      }, this.exportTimeoutMs);
+    });
     try {
-      const response = await this.send(`${this.options.endpoint.replace(/\/$/, '')}/v1/${signal}`, {
-        method: 'POST',
-        headers: { ...this.options.headers(), 'Content-Type': 'application/x-protobuf' },
-        body: new Uint8Array(body).buffer as ArrayBuffer,
-        signal: controller.signal,
-      });
+      const response = await Promise.race([
+        this.send(`${this.options.endpoint.replace(/\/$/, '')}/v1/${signal}`, {
+          method: 'POST',
+          headers: { ...this.options.headers(), 'Content-Type': 'application/x-protobuf' },
+          body: new Uint8Array(body).buffer as ArrayBuffer,
+          signal: controller.signal,
+        }),
+        timedOut,
+      ]);
+      if (response === undefined) return classifyNetworkError();
       return classifyResponse(
         response.status,
         new Uint8Array(await response.arrayBuffer()),
@@ -205,7 +215,7 @@ export class SpoolDrainer {
     } catch {
       return classifyNetworkError();
     } finally {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
       this.inFlight.delete(controller);
     }
   }
