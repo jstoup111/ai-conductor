@@ -25,7 +25,10 @@ afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
 });
 
-async function fixture(advance: { path: string; content: string } = { path: 'base.txt', content: 'base advanced\n' }) {
+async function fixture(
+  advance: { path: string; content: string } = { path: 'base.txt', content: 'base advanced\n' },
+  extraAdvances: readonly { path: string; content: string }[] = [],
+) {
   const repo = await mkdtemp(join(tmpdir(), 'restack-premove-'));
   repositories.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -56,7 +59,8 @@ async function fixture(advance: { path: string; content: string } = { path: 'bas
   const oldLeaf = (await git(['rev-parse', 'HEAD'])).stdout.trim();
 
   await git(['checkout', '-q', 'main']);
-  const advancedDefault = await commit('base advance', advance.path, advance.content);
+  let advancedDefault = await commit('base advance', advance.path, advance.content);
+  for (const extra of extraAdvances) advancedDefault = await commit('base advance', extra.path, extra.content);
   await git(['checkout', '-q', 'feat/daemon-demo']);
   await writeCoverageBindingEnvelope(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
@@ -107,6 +111,23 @@ describe('runRestack pre-move checks (real local Git)', () => {
     expect(refusals).toEqual([expect.objectContaining({ reason: 'dirty-overlap', detail: 'src/a.ts' })]);
     await expect(readFile(join(subject.repo, 'src', 'a.ts'), 'utf8')).resolves.toBe('operator edit\n');
     expect((await subject.git(['stash', 'list'])).stdout).toBe('');
+    expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(subject.oldLeaf);
+  });
+
+  // Covers: S10.7, task:33
+  it('names every tracked dirty path that overlaps the checked-out branch move in the dirty-overlap refusal', async () => {
+    const subject = await fixture({ path: 'src/a.ts', content: 'advanced\n' }, [{ path: 'base.txt', content: 'base advanced\n' }]);
+    await writeFile(join(subject.repo, 'src', 'a.ts'), 'operator edit\n');
+    await writeFile(join(subject.repo, 'base.txt'), 'operator base edit\n');
+    const events = new ConductorEventEmitter();
+    const refusals: unknown[] = [];
+    events.on('restack_refused', (event) => refusals.push(event));
+
+    const result = await restack(subject, events);
+
+    expect(result.kind).toBe('halted');
+    expect(refusals).toEqual([expect.objectContaining({ reason: 'dirty-overlap', detail: 'base.txt, src/a.ts' })]);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/base\.txt, src\/a\.ts/);
     expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(subject.oldLeaf);
   });
 

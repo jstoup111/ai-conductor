@@ -160,8 +160,8 @@ export async function checkRestackPreMove(
     dirtyTrackedPaths(git),
   ]);
   if (delta === undefined || dirty === undefined) return { kind: 'unavailable', detail: 'cannot inspect restack worktree changes' };
-  const overlap = delta.find((path) => dirty.includes(path));
-  if (overlap) return { kind: 'refused', reason: 'dirty-overlap', detail: overlap };
+  const overlap = delta.filter((path) => dirty.includes(path)).sort();
+  if (overlap.length > 0) return { kind: 'refused', reason: 'dirty-overlap', detail: overlap.join(', ') };
 
   const untracked = await untrackedAddedPaths(worktree, git, checkedOutMove.oldSha, checkedOutMove.newSha);
   if (untracked === undefined) return { kind: 'unavailable', detail: 'cannot inspect untracked restack collisions' };
