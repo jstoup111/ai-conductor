@@ -235,8 +235,11 @@ rotation proceeds for the rest. An indeterminate authorship probe still fails cl
 rotation. The engine records each rotation in `rebaselines` and logs the trigger, old and new
 commits, and paths.
 
-An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. For every protected
-artifact except stories, DECIDE writes the additive note beside the original assertion:
+An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. An accepted DECIDE
+artifact absent from the base branch — including one this spec branch already committed — is a draft:
+DECIDE revises it in place, removes the superseded text, and adds no amendment note or revision log.
+For every protected artifact already on the base branch except stories, DECIDE writes the additive
+note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
@@ -245,7 +248,9 @@ artifact except stories, DECIDE writes the additive note beside the original ass
 The original assertion remains present, and no separate amendment artifact is created. Story artifacts
 under `.docs/stories/` are the exception: DECIDE replaces the superseded assertion in place and leaves
 no amendment record — git history and the spec PR carry the correction's provenance. Either way, this
-places the correction in the initial seal baseline. `ai-conductor plan-protected-targets <plan-path>`
+places the correction in the initial seal baseline. The land gate refuses a draft `.md` artifact
+containing a dated `**Amended YYYY-MM-DD` line (`draft-amendment-note`); fold the correction into the
+current text, then land again. `ai-conductor plan-protected-targets <plan-path>`
 prevents a plan from assigning the same mutation to BUILD, and the land gate independently refuses a
 violating plan.
 

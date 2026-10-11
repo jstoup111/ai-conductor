@@ -189,6 +189,7 @@ from specs that would waste a build.
 | coherence | a traceability record that does not connect outcomes, requirements, accepted ADRs, stories, and tasks, or stories that do not tie out to the PRD |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | diagram presence | a non-Small architecture artifact with no fenced Mermaid block |
+| draft amendment note | a spec-branch `.md` artifact absent from the base branch that contains a dated `**Amended YYYY-MM-DD` line — fold the correction into the artifact text instead |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
 | plan completion checks | a task with no `Done when:` block, a blank check (including a bare `[test]`), fewer than two checks, more than five checks, or a malformed test tag — a leading bracketed token starting with `test` that is not exactly `[test]`; fenced-code examples are ignored |
 | plan task count | a plan with 41 or more parsed tasks unless it has exactly one `**Scope-exception:**` declaration with a non-empty rationale; 21–40 tasks are a plan-authoring warning, not a land refusal |
