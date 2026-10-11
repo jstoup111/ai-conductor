@@ -30,11 +30,12 @@ import {
   type GitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
-import { resolveActiveChild } from './child-cursor.js';
+import { hasDurableChildState, resolveActiveChild } from './child-cursor.js';
 import { listExistingChildren } from './child-context.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
+import { runRestack } from './restack/restack-executor.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
@@ -798,27 +799,6 @@ export async function resumeRebaseFirst(opts: {
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });
 
-  // A non-leaf child is a pinned, independently reviewed increment. Rebasing
-  // the worktree at this boundary would move its in-progress branch (and can
-  // strand its predecessor refs) before the region closes. The cursor is the
-  // sole authority for whether that stack state exists; an ordinary feature
-  // keeps the established play-forward path below.
-  const activeChild = await resolveActiveChild(opts.worktreePath, opts.slug ?? basename(opts.worktreePath));
-  if (activeChild.kind === 'active' && !activeChild.isLeaf) {
-    await opts.events.emit({
-      type: 'rebase_skipped_for_stack',
-      child: activeChild.child,
-      reason: 'active child is not the leaf',
-    });
-    opts.log?.(
-      `re-kick ${basename(opts.worktreePath)}: rebase skipped — active child ${activeChild.child} is not the leaf`,
-    );
-    // The sentinel was deliberately consumed: the child gate loop resumes at
-    // its existing overlay state, and retries the rebase only after the leaf
-    // becomes active.
-    return 'rebased';
-  }
-
   // Check and verify merged history BEFORE rebasing. Merge state alone is never
   // completion evidence: every refusal and unavailable dependency parks the
   // worktree without writing synthetic success markers.
@@ -842,6 +822,79 @@ export async function resumeRebaseFirst(opts: {
   }
 
   const git = makeGitRunner(opts.worktreePath);
+
+  // A stacked feature is one history.  Re-kick must therefore replay its
+  // complete durable stack even when the active region is an intermediate
+  // child; a single-branch rebase would leave its successors based on the old
+  // tip.  The executor owns child-region verdict writes and refusal HALTs.
+  const stackSlug = opts.slug ?? basename(opts.worktreePath);
+  const durableChildState = await hasDurableChildState(opts.worktreePath, stackSlug, { git });
+  if (durableChildState === 'git-error') {
+    await writeHalt(opts.worktreePath, [], 'cannot inspect durable stack state before re-kick', opts.events);
+    return 'halted';
+  }
+  if (durableChildState) {
+    const [target, previous, oldBase] = await Promise.all([
+      git(['rev-parse', '--verify', opts.localBase]),
+      git(['rev-parse', '--verify', 'HEAD']),
+      git(['merge-base', 'HEAD', opts.localBase]),
+    ]);
+    if (target.exitCode !== 0 || previous.exitCode !== 0 || oldBase.exitCode !== 0) {
+      await writeHalt(opts.worktreePath, [], 'cannot resolve the stacked re-kick base tuple', opts.events);
+      return 'halted';
+    }
+    const targetSha = target.stdout.trim();
+    const previousSha = previous.stdout.trim();
+    const contained = await git(['merge-base', '--is-ancestor', targetSha, previousSha]);
+    let stackedOutcome: RebaseOutcome;
+    if (contained.exitCode === 0) {
+      stackedOutcome = { kind: 'noop', baseSha: targetSha, allChangedPaths: [] };
+    } else {
+      const restacked = await runRestack({
+        worktree: opts.worktreePath,
+        slug: stackSlug,
+        cause: 'base-refresh',
+        newDefault: targetSha,
+        events: opts.events,
+        git,
+      });
+      if (restacked.kind !== 'applied') {
+        if (restacked.kind === 'unavailable') {
+          await writeHalt(opts.worktreePath, [], `stack base refresh unavailable: ${restacked.detail}`, opts.events);
+        }
+        return 'halted';
+      }
+      const [head, delta, featureSurface] = await Promise.all([
+        git(['rev-parse', '--verify', 'HEAD']),
+        git(['diff', '--name-only', oldBase.stdout.trim(), targetSha]),
+        git(['diff', '--name-only', oldBase.stdout.trim(), previousSha]),
+      ]);
+      if (head.exitCode !== 0 || delta.exitCode !== 0 || featureSurface.exitCode !== 0) {
+        await writeHalt(opts.worktreePath, [], 'cannot inspect completed stacked re-kick', opts.events);
+        return 'halted';
+      }
+      const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+      stackedOutcome = {
+        kind: 'changed',
+        baseSha: targetSha,
+        changedCodePaths: allChangedPaths.filter((path) => /(?:^|\/)(?:src|test)\//.test(path) || /\.(?:[cm]?[jt]sx?)$/.test(path)),
+        allChangedPaths,
+        featureSurface: featureSurface.stdout.split('\n').map((path) => path.trim()).filter(Boolean),
+        documentInputs: [],
+        replay: {
+          preRebaseHead: previousSha,
+          mergeBase: oldBase.stdout.trim(),
+          target: targetSha,
+          completedHead: head.stdout.trim(),
+        },
+      };
+    }
+    await recordRebaseStepCompletion(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), stackedOutcome);
+    await emitRebaseEvent(opts.events, stackedOutcome);
+    opts.log?.(`re-kick ${basename(opts.worktreePath)}: refreshed complete stack onto latest before resuming gate`);
+    return 'rebased';
+  }
+
   const translateAfterRebase =
     opts.translateAfterRebase ??
     ((

@@ -1,4 +1,4 @@
-// Covers: task:35
+// Covers: task:33, task:35
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -74,11 +74,9 @@ afterEach(async () => {
 });
 
 describe('resumeRebaseFirst stacked-region guard', () => {
-  it('consumes a re-kick sentinel without rebasing while an intermediate child is active', async () => {
+  it('uses the stack refresh path rather than skipping an intermediate active child', async () => {
     await initializeStack(2);
     await writeSentinel();
-    const childOneBefore = await git('rev-parse', 'feat/c1/demo');
-    const childTwoBefore = await git('rev-parse', 'feat/c2/demo');
     const events = new ConductorEventEmitter();
     const skipped: Array<{ child: number; reason: string }> = [];
     events.on('rebase_skipped_for_stack', (event) => {
@@ -99,15 +97,11 @@ describe('resumeRebaseFirst stacked-region guard', () => {
     })).resolves.toBe('rebased');
 
     expect(rebaseCalls).toBe(0);
-    expect(skipped).toEqual([{
-      type: 'rebase_skipped_for_stack', child: 2, reason: 'active child is not the leaf',
-    }]);
-    expect(await git('rev-parse', 'feat/c1/demo')).toBe(childOneBefore);
-    expect(await git('rev-parse', 'feat/c2/demo')).toBe(childTwoBefore);
+    expect(skipped).toEqual([]);
     await expect(readFile(join(repository, REKICK_SENTINEL), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('rebases the leaf worktree after the intermediate children close', async () => {
+  it('refreshes every moved stack ref when the base advances', async () => {
     await initializeStack(3);
     const childOneBefore = await git('rev-parse', 'feat/c1/demo');
     const childTwoBefore = await git('rev-parse', 'feat/c2/demo');
@@ -131,8 +125,8 @@ describe('resumeRebaseFirst stacked-region guard', () => {
     })).resolves.toBe('rebased');
 
     await expect(execFile('git', ['-C', repository, 'merge-base', '--is-ancestor', baseTip, 'feat/daemon-demo'])).resolves.toBeDefined();
-    expect(await git('rev-parse', 'feat/c1/demo')).toBe(childOneBefore);
-    expect(await git('rev-parse', 'feat/c2/demo')).toBe(childTwoBefore);
+    expect(await git('rev-parse', 'feat/c1/demo')).not.toBe(childOneBefore);
+    expect(await git('rev-parse', 'feat/c2/demo')).not.toBe(childTwoBefore);
     expect(skipped).toEqual([]);
   });
 
