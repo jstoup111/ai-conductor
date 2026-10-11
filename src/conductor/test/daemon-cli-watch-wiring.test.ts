@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDaemonSweepBinding } from '../src/daemon-cli.js';
 import { startDaemonEventPersistence } from '../src/engine/event-persister.js';
 import { enrollWatch, sweepMergeableLabels } from '../src/engine/mergeable-sweep.js';
+import type { CiFixDispatchOpts } from '../src/engine/mergeable-sweep.js';
 import type { GithubOperationRunner } from '../src/engine/github-operations.js';
 import type { PrMergeState } from '../src/engine/pr-labels.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
@@ -38,7 +39,7 @@ function state(checksOutcome: PrMergeState['checksOutcome']): PrMergeState {
   };
 }
 
-async function runProductionSweepBinding(root: string, events: ConductorEventEmitter, ciDispatch: ReturnType<typeof vi.fn>) {
+async function runProductionSweepBinding(root: string, events: ConductorEventEmitter, ciDispatch: CiFixDispatchOpts['dispatch']) {
   await Promise.all([
     enrollWatch(root, {
       prUrl: NO_CHECKS_URL,
@@ -52,7 +53,7 @@ async function runProductionSweepBinding(root: string, events: ConductorEventEmi
   const addedLabels: string[] = [];
   const operations: GithubOperationRunner = {
     run: async (request) => {
-      if (request.operation === 'pull-request.label.add' && request.payload?.label === 'needs-remediation') {
+      if (request.operation === 'pull-request.label.add' && request.payload && 'label' in request.payload && request.payload.label === 'needs-remediation') {
         addedLabels.push(request.payload.label);
       }
       return {};
@@ -86,7 +87,7 @@ describe('daemon-cli — mergeable-sweep event binding', () => {
     roots.push(root);
     const events = new ConductorEventEmitter();
     const persistence = startDaemonEventPersistence(root, events);
-    const ciDispatch = vi.fn(async () => undefined);
+    const ciDispatch = vi.fn<CiFixDispatchOpts['dispatch']>(async () => undefined);
 
     await runProductionSweepBinding(root, events, ciDispatch);
     persistence.stop();
@@ -103,7 +104,7 @@ describe('daemon-cli — mergeable-sweep event binding', () => {
     await mkdir(join(blockedRoot, '.daemon', 'events.jsonl'), { recursive: true });
     const blockedEvents = new ConductorEventEmitter();
     const blockedPersistence = startDaemonEventPersistence(blockedRoot, blockedEvents);
-    const blockedCiDispatch = vi.fn(async () => undefined);
+    const blockedCiDispatch = vi.fn<CiFixDispatchOpts['dispatch']>(async () => undefined);
 
     const labels = await runProductionSweepBinding(blockedRoot, blockedEvents, blockedCiDispatch);
     blockedPersistence.stop();
