@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -114,7 +114,8 @@ describe('build_review declared replication suppressions', () => {
       declaredReplicationSuppressions,
     });
 
-  it('persists a target-anchored source-only-evidence duplication from the active plan as a declaredReplicationSuppression', async () => {
+  const otherPath = 'src/other-widget.ts';
+  const runDeclaredReplication = async (makeFinding: (loci: { target: any; other: any }) => ReturnType<typeof duplication>) => {
     const projectDir = await mkdtemp(join(tmpdir(), 'declared-replication-runner-'));
     const planPath = join(projectDir, '.docs/plans/feature.md');
     const planBody = `# Plan\n\n**Pattern-source:** ${sourcePath}\n**Rename-map:** source-widget -> target-widget\n`;
@@ -131,11 +132,16 @@ describe('build_review declared replication suppressions', () => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
         if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
-        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\0${targetPath}\0`, stderr: '' };
-        if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${targetPath} b/${targetPath}\n@@ -1 +1 @@\n-export const widget = false;\n+export const widget = true;\n`, stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\0${targetPath}\0M\0${otherPath}\0`, stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: [
+          `diff --git a/${targetPath} b/${targetPath}\n@@ -1 +1 @@\n-export const widget = false;\n+export const widget = true;`,
+          `diff --git a/${otherPath} b/${otherPath}\n@@ -1 +1 @@\n-export const other = false;\n+export const other = true;`,
+        ].join('\n') + '\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:.docs/plans/feature.md') return { exitCode: 0, stdout: planBody, stderr: '' };
         if (args[0] === 'show' && args[1] === `head:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = true;\n', stderr: '' };
         if (args[0] === 'show' && args[1] === `base:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = false;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${otherPath}`) return { exitCode: 0, stdout: 'export const other = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${otherPath}`) return { exitCode: 0, stdout: 'export const other = false;\n', stderr: '' };
         if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
@@ -160,19 +166,14 @@ describe('build_review declared replication suppressions', () => {
       });
       vi.spyOn(runner as any, 'fileExists').mockImplementation(async (...args: any[]) => args[0] === join(projectDir, sourcePath));
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => {
+        const loci = Object.fromEntries(projection.changedFiles.map((file: any) => [file.path, {
+          path: file.path,
+          contentHash: file.hunks[0].contentHash,
+          display: `${file.path}:1`,
+        }]));
         return {
           kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v3', findings: [finding = {
-            ...duplication(),
-            anchor: {
-              rubric: 'implementationQuality',
-              locus: {
-                path: targetPath,
-                contentHash: projection.changedFiles[0].hunks[0].contentHash,
-                display: 'declared target copy',
-              },
-            },
-          }], verdict: 'FAIL',
+          contractVersion: 'v3', findings: [finding = makeFinding({ target: loci[targetPath], other: loci[otherPath] })], verdict: 'FAIL',
         };
       });
 
@@ -181,20 +182,37 @@ describe('build_review declared replication suppressions', () => {
 
       const persisted = JSON.parse(await readFile(join(projectDir, '.pipeline/build-review.json'), 'utf8'));
       const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding!.concernKind, anchor: finding!.anchor })!;
-      expect(persisted.declaredReplicationSuppressions).toEqual([{ findingId: identity.id, sourcePath, targetPath }]);
-      expect(effective).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id] });
+      return { persisted, effective, identity };
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
+  };
+
+  it('persists a target-anchored source-only-evidence duplication from the active plan as a declaredReplicationSuppression', async () => {
+    const { persisted, effective, identity } = await runDeclaredReplication(({ target }) => ({
+      ...duplication(),
+      anchor: { rubric: 'implementationQuality', locus: target },
+    }));
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([{ findingId: identity.id, sourcePath, targetPath }]);
+    expect(effective).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id] });
   });
 
   it.each([
-    ['an off-target anchor', duplication('src/other-widget.ts')],
-    ['evidence naming another file', duplication(targetPath, 'src/other-widget.ts:8')],
-  ])('does not suppress declared replication with %s', (_label, finding) => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;
-    expect(aggregate(finding, [])).toMatchObject({ verdict: 'FAIL', declaredReplicationSuppressions: [] });
-    expect(deriveEffectiveBuildReviewVerdict(aggregate(finding, []))).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
+    ['an off-target anchor', ({ other }: any) => ({
+      ...duplication(otherPath),
+      anchor: { rubric: 'implementationQuality' as const, locus: other },
+    })],
+    ['mixed source and foreign evidence', ({ target }: any) => ({
+      ...duplication(),
+      evidenceLocations: [`${sourcePath}:8`, `${otherPath}:8`],
+      anchor: { rubric: 'implementationQuality' as const, locus: target },
+    })],
+  ])('does not suppress declared replication with %s', async (_label, makeFinding) => {
+    const { persisted, effective, identity } = await runDeclaredReplication(makeFinding);
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([]);
+    expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
   });
 
   it('keeps a plan without Pattern-source at an empty declaredReplicationSuppressions list', () => {
