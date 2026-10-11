@@ -106,6 +106,8 @@ tier.
 > no change of substance. Each id names a decision exactly as already stated above.
 >
 > **D1** — Option A: a new `/coherence-check` skill runs as the final DECIDE step (after `/plan`), authoring `.docs/coherence/<plan-stem>.md` with one row per chain link and a per-row verdict (above: "**Option A.** A new `/coherence-check` skill")
+>
+> **Amended 2026-10-10 by #3038:** `/coherence-check` remains the final DECIDE *authoring* step and the final DECIDE step at tier S. At Medium/Large tier it is followed by the `plan_review` step (`adr-2026-10-10-source-grounded-adversarial-plan-review-step` D1), which authors no spec artifact and only reviews the final plan against real source. Coherence-check's own mapping, verdicts and land rung are unchanged.
 > **D2** — `landSpec` gains a `CoherenceValidator` rung that parses the artifact fail-closed, mechanically cross-checks every cited id via the existing parsers, and computes set-difference coverage, rejecting with a per-gap report (above: "`landSpec` gains a `CoherenceValidator` rung")
 > **D3** — Semantic-at-authoring, mechanical-at-land: the LLM contributes only semantic correspondence, authored in-session; everything enforceable by code is enforced by code at the boundary (above: "Semantic-at-authoring, mechanical-at-land.")
 > **D4** — A plan task is covered iff its `**Story:**` line cites a story id present in the stories file, or its `**Type:**` is `infrastructure`/`refactor` with a non-empty supporting purpose; anything else is an orphan (above: "Orphan-task rule (FR-5), mechanical form:")
