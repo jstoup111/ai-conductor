@@ -243,7 +243,7 @@ import {
 } from './engine/daemon-rekick.js';
 import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { enrollWatch, sweepMergeableLabels } from './engine/mergeable-sweep.js';
+import { enrollWatch, sweepMergeableLabels, type SweepOpts } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { isPaused } from './engine/pause-marker.js';
 import {
@@ -1004,6 +1004,14 @@ export async function prepareDaemonFeatureManagedSessionContext(input: {
  * the worktree down on success. Unattended; ceilings + supervision live in
  * runDaemon / makeRunFeature.
  */
+/** Construct the production daemon sweep input, including its event-spine binding. */
+export function createDaemonSweepBinding(
+  options: Omit<SweepOpts, 'onEvent'>,
+  events: ConductorEventEmitter,
+): SweepOpts {
+  return { ...options, onEvent: (event) => { void events.emit(event); } };
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
@@ -2746,15 +2754,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
       sweepMergeableLabels: async () => {
-        await sweepMergeableLabels({
+        await sweepMergeableLabels(createDaemonSweepBinding({
           projectRoot,
           log,
           tracker,
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
-          // Keep readiness observations and ci-failure occurrences on the
-          // daemon's one global event spine, whose persister owns events.jsonl.
-          onEvent: (event) => { void events.emit(event); },
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).
@@ -3027,7 +3032,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               headRefName: leafBranchFor(entry.slug),
             });
           },
-        });
+        }, events));
       },
       // Task T28: check for pending restart marker at idle boundary.
       hasRestartPending: async () => {

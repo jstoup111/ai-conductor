@@ -1,38 +1,119 @@
-// Covers: task:9
+// Covers: task:9, task:rem-prd-audit-R2
 
-import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createDaemonSweepBinding } from '../src/daemon-cli.js';
+import { startDaemonEventPersistence } from '../src/engine/event-persister.js';
+import { enrollWatch, sweepMergeableLabels } from '../src/engine/mergeable-sweep.js';
+import type { GithubOperationRunner } from '../src/engine/github-operations.js';
+import type { PrMergeState } from '../src/engine/pr-labels.js';
+import { ConductorEventEmitter } from '../src/ui/events.js';
 
-/**
- * Tests for Task 14: daemon-cli watcher wiring
- *
- * Verifies that:
- * 1. watchHaltCleared is properly wired into runDaemon deps by default
- * 2. watchHaltCleared can be disabled via watch: false flag
- * 3. The seam function is pre-bound with worktreeBase correctly
- */
+const roots: string[] = [];
+const NO_CHECKS_URL = 'https://github.com/acme/widgets/pull/41';
+const FAILED_CHECKS_URL = 'https://github.com/acme/widgets/pull/42';
 
-describe('daemon-cli — watchHaltCleared wiring', () => {
-  it('routes mergeable-sweep readiness and ci_failed events through the daemon-global event spine', () => {
-    const source = readFileSync(join(process.cwd(), 'src/daemon-cli.ts'), 'utf8');
-    const sweepStart = source.indexOf('sweepMergeableLabels: async () =>');
-    const sweepEnd = source.indexOf('// Task T28: check for pending restart marker', sweepStart);
-    const sweepBinding = source.slice(sweepStart, sweepEnd);
+const testTmpdir = (): string => process.env.TMPDIR ?? '/tmp';
 
-    expect(sweepStart).toBeGreaterThanOrEqual(0);
-    expect(sweepEnd).toBeGreaterThan(sweepStart);
-    expect(sweepBinding).toContain('onEvent: (event) => { void events.emit(event); },');
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+function state(checksOutcome: PrMergeState['checksOutcome']): PrMergeState {
+  return {
+    state: 'OPEN',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    checksOutcome,
+    hasFailingOrPendingChecks: checksOutcome === 'failed',
+    statusCheckRollup: checksOutcome === 'failed'
+      ? [{ name: 'unit', status: 'COMPLETED', conclusion: 'FAILURE' }]
+      : [],
+    labels: [],
+    isDraft: false,
+    hasHaltBodyMarker: false,
+    headRefOid: checksOutcome === 'failed' ? 'failed-head' : 'no-checks-head',
+    baseRefName: 'main',
+  };
+}
+
+async function runProductionSweepBinding(root: string, events: ConductorEventEmitter, ciDispatch: ReturnType<typeof vi.fn>) {
+  await Promise.all([
+    enrollWatch(root, {
+      prUrl: NO_CHECKS_URL,
+      slug: 'no-checks',
+      repoCwd: root,
+      headSha: 'no-checks-head',
+      headFirstSeenAt: '2026-10-11T11:00:00.000Z',
+    }),
+    enrollWatch(root, { prUrl: FAILED_CHECKS_URL, slug: 'failed-checks', repoCwd: root }),
+  ]);
+  const addedLabels: string[] = [];
+  const operations: GithubOperationRunner = {
+    run: async (request) => {
+      if (request.operation === 'pull-request.label.add' && request.payload?.label === 'needs-remediation') {
+        addedLabels.push(request.payload.label);
+      }
+      return {};
+    },
+  };
+  await sweepMergeableLabels(createDaemonSweepBinding({
+    projectRoot: root,
+    runGh: async (args) => {
+      if (args[0] === 'api' && args[2] === 'POST') addedLabels.push(args[5] ?? '');
+      return { stdout: '' };
+    },
+    tracker: {
+      readPullRequestMergeState: async (prUrl) =>
+        prUrl === FAILED_CHECKS_URL ? state('failed') : state('none'),
+    },
+    operations,
+    now: () => new Date('2026-10-11T12:00:00.000Z'),
+    ciFix: {
+      enabled: true,
+      isEligible: async () => ({ eligible: true }),
+      dispatch: ciDispatch,
+      now: () => new Date('2026-10-11T12:00:00.000Z'),
+    },
+  }, events));
+  return addedLabels;
+}
+
+describe('daemon-cli — mergeable-sweep event binding', () => {
+  it('persists readiness and CI failures while an unavailable ledger leaves remediation work intact', async () => {
+    const root = await mkdtemp(join(testTmpdir(), 'daemon-sweep-events-'));
+    roots.push(root);
+    const events = new ConductorEventEmitter();
+    const persistence = startDaemonEventPersistence(root, events);
+    const ciDispatch = vi.fn(async () => undefined);
+
+    await runProductionSweepBinding(root, events, ciDispatch);
+    persistence.stop();
+
+    const ledger = (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string; verdict?: string; prUrl?: string });
+    expect(ledger).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'shipped_pr_readiness', verdict: 'no-checks', prUrl: NO_CHECKS_URL }),
+      expect.objectContaining({ type: 'ci_failed', prUrl: FAILED_CHECKS_URL }),
+    ]));
+
+    const blockedRoot = await mkdtemp(join(testTmpdir(), 'daemon-sweep-events-blocked-'));
+    roots.push(blockedRoot);
+    await mkdir(join(blockedRoot, '.daemon', 'events.jsonl'), { recursive: true });
+    const blockedEvents = new ConductorEventEmitter();
+    const blockedPersistence = startDaemonEventPersistence(blockedRoot, blockedEvents);
+    const blockedCiDispatch = vi.fn(async () => undefined);
+
+    const labels = await runProductionSweepBinding(blockedRoot, blockedEvents, blockedCiDispatch);
+    blockedPersistence.stop();
+
+    expect({ labels, dispatches: blockedCiDispatch.mock.calls.length }).toEqual({
+      labels: expect.arrayContaining(['needs-remediation']),
+      dispatches: 1,
+    });
   });
 
-  /**
-   * Scenario (a): By default, watch is true and watchHaltCleared is wired
-   *
-   * This simulates the daemon-cli wiring logic inline to verify that:
-   * - When watch is undefined (defaulted to true), watchHaltCleared is a function
-   * - The function is pre-bound with worktreeBase
-   * - Calling it with slug and onCleared produces a dispose function
-   */
   it('by default (watch=true), watchHaltCleared is wired', () => {
     // Simulate the options from the CLI
     const opts: { watch: boolean | undefined } = { watch: undefined };
