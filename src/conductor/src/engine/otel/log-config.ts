@@ -60,6 +60,14 @@ function validateHeaderReferences(headers: unknown): string | undefined {
   return undefined;
 }
 
+/** Parent inheritance is deliberately narrower than "not grpc".  A malformed
+ * parent is not an authorization source for the independently opted-in logs
+ * signal. */
+function usableHttpParent(parent: HarnessConfig['otel'] | undefined): parent is NonNullable<HarnessConfig['otel']> {
+  if (parent?.exporter !== 'otlp' || (parent.protocol !== undefined && parent.protocol !== 'http/protobuf') || !isHttpEndpoint(parent.endpoint)) return false;
+  return parent.headers === undefined || validateHeaderReferences(parent.headers) === undefined;
+}
+
 /**
  * Resolve the optional log exporter without resolving parent credentials.
  * Log export is independently enabled and may inherit only a usable OTLP/HTTP
@@ -99,9 +107,7 @@ export function resolveLogConfig(config: Pick<HarnessConfig, 'otel'>): ResolvedL
   if (logs.enabled !== true) return { enabled: false };
 
   const parent = config.otel;
-  const parentIsHttpOtlp = parent?.exporter === 'otlp'
-    && parent.protocol !== 'grpc'
-    && isHttpEndpoint(parent.endpoint);
+  const parentIsHttpOtlp = usableHttpParent(parent);
   const endpoint = logs.endpoint !== undefined
     ? logs.endpoint
     : parentIsHttpOtlp

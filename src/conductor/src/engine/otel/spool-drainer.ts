@@ -119,7 +119,10 @@ export class SpoolDrainer {
       while (!this.stopped) {
         const logDestination = signal === 'logs' ? await this.options.authorizeLog?.(batch.destinationId) : undefined;
         // A disabled/revoked/mismatched policy leaves retained logs untouched.
-        if (signal === 'logs' && !logDestination) return;
+        // A stale destination must not block later eligible log batches.  It
+        // remains durable (and therefore may become eligible after a config
+        // restoration); continue this oldest-first scan instead of ending it.
+        if (signal === 'logs' && !logDestination) break;
         const classification = await this.deliver(signal, body, logDestination);
         if (this.stopped) return;
         if (classification.action !== 'keep') {
@@ -167,7 +170,7 @@ export class SpoolDrainer {
         try {
           await this.drainSignal(signal);
         } catch (error) {
-          await this.reportFailure(signal, 'spool', `OTLP ${signal} spool delivery failed: ${errorMessage(error)}`);
+          await this.reportFailure(signal, 'spool', `OTLP ${signal} spool delivery failed`);
           if (!this.stopped) await this.delay(INITIAL_BACKOFF_MS);
           continue;
         }
@@ -198,7 +201,12 @@ export class SpoolDrainer {
     try {
       const endpoint = logDestination?.endpoint ?? this.options.endpoint;
       const headers = logDestination?.headers ?? this.options.headers();
-      const response = await this.send(`${endpoint.replace(/\/$/, '')}/v1/${signal}`, {
+      // Logs policies are normalized with /v1/logs already.  Trace/metric
+      // endpoints remain signal bases.
+      const target = signal === 'logs' && logDestination
+        ? endpoint.replace(/\/+$/, '').replace(/(?:\/v1\/logs)+$/, '') + '/v1/logs'
+        : `${endpoint.replace(/\/$/, '')}/v1/${signal}`;
+      const response = await this.send(target, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/x-protobuf' },
         body: new Uint8Array(body).buffer as ArrayBuffer,
@@ -254,7 +262,7 @@ export class SpoolDrainer {
       try {
         await this.reportBacklog();
       } catch (error) {
-        await this.reportFailure('traces', 'spool', `OTLP spool backlog reporting failed: ${errorMessage(error)}`);
+        await this.reportFailure('traces', 'spool', 'OTLP spool backlog reporting failed');
         if (!this.stopped) await this.delay(INITIAL_BACKOFF_MS);
       }
     }
@@ -310,8 +318,4 @@ export class SpoolDrainer {
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

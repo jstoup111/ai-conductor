@@ -26,7 +26,7 @@ const FEATURE_TAG_DISPLAY_LENGTH = 24;
 const featureOwnership = new AsyncLocalStorage<string>();
 const projectDiagnosticOwnership: OperationalLogOwnership = Object.freeze({ scope: 'project' });
 
-type DaemonActivityLogger = (message: string, featureOwned?: boolean) => void;
+type DaemonActivityLogger = (message: string, featureOwned?: boolean, ownership?: OperationalLogOwnership) => void;
 
 /** Return the immutable project ownership used outside a feature executor. */
 export function daemonProjectDiagnosticOwnership(): OperationalLogOwnership {
@@ -119,17 +119,20 @@ export function createDaemonModeLogger(sinks: {
   writeLive: (line: string) => void;
   writePersisted: (line: string) => void;
   formatActivityLine?: (message: string, featureOwned: boolean) => string;
-}): (msg: string, featureOwned?: boolean) => void {
+  /** Optional structured capture happens before display formatting. */
+  onMessage?: (message: string, ownership: OperationalLogOwnership) => void;
+}): DaemonActivityLogger {
   const lastStatus = new Map<string, string>();
   const formatActivityLine = sinks.formatActivityLine ?? formatDaemonActivityLine;
 
-  return (msg: string, featureOwned = false) => {
+  return (msg: string, featureOwned = false, ownership?: OperationalLogOwnership) => {
     // Subprocess output is commonly a single captured string containing many
     // lines. Attribute and persist each physical line independently: otherwise
     // only the first one receives the daemon/feature prefix and timestamp.
     const lines = msg.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
     for (const lineMessage of lines) {
+      sinks.onMessage?.(lineMessage, ownership ?? captureDaemonDiagnosticOwnership());
       writeDaemonMessage(lineMessage, featureOwned, lastStatus, formatActivityLine, sinks);
     }
   };
@@ -188,7 +191,7 @@ function writeDaemonMessage(
  */
 export function createFeatureDaemonLogger(
   featureSlug: string,
-  baseLog: (message: string, featureOwned?: boolean) => void,
+  baseLog: DaemonActivityLogger,
   featureTag?: string,
 ): (message: string) => void {
   const ownership = daemonFeatureDiagnosticOwnership(featureSlug);
@@ -196,7 +199,7 @@ export function createFeatureDaemonLogger(
   return (message) => {
     const lines = message.split(/\r?\n/);
     if (lines.at(-1) === '') lines.pop();
-    for (const line of lines) baseLog(`${tag} ${line}`, true);
+      for (const line of lines) baseLog(`${tag} ${line}`, true, ownership);
   };
 }
 

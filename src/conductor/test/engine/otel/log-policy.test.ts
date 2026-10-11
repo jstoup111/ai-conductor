@@ -7,6 +7,7 @@ const merged = { otel: { exporter: 'otlp', endpoint: 'https://logs.example/base'
 describe('canonical log policy', () => {
   it('uses only the canonical root merged policy and keeps identity secret-free', async () => {
     const calls: string[] = [];
+    const warnings: string[] = [];
     const mainConfig = merged;
     const worktreeConfig = { otel: { exporter: 'otlp', endpoint: 'https://worktree.invalid', logs: { enabled: false } } };
     const originalToken = process.env.LOG_TOKEN;
@@ -18,10 +19,12 @@ describe('canonical log policy', () => {
         calls.push(path);
         return { ok: true, config: path === '/main' ? mainConfig : worktreeConfig };
       },
+      warn: (message) => warnings.push(message),
     });
     expect(policy).toMatchObject({ sendable: true, root: '/main' });
     if (!policy.sendable) throw new Error('expected policy');
-    expect(calls).toEqual(['/main']);
+    expect(calls).toEqual(['/main', '/linked-worktree']);
+    expect(warnings).toEqual([expect.stringContaining('/main')]);
     expect(policy.destinationId).toBe(logDestinationId(policy.config));
     expect(policy.destinationId).toContain('$LOG_TOKEN');
     expect(policy.destinationId).not.toContain('secret-value');

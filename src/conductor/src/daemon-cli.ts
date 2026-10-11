@@ -130,10 +130,12 @@ import {
   createDaemonModeLogger,
   createFeatureDaemonLogger,
   createOwnershipAwareDaemonLogger,
+  captureDaemonDiagnosticOwnership,
   formatDaemonConsoleTeeLine,
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
+import { createOperationalLogger } from './engine/operational-log.js';
 import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import {
@@ -1034,6 +1036,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // run had color on. The sink is opened once we own the repo (below); until then
   // `log` goes to the console only.
   let logSink: DaemonLogSink | null = null;
+  let emitOperationalLog: ((message: string, ownership: import('./types/events.js').OperationalLogOwnership, severity?: 'info' | 'warn' | 'error') => void) | undefined;
 
   let ciFixEnabled = true;
 
@@ -1055,6 +1058,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // read back via `conduct daemon logs` can be correlated in time; the
     // console stays uncluttered for live watching.
     writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
+    onMessage: (message, ownership) => emitOperationalLog?.(message, ownership),
   });
   // daemon.ts is also used as a plain core, where its `[daemon]` messages are
   // meaningful. Its daemon-mode renderer already owns that prefix, though, so
@@ -1103,6 +1107,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const teeConsoleLine = (level: string, args: unknown[]): void => {
     try {
       const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
+      emitOperationalLog?.(line, captureDaemonDiagnosticOwnership(), level === 'warn' ? 'warn' : 'error');
       logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, stripAnsi(line))));
     } catch {
       // Best-effort: the tee must never disrupt the warning path itself.
@@ -1288,6 +1293,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon-wide forwarding bus keeps rendering global. Each feature owns a
   // local persistence bus plus provider runtime/session state; rate limits remain shared.
   const events = new ConductorEventEmitter();
+  // Capture before daemon formatting while retaining the pre-existing console
+  // and durable-file sinks.  The ownership closure is frozen for every event.
+  emitOperationalLog = (message, ownership, severity = 'info') => {
+    const logger = createOperationalLogger({
+      emit: (occurrence) => events.emit(occurrence),
+      localSink: () => undefined,
+      now: Date.now,
+      ownership,
+    });
+    logger[severity](message);
+  };
   installDaemonBotCoAuthor(createBotCoAuthorResolver({ runner: makeProductionGh(), cwd: projectRoot, events }));
   // Both daemon-only occurrences and forwarded feature events share one bus;
   // the sibling ledger deliberately persists only daemon-origin copies.
@@ -1445,7 +1461,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const scopedEvents = new ConductorEventEmitter();
     const scopedLog = createFeatureDaemonLogger(
       slug,
-      (message) => log(message, true),
+      (message, _featureOwned, ownership) => log(message, true, ownership),
       formatDaemonFeatureTag(slug),
     );
     scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
@@ -1495,7 +1511,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (!featureLog) {
       featureLog = createFeatureDaemonLogger(
         slug,
-        (message) => log(message, true),
+        (message, _featureOwned, ownership) => log(message, true, ownership),
         formatDaemonFeatureTag(slug),
       );
       featureLogs.set(slug, featureLog);
@@ -2796,7 +2812,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   featureEvents,
                   createFeatureDaemonLogger(
                     entry.slug,
-                    (message) => log(message, true),
+                    (message, _featureOwned, ownership) => log(message, true, ownership),
                     formatDaemonFeatureTag(entry.slug),
                   ),
                 );
@@ -2842,7 +2858,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                             providerExecution,
                             log: createFeatureDaemonLogger(
                               entry.slug,
-                              (message) => log(message, true),
+                              (message, _featureOwned, ownership) => log(message, true, ownership),
                               formatDaemonFeatureTag(entry.slug),
                             ),
                           },
@@ -2903,7 +2919,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 featureEvents,
                 createFeatureDaemonLogger(
                   entry.slug,
-                  (message) => log(message, true),
+                  (message, _featureOwned, ownership) => log(message, true, ownership),
                   formatDaemonFeatureTag(entry.slug),
                 ),
               );
@@ -2956,7 +2972,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                             providerExecution,
                             log: createFeatureDaemonLogger(
                               ctx.entry.slug,
-                              (message) => log(message, true),
+                              (message, _featureOwned, ownership) => log(message, true, ownership),
                               formatDaemonFeatureTag(ctx.entry.slug),
                             ),
                           },

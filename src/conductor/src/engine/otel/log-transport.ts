@@ -23,10 +23,18 @@ export async function sendLogBatch(records: SdkLogRecord[], options: LogTranspor
   const timeoutMs = options.timeoutMs ?? 2_000;
   const controller = new AbortController();
   let expired = false;
-  const timeout = setTimeout(() => { expired = true; controller.abort(); }, timeoutMs);
+  let expire!: () => void;
+  const expiredAttempt = new Promise<void>((resolve) => { expire = resolve; });
+  const timeout = setTimeout(() => { expired = true; controller.abort(); expire(); }, timeoutMs);
   timeout.unref?.();
   try {
-    const policy = await authorizeLogDestination(options.startDir, options.destinationId, options.policy);
+    const authorized = await Promise.race([
+      authorizeLogDestination(options.startDir, options.destinationId, options.policy)
+        .then((policy) => ({ policy })),
+      expiredAttempt.then(() => ({ timedOut: true as const })),
+    ]);
+    if ('timedOut' in authorized) return { ok: false, reason: 'timeout' };
+    const { policy } = authorized;
     if (!policy || expired) return { ok: false, reason: expired ? 'timeout' : 'policy' };
     const headers = policy.config.headerReferences
       ? Object.fromEntries(Object.entries(policy.config.headerReferences).map(([name, ref]) => [name, (options.env ?? process.env)[ref.env] ?? '']))

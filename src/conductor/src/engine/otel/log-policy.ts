@@ -14,6 +14,13 @@ export interface LogPolicyOptions {
   warn?: (message: string) => void;
 }
 
+function stableLogBlock(config: { otel?: unknown }): string {
+  const otel = config.otel;
+  if (otel === null || typeof otel !== 'object') return '';
+  const logs = (otel as { logs?: unknown }).logs;
+  try { return JSON.stringify(logs ?? null); } catch { return '[unreadable]'; }
+}
+
 /**
  * A non-secret identity for immutable batches.  Header *reference names*, not
  * their resolved values, intentionally participate so rotating a credential
@@ -41,6 +48,20 @@ export async function readLogPolicy(startDir: string, options: LogPolicyOptions 
   const resolved = resolveLogConfig(loaded.config);
   if (!resolved.enabled) {
     return { sendable: false, root, reason: resolved.error ?? 'log export is disabled' };
+  }
+  // A linked checkout may carry a tempting local override.  It is observed
+  // solely to explain why it is ignored; authorization remains the canonical
+  // main-root result above and this read performs no migration or write.
+  if (root !== startDir) {
+    try {
+      const local = await (options.loadConfig ?? loadMergedConfigForRead)(startDir);
+      if (local.ok && stableLogBlock(local.config) !== stableLogBlock(loaded.config)) {
+        options.warn?.(`log settings in this worktree are ignored; using canonical project policy at ${root}`);
+      }
+    } catch {
+      // The canonical policy has already been read successfully.  An optional
+      // local comparison must never turn into a second authorization source.
+    }
   }
   return { sendable: true, root, config: resolved, destinationId: logDestinationId(resolved) };
 }

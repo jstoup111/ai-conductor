@@ -12,6 +12,20 @@ const severity = { info: SeverityNumber.INFO, warn: SeverityNumber.WARN, error: 
 
 /** The closed projection boundary: never serialize arbitrary event objects. */
 export function projectLogRecord(event: ConductorEvent, project = 'unknown', worker = 'unknown'): ProjectedLogRecord | undefined {
+  if (event.type === 'step_started' || event.type === 'step_completed' || event.type === 'feature_complete') {
+    const body = event.type === 'step_started' ? `step started: ${event.step}`
+      : event.type === 'step_completed' ? `step completed: ${event.step}`
+        : 'feature completed';
+    return {
+      timestamp: Date.parse(observedAtOf(event) ?? '') || Date.now(), severityText: 'INFO', severityNumber: SeverityNumber.INFO, body,
+      attributes: {
+        'conductor.project': project, 'conductor.worker': worker, 'conductor.event': event.type,
+        // Lifecycle events do not carry a slug in the public event union;
+        // their root-owner projection is intentionally project scoped.
+        'conductor.scope': 'project',
+      },
+    };
+  }
   if (event.type !== 'operational_log') return undefined;
   const feature = event.ownership.scope === 'feature' ? event.ownership.featureSlug : undefined;
   const attrs: Record<string, string | number | boolean> = {

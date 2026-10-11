@@ -57,8 +57,9 @@ export function createSpoolRuntime(
   directory: string,
   config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>,
   events?: ConductorEventEmitter,
+  logMaxBytes?: number,
 ): SpoolRuntime {
-  const store = new SpoolStore(directory, { maxBytes: config.spool?.maxBytes });
+  const store = new SpoolStore(directory, { maxBytes: config.spool?.maxBytes, logMaxBytes });
   let drainer: SpoolDrainer | undefined;
   const lease = new SpoolLease(directory, { onLost: () => { void drainer?.stop(); } });
   drainer = new SpoolDrainer(store, {
@@ -69,7 +70,7 @@ export function createSpoolRuntime(
         : config.headers ?? {},
       authorizeLog: async (destinationId) => {
         const policy = await readLogPolicy(dirname(directory));
-        if (!policy.sendable || policy.destinationId !== destinationId) return undefined;
+        if (!policy.sendable || !policy.config.spool.enabled || policy.destinationId !== destinationId) return undefined;
         return {
           endpoint: policy.config.endpoint,
           headers: policy.config.headerReferences

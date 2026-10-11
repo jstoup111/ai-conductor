@@ -143,6 +143,16 @@ describe('resolveLogConfig', () => {
     expect(serialized).not.toMatch(/token@|token=secret|#secret/i);
   });
 
+  it.each([
+    ['an unknown parent protocol', { ...parent, protocol: 'other', logs: { enabled: true } }],
+    ['malformed inherited headers', { ...parent, headers: { Authorization: 'literal-secret' }, logs: { enabled: true } }],
+  ])('does not inherit %s', (_caseName, otel) => {
+    expect(resolveLogConfig({ otel } as never)).toMatchObject({
+      enabled: false,
+      error: expect.stringMatching(/otel\.logs\.endpoint/i),
+    });
+  });
+
   it('loads valid logs while leaving malformed log-only settings isolated from valid parent telemetry', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'log-config-loader-'));
     tempDirs.push(projectRoot);

@@ -1134,6 +1134,40 @@ otel:
     team.name: platform
 ```
 
+### otel.logs
+
+Operational log export is independently opt-in. It uses HTTP/protobuf only, reads the canonical
+main-checkout policy at send time, and leaves all terminal and `daemon.log` output unchanged. A log
+endpoint is normalized to exactly one `/v1/logs` suffix. Header values are environment references;
+never put a credential in this file.
+
+| Key | Type | Default |
+| --- | --- | --- |
+| `otel.logs.enabled` | boolean | `false` |
+| `otel.logs.endpoint` | HTTP(S) URL | inherited only from a valid HTTP/protobuf OTLP parent |
+| `otel.logs.headers` | header-to-`{ env: NAME }` mapping | inherited parent references |
+| `otel.logs.spool.enabled` | boolean | `true` when logs are enabled |
+| `otel.logs.spool.max_bytes` | positive integer | `67108864` (64 MiB), separate from trace/metric retention |
+
+An explicit `endpoint` replaces the parent endpoint. An explicit `headers: {}` deliberately sends no
+headers. Invalid log settings disable only logs and produce a named local diagnostic; existing traces,
+metrics, and local diagnostics continue.
+
+```yaml
+otel:
+  exporter: otlp
+  endpoint: https://collector.example
+  logs:
+    enabled: true
+    headers:
+      Authorization:
+        env: LOG_EXPORT_TOKEN
+    spool:
+      max_bytes: 67108864
+```
+
+See [log export recipes](../guides/log-export.md) for common destinations.
+
 ### otel spool
 
 With `exporter: otlp` and HTTP/protobuf, every trace and metric batch is first written to a durable

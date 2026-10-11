@@ -343,9 +343,13 @@ export function buildInteractiveVisualizers(
   let logOwner: ReturnType<typeof wireOtelLogs> | undefined;
   const logs: VisualizerPlugin = {
     name: 'otel-logs',
-    start: () => { logOwner = wireOtelLogs(config, { ...context.startContext, pipelineDir: context.pipelineDir }, context.emitter); },
+    start: () => { logOwner ??= wireOtelLogs(config, { ...context.startContext, pipelineDir: context.pipelineDir }, context.emitter); },
     stop: async () => { await logOwner?.then((owner) => owner?.stop()); },
   };
+  // OTel's synchronous visualizer helpers start their own constructors above.
+  // Start the asynchronous log owner here as well; returning an unstarted
+  // plugin meant ordinary interactive runs never subscribed to the event bus.
+  logs.start(context.emitter, context.startContext);
   return [...started, ...(otel ? [otel] : []), ...(metrics ? [metrics] : []), logs];
 }
 

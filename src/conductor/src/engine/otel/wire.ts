@@ -27,7 +27,9 @@ import { LogListener } from './log-listener.js';
 import { BoundedLogProcessor, type LogBatchExporter } from './log-processor.js';
 import { sendLogBatch } from './log-transport.js';
 import { readLogPolicy } from './log-policy.js';
+import { resolveLogConfig } from './log-config.js';
 import { SpoolingLogExporter } from './spooling-exporter.js';
+import { LogHealth } from './log-health.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
 
@@ -102,30 +104,69 @@ export async function wireOtelLogs(
   events: ConductorEventEmitter,
   spoolRuntime?: SpoolRuntime,
 ): Promise<OtelLogOwner | null> {
-  const policy = await readLogPolicy(context.project ?? dirname(context.pipelineDir));
-  if (!policy.sendable) return null;
+  const requested = resolveLogConfig(_config);
+  // Default-off is intentionally silent. Invalid explicitly-requested logs
+  // get a named local diagnostic, while traces and metrics remain independent.
+  if (!requested.enabled) {
+    if (requested.error) {
+      void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] ${requested.error}; logs remain local` }).catch(() => undefined);
+    }
+    return null;
+  }
+  const policy = await readLogPolicy(context.project ?? dirname(context.pipelineDir), {
+    warn: (message) => { void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] ${message}` }); },
+  });
+  if (!policy.sendable) {
+    void events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] ${policy.reason}; logs remain local` }).catch(() => undefined);
+    return null;
+  }
   try {
-    const worker = 'unknown';
+    const resolved = resolveOtelConfig(_config, context.pipelineDir);
+    const worker = resolveWorkerName(resolved);
+    const health = new LogHealth(events);
     const direct: LogBatchExporter = {
       export(records, done) { void sendLogBatch(records, { startDir: policy.root, destinationId: policy.destinationId })
-        .then((result) => done({ code: result.ok ? ExportResultCode.SUCCESS : ExportResultCode.FAILED })); },
+        .then((result) => {
+          if (result.ok) health.recovered(); else health.failure(result.reason);
+          done({ code: result.ok ? ExportResultCode.SUCCESS : ExportResultCode.FAILED });
+        }); },
     };
     const exporter = policy.config.spool.enabled && spoolRuntime
       ? new SpoolingLogExporter(spoolRuntime.store, policy.destinationId, direct, events) : direct;
+    const processor = new BoundedLogProcessor(exporter, { onDrop: (count) => health.failure('dropped', count) });
     const provider = new LoggerProvider({ resource: buildResource({ pipelineDir: context.pipelineDir,
       project: policy.root, projectName: basename(policy.root), workerName: worker,
+      ...(resolved.enabled && resolved.attributes ? { attributes: resolved.attributes } : {}),
       ...(context.harnessVersion === undefined ? {} : { harnessVersion: context.harnessVersion }),
-    }, 'logs'), processors: [new BoundedLogProcessor(exporter)] });
-    const listener = new LogListener(provider.getLogger('conductor', '1.0.0'), policy.root, worker);
+    }, 'logs'), processors: [processor] });
+    const listener = new LogListener(provider.getLogger('conductor', '1.0.0'), policy.root, worker, () => health.failure('dropped'));
     listener.start(events);
     let stopped: Promise<void> | undefined;
     return {
-      flush: () => provider.forceFlush().catch(() => undefined),
-      stop: () => stopped ??= (async () => { listener.stop(); await provider.forceFlush().catch(() => undefined); await provider.shutdown().catch(() => undefined); })(),
+      flush: () => withinLogStopBudget(() => provider.forceFlush()),
+      stop: () => stopped ??= (async () => {
+        listener.stop();
+        await withinLogStopBudget(async () => { await provider.forceFlush(); await provider.shutdown(); });
+      })(),
     };
   } catch {
     void events.emit({ type: 'renderer_error', rendererName: 'otel', error: '[otel] log export setup failed; logs remain local' });
     return null;
+  }
+}
+
+/** A single deadline bounds all shutdown work, including a stalled durable write. */
+async function withinLogStopBudget(operation: () => Promise<void>, timeoutMs = 2_000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation(),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); }),
+    ]);
+  } catch {
+    // Logging must not alter the calling lifecycle result.
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -141,6 +182,7 @@ export function createOtelVisualizerRegistry(events: ConductorEventEmitter): Plu
  * their spool shares the durable checkout location used by daemon runs.
  */
 function interactiveSpoolLifecycle(
+  sourceConfig: HarnessConfig,
   resolved: Extract<ReturnType<typeof resolveOtelConfig>, { enabled: true; exporter: 'otlp' }>,
   context: OtelVisualizerStartContext,
   events: ConductorEventEmitter,
@@ -151,7 +193,12 @@ function interactiveSpoolLifecycle(
   const existing = interactiveSpoolLifecycles.get(directory);
   if (existing) return existing;
   const lifecycle: InteractiveSpoolLifecycle = {
-    runtime: createSpoolRuntime(directory, resolved, events), events, visualizerOpen: false, metricsOpen: false,
+    runtime: createSpoolRuntime(
+      directory,
+      resolved,
+      events,
+      (() => { const logs = resolveLogConfig(sourceConfig); return logs.enabled ? logs.spool.maxBytes : undefined; })(),
+    ), events, visualizerOpen: false, metricsOpen: false,
   };
   const priorStop = interactiveSpoolStops.get(directory);
   if (priorStop) lifecycle.leaseStart = priorStop.then(() => lifecycle.runtime.lease.acquire());
@@ -198,7 +245,7 @@ export function wireOtelVisualizer(
   void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
 
   const interactiveLifecycle = !spoolRuntime && resolved.exporter === 'otlp'
-    ? interactiveSpoolLifecycle(resolved, context, events)
+    ? interactiveSpoolLifecycle(config, resolved, context, events)
     : undefined;
   if (!spoolRuntime && resolved.exporter === 'otlp' && resolved.spool?.enabled && !interactiveLifecycle) {
     warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
@@ -262,7 +309,12 @@ export function wireDaemonOtel(
   emitResolvedWarnings(resolved, context.rootEvents);
   void warnDisabledSpoolBacklog(resolved, context.mainRoot, context.rootEvents);
   const spoolRuntime = resolved.exporter === 'otlp' && resolved.spool?.enabled
-    ? createSpoolRuntime(join(context.mainRoot, '.daemon', 'otel-spool'), resolved, context.rootEvents)
+    ? createSpoolRuntime(
+      join(context.mainRoot, '.daemon', 'otel-spool'),
+      resolved,
+      context.rootEvents,
+      (() => { const logs = resolveLogConfig(config); return logs.enabled ? logs.spool.maxBytes : undefined; })(),
+    )
     : undefined;
   const exporters = spoolRuntime
     ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events: context.rootEvents, env: context.env })
@@ -325,7 +377,7 @@ export function wireInteractiveOtelMetrics(
   emitResolvedWarnings(resolved, events);
   void warnDisabledSpoolBacklog(resolved, context.project ?? dirname(context.pipelineDir), events);
   const spoolLifecycle = resolved.exporter === 'otlp'
-    ? interactiveSpoolLifecycle(resolved, context, events)
+    ? interactiveSpoolLifecycle(config, resolved, context, events)
     : undefined;
   if (resolved.exporter === 'otlp' && resolved.spool?.enabled && !spoolLifecycle) {
     warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
