@@ -9,7 +9,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createBlockerResolver } from '../../src/engine/blocker-resolver.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
-import { createGhBlockerRunner } from '../../src/engine/gh-blocker-runner.js';
+import { makeProductionGh } from '../../src/engine/tracker-client.js';
 import { createOrderingSource, type OrderingSource } from '../../src/engine/ordering-source.js';
 
 const execFile = promisify(execFileCb);
@@ -364,7 +364,7 @@ describe('createBlockerResolver', () => {
 // unauthenticated, or when the network is unreachable, so it never blocks
 // CI/offline runs; it exists to catch adapter-shape drift (flag names,
 // response fields) that injected-runner tests cannot see.
-describe('createGhBlockerRunner (real gh binary smoke)', () => {
+describe('createOrderingSource (real gh binary smoke)', () => {
   it('resolves owner/repo#229 blocked_by via the real gh CLI, when gh is available', async () => {
     try {
       await execFile('gh', ['--version']);
@@ -373,8 +373,7 @@ describe('createGhBlockerRunner (real gh binary smoke)', () => {
       return;
     }
 
-    // adr-2026-07-22-canonical-tracker-client-seam: createGhBlockerRunner now
-    // delegates to the canonical makeProductionGh(), which is guarded by the
+    // The canonical makeProductionGh() is guarded by the
     // AI_CONDUCTOR_NO_REAL_EXEC kill-switch (set globally by vitest setup).
     // This smoke test deliberately opts out — it is the one place a real gh
     // call is intentional — and the call is a read-only GET
@@ -388,8 +387,7 @@ describe('createGhBlockerRunner (real gh binary smoke)', () => {
 
     let verdict;
     try {
-      const run = createGhBlockerRunner();
-      const resolver = createResolver(run);
+      const resolver = createBlockerResolver({ source: createOrderingSource({ run: makeProductionGh() }) });
       try {
         verdict = await resolver.resolve('anthropics/claude-code#229');
       } catch (err) {
