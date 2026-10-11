@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:6
+// Covers: task:1, task:2, task:3, task:4, task:6
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
@@ -512,6 +512,57 @@ describe('live self-host boundary', () => {
           reason: expect.stringContaining('provider state changed during self-host execution'),
         });
         expect(result.reason).toContain('removed remote-settings.json');
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('keeps a nested remote-settings.json fingerprinted', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-nested-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      const settings = join(provider, 'rules', 'remote-settings.json');
+      await Promise.all([mkdir(live), mkdir(join(provider, 'rules'), { recursive: true })]);
+      await writeFile(settings, '{}');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(settings, '');
+      try {
+        const result = await verify(baseline);
+        expect(result).toMatchObject({ ok: false });
+        expect(result.reason).toContain('changed rules/remote-settings.json');
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('keeps a Codex root remote-settings.json fingerprinted', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-codex-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      const settings = join(provider, 'remote-settings.json');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      await writeFile(settings, '{}');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'codex' });
+      await writeFile(settings, '');
+      try {
+        const result = await verify(baseline);
+        expect(result).toMatchObject({ ok: false });
+        expect(result.reason).toContain('changed remote-settings.json');
+      } finally { await rm(root, { recursive: true, force: true }); }
+    });
+
+    it('keeps an untracked live-checkout root remote-settings.json fingerprinted without containment', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-checkout-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      const settings = join(live, 'remote-settings.json');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      await execFileAsync('git', ['init'], { cwd: live });
+      await writeFile(settings, '{}');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(settings, '');
+      try {
+        const result = await verifyLiveBoundary(baseline, {
+          contained: false,
+          reason: 'containment unavailable: bwrap not found',
+        });
+        expect(result).toMatchObject({ ok: false });
+        expect(result.reason).toContain('live checkout changed during self-host execution');
+        expect(result.reason).toContain('changed remote-settings.json');
+        expect(result.reason).toContain('Containment was not in force');
       } finally { await rm(root, { recursive: true, force: true }); }
     });
   });
