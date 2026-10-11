@@ -100,3 +100,21 @@ test_codex_guidance_contract.sh shell-runner verifies Codex-facing bootstrap gui
 # triage: test_codex_skill_installation.sh fixed — isolated runner PASS after removing retired Unreleased changelog-migration assertions
 test_codex_skill_installation.sh shell-runner verifies isolated Codex catalog installation, update, check, and uninstall behavior
 # triage: run_browsable_documentation_site_acceptance.sh deleted — obsolete: duplicate runner; test_docs_navigation.sh and test_docs_pages_smoke.sh retain integrity ownership
+
+# Triage: launcher, hook, and release orphan scripts verified through the isolated shell runner.
+# triage: test_ai_conductor_launcher.sh kept — isolated runner PASS
+test_ai_conductor_launcher.sh shell-runner verifies canonical launcher aliases, installation, and uninstall behavior
+# triage: test_conduct_ts_launcher.sh kept — isolated runner PASS
+test_conduct_ts_launcher.sh shell-runner verifies launcher realpath pinning and pinned runtime behavior
+# triage: test_generate_model_table_wrapper.sh kept — isolated runner PASS
+test_generate_model_table_wrapper.sh shell-runner verifies the model-table wrapper's source-only behavior
+# triage: test_post_commit_derive_feedback.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_post_commit_derive_feedback.sh shell-runner verifies post-commit feedback hook behavior and command gating
+# triage: test_rate_limit_wait.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_rate_limit_wait.sh shell-runner verifies StopFailure rate-limit wait parsing
+# triage: test_release_unreleased_state.sh kept — isolated runner PASS
+test_release_unreleased_state.sh shell-runner verifies release publisher workflow and consumed transition state
+# triage: test_session_start_summary.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_session_start_summary.sh shell-runner verifies session-start pipeline-summary behavior and parse failures
+# triage: test_skill_pipeline_contract.sh fixed — isolated runner PASS with current engine evidence-writer and policy contracts
+test_skill_pipeline_contract.sh shell-runner verifies cross-skill pipeline contracts

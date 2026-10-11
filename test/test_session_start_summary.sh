@@ -6,6 +6,14 @@ HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_ROOT=$(mktemp -d)
 trap 'status=$?; rm -rf "$TMP_ROOT"; exit "$status"' EXIT
 
+# The healthy cases need a real parser after the isolated shell runner changes
+# HOME. The final case still shadows this fixture entry with its intentional
+# failing python3 stub.
+TEST_BIN="$TMP_ROOT/bin"
+mkdir -p "$TEST_BIN"
+ln -s "$(command -p -v python3)" "$TEST_BIN/python3"
+PATH="$TEST_BIN:$PATH"
+
 mkdir -p "$TMP_ROOT/.pipeline"
 cat > "$TMP_ROOT/.pipeline/conduct-state.json" <<'JSON'
 {"build":"done","notes":7,"ship":"skipped","literal":"$(touch should-not-run)"}

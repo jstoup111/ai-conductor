@@ -82,6 +82,15 @@ trap cleanup EXIT
 
 TMPDIR_ROOT=$(mktemp -d)
 
+# The hook parses PostToolUse JSON with python3. The isolated shell runner
+# replaces HOME, so a version-manager shim on PATH may no longer resolve an
+# interpreter; pin a real fixture-owned entry for both the hook and payload
+# construction below.
+TEST_BIN="$TMPDIR_ROOT/bin"
+mkdir -p "$TEST_BIN"
+ln -s "$(command -p -v python3)" "$TEST_BIN/python3"
+PATH="$TEST_BIN:$PATH"
+
 echo "Testing post-commit-derive-feedback hook"
 echo ""
 
