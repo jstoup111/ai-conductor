@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
@@ -100,6 +103,48 @@ async function patchIdsForCommits(git: GitRunner, commits: readonly CommitSha[])
   return patchIds;
 }
 
+function conflictPaths(stdout: string, stderr: string): string[] {
+  const paths = new Set<string>();
+  for (const line of `${stdout}\n${stderr}`.split('\n')) {
+    const match = line.match(/CONFLICT .*? in\s+(.+)$/);
+    if (match?.[1]?.trim()) paths.add(match[1].trim());
+  }
+  return [...paths];
+}
+
+function isHaltRecordPath(path: string): boolean {
+  return /^\.docs\/halted\/[^/]+\.md$/.test(path);
+}
+
+async function upperChildHaltRecordTree(
+  git: GitRunner,
+  mergeTreeOutput: string,
+  commit: CommitSha,
+  path: string,
+): Promise<CommitSha> {
+  const mergedTree = requiredSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
+  const upper = await git(['ls-tree', commit, '--', path]);
+  if (upper.exitCode !== 0) throw new Error(`could not read halt record from ${commit}: ${upper.stderr}`);
+  const entry = upper.stdout.trim();
+  const match = entry.match(/^(\d+)\s+(blob)\s+([0-9a-f]{40,64})\t/);
+  const indexDirectory = await mkdtemp(join(tmpdir(), 'restack-halt-record-index-'));
+  const indexPath = join(indexDirectory, 'index');
+  const env = { GIT_INDEX_FILE: indexPath };
+  try {
+    const read = await git(['read-tree', mergedTree], { env });
+    if (read.exitCode !== 0) throw new Error(`could not load merged tree for ${commit}: ${read.stderr}`);
+    const update = match
+      ? await git(['update-index', '--add', '--cacheinfo', `${match[1]},${match[3]},${path}`], { env })
+      : await git(['update-index', '--force-remove', path], { env });
+    if (update.exitCode !== 0) throw new Error(`could not select upper halt record from ${commit}: ${update.stderr}`);
+    const written = await git(['write-tree'], { env });
+    if (written.exitCode !== 0) throw new Error(`could not write halt-record tree for ${commit}: ${written.stderr}`);
+    return requiredSha(written.stdout, `halt-record tree for ${commit}`);
+  } finally {
+    await rm(indexDirectory, { recursive: true, force: true });
+  }
+}
+
 /** Construct identity for exactly one replayed commit. */
 function commitEnvironment(
   author: AuthorIdentity,
@@ -164,8 +209,13 @@ export async function replayChildRange(
       authorOf(git, commit),
       messageOf(git, commit),
     ]);
-    if (merged.exitCode !== 0) throw new Error(`merge-tree failed for ${commit}: ${merged.stderr}`);
-    const mergedTree = requiredSha(merged.stdout, `merge-tree for ${commit}`);
+    const paths = merged.exitCode === 1 ? conflictPaths(merged.stdout, merged.stderr) : [];
+    if (merged.exitCode !== 0 && !(merged.exitCode === 1 && paths.length === 1 && isHaltRecordPath(paths[0]!))) {
+      throw new Error(`merge-tree failed for ${commit}: ${merged.stderr}`);
+    }
+    const mergedTree = paths.length === 1 && isHaltRecordPath(paths[0]!)
+      ? await upperChildHaltRecordTree(git, merged.stdout, commit, paths[0]!)
+      : requiredSha(merged.stdout, `merge-tree for ${commit}`);
 
     // Rebase drops a newly-empty patch, but evidence commits that began empty
     // remain meaningful history and must retain their exact correspondence.
