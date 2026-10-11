@@ -404,6 +404,48 @@ describe('sweepMergeableLabels — Task 4 lazy re-read and head tracking', () =>
     expect(readPullRequestMergeState).toHaveBeenCalledTimes(2);
     expect(await readWatch(tmpDir)).toHaveLength(1);
   });
+
+  // Covers: task:rem-as-built-R4
+  it('classifies a production read-failure sentinel from the UNKNOWN re-read as indeterminate', async () => {
+    const readFailure = new Error('transient reread failure');
+    const readPullRequestMergeState = vi.fn()
+      .mockResolvedValueOnce(readinessState({
+        mergeable: 'UNKNOWN',
+        headRefOid: 'A',
+        labels: ['ci-failed'],
+      }))
+      .mockResolvedValueOnce({
+        state: 'UNKNOWN',
+        mergeable: 'UNKNOWN',
+        hasFailingOrPendingChecks: true,
+        hasHaltBodyMarker: false,
+        labels: [],
+        checksOutcome: 'none',
+        readFailure: { kind: 'runner' as const, error: readFailure },
+      } satisfies PrMergeState);
+    const onEvent = vi.fn();
+    const { gh, allArgs } = makeFakeGh();
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      tracker: { readPullRequestMergeState },
+      onEvent,
+      now: () => new Date('2026-10-10T12:00:00.000Z'),
+    });
+
+    expect(readPullRequestMergeState).toHaveBeenCalledTimes(2);
+    expect(allArgs).toEqual([]);
+    expect(await readWatch(tmpDir)).toEqual([
+      expect.objectContaining({ prUrl: PR_URL, headSha: 'A' }),
+    ]);
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'shipped_pr_readiness',
+      prUrl: PR_URL,
+      verdict: 'indeterminate',
+    }));
+  });
 });
 
 // ── Task 5: exhaustive shipped-readiness routing ───────────────────────────

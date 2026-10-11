@@ -472,8 +472,13 @@ export async function sweepMergeableLabels({
         let mergeabilityReread: 'not-needed' | 'completed' | 'failed' = 'not-needed';
         if (state.state === 'OPEN' && state.mergeable === 'UNKNOWN') {
           try {
-            state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
-            mergeabilityReread = 'completed';
+            const reread = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+            if (reread.state === 'UNKNOWN' || reread.readFailure) {
+              mergeabilityReread = 'failed';
+            } else {
+              state = reread;
+              mergeabilityReread = 'completed';
+            }
           } catch (error) {
             mergeabilityReread = 'failed';
             state = {
@@ -654,6 +659,11 @@ export async function sweepMergeableLabels({
           indeterminate: () => true,
         });
 
+        // An indeterminate GitHub observation is deliberately read-only. It
+        // remains watched for the next tick, but neither a stale label nor a
+        // repair/escalation action can turn uncertainty into a side effect.
+        if (indeterminate) continue;
+
         // Retire only labels whose recorded cause says they are stale. This is
         // deliberately before normal reconciliation and candidate collection.
         const readinessClearAttempts = entry.labelClearAttempts ?? 0;
@@ -684,11 +694,6 @@ export async function sweepMergeableLabels({
             conflictingCandidates.push({ entry, state });
           }
         }
-
-        // An indeterminate GitHub observation is deliberately read-only. It
-        // remains watched for the next tick, but neither a stale label nor a
-        // repair/escalation action can turn uncertainty into a side effect.
-        if (indeterminate) continue;
 
         // A conflict-resolution label becomes stale once GitHub reports the PR
         // mergeable again. Legacy/unattributed labels remain sticky.
