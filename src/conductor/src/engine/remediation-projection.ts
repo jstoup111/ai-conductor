@@ -145,7 +145,7 @@ export type RemediationProjectionResult =
 export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
   requiredReferencesBytes: 3_911,
   tasksBytes: 53_431,
-  pendingAsBuiltFindingsBytes: 1_383,
+  pendingAsBuiltFindingsBytes: 9_989,
   priorLapsBytes: 111,
   refusalsBytes: 0,
 } as const;
@@ -174,9 +174,11 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
     REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
   )),
-  // `.pipeline/kickback-ledger.json`: 1,383 B pending finding set; optional-history floor → 4,096 B.
+  // `.pipeline/kickback-ledger.json`: 9,989 B for 15 pending findings; D7.2 floor → 262,144 B.
+  // Each finding carries its governing clause, so the set is criterion-bearing and the
+  // optional-history floor would fault any as-built lap with roughly eight or more findings.
   pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
   )),
   // `.pipeline/kickback-ledger.json`: 111 B prior-lap set; optional-history floor → 4,096 B.

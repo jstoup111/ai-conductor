@@ -313,6 +313,38 @@ describe('remediation projection', () => {
     ]);
   });
 
+  it('admits a fifteen-finding pending as-built set without truncation', async () => {
+    const root = await fixture();
+    await writeRealisticPlan(root);
+    await writeCorpusScaleAsBuiltVerdict(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    // Distinct from the corpus-scale case above: mirrors a halted daemon ledger whose
+    // 15 findings (~10 KB) exceeded the former 4 KiB optional-history limit.
+    const pending = Array.from({ length: 15 }, (_, index) => ({
+      gate: 'architecture_review_as_built',
+      finding: `as-built:0ccf593e-94cc-4fc0-832b-4a32c22b0b91:${index + 1}`,
+      class: 'REMEDIABLE',
+      governingClause: `adr-014-otel-observability-exporter decision ${index + 20}`,
+      reference: { kind: 'adr-decision', stem: 'adr-014-otel-observability-exporter', decision: index + 20 },
+      summary: `Verified, 99% confidence: finding ${index + 1} ${'cites a source location and the required repair. '.repeat(9)}`,
+      outcome: 'remediated',
+    }));
+    await writeFile(join(root, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {},
+      pendingAsBuiltRemediationFindings: pending,
+    }));
+
+    const result = await buildRemediationProjection(root, {
+      source: 'as-built', activePlanPath: '.docs/plans/active.md',
+    });
+
+    if (!result.ok) throw new Error(result.fault.detail);
+    expect(result.projection.pendingAsBuiltFindings.map((finding) => finding.summary)).toEqual(
+      pending.map((finding) => finding.summary),
+    );
+  });
+
   // Covers: task:15
   it('keeps provider-minted pending rows historical and refuses to account for them', async () => {
     const root = await fixture();
@@ -705,8 +737,11 @@ describe('remediation projection', () => {
       REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
       REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
     )));
+    expect(limits.pendingAsBuiltFindingsBytes).toBe(roundUpPowerOfTwo(Math.max(
+      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
+    )));
     for (const [limit, measured] of [
-      [limits.pendingAsBuiltFindingsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes],
       [limits.priorLapsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes],
       [limits.refusalsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes],
     ] as const) {
