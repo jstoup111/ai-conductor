@@ -463,6 +463,11 @@ For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line read
 kickback ledger and resolved `prd_audit` cap. For a stacked feature the line reads
 `PLAN GROWTH [<slug> child <k>/<N>]:`, and its per-gate budgets come from the active child's ledger. It shows the plan's authored task count, the number of tasks added
 so far (broken down by the gate that added them, when any), and how many remain under the cap.
+The authored count comes from the feature's resolved plan — the same selection the daemon uses — so
+the line reports the budget remediation enforces. When no plan resolves and the ledger records no
+authored count, the line reads `plan unresolved; added <n>` instead of a zero authored count and
+zero cap, appending `remaining <r>/<cap>` only when the cap was raised. The line never rewrites the
+ledger.
 When the growth accounting cannot be read, the line reads `PLAN GROWTH [<slug>]: unavailable (<error>)`
 and the budget lines still print.
 
@@ -1194,7 +1199,10 @@ refused and changes nothing.
 gate's effective lap limit by `--by`; for a plan-growth halt it increases the feature's effective
 plan-growth cap by `--by`. `reset` returns only a gate's lap count to zero without lowering an
 already authorized effective limit, and refuses plan-growth evidence; use `raise` for that recovery.
-Inspect shows the effective plan-growth cap and whether it is config-derived or raised. For either
+Inspect shows the effective plan-growth cap and whether it is config-derived or raised. Without
+`--child`, it computes that cap from the feature's resolved plan without rewriting the ledger; when
+no plan resolves and the cap was not
+raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
 mutation, the command temporarily parks an unparked feature while it records the authorization and
 removes that temporary park after success. It preserves a park that already existed; unpark that
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
