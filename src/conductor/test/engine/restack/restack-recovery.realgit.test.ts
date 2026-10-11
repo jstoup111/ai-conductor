@@ -1,6 +1,6 @@
 // Covers: task:24
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -17,6 +17,7 @@ import {
 } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { replayChildRange } from '../../../src/engine/restack/restack-replay.js';
+import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -164,6 +165,60 @@ describe('recoverRestackJournal (real local Git)', () => {
     await expect(subject.git(['merge-base', '--is-ancestor', subject.advanced, firstTip])).resolves.toMatchObject({ stdout: '', stderr: '' });
     await expect(subject.git(['merge-base', '--is-ancestor', firstTip, recoveredSecondTip])).resolves.toMatchObject({ stdout: '', stderr: '' });
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
+  // Covers: task:rem-as-built-R23
+  it('aborts an ownership-refused planned recovery and surfaces its replay-mismatch halt', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1);
+    if (!child) throw new Error('child id should parse');
+    await writeFile(join(subject.repo, 'base.txt'), 'X\n');
+    await subject.git(['add', 'base.txt']);
+    await subject.git(['commit', '-qm', 'add X']);
+    await writeFile(join(subject.repo, 'base.txt'), 'base\n');
+    await subject.git(['add', 'base.txt']);
+    await subject.git(['commit', '-qm', 'revert X']);
+    const oldTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['checkout', '-qb', 'new-default', subject.base]);
+    await writeFile(join(subject.repo, 'base.txt'), 'X\n');
+    await subject.git(['add', 'base.txt']);
+    await subject.git(['commit', '-qm', 'default adds X']);
+    const newDefault = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    const journal: RestackJournal = {
+      opId: 'crashed-planned-replay-mismatch' as RestackOpId,
+      cause: 'base-refresh',
+      newDefault,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [{ ref: 'refs/heads/feat/c1/demo' as never, oldSha: oldTip }],
+      ranges: [{ child, oldParent: subject.base, oldTip, kind: 'active' }],
+      children: [{ child, status: 'pending' }],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+    const events = new ConductorEventEmitter();
+    const refusals: unknown[] = [];
+    events.on('restack_refused', (event) => refusals.push(event));
+
+    await expect(runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      events,
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    expect(refusals).toEqual([expect.objectContaining({
+      reason: 'replay-mismatch', child: 1, detail: 'base.txt',
+    })]);
+    expect(await readRestackJournal(subject.repo, 'demo')).toMatchObject({
+      kind: 'journal', journal: { state: 'aborted' },
+    });
+    expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim()).toBe(oldTip);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8'))
+      .resolves.toBe('restack refused (replay-mismatch) child 1\nbase.txt\n');
   });
 
   it('finishes a dead owner’s ready journal after .pipeline is lost, using only its staging and journal refs', async () => {

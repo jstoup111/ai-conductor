@@ -42,6 +42,7 @@ import {
 export type RecoverRestackJournalResult =
   | { readonly kind: 'none' }
   | { readonly kind: 'live-owner' }
+  | { readonly kind: 'halted' }
   | { readonly kind: 'recovered'; readonly fromState: Exclude<JournalState, 'applied' | 'aborted'> }
   | { readonly kind: 'cleaned' }
   | { readonly kind: 'unavailable'; readonly detail: string };
@@ -316,21 +317,31 @@ export async function cleanClearedAbortedRestackJournal(
     : 'unavailable';
 }
 
+type ResumePlannedResult =
+  | { readonly kind: 'resumed'; readonly journal: StoredRestackJournal }
+  | {
+    readonly kind: 'ownership-refused';
+    readonly journal: StoredRestackJournal;
+    readonly child: ChildRange['child'];
+    readonly paths: readonly string[];
+  }
+  | { readonly kind: 'unavailable' };
+
 async function resumePlanned(
   worktree: string,
   journal: StoredRestackJournal,
   git: GitRunner,
-): Promise<StoredRestackJournal | undefined> {
-  if (!await refsStillAtOldValues(journal, git)) return undefined;
+): Promise<ResumePlannedResult> {
+  if (!await refsStillAtOldValues(journal, git)) return { kind: 'unavailable' };
   let current = journal;
   let parent = current.journal.newDefault ?? current.journal.ranges[0]?.oldParent;
-  if (!parent) return undefined;
+  if (!parent) return { kind: 'unavailable' };
   for (const range of current.journal.ranges) {
     const child = current.journal.children.find((entry) => entry.child === range.child);
-    if (!child) return undefined;
+    if (!child) return { kind: 'unavailable' };
     if (child.status !== 'pending') {
       const staged = await resolveSha(git, stagingRefFor(current.slug, range.child));
-      if (!staged) return undefined;
+      if (!staged) return { kind: 'unavailable' };
       parent = staged;
       continue;
     }
@@ -338,13 +349,16 @@ async function resumePlanned(
       comparisonCommits: current.journal.comparisonCommits,
     });
     const ownership = await checkPathOwnership(range, parent, replay.tip, git);
-    if (ownership.kind === 'refused') return undefined;
+    if (ownership.kind === 'refused') {
+      return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
+    }
     const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', replay.tip, replay.rewrites, { git });
-    if (updated.kind !== 'updated') return undefined;
+    if (updated.kind !== 'updated') return { kind: 'unavailable' };
     current = updated.journal;
     parent = replay.tip;
   }
-  return transition(worktree, current, 'ready', git);
+  const ready = await transition(worktree, current, 'ready', git);
+  return ready === undefined ? { kind: 'unavailable' } : { kind: 'resumed', journal: ready };
 }
 
 async function rollBackFromRolling(
@@ -447,7 +461,17 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         return { kind: 'recovered', fromState };
       }
       const resumed = await resumePlanned(options.worktree, journal, git);
-      if (!resumed) {
+      if (resumed.kind === 'ownership-refused') {
+        journal = resumed.journal;
+        const aborted = await transition(options.worktree, journal, 'aborted', git);
+        if (!aborted) return { kind: 'unavailable', detail: 'cannot abort ownership-refused recovered restack' };
+        await haltRestack(options.worktree, 'replay-mismatch', options.events, {
+          child: resumed.child,
+          detail: resumed.paths.join(', '),
+        });
+        return { kind: 'halted' };
+      }
+      if (resumed.kind !== 'resumed') {
         // A planned journal has never moved a production ref.  If an operator
         // changed one of its inputs, discard its now-untrustworthy staged
         // commits rather than replaying across a different stack.
@@ -462,7 +486,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         }
         return { kind: 'unavailable', detail: 'cannot resume planned restack journal from durable refs' };
       }
-      journal = resumed;
+      journal = resumed.journal;
     }
 
     moves = await movesFor(journal, git) ?? [];

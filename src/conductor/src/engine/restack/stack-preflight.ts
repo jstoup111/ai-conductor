@@ -70,7 +70,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     return { kind: 'no-stack' };
   }
   const recovery = await recoverRestackJournal(options);
-  if (recovery.kind === 'live-owner') return { kind: 'halted' };
+  if (recovery.kind === 'live-owner' || recovery.kind === 'halted') return { kind: 'halted' };
   if (recovery.kind === 'unavailable') return recovery;
 
   // Recovery is safe while a feature is parked; changing closure refs is not.
@@ -94,7 +94,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // aborted journal collectible. Task 31.1 adds live-HALT gating around this
   // entry point; until then recovery remains the sole owner of cleanup.
   const secondRecovery = await recoverRestackJournal(options);
-  if (secondRecovery.kind === 'live-owner') return { kind: 'halted' };
+  if (secondRecovery.kind === 'live-owner' || secondRecovery.kind === 'halted') return { kind: 'halted' };
   if (secondRecovery.kind === 'unavailable') return secondRecovery;
 
   const durable = await hasDurableChildState(options.worktree, options.slug, { git: options.git });
