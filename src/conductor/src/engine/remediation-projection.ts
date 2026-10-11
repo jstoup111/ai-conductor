@@ -169,7 +169,7 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
     REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
   )),
-  // `.docs/plans/a-change-to-one-stacked-child-cannot-be-carried-in.md`: 78,782 B for all tasks; D7.2 floor → 262,144 B.
+  // Largest current plan-task projection in the repository corpus; D7.2 floor → 262,144 B.
   tasksBytes: roundUpPowerOfTwo(Math.max(
     REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
