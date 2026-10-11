@@ -183,7 +183,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     if (failure.reason === 'rejected-transition' && failure.violation !== undefined) {
       const { invariant, caseIds, sourceIds } = failure.violation;
-      return fail(`case transition rejected: ${invariant} (cases ${caseIds.join(', ')}; sources ${sourceIds.join(', ')})`, failure.violation);
+      const feature = input.feature.feature;
+      return fail(
+        `case transition rejected: ${invariant} (cases ${caseIds.join(', ')}; sources ${sourceIds.join(', ')})\n` +
+        'persisted case history is valid and unchanged\n' +
+        `Inspect with ai-conductor build-review findings --feature ${feature}, then clear with ` +
+        `ai-conductor halt clear --feature ${feature} --rationale "<why>" once the proposed transition is admissible ` +
+        '(an engine admits it or a judgement no longer proposes it).',
+        failure.violation,
+      );
     }
     return fail(`${prefix} ${failure.reason}`);
   };
