@@ -17,6 +17,7 @@ import {
 } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { replayChildRange } from '../../../src/engine/restack/restack-replay.js';
+import type { RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -47,8 +48,7 @@ async function fixture() {
   await git(['init', '-q', '-b', 'main']);
   await git(['config', 'user.email', 'restack@example.test']);
   await git(['config', 'user.name', 'Restack recovery']);
-  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
-  await git(['add', '.gitignore']);
+  await writeFile(join(repo, '.git', 'info', 'exclude'), '.pipeline/\n');
   const base = await commit('base', 'base.txt', 'base\n');
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const oldTip = await commit('child', 'child.txt', 'child\n');
@@ -113,6 +113,53 @@ describe('recoverRestackJournal (real local Git)', () => {
     const tip = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
     expect(tip).not.toBe(subject.oldTip);
     expect((await subject.git(['merge-base', '--is-ancestor', subject.advanced, tip])).stdout).toBe('');
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
+  // Covers: task:rem-prd-audit-R14
+  it('hands a planned-recovery replay conflict to the configured resolver and applies its result', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1);
+    if (!child) throw new Error('child id should parse');
+    await writeFile(join(subject.repo, 'base.txt'), 'child\n');
+    await subject.git(['add', 'base.txt']);
+    await subject.git(['commit', '-qm', 'child conflicts with advance']);
+    const oldTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const journal: RestackJournal = {
+      opId: 'crashed-planned-conflict' as RestackOpId,
+      cause: 'base-refresh',
+      newDefault: subject.advanced,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [{ ref: 'refs/heads/feat/c1/demo' as never, oldSha: oldTip }],
+      ranges: [{ child, oldParent: subject.base, oldTip, kind: 'active' }],
+      children: [{ child, status: 'pending' }],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+    let calls = 0;
+    const resolver: RestackResolver = async ({ projectRoot, environment }) => {
+      calls += 1;
+      await writeFile(join(projectRoot, 'base.txt'), 'resolved\n');
+      const git = (args: string[]) => execFile('git', args, { cwd: projectRoot, env: { ...process.env, ...environment } });
+      await git(['add', 'base.txt']);
+      await git(['rebase', '--continue']);
+      return { resolved: true };
+    };
+
+    const result = await recoverRestackJournal({
+      worktree: subject.repo,
+      slug: 'demo',
+      git: makeGitRunner(subject.repo),
+      resolver,
+      resolverCap: 1,
+    });
+    expect(result).toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    expect(calls).toBe(1);
+    await expect(subject.git(['show', 'feat/c1/demo:base.txt'])).resolves.toMatchObject({ stdout: 'resolved\n' });
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 
