@@ -24,8 +24,9 @@ the defect; name related unchanged code only in `evidenceLocations`.
 
 - `duplication` — newly repeated behavior creates divergent maintenance paths. **Non-finding:** a
   declared exact pattern replication or incidental short syntax repetition.
-- `excess-complexity` — a changed control/data flow is unnecessarily difficult to follow and has a
-  concrete correctness cost. **Non-finding:** ordinary conditional logic with clear bounded cases.
+- `excess-complexity` — a changed control/data flow is unnecessarily difficult to follow, including
+  four or more levels of nesting that can be flattened without changing correctness. **Non-finding:**
+  ordinary conditional logic with clear bounded cases.
 - `obscured-intent` — changed structure hides the domain operation it performs. **Non-finding:** a
   local implementation detail with an unambiguous name and boundary.
 - `primitive-obsession` — changed primitive values encode a domain concept that needs invariants.

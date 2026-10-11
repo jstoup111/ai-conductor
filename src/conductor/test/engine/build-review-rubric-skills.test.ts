@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:rem-prd-audit-10-2
 import { createHash } from 'node:crypto';
 import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -79,6 +79,9 @@ describe('build-review rubric skill catalog', () => {
     for (const kind of BUILD_REVIEW_FINDING_VOCABULARIES.implementationQuality.concernKinds) {
       expect(judgement).toContain(`\`${kind}\``);
     }
+    const excessComplexity = judgement.match(/^- `excess-complexity`[\s\S]*?(?=\n- `|\nDo not|(?![\s\S]))/m)?.[0];
+    expect(excessComplexity).toMatch(/four or more levels of nesting that can be flattened without changing correctness/i);
+    expect(excessComplexity).not.toMatch(/correctness cost/i);
     expect(content).toMatch(/hunk that introduces/i);
     expect(content).toMatch(/style preferences/i);
   });
