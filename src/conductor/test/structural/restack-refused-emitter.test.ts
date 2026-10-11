@@ -59,6 +59,59 @@ function namedFunctionCalls(source: string, functionName: string, calleeName: st
     && callsNamed(statement, calleeName));
 }
 
+function callsEmitterForReason(node: ts.Node, reason: string): boolean {
+  let found = false;
+  const visit = (current: ts.Node): void => {
+    if (
+      ts.isCallExpression(current)
+      && ts.isIdentifier(current.expression)
+      && current.expression.text === 'emitRestackRefused'
+      && ts.isObjectLiteralExpression(current.arguments[0])
+      && current.arguments[0].properties.some((property) => ts.isPropertyAssignment(property)
+        && ts.isIdentifier(property.name)
+        && property.name.text === 'reason'
+        && ts.isStringLiteral(property.initializer)
+        && property.initializer.text === reason)
+    ) found = true;
+    ts.forEachChild(current, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function namedFunctionEmitsReason(source: string, functionName: string, reason: string): boolean {
+  const sourceFile = ts.createSourceFile(functionName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  return sourceFile.statements.some((statement) => ts.isFunctionDeclaration(statement)
+    && statement.name?.text === functionName
+    && callsEmitterForReason(statement, reason));
+}
+
+function isCreatedCheck(node: ts.Expression): boolean {
+  return ts.isBinaryExpression(node)
+    && node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken
+    && ts.isIdentifier(node.left)
+    && node.left.text === 'created'
+    && ts.isIdentifier(node.right)
+    && node.right.text === 'undefined';
+}
+
+function losingJournalPlannerEmitsRefusal(source: string): boolean {
+  const sourceFile = ts.createSourceFile('restack-journal.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const journalPlanner = sourceFile.statements.find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement)
+    && statement.name?.text === 'createRestackJournal');
+  if (journalPlanner === undefined) return false;
+
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (ts.isIfStatement(node) && isCreatedCheck(node.expression) && callsEmitterForReason(node.thenStatement, 'restack-outstanding')) {
+      found = true;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(journalPlanner);
+  return found;
+}
+
 function callsHaltForReason(source: string, reason: string): boolean {
   const sourceFile = ts.createSourceFile('fixture.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   let found = false;
@@ -117,13 +170,13 @@ describe('restack refused emitter', () => {
     };
 
     expect(namedFunctionCalls(source('engine/restack/restack-move.ts'), 'haltRestack', 'emitRestackRefused')).toBe(true);
-    expect(namedFunctionCalls(source('engine/restack/restack-journal.ts'), 'createRestackJournal', 'emitRestackRefused')).toBe(true);
-    expect(namedFunctionCalls(source('engine/restack/stack-preflight.ts'), 'deferredBaseRefresh', 'emitRestackRefused')).toBe(true);
-    expect(namedFunctionCalls(source('engine/autoresolve.ts'), 'resolveConflictingPr', 'emitRestackRefused')).toBe(true);
+    expect(losingJournalPlannerEmitsRefusal(source('engine/restack/restack-journal.ts'))).toBe(true);
+    expect(namedFunctionEmitsReason(source('engine/restack/stack-preflight.ts'), 'deferredBaseRefresh', 'deferred-base-refresh')).toBe(true);
+    expect(namedFunctionEmitsReason(source('engine/autoresolve.ts'), 'resolveConflictingPr', 'published-stack')).toBe(true);
     expect(callsHaltForReason(source('engine/restack/restack-executor.ts'), 'cascade-cap')).toBe(true);
   });
 
-  it('emits named and unnamed refusals with their optional event fields intact', async () => {
+  it('emits refusals with and without a child through the recording emitter', async () => {
     const events = new ConductorEventEmitter();
     const recorded: unknown[] = [];
     const child = parseChildId(2)!;
@@ -136,5 +189,7 @@ describe('restack refused emitter', () => {
       { type: 'restack_refused', reason: 'cascade-cap', child, detail: '2/2' },
       { type: 'restack_refused', reason: 'published-stack', detail: '#2945' },
     ]);
+    expect(recorded[0]).toHaveProperty('child', child);
+    expect(recorded[1]).not.toHaveProperty('child');
   });
 });
