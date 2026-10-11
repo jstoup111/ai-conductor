@@ -1,12 +1,13 @@
 // Covers: task:11
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { replayChildRange, type CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
@@ -14,6 +15,12 @@ import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/rest
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
+const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
+  rename,
+};
 const stamp: CommitterStamp = {
   name: 'Restack Journal',
   email: 'journal@example.test',
@@ -28,6 +35,21 @@ interface Repository {
   readonly path: string;
   readonly git: (args: string[]) => Promise<{ readonly stdout: string; readonly stderr: string }>;
   readonly commit: (message: string, path: string, content: string) => Promise<string>;
+}
+
+async function sealStack(repo: Repository, positions: readonly number[]): Promise<void> {
+  await writeCoverageBindingEnvelope(repo.path, {
+    version: 1,
+    slug: 'demo',
+    runId: 'run-1',
+    status: 'done',
+    entries: [],
+    sliceMembership: {
+      taskSlices: Object.fromEntries(positions.map((position) => [String(position), position])),
+      titles: positions.map((position) => position === positions.at(-1) ? 'Leaf' : `Child ${position}`),
+    },
+    storyOwnership: Object.fromEntries(positions.map((position) => [`S${position}`, position])),
+  }, envelopeFilesystem);
 }
 
 async function createRepository(): Promise<Repository> {
@@ -71,6 +93,7 @@ describe('runRestack patch equivalence (real local Git)', () => {
     await repo.git(['cherry-pick', a2]);
     const advanced = await repo.commit('main follow-up', 'shared.txt', 'main\n');
     await repo.git(['checkout', '-q', 'feat/daemon-demo']);
+    await sealStack(repo, [1, 2]);
 
     const result = await runRestack({
       worktree: repo.path,
@@ -126,6 +149,7 @@ describe('runRestack patch equivalence (real local Git)', () => {
     await repo.git(['checkout', '-q', 'main']);
     const advanced = await repo.commit('advance', 'advance.txt', 'advance\n');
     await repo.git(['checkout', '-q', 'feat/daemon-demo']);
+    await sealStack(repo, [1, 2, 3]);
 
     const result = await runRestack({
       worktree: repo.path,
