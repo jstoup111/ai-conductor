@@ -231,7 +231,12 @@ export async function sweepDependencyDrift({
       continue;
     }
 
+    // Completed links still satisfy a body declaration, but they are resolved
+    // history rather than drift evidence for contradiction, stale, or cycle checks.
     const actual = new Set(blockedBy.map((blocker) => blockerRef(repository, blocker)));
+    const unresolvedActual = new Set(blockedBy
+      .filter((blocker) => blocker.state_reason !== 'completed')
+      .map((blocker) => blockerRef(repository, blocker)));
     const declared = declaredEdges({ ref: source, body: issue.body });
     unlinked.push(...compareEdges(declared.edges, actual).unlinked);
 
@@ -249,7 +254,7 @@ export async function sweepDependencyDrift({
     if (!graph.has(source)) graph.set(source, []);
 
     for (const item of declared.manualReview) {
-      if (item.reason === 'reverse-direction' && item.target && actual.has(item.target)) {
+      if (item.reason === 'reverse-direction' && item.target && unresolvedActual.has(item.target)) {
         contradictions.push({ source, target: item.target, kind: 'reverse-direction' });
       }
     }

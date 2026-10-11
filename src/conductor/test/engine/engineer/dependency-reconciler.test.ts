@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2, task:rem-as-built-rem-asb-3
+// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2, task:rem-as-built-rem-asb-3, task:rem-as-built-rem-asb-7
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -215,6 +215,17 @@ describe('sweepDependencyDrift', () => {
       kind: 'swept', unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
     });
     expect(excluded.calls).not.toContain('blocked_by:acme/app#40');
+  });
+
+  it('keeps a completed blocker for declaration satisfaction but excludes it from a reverse-direction contradiction', async () => {
+    const tracker = driftTracker(
+      [{ number: 36, body: 'Blocks #37.' }],
+      { 36: [{ number: 37, state: 'closed', state_reason: 'completed' }] },
+    );
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker })).resolves.toEqual({
+      kind: 'swept', unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    });
   });
 
   it('makes no tracker writes and preserves present stale and cycle links', async () => {
