@@ -260,7 +260,9 @@ export async function consumeResumeAuthorizations(
       const children = await listExistingChildren(path);
       const child = children.length === 0 ? undefined : await (async () => {
         const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
-        if (activeChild.kind !== 'active') throw new Error(`active child cursor is ${activeChild.kind}`);
+        if (activeChild.kind !== 'active' && activeChild.kind !== 'repair-pending') {
+          throw new Error(`active child cursor is ${activeChild.kind}`);
+        }
         return activeChild.child;
       })();
       const ledger = await readKickbackLedger(path, child);

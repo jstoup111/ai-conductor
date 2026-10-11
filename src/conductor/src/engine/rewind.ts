@@ -380,19 +380,19 @@ export async function dispatchRewindCommand(
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
   const cursor = await resolveActiveChildForCurrentFeature(cwd);
-  if (cursor.kind !== 'no-child' && cursor.kind !== 'active') {
+  if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
     console.error(`rewind: active child resolution refused (${cursor.kind})`);
     return 1;
   }
-  const requestedChild = command.child ?? (cursor.kind === 'active' ? String(cursor.child) : undefined);
+  const requestedChild = command.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.child) : undefined);
   if (requestedChild !== undefined) {
     const child = parseChildId(requestedChild);
     if (child === undefined) {
       console.error(`rewind: invalid child id "${requestedChild}" (expected 1-9)`);
       return 1;
     }
-    if (command.child !== undefined && cursor.kind === 'active' && child < cursor.child) {
-      console.error(`rewind: child ${child} is closed and cannot be rewound (#2943)`);
+    if (command.child !== undefined && (cursor.kind === 'active' || cursor.kind === 'repair-pending') && child < cursor.child) {
+      console.error(`rewind: child ${child} is closed and cannot be rewound (#2944)`);
       return 1;
     }
     if (!(await childStateExists(cwd, child))) {

@@ -114,11 +114,11 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   };
   if (command.action === 'inspect') {
     const cursor = await resolveActiveChildForCurrentFeature(worktree);
-    if (cursor.kind !== 'no-child' && cursor.kind !== 'active') {
+    if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
       print(`kickback-budget: active child resolution refused (${cursor.kind}).`);
       return 1;
     }
-    const selectedChild = command.child ?? (cursor.kind === 'active' ? String(cursor.child) : undefined);
+    const selectedChild = command.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.child) : undefined);
     const child = selectedChild === undefined ? undefined : parseChildId(selectedChild);
     if (selectedChild !== undefined && child === undefined) {
       print(`kickback-budget: invalid child id "${selectedChild}".`);

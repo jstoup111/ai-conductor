@@ -168,11 +168,11 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
 
   const projectRoot = await resolveTaskProjectRoot(cwd);
   const cursor = await resolveActiveChildForCurrentFeature(projectRoot);
-  if (cursor.kind !== 'no-child' && cursor.kind !== 'active') {
+  if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
     console.error(`[task-cli] active child resolution refused (${cursor.kind})`);
     return 1;
   }
-  const selectedChild = cmd.child ?? (cursor.kind === 'active' ? String(cursor.child) : undefined);
+  const selectedChild = cmd.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.child) : undefined);
 
   if (selectedChild !== undefined) {
     const child = parseChildId(selectedChild);

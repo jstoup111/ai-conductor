@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:20, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
+// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -163,7 +163,7 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(recreated, 'demo')).resolves.toEqual(before);
   });
 
-  it('fails closed as divergent when a closed child has a non-halt commit after its closure', async () => {
+  it('reports repair-pending when a closed child has a non-halt commit after its closure', async () => {
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);
     const closure = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
@@ -174,7 +174,26 @@ describe('resolveActiveChild', () => {
     await git(['add', 'child-change.txt']);
     await git(['commit', '-qm', 'child drift']);
 
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'divergent', child: 1 });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'repair-pending', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [1],
+    });
+  });
+
+  it('reports closed-child-rewritten when a closed child is reset behind its closure', async () => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2]);
+    await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
+    await git(['checkout', '-q', 'feat/c1/demo']);
+    await writeFile(join(repository, 'closed-change.txt'), 'closed\n');
+    await git(['add', 'closed-change.txt']);
+    await git(['commit', '-qm', 'closed child change']);
+    const closure = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
+    await git(['reset', '--hard', 'HEAD^']);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'divergent', child: 1, check: 'closed-child-rewritten',
+    });
   });
 
   it('fails closed as divergent when a closure is not an ancestor of the next non-leaf child', async () => {
@@ -186,7 +205,9 @@ describe('resolveActiveChild', () => {
     const unrelatedTip = (await git(['commit-tree', `${closure}^{tree}`, '-m', 'unrelated child base'])).trim();
     await git(['branch', 'feat/c2/demo', unrelatedTip]);
 
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'divergent', child: 1 });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'divergent', child: 2, check: 'range-not-ancestor',
+    });
   });
 
   it('fails closed for child state without a sealed envelope, detached HEAD, and git errors', async () => {

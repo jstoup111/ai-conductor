@@ -729,7 +729,9 @@ export class Conductor {
   private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {
     switch (cursor.kind) {
       case 'divergent':
-        return `child ${cursor.child} diverged from its declared successor; restack required (#2943)`;
+        return `child ${cursor.child} failed active-child check ${cursor.check}`;
+      case 'repair-pending':
+        return `child stack repair is pending for closed child ${cursor.repairChildren.join(', ')}`;
       case 'envelope-missing':
         return 'coverage-binding envelope is missing while child state exists';
       case 'detached-head':

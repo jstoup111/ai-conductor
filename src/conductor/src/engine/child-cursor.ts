@@ -12,13 +12,27 @@ import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch, parse
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveThroughMap } from './rebase-translate.js';
 
+type ActiveChildTarget = {
+  child: ChildId;
+  position: ChildId;
+  isLeaf: boolean;
+  branch: string;
+  leafMovePending?: boolean;
+};
+
+export type RepairPendingChildResolution = ActiveChildTarget & {
+  kind: 'repair-pending';
+  repairChildren: ChildId[];
+};
+
 export type ActiveChildResolution =
   | { kind: 'no-child' }
   | { kind: 'envelope-missing' }
   | { kind: 'detached-head' }
   | { kind: 'git-error' }
-  | { kind: 'divergent'; child: ChildId }
-  | { kind: 'active'; child: ChildId; position: ChildId; isLeaf: boolean; branch: string; leafMovePending?: boolean };
+  | { kind: 'divergent'; child: ChildId; check: 'closed-child-rewritten' | 'range-not-ancestor' }
+  | (ActiveChildTarget & { kind: 'active' })
+  | RepairPendingChildResolution;
 
 export interface ActiveChildDependencies {
   readonly git?: GitRunner;
@@ -252,6 +266,7 @@ export async function resolveActiveChild(
   let leafMoved = await hasLeafMovedMarker(slug, git);
   if (leafMoved === 'git-error') return { kind: 'git-error' };
   let leafMovePending = false;
+  const repairChildren: ChildId[] = [];
   const lastClosed = closed.reduce<ClosedChild | undefined>((last, closure) => (
     last === undefined || positions.indexOf(closure.child) > positions.indexOf(last.child) ? closure : last
   ), undefined);
@@ -263,13 +278,20 @@ export async function resolveActiveChild(
     const branchExists = await runGit(git, ['show-ref', '--verify', '--quiet', `refs/heads/${branch.branch}`]);
     if (!branchExists || (branchExists.exitCode !== 0 && branchExists.exitCode !== 1)) return { kind: 'git-error' };
     if (branchExists.exitCode === 0) {
+      const containsClosure = await runGit(git, ['merge-base', '--is-ancestor', closure.tip, `refs/heads/${branch.branch}`]);
+      if (!containsClosure || (containsClosure.exitCode !== 0 && containsClosure.exitCode !== 1)) return { kind: 'git-error' };
+      if (containsClosure.exitCode === 1) {
+        return { kind: 'divergent', child: closure.child, check: 'closed-child-rewritten' };
+      }
       const postClosure = await runGit(git, ['rev-list', `${closure.tip}..refs/heads/${branch.branch}`]);
       if (!postClosure || postClosure.exitCode !== 0) return { kind: 'git-error' };
+      let needsRepair = false;
       for (const sha of postClosure.stdout.split('\n').filter(Boolean)) {
         const haltOnly = await onlyHaltRecordChanged(git, sha, slug);
         if (haltOnly === 'git-error') return { kind: 'git-error' };
-        if (!haltOnly) return { kind: 'divergent', child: closure.child };
+        if (!haltOnly) needsRepair = true;
       }
+      if (needsRepair) repairChildren.push(closure.child);
     }
     const index = positions.indexOf(closure.child);
     const next = positions[index + 1];
@@ -291,7 +313,7 @@ export async function resolveActiveChild(
       Object.hasOwn(rewrites.map, closure.tip)) lastClosureRewriteOnLeaf = true;
     if (ancestry.exitCode === 1) {
       if (next === positions.at(-1) && !leafMoved) leafMovePending = true;
-      else if (next !== positions.at(-1)) return { kind: 'divergent', child: closure.child };
+      else if (next !== positions.at(-1)) return { kind: 'divergent', child: next, check: 'range-not-ancestor' };
     }
   }
 
@@ -299,18 +321,25 @@ export async function resolveActiveChild(
   const leaf = positions.at(-1)!;
   const child = positions.slice(0, -1).find((position) => !closedSet.has(position)) ?? leaf;
   const isLeaf = child === leaf;
+  const active = isLeaf
+    ? {
+      kind: 'active' as const, child, position: child, isLeaf, branch: leafBranchFor(slug),
+      ...(leafMovePending || leafMoved ? { leafMovePending } : {}),
+    }
+    : (() => {
+      const branch = childBranchFor(slug, child);
+      return branch.ok ? { kind: 'active' as const, child, position: child, isLeaf, branch: branch.branch } : undefined;
+    })();
+  if (active === undefined) return { kind: 'git-error' };
+  if (repairChildren.length > 0) return { ...active, kind: 'repair-pending', repairChildren };
   if (isLeaf) {
     if (!leafMoved && !leafMovePending && lastClosureRewriteOnLeaf) {
       if (!await writeLeafMovedMarker(slug, git)) return { kind: 'git-error' };
       leafMoved = true;
     }
-    return {
-      kind: 'active', child, position: child, isLeaf, branch: leafBranchFor(slug),
-      ...(leafMovePending || leafMoved ? { leafMovePending } : {}),
-    };
+    return { ...active, ...(leafMovePending || leafMoved ? { leafMovePending } : {}) };
   }
-  const branch = childBranchFor(slug, child);
-  return branch.ok ? { kind: 'active', child, position: child, isLeaf, branch: branch.branch } : { kind: 'git-error' };
+  return active;
 }
 
 /**

@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:29
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access, chmod } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -107,6 +107,29 @@ describe('consumeResumeAuthorizations', () => {
 
       await expect(consumeResumeAuthorizations(base(worktree, {
         resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/feature' }),
+      }) as never)).resolves.toEqual(['feature']);
+
+      expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
+      expect((await readKickbackLedger(worktree, child)).gates.build_review.resumeAuthorization?.consumed).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the active child ledger when stack repair is pending', async () => {
+    const { root, worktree } = await seed();
+    try {
+      const child = 2 as import('../../src/engine/child-context.js').ChildId;
+      await mkdir(join(worktree, '.pipeline', 'children', '2'), { recursive: true });
+      await writeFile(
+        join(worktree, '.pipeline', 'children', '2', 'kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { build_review: gateEntry } }),
+      );
+
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        resolveActiveChild: async () => ({
+          kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/feature', repairChildren: [1],
+        }),
       }) as never)).resolves.toEqual(['feature']);
 
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
