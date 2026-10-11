@@ -7,6 +7,7 @@ import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
   createRestackJournal,
   journalRefFor,
+  pinStagingRef,
   stagingRefFor,
   updateRestackChildStatus,
   writeRestackJournalBlob,
@@ -24,6 +25,7 @@ import {
 import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, type CommitterStamp } from './restack-replay.js';
+import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import {
   isLegalJournalTransition,
@@ -45,6 +47,9 @@ export interface RunRestackOptions {
   readonly newDefault?: string;
   readonly events?: ConductorEventEmitter;
   readonly git?: GitRunner;
+  /** Narrow, bounded resolver used only after one child's plumbing replay conflicts. */
+  readonly resolver?: RestackResolver;
+  readonly resolverCap?: number;
 }
 
 export type RunRestackResult =
@@ -217,6 +222,52 @@ async function abortJournal(worktree: string, journal: StoredRestackJournal, git
   }
 }
 
+interface ReplayConflict {
+  readonly commit: CommitSha;
+  readonly paths: readonly string[];
+}
+
+/**
+ * Plumbing replay reports the failed commit in its error. Its complete changed
+ * path set is the durable hand-off context: merge-tree's human stderr is not a
+ * stable interface and may omit a path on some Git versions.
+ */
+async function replayConflict(git: GitRunner, error: unknown): Promise<ReplayConflict | undefined> {
+  const message = error instanceof Error ? error.message : String(error);
+  const matched = /^merge-tree failed for ([0-9a-f]{40}|[0-9a-f]{64}):/m.exec(message);
+  const commit = matched === null ? undefined : parseCommitSha(matched[1]!);
+  if (!commit) return undefined;
+  const changed = await runGit(git, ['diff', '--no-renames', '--name-only', `${commit}^`, commit]);
+  if (changed.exitCode !== 0) throw new Error(`cannot determine conflicted paths for ${commit}`);
+  const paths = [...new Set(changed.stdout.split('\n').map((path) => path.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
+  return { commit, paths };
+}
+
+async function haltUnresolvedConflict(
+  worktree: string,
+  slug: string,
+  journal: StoredRestackJournal,
+  range: ChildRange,
+  conflict: ReplayConflict,
+  events: ConductorEventEmitter | undefined,
+  git: GitRunner,
+  reason: 'conflict' | 'replay-mismatch',
+  resolutionDetail?: string,
+): Promise<void> {
+  // The rejected resolver result is deliberately discarded. Keeping the
+  // journaled own tip reachable gives the operator the exact child history
+  // that entered the hand-off, while no real branch has moved.
+  if (!await pinStagingRef(worktree, slug, range.child, range.oldTip, { git })) {
+    throw new Error(`cannot pin original tip for conflicted child ${range.child}`);
+  }
+  await abortJournal(worktree, journal, git, []);
+  await events?.emit({ type: 'restack_conflict', opId: journal.journal.opId, child: range.child, commit: conflict.commit, paths: [...conflict.paths] });
+  await haltRestack(worktree, reason === 'replay-mismatch' ? 'replay-mismatch' : 'restack-conflict', events, {
+    child: range.child,
+    detail: `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}`,
+  });
+}
+
 /**
  * Replay the existing stack off-worktree, then apply every branch and closure
  * ref in a single transaction. Follow-on handling and transition semantics are
@@ -278,9 +329,43 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const overlaps = new Map<number, string[]>();
     let parent = newDefault;
     for (const range of plan.ranges) {
-      const replay = await replayChildRange(range, parent, journal.journal.committer, git, {
-        comparisonCommits: newStackCommits,
-      });
+      let replay;
+      try {
+        replay = await replayChildRange(range, parent, journal.journal.committer, git, {
+          comparisonCommits: newStackCommits,
+        });
+      } catch (error) {
+        const conflict = await replayConflict(git, error);
+        if (!conflict) throw error;
+        const resolution = await resolveRestackConflict({
+          worktree: options.worktree,
+          range,
+          newParent: parent,
+          stamp: journal.journal.committer,
+          comparisonCommits: newStackCommits,
+          resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
+          cap: options.resolverCap ?? 0,
+          git,
+        });
+        if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
+          const detail = 'reason' in resolution.outcome ? resolution.outcome.reason : undefined;
+          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, conflict, options.events, git, 'conflict', detail);
+          terminal = true;
+          return { kind: 'halted' };
+        }
+        const ownership = await checkPathOwnership(range, parent, resolution.tip, git);
+        if (ownership.kind === 'refused') {
+          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths }, options.events, git, 'replay-mismatch');
+          terminal = true;
+          return { kind: 'halted' };
+        }
+        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, { git });
+        if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
+        journal = updated.journal;
+        overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
+        parent = resolution.tip;
+        continue;
+      }
       const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, { git });
       if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;

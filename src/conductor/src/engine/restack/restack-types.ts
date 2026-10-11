@@ -38,6 +38,7 @@ export type RestackRefusalReason =
   | 'stack-ref-changed'
   | 'lock-unavailable'
   | 'verification-failed'
+  | 'restack-conflict'
   | 'replay-mismatch'
   | 'range-not-ancestor'
   | 'closed-child-rewritten'
