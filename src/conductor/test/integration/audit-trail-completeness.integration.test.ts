@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:6, task:11, task:15
+// Covers: task:1, task:4, task:5, task:6, task:11, task:15
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -194,6 +194,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_progress: 'not-audited-by-design',
   step_in_flight: 'not-audited-by-design',
   build_no_progress: 'not-audited-by-design',
+  pipeline_closeout_started: 'not-audited-by-design',
   pipeline_closeout: 'not-audited-by-design',
   pipeline_tail_diagnostic: 'not-audited-by-design',
   renderer_error: 'not-audited-by-design',
@@ -707,6 +708,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3, activity: 'quiet' },
   step_in_flight: { type: 'step_in_flight', step: 'test_suite', elapsedMs: 1 },
   build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3, activity: 'quiet' },
+  pipeline_closeout_started: {
+    type: 'pipeline_closeout_started',
+    obligation: 'evaluator',
+    ts: 100,
+  },
   pipeline_closeout: {
     type: 'pipeline_closeout',
     obligation: 'evaluator',

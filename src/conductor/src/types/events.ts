@@ -1351,6 +1351,18 @@ type ConductorEventBody =
       featureSlug?: string;
     }
   | {
+      /** A pipeline-owned closeout obligation began during a build. */
+      type: 'pipeline_closeout_started';
+      obligation:
+        | 'evaluator'
+        | 'simplify'
+        | 'architecture-diagram'
+        | 'memory'
+        | 'summary';
+      /** Epoch milliseconds when the pipeline recorded the start. */
+      ts: number;
+    }
+  | {
       /** A pipeline-owned closeout obligation completed during a build. */
       type: 'pipeline_closeout';
       obligation:

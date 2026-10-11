@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:3, task:6, task:8, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:3, task:5, task:6, task:8, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1243,6 +1243,20 @@ describe('event sink subscriptions', () => {
     }).toEqual({
       sinks: { render: true, persist: false, audit: false, otel: true },
       rendered: true,
+      persisted: false,
+    });
+  });
+
+  it('keeps closeout starts off every engine sink', () => {
+    const sinks = EVENT_SINKS as Record<string, SinkDeclaration>;
+
+    expect({
+      sinks: sinks.pipeline_closeout_started,
+      rendered: renderedEventTypes().includes('pipeline_closeout_started' as never),
+      persisted: persistedEventTypes().includes('pipeline_closeout_started' as never),
+    }).toEqual({
+      sinks: { render: false, persist: false, audit: false, otel: false },
+      rendered: false,
       persisted: false,
     });
   });

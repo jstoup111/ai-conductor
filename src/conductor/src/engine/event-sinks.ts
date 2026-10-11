@@ -166,6 +166,7 @@ export const EVENT_SINKS = {
   step_in_flight: { render: true, persist: true, audit: false, otel: false },
   build_no_progress: { render: true, persist: true, audit: false, otel: true },
   build_active_stall: { render: true, persist: true, audit: false, otel: true },
+  pipeline_closeout_started: { render: false, persist: false, audit: false, otel: false },
   pipeline_closeout: { render: true, persist: false, audit: false, otel: true },
   pipeline_tail_diagnostic: { render: true, persist: true, audit: false, otel: false },
   renderer_error: { render: true, persist: true, audit: false, otel: false },

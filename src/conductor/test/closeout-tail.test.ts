@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { CloseoutEventTail } from '../src/engine/closeout-tail.js';
 import { EventPersister } from '../src/engine/event-persister.js';
+import { appendCloseoutEvent } from '../src/engine/closeout-events.js';
 
 const directories: string[] = [];
 
@@ -219,6 +221,26 @@ describe('CloseoutEventTail lifecycle', () => {
     await tail.poll();
 
     expect(received).toEqual([closeout]);
+  });
+
+  it('re-emits closeout starts once without copying them to the canonical ledger', async () => {
+    const projectRoot = await createProjectRoot();
+    const eventLedger = join(projectRoot, '.pipeline', 'events.jsonl');
+    const started = { type: 'pipeline_closeout_started', obligation: 'evaluator', ts: 1_788_012_000_000 } as const;
+    const events = new ConductorEventEmitter();
+    const received: unknown[] = [];
+    events.on('pipeline_closeout_started', (event) => { received.push(event); });
+    const persister = new EventPersister(eventLedger, events);
+    persister.start();
+    const tail = new CloseoutEventTail({ projectRoot, events });
+
+    appendCloseoutEvent(projectRoot, started);
+    await tail.poll();
+    await tail.poll();
+    persister.stop();
+
+    expect(received).toEqual([started]);
+    expect(existsSync(eventLedger)).toBe(false);
   });
 
   it('consumes malformed completed lines and reports their byte offset once', async () => {
