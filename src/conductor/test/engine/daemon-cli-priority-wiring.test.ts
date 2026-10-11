@@ -1,3 +1,4 @@
+// Covers: task:4
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests for daemon-cli priority resolver wiring (Task 13).
 //
@@ -37,6 +38,21 @@ async function loadDaemonWorkSource() {
 
 type IssueLabelReader = (refs: string[]) => Promise<Map<string, string[] | 'not-found'>>;
 
+function orderingSourceFor(reader: IssueLabelReader) {
+  return {
+    async readFacts(refs: string[]) {
+      const labelsByRef = await reader(refs);
+      return new Map([...labelsByRef].map(([ref, labels]) => [
+        ref,
+        labels === 'not-found'
+          ? 'not-found'
+          : { priority: labels.includes('priority: high') ? 'high' as const : labels.includes('priority: low') ? 'low' as const : undefined, size: undefined },
+      ]));
+    },
+    async readBlockers() { return []; },
+  };
+}
+
 let workDirs: string[] = [];
 
 beforeEach(() => {
@@ -70,7 +86,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     const log = (msg: string) => logs.push(msg);
 
     // Test 1: Resolver is constructed with reader and log
-    const resolver = backlogMod.createPriorityResolver(fakeReader, log);
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(fakeReader), log);
     expect(resolver).toBeDefined();
     expect(typeof resolver.resolve).toBe('function');
 
@@ -114,7 +130,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     const log = (msg: string) => logs.push(msg);
 
     // Create resolver
-    const resolver = backlogMod.createPriorityResolver(fakeReader, log);
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(fakeReader), log);
 
     // Create backlog items (in chronological order, not priority order)
     const backlogItems: BacklogItem[] = [
@@ -168,7 +184,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     };
 
     const logs: string[] = [];
-    const resolver = backlogMod.createPriorityResolver(fakeReader, (msg: string) => logs.push(msg));
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(fakeReader), (msg: string) => logs.push(msg));
 
     const items: BacklogItem[] = [{ slug: 'a', sourceRef: 'acme/app#1' }];
 
@@ -216,7 +232,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     };
 
     const logs: string[] = [];
-    const resolver = backlogMod.createPriorityResolver(failingReader, (msg: string) => logs.push(msg));
+    const resolver = backlogMod.createPriorityResolver(orderingSourceFor(failingReader), (msg: string) => logs.push(msg));
 
     const items: BacklogItem[] = [
       { slug: 'a', sourceRef: 'acme/app#1' },

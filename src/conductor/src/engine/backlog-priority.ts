@@ -3,6 +3,7 @@ import type { GhRunner } from './tracker-client.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
 import { splitOwnerRepo } from './engineer/source-ref.js';
 import { runTrackerRepositoryRead } from './tracker-client.js';
+import type { OrderingSource } from './ordering-source.js';
 
 /**
  * Priority band type for issue classification in daemon backlog scheduling.
@@ -111,24 +112,24 @@ export function parseSizeLabel(labels: string[]): 'S' | 'M' | 'L' | undefined {
  *
  * The resolver maintains an in-memory cache (process-local, never persisted to disk) and
  * handles transport failures gracefully:
- * - On `refresh: true`: fetches all linked refs via the reader, updates cache, returns bands
+ * - On `refresh: true`: fetches all linked refs via the ordering source, updates cache, returns bands
  * - On `refresh: false`: primes unseen linked refs, then returns cached bands
  * - On reader throw: clears cache, returns fallback mode, logs exactly one warning per outage
  * - Fallback persists across `refresh: false` resolves until a successful refresh resets the
  *   outage state — a non-refresh resolve during an outage never pseudo-bands the empty cache
  *
- * @param reader Function that fetches labels for issue references
+ * @param source Backend-neutral ordering source for issue facts
  * @param log Function for logging resolver actions (including warnings)
  * @returns Resolver object with a `resolve` method
  */
 export function createPriorityResolver(
-  reader: IssueLabelReader,
+  source: OrderingSource,
   log: (msg: string) => void,
 ): {
   resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution>;
 } {
-  // In-memory cache: ref -> labels
-  const cache = new Map<string, string[]>();
+  // In-memory cache: ref -> resolved priority band.
+  const cache = new Map<string, PriorityBand>();
   // Refs for which the reader has returned a result, including not-found.
   // This is separate from the labels cache because a missing issue must not
   // trigger a network read on every local discovery pass.
@@ -152,18 +153,25 @@ export function createPriorityResolver(
         // Refreshes retain their full-read behavior. Local scans prime only
         // references this process has never resolved.
         try {
-          const readerResult = await reader(refsToRead);
+          const readerResult = await source.readFacts(refsToRead);
           // Reader succeeded: reset outage state
           inOutage = false;
           hasWarnedThisOutage = false;
           // Update cache with reader results
-          for (const [ref, labels] of readerResult.entries()) {
+          for (const [ref, facts] of readerResult.entries()) {
             attemptedRefs.add(ref);
-            if (labels !== 'not-found') {
-              cache.set(ref, labels);
-            } else {
-              cache.delete(ref);
+            if (typeof facts === 'object') {
+              cache.set(ref, facts.priority ?? 'unlabeled');
+              continue;
             }
+            switch (facts) {
+              case 'not-found':
+              case 'unavailable':
+                cache.delete(ref);
+                continue;
+            }
+            const exhaustive: never = facts;
+            void exhaustive;
           }
         } catch (error) {
           // Reader threw: set outage state and clear cache
@@ -197,13 +205,7 @@ export function createPriorityResolver(
           bands.set(item.slug, 'no-issue');
         } else {
           // Item has a sourceRef - look up in cache
-          const labels = cache.get(item.sourceRef);
-          if (labels) {
-            const priority = parsePriorityLabels(labels);
-            bands.set(item.sourceRef, priority || 'unlabeled');
-          } else {
-            bands.set(item.sourceRef, 'unlabeled');
-          }
+          bands.set(item.sourceRef, cache.get(item.sourceRef) ?? 'unlabeled');
         }
       }
 

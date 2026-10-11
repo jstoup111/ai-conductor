@@ -1,3 +1,4 @@
+// Covers: task:4
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Daemon Issue-Priority Scheduling" (issue #200).
 //
@@ -62,6 +63,21 @@ type PriorityResolution =
   | { mode: 'fallback' }
   | { mode: 'off' };
 type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+
+function orderingSourceFor(reader: IssueLabelReader) {
+  return {
+    async readFacts(refs: string[]) {
+      const labelsByRef = await reader(refs);
+      return new Map([...labelsByRef].map(([ref, labels]) => [
+        ref,
+        labels === 'not-found'
+          ? 'not-found'
+          : { priority: labels.includes('priority: critical') ? 'critical' as const : labels.includes('priority: high') ? 'high' as const : labels.includes('priority: medium') ? 'medium' as const : labels.includes('priority: low') ? 'low' as const : undefined, size: undefined },
+      ]));
+    },
+    async readBlockers() { return []; },
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared fixture helpers (mirror dependency-ordered-intake-and-dispatch.test.ts)
@@ -173,7 +189,7 @@ async function buildDeps(
   opts: { reader?: IssueLabelReader; log?: (m: string) => void } = {},
 ): Promise<LocalWorkSourceDeps> {
   const log = opts.log ?? (() => {});
-  const resolver = opts.reader ? (await loadPriorityMod()).createPriorityResolver(opts.reader, log) : undefined;
+  const resolver = opts.reader ? (await loadPriorityMod()).createPriorityResolver(orderingSourceFor(opts.reader), log) : undefined;
   return {
     projectRoot: dir,
     baseBranch: 'main',

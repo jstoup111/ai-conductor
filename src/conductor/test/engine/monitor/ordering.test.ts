@@ -1,7 +1,8 @@
-// Covers: task:7, task:8
+// Covers: task:4, task:7, task:8
 import { describe, expect, it, vi } from 'vitest';
 
-import { createPriorityResolver, type IssueLabelReader } from '../../../src/engine/backlog-priority.js';
+import { createPriorityResolver, parsePriorityLabels, parseSizeLabel, type IssueLabelReader } from '../../../src/engine/backlog-priority.js';
+import type { OrderingSource } from '../../../src/engine/ordering-source.js';
 import {
   orderMonitorQueue,
   type OrderableMonitorHalt,
@@ -23,8 +24,23 @@ function halt(
   };
 }
 
-function readerFor(labels: Record<string, string[] | 'not-found'>): IssueLabelReader {
-  return async (refs) => new Map(refs.map((ref) => [ref, labels[ref] ?? 'not-found']));
+function orderingSourceFor(reader: IssueLabelReader): OrderingSource {
+  return {
+    async readFacts(refs) {
+      const labelsByRef = await reader(refs);
+      return new Map([...labelsByRef].map(([ref, labels]) => [
+        ref,
+        labels === 'not-found'
+          ? 'not-found'
+          : { priority: parsePriorityLabels(labels), size: parseSizeLabel(labels) },
+      ]));
+    },
+    async readBlockers() { return []; },
+  };
+}
+
+function readerFor(labels: Record<string, string[] | 'not-found'>): OrderingSource {
+  return orderingSourceFor(async (refs) => new Map(refs.map((ref) => [ref, labels[ref] ?? 'not-found'])));
 }
 
 describe('Task 7 — monitor queue ordering', () => {
@@ -147,7 +163,7 @@ describe('Task 7 — monitor queue ordering', () => {
       lookups.push(refs);
       throw new Error('priority provider unavailable');
     });
-    const resolver = createPriorityResolver(reader, (warning) => warnings.push(warning));
+    const resolver = createPriorityResolver(orderingSourceFor(reader), (warning) => warnings.push(warning));
 
     const ordered = await orderMonitorQueue([
       halt('first', 'owner/repo#same'),
@@ -192,9 +208,9 @@ describe('Task 8 — bounded monitor priority lookup', () => {
 describe('Task 8 — monitor priority outage fallback', () => {
   it('keeps every halt in stable deferral-partition fallback order throughout an outage', async () => {
     const warnings: string[] = [];
-    const resolver = createPriorityResolver(async () => {
+    const resolver = createPriorityResolver(orderingSourceFor(async () => {
       throw new Error('priority provider unavailable');
-    }, (warning) => warnings.push(warning));
+    }), (warning) => warnings.push(warning));
     const halts = [
       halt('deferred-critical', 'owner/repo#critical', true),
       halt('unseen-low', 'owner/repo#low'),
@@ -224,10 +240,10 @@ describe('Task 8 — monitor priority outage fallback', () => {
   it('restores priority-band ordering after the same resolver recovers', async () => {
     const warnings: string[] = [];
     let available = false;
-    const resolver = createPriorityResolver(async (refs) => {
+    const resolver = createPriorityResolver(orderingSourceFor(async (refs) => {
       if (!available) throw new Error('priority provider unavailable');
       return new Map(refs.map((ref) => [ref, ref.endsWith('#high') ? ['priority: high'] : ['priority: low']]));
-    }, (warning) => warnings.push(warning));
+    }), (warning) => warnings.push(warning));
     const halts = [
       halt('low', 'owner/repo#low'),
       halt('high', 'owner/repo#high'),
