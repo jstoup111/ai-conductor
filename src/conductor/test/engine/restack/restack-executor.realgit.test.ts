@@ -1,18 +1,26 @@
 // Covers: task:8
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
+import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
+
+const envelopeFilesystem = {
+  readFile: (path: string) => readFile(path, 'utf8'),
+  mkdir: (path: string) => mkdir(path, { recursive: true }).then(() => undefined),
+  writeFile: (path: string, contents: string) => writeFile(path, contents, 'utf8'),
+  rename,
+};
 
 afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
@@ -129,6 +137,54 @@ describe('runRestack (real local Git)', () => {
     await expect(git(['rev-parse', '--verify', 'refs/heads/feat/daemon-demo'])).rejects.toBeDefined();
     expect((await git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).not.toBe(closed);
     expect((await git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).not.toBe(base);
+  });
+
+  it('moves an unentered pre-region halt-record leaf to its owning child rewrite', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'restack-executor-unentered-leaf-'));
+    repositories.push(repo);
+    const git = (args: string[]) => execFile('git', args, { cwd: repo });
+    const commit = async (message: string, file: string, content: string) => {
+      await mkdir(join(repo, '.docs', 'halted'), { recursive: true });
+      await writeFile(join(repo, file), content);
+      await git(['add', file]);
+      await git(['commit', '-qm', message]);
+      return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    };
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'restack@example.test']);
+    await git(['config', 'user.name', 'Restack Executor']);
+    await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
+    await commit('base', 'base.txt', 'base\n');
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    const haltRecord = await commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
+    await git(['checkout', '-qb', 'feat/c1/demo']);
+    await commit('child work', 'child.txt', 'child\n');
+    await writeCoverageBindingEnvelope(repo, {
+      version: 1,
+      slug: 'demo',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Child 2'] },
+      storyOwnership: { S1: 1, S2: 2 },
+    }, envelopeFilesystem);
+    await git(['checkout', '-q', 'main']);
+    const advanced = await commit('advance', 'base.txt', 'advanced\n');
+    await git(['checkout', '-q', 'feat/c1/demo']);
+
+    const result = await runRestack({ worktree: repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, git: makeGitRunner(repo) });
+
+    expect(result.kind).toBe('applied');
+    const [newChild, newLeaf] = await Promise.all([
+      git(['rev-parse', 'feat/c1/demo']).then((result) => result.stdout.trim()),
+      git(['rev-parse', 'feat/daemon-demo']).then((result) => result.stdout.trim()),
+    ]);
+    expect(newLeaf).not.toBe(newChild);
+    expect(newLeaf).not.toBe(haltRecord);
+    expect((await git(['show', '-s', '--format=%s', newLeaf])).stdout.trim()).toBe('halt record');
+    expect((await git(['merge-base', '--is-ancestor', advanced, newLeaf])).stdout).toBe('');
+    expect((await git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(newChild);
   });
 
   it('persists a merge audit after flattening an uncarried side of a child range', async () => {

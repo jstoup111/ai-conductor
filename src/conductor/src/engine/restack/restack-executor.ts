@@ -421,11 +421,31 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const newStackCommits = comparison;
     const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
     const overlaps = new Map<number, string[]>();
+    const exactRewrites = new Map<ChildId, ReadonlyMap<CommitSha, CommitSha>>();
+    const unenteredLeafOwners = new Map<ChildId, ChildId>();
     let parent = planningDefault;
     const lastOriginIndex = options.cause === 'feature-repair'
       ? Math.max(-1, ...plan.ranges.map((range, index) => plan.originating.includes(range.child) ? index : -1))
       : -1;
     for (const [rangeIndex, range] of plan.ranges.entries()) {
+      if (range.kind === 'leaf-unentered') {
+        const matches = [...exactRewrites.entries()]
+          .flatMap(([child, rewrites]) => {
+            const rewritten = rewrites.get(range.oldTip);
+            return rewritten === undefined ? [] : [{ child, rewritten }];
+          });
+        if (matches.length !== 1) {
+          throw new Error(`cannot resolve unentered leaf ${range.child} from its owning child rewrite map`);
+        }
+        const { child: owner, rewritten } = matches[0]!;
+        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', rewritten, { git });
+        if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while moving unentered leaf' : updated.detail);
+        journal = updated.journal;
+        unenteredLeafOwners.set(range.child, owner);
+        overlaps.set(range.child, []);
+        parent = rewritten;
+        continue;
+      }
       // Repair leaves all existing lower tips intact. Only descendants of the
       // highest originating child are rebuilt on the new closure chain.
       if (options.cause === 'feature-repair' && rangeIndex <= lastOriginIndex) {
@@ -483,6 +503,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
         journal = updated.journal;
+        exactRewrites.set(range.child, resolution.rewrites);
         overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
         parent = resolution.tip;
         continue;
@@ -490,6 +511,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, { git });
       if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;
+      exactRewrites.set(range.child, replay.rewrites);
       const ownership = await checkPathOwnership(range, parent, replay.tip, git);
       if (ownership.kind === 'refused') {
         await abortJournal(options.worktree, journal, git, moves);
@@ -548,7 +570,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     if (moved.kind === 'refused') return { kind: 'halted' };
     if (moved.kind === 'unavailable') throw new Error(moved.detail);
     journal = moved.journal;
-    const verified = await verifyRestackMove(options.worktree, journal, moves, { git });
+    // An unentered leaf can point into its owner's own range. The durable
+    // plan keeps it last for translation, while move verification needs the
+    // ancestry order H′ -> owner's rewritten tip.
+    const verificationRanges = plan.ranges.flatMap((range) => [
+      ...plan.ranges.filter((candidate) => candidate.kind === 'leaf-unentered' && unenteredLeafOwners.get(candidate.child) === range.child),
+      ...(range.kind === 'leaf-unentered' ? [] : [range]),
+    ]);
+    const verificationJournal = { ...journal, journal: { ...journal.journal, ranges: verificationRanges } };
+    const verified = await verifyRestackMove(options.worktree, verificationJournal, moves, { git });
     if (verified.kind === 'failed') {
       const rolledBack = await rollbackRestackMove(options.worktree, journal, moves, { git });
       if (rolledBack.kind !== 'aborted') throw new Error(rolledBack.detail);
