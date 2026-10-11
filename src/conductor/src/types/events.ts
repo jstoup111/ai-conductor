@@ -1903,7 +1903,7 @@ type ConductorEventBody =
       beforeLimit: number;
       afterLimit: number;
       ts: string;
-      allowance?: 'laps' | 'growth';
+      allowance?: 'laps' | 'growth' | 'restacks';
     }
   // ── Ship→CI feedback loop (Task 5): CI failure events ──
   | {

@@ -34,7 +34,7 @@ export interface KickbackBudgetAdjustment {
   rationale: string;
   timestamp: string;
   haltGeneration: string;
-  allowance?: 'laps' | 'growth';
+  allowance?: 'laps' | 'growth' | 'restacks';
 }
 
 export interface KickbackCapEvidence {
@@ -43,7 +43,7 @@ export interface KickbackCapEvidence {
   limit: number;
   latestReason: string;
   haltGeneration: string;
-  allowance?: 'laps' | 'growth';
+  allowance?: 'laps' | 'growth' | 'restacks';
 }
 
 export interface KickbackResumeAuthorization {
@@ -383,7 +383,7 @@ function isBudgetAdjustment(value: unknown): value is KickbackBudgetAdjustment {
     isNonEmptyString(adjustment.rationale) &&
     isNonEmptyString(adjustment.timestamp) &&
     isNonEmptyString(adjustment.haltGeneration) &&
-    (adjustment.allowance === undefined || adjustment.allowance === 'laps' || adjustment.allowance === 'growth');
+    (adjustment.allowance === undefined || adjustment.allowance === 'laps' || adjustment.allowance === 'growth' || adjustment.allowance === 'restacks');
 }
 
 function isCapEvidence(value: unknown): value is KickbackCapEvidence {
@@ -394,7 +394,7 @@ function isCapEvidence(value: unknown): value is KickbackCapEvidence {
     isNonNegativeInteger(evidence.limit) &&
     isNonEmptyString(evidence.latestReason) &&
     isNonEmptyString(evidence.haltGeneration) &&
-    (evidence.allowance === undefined || evidence.allowance === 'laps' || evidence.allowance === 'growth');
+    (evidence.allowance === undefined || evidence.allowance === 'laps' || evidence.allowance === 'growth' || evidence.allowance === 'restacks');
 }
 
 function isResumeAuthorization(value: unknown): value is KickbackResumeAuthorization {

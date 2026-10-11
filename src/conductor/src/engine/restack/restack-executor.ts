@@ -8,6 +8,7 @@ import {
   createRestackJournal,
   journalRefFor,
   pinStagingRef,
+  replaceAppliedJournalWithFollowOn,
   stagingRefFor,
   updateRestackChildStatus,
   writeRestackJournalBlob,
@@ -29,6 +30,9 @@ import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
+import { cascadeUpdateLines, checkCascadeCap, MAX_RESTACK_CASCADES_PER_CHILD } from './cascade-cap.js';
+import { readKickbackLedger, recordKickbackCapEvidence } from '../kickback-ledger.js';
+import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -52,6 +56,8 @@ export interface RunRestackOptions {
   /** Narrow, bounded resolver used only after one child's plumbing replay conflicts. */
   readonly resolver?: RestackResolver;
   readonly resolverCap?: number;
+  /** Recovery-only replacement of an applied operation that named this cause. */
+  readonly replacesAppliedJournal?: StoredRestackJournal;
 }
 
 export type RunRestackResult =
@@ -205,6 +211,32 @@ async function transitionState(
   return { slug: journal.slug, blob, journal: next };
 }
 
+/** Apply the terminal journal transition and the repair cascade charge atomically. */
+async function transitionAppliedWithCascade(
+  worktree: string,
+  journal: StoredRestackJournal,
+  originatingChildren: readonly ChildId[],
+  git: GitRunner,
+): Promise<StoredRestackJournal> {
+  if (!isLegalJournalTransition(journal.journal.state, 'applied')) throw new Error('illegal restack state transition to applied');
+  const next = { ...journal.journal, state: 'applied' as const };
+  const blob = await writeRestackJournalBlob(worktree, next, { git });
+  const updates = await cascadeUpdateLines(worktree, journal.slug, originatingChildren, { git });
+  if (updates.kind !== 'lines') throw new Error(updates.detail);
+  const updated = await runGit(git, ['update-ref', '--stdin'], transaction([
+    ...updates.lines,
+    `update ${journalRefFor(journal.slug)} ${blob} ${journal.blob}`,
+  ]));
+  if (updated.exitCode !== 0) throw new Error('cannot transition restack journal to applied with cascade counts');
+  return { slug: journal.slug, blob, journal: next };
+}
+
+async function restackCascadeLimit(worktree: string, activeChild: ChildId): Promise<number> {
+  const ledger = await readKickbackLedger(worktree, activeChild);
+  if (ledger.unreadable) throw new Error('cannot read active child kickback ledger for restack cascade cap');
+  return ledger.gates.restack?.effectiveLimit ?? MAX_RESTACK_CASCADES_PER_CHILD;
+}
+
 async function cleanAppliedJournal(journal: StoredRestackJournal, git: GitRunner): Promise<void> {
   const lines = [
     `delete ${journalRefFor(journal.slug)} ${journal.blob}`,
@@ -313,6 +345,26 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
     if (plan.kind === 'unavailable') throw new Error(plan.detail);
 
+    if (options.cause === 'feature-repair') {
+      const limit = await restackCascadeLimit(options.worktree, active.child);
+      const cap = await checkCascadeCap(options.worktree, options.slug, plan.originating, limit, { git });
+      if (cap.kind === 'exhausted') {
+        const entry = await recordKickbackCapEvidence(options.worktree, 'restack', {
+          consumed: cap.count,
+          limit: cap.limit,
+          latestReason: `restack cascade cap for originating child ${cap.child}`,
+          allowance: 'restacks',
+        }, active.child);
+        const rendered = renderKickbackBudgetView(entry, 'restack', cap.limit, undefined, undefined, active.child);
+        await haltRestack(options.worktree, 'cascade-cap', options.events, {
+          child: cap.child,
+          detail: `${cap.detail ?? `originating child ${cap.child} reached ${cap.count}/${cap.limit} cascades`}\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
+        });
+        terminal = true;
+        return { kind: 'halted' };
+      }
+    }
+
     const draft: RestackJournalDraft = {
       opId: randomUUID() as RestackOpId,
       cause: options.cause,
@@ -322,7 +374,9 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       ranges: plan.ranges,
       children: plan.ranges.map((range) => ({ child: range.child, status: 'pending' as const })),
     };
-    const created = await createRestackJournal(options.worktree, options.slug, draft, options.events, { git });
+    const created = options.replacesAppliedJournal === undefined
+      ? await createRestackJournal(options.worktree, options.slug, draft, options.events, { git })
+      : await replaceAppliedJournalWithFollowOn(options.worktree, options.slug, options.replacesAppliedJournal, draft, { git });
     if (created.kind === 'refused') {
       terminal = true;
       await haltRestack(options.worktree, created.reason, options.events);
@@ -464,7 +518,9 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       git,
       ...(options.events === undefined ? {} : { events: options.events }),
     });
-    journal = await transitionState(options.worktree, journal, 'applied', git);
+    journal = options.cause === 'feature-repair'
+      ? await transitionAppliedWithCascade(options.worktree, journal, plan.originating, git)
+      : await transitionState(options.worktree, journal, 'applied', git);
     if (journal.journal.followOnCause === undefined) await cleanAppliedJournal(journal, git);
     for (const range of plan.ranges) {
       const move = moves.find((entry) => entry.child === range.child);

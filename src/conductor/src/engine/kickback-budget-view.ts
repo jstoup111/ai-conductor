@@ -35,10 +35,10 @@ export function renderKickbackRecoveryHint({
 }: {
   slug?: string;
   gate: string;
-  allowance: 'laps' | 'growth';
+  allowance: 'laps' | 'growth' | 'restacks';
 }): string {
   // ai-conductor:session-command-context=operator-only
-  const allowanceName = allowance === 'growth' ? 'Plan-growth' : 'Lap';
+  const allowanceName = allowance === 'growth' ? 'Plan-growth' : allowance === 'restacks' ? 'Restack' : 'Lap';
   return `${allowanceName} allowance exhausted. Recover with: ` +
     `ai-conductor kickback-budget raise --feature ${slug ?? '«slug»'} --gate ${gate} --by «N» --rationale "«why»"`;
   // /ai-conductor:session-command-context
@@ -53,8 +53,11 @@ export function kickbackBudgetView(
   pendingLaps = 0,
 ): KickbackBudgetView {
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
+  const restack = gate === 'restack';
   const limit = remediation ? (entry?.effectiveLapCap ?? fallbackLimit) : (entry?.effectiveLimit ?? fallbackLimit);
-  const consumed = remediation ? (entry?.laps ?? 0) : (entry?.cumulative ?? 0);
+  // Cascade counts are ref-backed by child, not accumulated in the ledger.
+  // The cap evidence snapshots the exact count which raised this halt.
+  const consumed = restack ? (entry?.capEvidence?.consumed ?? 0) : remediation ? (entry?.laps ?? 0) : (entry?.cumulative ?? 0);
   const authorization = entry?.resumeAuthorization;
   const resumeAuthorization = authorization === undefined ? undefined : {
     state: authorization.consumed
@@ -74,7 +77,7 @@ export function kickbackBudgetView(
     consumed,
     limit,
     remaining: Math.max(0, limit - consumed - (remediation ? pendingLaps : 0)),
-    latestReason: entry?.lastReason ?? '',
+    latestReason: entry?.lastReason || entry?.capEvidence?.latestReason || '',
     // Current-schema entries stamp `adjustmentsKnown` when they first consume
     // budget, so an absent history is an authoritative empty array. Older
     // entries retain the unavailable diagnostic.
@@ -84,7 +87,7 @@ export function kickbackBudgetView(
     ) ? 'unavailable' : (entry?.adjustments ?? []),
     ...(remediation
       ? { laps: entry?.laps ?? 0, lapCap: limit, pendingLaps }
-      : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
+      : restack ? {} : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
     ...(planGrowth === undefined ? {} : { planGrowth }),
     ...(resumeAuthorization === undefined ? {} : { resumeAuthorization }),
   };
