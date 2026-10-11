@@ -15,6 +15,7 @@ describe('BoundedLogProcessor', () => {
     processor.onEmit(record('two'));
     await processor.forceFlush();
     expect({ batches: delivered.length, records: delivered[0]?.length, dropped }).toEqual({ batches: 1, records: 1, dropped: [1] });
+    expect((delivered[0]?.[0] as { body: string }).body).toBe('one');
     await processor.shutdown(); await processor.shutdown();
   });
 
