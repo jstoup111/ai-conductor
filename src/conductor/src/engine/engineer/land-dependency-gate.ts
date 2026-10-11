@@ -18,7 +18,8 @@ export interface LandDependencyProposal {
 export interface LandDependencyAdvisory {
   branch?: string;
   target?: string;
-  reason: 'markerless-branch' | 'self' | 'already-linked';
+  message?: string;
+  reason: 'markerless-branch' | 'self' | 'already-linked' | 'local-git';
 }
 
 export type LandDependencyProposalResult =
@@ -213,9 +214,14 @@ export async function computeLandDependencyProposals({
     return unavailable('open-issue overlap listing', error);
   }
 
-  const inFlight = await collectInFlightOverlaps({
-    git, baseRef, citedPaths, repository: source.repo, gh, cwd,
-  });
+  let inFlight;
+  try {
+    inFlight = await collectInFlightOverlaps({
+      git, baseRef, citedPaths, repository: source.repo, gh, cwd, strictIssueState: true,
+    });
+  } catch (error) {
+    return unavailable('in-flight branch issue state', error);
+  }
   const suggestions = buildSuggestions({
     issueOverlaps: issueOverlaps.overlaps.map((overlap) => ({
       ...overlap,
@@ -241,6 +247,9 @@ export async function computeLandDependencyProposals({
   const advisory: LandDependencyAdvisory[] = [];
   for (const branch of suggestions.advisory) {
     advisory.push({ branch: branch.branch, reason: 'markerless-branch' });
+  }
+  for (const message of inFlight.skipNotes) {
+    advisory.push({ reason: 'local-git', message });
   }
   for (const suggestion of suggestions.preAccepted) {
     advisory.push({ target: suggestion.issue, reason: 'already-linked' });

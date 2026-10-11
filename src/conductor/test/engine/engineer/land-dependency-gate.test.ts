@@ -1,4 +1,4 @@
-// Covers: task:9, task:10, task:rem-prd-audit-rem-s5-2, task:rem-as-built-rem-asb-4, task:rem-as-built-rem-asb-6
+// Covers: task:9, task:10, task:rem-prd-audit-rem-s5-2, task:rem-as-built-rem-asb-4, task:rem-as-built-rem-asb-5, task:rem-as-built-rem-asb-6
 
 import { describe, expect, it } from 'vitest';
 import type { GitRunner } from '../../../src/engine/rebase.js';
@@ -21,7 +21,7 @@ function recordingGh({
   body?: string;
   blockedBy?: unknown[];
   openIssues?: unknown[];
-  fail?: 'body' | 'blocked-by' | 'open-issues' | 'rate-limit';
+  fail?: 'body' | 'blocked-by' | 'open-issues' | 'branch-state' | 'rate-limit';
   branchState?: 'OPEN' | 'CLOSED';
 } = {}): { gh: GhRunner; calls: string[][] } {
   const calls: string[][] = [];
@@ -32,6 +32,7 @@ function recordingGh({
     if (fail === 'body' && joined.includes('issue view 536')) throw new Error('network unavailable');
     if (fail === 'blocked-by' && joined.includes('dependencies/blocked_by')) throw new Error('network unavailable');
     if (fail === 'open-issues' && joined.includes('issue list')) throw new Error('network unavailable');
+    if (fail === 'branch-state' && joined.includes('issue view 610')) throw new Error('network unavailable');
     if (joined.includes('issue view 536')) return { stdout: JSON.stringify({ body }) };
     if (joined.includes('dependencies/blocked_by')) return { stdout: JSON.stringify(blockedBy) };
     if (joined.includes('issue list')) return { stdout: JSON.stringify(openIssues) };
@@ -41,7 +42,7 @@ function recordingGh({
   return { gh, calls };
 }
 
-function recordingGit({ marker = true }: { marker?: boolean } = {}): { git: GitRunner; calls: string[][] } {
+function recordingGit({ marker = true, diffFails = false }: { marker?: boolean; diffFails?: boolean } = {}): { git: GitRunner; calls: string[][] } {
   const calls: string[][] = [];
   const git: GitRunner = async (args) => {
     calls.push(args);
@@ -50,7 +51,10 @@ function recordingGit({ marker = true }: { marker?: boolean } = {}): { git: GitR
     if (args[0] === 'cat-file') return { exitCode: 1, stdout: '', stderr: '' };
     if (args[0] === 'log') return { exitCode: 0, stdout: '10\n', stderr: '' };
     if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
-    if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/shared.ts\n', stderr: '' };
+    if (args[0] === 'diff') {
+      if (diffFails) throw new Error('diff unavailable');
+      return { exitCode: 0, stdout: 'src/shared.ts\n', stderr: '' };
+    }
     if (args[0] === 'show') {
       if (args[1]?.startsWith('feat/daemon-feature:')) {
         return marker
@@ -127,6 +131,29 @@ describe('computeLandDependencyProposals', () => {
       expect(result.advisory).toEqual(expect.arrayContaining([
         expect.objectContaining({ branch: 'feat/daemon-feature' }),
         expect.objectContaining({ branch: 'feat/daemon-markerless' }),
+      ]));
+    }
+  });
+
+  it('fails closed when an intake-marked branch state lookup is unavailable', async () => {
+    const { gh } = recordingGh({ body: '', fail: 'branch-state' });
+    const { git } = recordingGit();
+
+    const result = await computeLandDependencyProposals({ sourceRef: SOURCE, planText: PLAN, gh, git, cwd: '/target', baseRef: 'main' });
+
+    expect(result).toMatchObject({ kind: 'unavailable', cause: expect.stringContaining('network unavailable') });
+  });
+
+  it('keeps a local in-flight diff failure advisory', async () => {
+    const { gh } = recordingGh({ body: '' });
+    const { git } = recordingGit({ diffFails: true });
+
+    const result = await computeLandDependencyProposals({ sourceRef: SOURCE, planText: PLAN, gh, git, cwd: '/target', baseRef: 'main' });
+
+    expect(result).toMatchObject({ kind: 'computed' });
+    if (result.kind === 'computed') {
+      expect(result.advisory).toEqual(expect.arrayContaining([
+        expect.objectContaining({ reason: 'local-git', message: expect.stringContaining('diff unavailable') }),
       ]));
     }
   });

@@ -627,6 +627,10 @@ function renderLandDependencyDecision(
       print(`engineer land: dependency advisory markerless branch ${advisory.branch}`);
       continue;
     }
+    if (advisory.reason === 'local-git' && advisory.message) {
+      print(`engineer land: dependency advisory local-git ${advisory.message}`);
+      continue;
+    }
     const subject = advisory.target ?? advisory.branch;
     print(`engineer land: dependency advisory ${advisory.reason}${subject ? ` ${subject}` : ''}`);
   }
