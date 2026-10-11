@@ -103,6 +103,11 @@ project's configured static checks: its typecheck command and, where one is conf
 command. Each project supplies its own concrete commands; this repository documents them in
 `docs/contributing/testing.md`.
 
+A test whose verdict depends on the live repository `.docs/` corpus belongs in
+`src/conductor/test/corpus/`, because docs-only pull requests run only that tier. A
+projection-limit check in that tier asserts that the shipped limits admit the corpus, never equality
+with a recorded snapshot.
+
 The typecheck command MUST be one that covers test files. Many projects' default typecheck target
 excludes the test directory, and many test runners transpile without type-checking — together those
 mean a test can carry a type error indefinitely, pass every run, and surface only when someone edits
@@ -138,3 +143,5 @@ The ordinary suite must finish in under five minutes. The expected healthy range
 - The project's lint command passes, where one is configured.
 - CI and local aggregate execution use the project's configured aggregate test command.
 - The aggregate suite completes under five minutes.
+- Each test whose verdict depends on the live `.docs/` corpus is in `src/conductor/test/corpus/`, and
+  projection-limit checks there assert admission rather than equality with recorded maxima.
