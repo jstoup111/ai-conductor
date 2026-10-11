@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-11T01:12:49.265Z
 Slug: harness-logs-have-no-export-path-daemon-log-is-a-f
 Class: needs-human
 Halting step: unknown
