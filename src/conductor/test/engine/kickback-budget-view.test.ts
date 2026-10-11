@@ -7,12 +7,33 @@ import { join } from 'node:path';
 import { kickbackBudgetView, renderKickbackBudgetView, renderKickbackRecoveryHint } from '../../src/engine/kickback-budget-view.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 
-async function makeFeature(ledger: unknown): Promise<{ root: string; worktree: string }> {
+async function makeFeature(ledger: unknown, config?: string): Promise<{ root: string; worktree: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kickback-budget-view-'));
   const worktree = join(root, '.worktrees', 'feature');
   await mkdir(join(worktree, '.pipeline'), { recursive: true });
   await writeFile(join(worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify(ledger));
+  if (config) {
+    await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
+    await writeFile(join(worktree, '.ai-conductor', 'config.yml'), config);
+  }
   return { root, worktree };
+}
+
+async function inspectFeature(fixture: { root: string }): Promise<{
+  human: string;
+  gates: Array<{ gate: string; consumed: number; limit: number; remaining: number; pendingLaps?: number }>;
+}> {
+  const human: string[] = [];
+  expect(await dispatchKickbackBudgetCommand(
+    { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+    { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => human.push(line) },
+  )).toBe(0);
+  const json: string[] = [];
+  expect(await dispatchKickbackBudgetCommand(
+    { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+    { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => json.push(line) },
+  )).toBe(0);
+  return { human: human[0], gates: (JSON.parse(json[0]) as { gates: Array<{ gate: string; consumed: number; limit: number; remaining: number; pendingLaps?: number }> }).gates };
 }
 
 describe('kickback budget view', () => {
@@ -114,6 +135,100 @@ describe('kickback budget view', () => {
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
+  });
+
+  // Covers: task:1
+  it('uses the configured remediation lap cap when a gate has no ledger entry', async () => {
+    const fixture = await makeFeature(
+      { version: 1, gates: {} },
+      'architecture_review_as_built:\n  max_remediation_laps: 3\n',
+    );
+    try {
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(0);
+
+      expect(output[0]).toContain('Kickback budget (architecture_review_as_built): 0/3 consumed; 3 remaining');
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('counts an uncharged as-built pending lap in the remaining budget', async () => {
+    const fixture = await makeFeature({ version: 1, gates: {
+      architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
+    }, pendingRepair: {
+      receiptId: 'repair-1', taskIds: ['rem-as-built-1'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+    } });
+    try {
+      const inspected = await inspectFeature(fixture);
+      expect(inspected.human).toContain('Kickback budget (architecture_review_as_built): 0/1 consumed; 0 remaining');
+      expect(inspected.human).toContain('Pending charge: 1 lap (charged when build dispatches)');
+      expect(inspected.gates.find((gate) => gate.gate === 'architecture_review_as_built')).toMatchObject({
+        consumed: 0, limit: 1, pendingLaps: 1, remaining: 0,
+      });
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('does not apply a sibling pending charge to the as-built budget', async () => {
+    const fixture = await makeFeature({ version: 1, gates: {
+      architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
+    }, pendingRepair: {
+      receiptId: 'repair-1', taskIds: ['rem-prd-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+    } });
+    try {
+      const inspected = await inspectFeature(fixture);
+      const asBuiltBlock = inspected.human.split('\n\n').find((block) => block.includes('Kickback budget (architecture_review_as_built):'));
+      expect(asBuiltBlock).not.toContain('Pending charge:');
+      expect(inspected.gates.find((gate) => gate.gate === 'architecture_review_as_built')).toMatchObject({
+        pendingLaps: 0, remaining: 1,
+      });
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('floors remaining budget at zero when an already-consumed lap is pending again', async () => {
+    const fixture = await makeFeature({ version: 1, gates: {
+      architecture_review_as_built: { count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
+    }, pendingRepair: {
+      receiptId: 'repair-1', taskIds: ['rem-as-built-1'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+    } });
+    try {
+      const inspected = await inspectFeature(fixture);
+      expect(inspected.human).toContain('Kickback budget (architecture_review_as_built): 1/1 consumed; 0 remaining');
+      expect(inspected.human).toContain('Pending charge: 1 lap (charged when build dispatches)');
+      expect(inspected.gates.find((gate) => gate.gate === 'architecture_review_as_built')).toMatchObject({
+        consumed: 1, limit: 1, pendingLaps: 1, remaining: 0,
+      });
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('renders plural pending remediation laps', () => {
+    const rendered = renderKickbackBudgetView(
+      { ...baseEntry, laps: 0, adjustmentsKnown: true },
+      'architecture_review_as_built',
+      3,
+      undefined,
+      undefined,
+      undefined,
+      2,
+    );
+    expect(rendered).toContain('1 remaining');
+    expect(rendered).toContain('Pending charge: 2 laps (charged when build dispatches)');
   });
 
   it('keeps a malformed adjustment history explicitly unavailable in JSON', async () => {

@@ -16,26 +16,19 @@ import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
-import { prdAuditAppendCap } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, prdAuditAppendCap } from './remediation-caps.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
 const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built']);
-const DEFAULTS: Record<string, number> = { build_review: 5, prd_audit: 1, architecture_review_as_built: 1 };
-
 async function defaultsFor(worktree: string): Promise<Record<string, number>> {
   const loaded = await loadConfig(worktree);
-  const config = loaded.ok ? loaded.config as {
-    prd_audit?: { max_remediation_laps?: number };
-    architecture_review_as_built?: { max_remediation_laps?: number };
-  } : {};
-  return {
-    ...DEFAULTS,
-    prd_audit: config.prd_audit?.max_remediation_laps ?? DEFAULTS.prd_audit,
-    architecture_review_as_built: config.architecture_review_as_built?.max_remediation_laps ?? DEFAULTS.architecture_review_as_built,
-  };
+  const config = loaded.ok ? loaded.config : {} as HarnessConfig;
+  return Object.fromEntries(
+    [...GATES].map((gate) => [gate, kickbackBudgetFallbackLimit(gate, config)]),
+  );
 }
 
 /** Resolve the shared plan-growth accounting view without consulting halt prose. */
@@ -153,9 +146,18 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
     const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
     const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
-    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration));
+    const pendingLaps = (gate: string) =>
+      gate === 'prd_audit' || gate === 'architecture_review_as_built'
+        ? ledger.pendingRepair?.charges[gate]?.laps ?? 0
+        : 0;
+    const views = readable.map((gate) => kickbackBudgetView(
+      ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
+    ));
     const human = [
-        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration)),
+        ...views.map((view) => renderKickbackBudgetView(
+          ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
+          undefined, pendingLaps(view.gate),
+        )),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
       ].join('\n\n');
     print(command.format === 'json'

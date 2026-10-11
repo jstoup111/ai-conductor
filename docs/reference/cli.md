@@ -463,6 +463,15 @@ For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line read
 kickback ledger and resolved `prd_audit` cap. For a stacked feature the line reads
 `PLAN GROWTH [<slug> child <k>/<N>]:`, and its per-gate budgets come from the active child's ledger. It shows the plan's authored task count, the number of tasks added
 so far (broken down by the gate that added them, when any), and how many remain under the cap.
+When the growth accounting cannot be read, the line reads `PLAN GROWTH [<slug>]: unavailable (<error>)`
+and the budget lines still print.
+
+Each in-progress feature also prints one `KICKBACK BUDGET [<slug>]:` line for `prd_audit` and one for
+`architecture_review_as_built`, even before any halt. Each line is the
+[`kickback-budget inspect`](#ai-conductor-kickback-budget) human view joined with ` | `, prefixed with
+`Allowance: <allowance>;` when cap evidence exists. A gate whose durable entry fails validation prints
+`<gate>: budget unavailable (durable entry failed validation)` instead. `build_review` gets a line
+only once it has cap evidence or adjustment history.
 
 For every halted or in-progress feature with an honored
 [per-feature applicability](steps.md#per-feature-applicability) declaration, it prints
@@ -1151,6 +1160,13 @@ unrelated base-branch advance. Supported gates are `build_review`, `prd_audit`, 
 `architecture_review_as_built`. Inspect always lists all three gates; JSON renders an empty
 `adjustments` array for a valid gate with no adjustment history. Inspect also performs that
 reconciliation, so it is safe as the first command after an interrupted `raise` or `reset`.
+
+For `prd_audit` and `architecture_review_as_built`, `remaining` also subtracts the laps of an
+appended [pending repair](../explanation/gates.md#remediation-caps-settle-at-the-build-transition)
+that `build` has not yet charged, so it reads `0` as soon as the next `build` dispatch would exhaust
+the cap. `consumed` and `laps` count only charged laps. Human output adds
+`Pending charge: <n> lap(s) (charged when build dispatches)` while a charge is pending; JSON reports
+`pendingLaps` (`0` when none) on both remediation gates.
 
 Inspect reports each gate's resume authorization against the live halt generation. Human output
 prints one `Resume authorization:` line per gate:

@@ -13,6 +13,7 @@ import {
   detectDaemonObserveCommand,
 } from '../../src/engine/daemon-observe-cli.js';
 import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
+import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
 const ALIVE: KillProbe = () => {};
@@ -1021,6 +1022,113 @@ describe('engine/daemon-observe-cli', () => {
 
         expect(out).toContain(
           '  PLAN GROWTH [legacy-feature]: authored 19; added 0; remaining 4/4',
+        );
+      });
+
+      // Covers: task:4
+      it('renders an as-built remediation lap without cap evidence', async () => {
+        const repo = join(root, 'repo-remediation-lap');
+        const featureRoot = await writeActivePlan(repo, 'laps-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            architecture_review_as_built: {
+              count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0,
+            },
+          } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-remediation-lap', repo)]), out: (line) => out.push(line) });
+
+        expect(out.find((line) => line.includes('KICKBACK BUDGET [laps-feature]:') && line.includes('architecture_review_as_built'))).toContain(
+          'Kickback budget (architecture_review_as_built): 1/1 consumed; 0 remaining',
+        );
+      });
+
+      // Covers: task:4
+      it('renders each remediation gate exactly once for an empty ledger', async () => {
+        const repo = join(root, 'repo-fresh-remediation');
+        const featureRoot = await writeActivePlan(repo, 'fresh-feature', 19);
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-fresh-remediation', repo)]), out: (line) => out.push(line) });
+
+        const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [fresh-feature]:'));
+        expect(budgets.filter((line) => line.includes('Kickback budget (prd_audit): 0/1 consumed; 1 remaining'))).toHaveLength(1);
+        expect(budgets.filter((line) => line.includes('Kickback budget (architecture_review_as_built): 0/1 consumed; 1 remaining'))).toHaveLength(1);
+      });
+
+      // Covers: task:4
+      it('uses the configured as-built lap cap consistently in status and inspect', async () => {
+        const repo = join(root, 'repo-configured-remediation');
+        const featureRoot = await writeActivePlan(repo, 'config-feature', 19);
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps: 3\n', 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            architecture_review_as_built: {
+              count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0,
+            },
+          } }),
+          'utf8',
+        );
+        const status: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-configured-remediation', repo)]), out: (line) => status.push(line) });
+        const inspect: string[] = [];
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'config-feature', format: 'human' },
+          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+        )).toBe(0);
+
+        expect(status.find((line) => line.includes('KICKBACK BUDGET [config-feature]:') && line.includes('architecture_review_as_built'))).toContain(
+          'Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining',
+        );
+        expect(inspect[0]).toContain('Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining');
+      });
+
+      // Covers: task:5
+      it('reports malformed pending-repair growth and remediation budgets as unavailable', async () => {
+        const repo = join(root, 'repo-broken-remediation');
+        const featureRoot = await writeActivePlan(repo, 'broken-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {}, pendingRepair: { receiptId: 'broken' } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        const { code } = await runDaemonStatus({ registryPath: await registry([record('repo-broken-remediation', repo)]), out: (line) => out.push(line) });
+
+        expect(code).toBe(0);
+        expect(out).toContain('  PLAN GROWTH [broken-feature]: unavailable (plan growth is unreadable)');
+        const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [broken-feature]:'));
+        expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: prd_audit: budget unavailable (durable entry failed validation)');
+        expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: architecture_review_as_built: budget unavailable (durable entry failed validation)');
+        expect(budgets.join('\n')).not.toContain('consumed;');
+      });
+
+      // Covers: task:5
+      it('omits build-review budget without cap evidence or adjustment history', async () => {
+        const repo = join(root, 'repo-review-without-budget');
+        const featureRoot = await writeActivePlan(repo, 'review-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            build_review: { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
+          } }),
+          'utf8',
+        );
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-review-without-budget', repo)]), out: (line) => out.push(line) });
+
+        expect(out.filter((line) => line.includes('KICKBACK BUDGET [review-feature]:'))).not.toContainEqual(
+          expect.stringContaining('Kickback budget (build_review):'),
         );
       });
     });

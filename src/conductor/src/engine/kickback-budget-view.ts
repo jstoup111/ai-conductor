@@ -22,6 +22,7 @@ export interface KickbackBudgetView {
   adjustments: NonNullable<KickbackGateEntry['adjustments']> | 'unavailable';
   laps?: number;
   lapCap?: number;
+  pendingLaps?: number;
   mechanicalFaults?: number;
   planGrowth?: KickbackPlanGrowthView;
   resumeAuthorization?: KickbackResumeAuthorizationView;
@@ -49,6 +50,7 @@ export function kickbackBudgetView(
   fallbackLimit: number,
   planGrowth?: KickbackPlanGrowthView,
   liveHaltGeneration?: string,
+  pendingLaps = 0,
 ): KickbackBudgetView {
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
   const limit = remediation ? (entry?.effectiveLapCap ?? fallbackLimit) : (entry?.effectiveLimit ?? fallbackLimit);
@@ -68,7 +70,11 @@ export function kickbackBudgetView(
     liveHaltGeneration: liveHaltGeneration ?? '',
   } as KickbackResumeAuthorizationView;
   return {
-    gate, consumed, limit, remaining: Math.max(0, limit - consumed), latestReason: entry?.lastReason ?? '',
+    gate,
+    consumed,
+    limit,
+    remaining: Math.max(0, limit - consumed - (remediation ? pendingLaps : 0)),
+    latestReason: entry?.lastReason ?? '',
     // Current-schema entries stamp `adjustmentsKnown` when they first consume
     // budget, so an absent history is an authoritative empty array. Older
     // entries retain the unavailable diagnostic.
@@ -76,7 +82,9 @@ export function kickbackBudgetView(
       entry !== undefined && entry.adjustments === undefined &&
       entry.adjustmentsKnown !== true
     ) ? 'unavailable' : (entry?.adjustments ?? []),
-    ...(remediation ? { laps: entry?.laps ?? 0, lapCap: limit } : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
+    ...(remediation
+      ? { laps: entry?.laps ?? 0, lapCap: limit, pendingLaps }
+      : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
     ...(planGrowth === undefined ? {} : { planGrowth }),
     ...(resumeAuthorization === undefined ? {} : { resumeAuthorization }),
   };
@@ -89,8 +97,9 @@ export function renderKickbackBudgetView(
   planGrowth?: KickbackPlanGrowthView,
   liveHaltGeneration?: string,
   child?: ChildId,
+  pendingLaps = 0,
 ): string {
-  const view = kickbackBudgetView(entry, gate, fallbackLimit, planGrowth, liveHaltGeneration);
+  const view = kickbackBudgetView(entry, gate, fallbackLimit, planGrowth, liveHaltGeneration, pendingLaps);
   const history = view.adjustments === 'unavailable' ? 'unavailable' : (view.adjustments ?? []);
   const authorization = view.resumeAuthorization;
   const authorizationLine = authorization === undefined
@@ -105,6 +114,9 @@ export function renderKickbackBudgetView(
   return [
     ...(child === undefined ? [] : [`Child: ${child}`]),
     `Kickback budget (${gate}): ${view.consumed}/${view.limit} consumed; ${view.remaining} remaining`,
+    ...(view.pendingLaps && view.pendingLaps > 0
+      ? [`Pending charge: ${view.pendingLaps} ${view.pendingLaps === 1 ? 'lap' : 'laps'} (charged when build dispatches)`]
+      : []),
     `Latest reason: ${view.latestReason || 'none'}`,
     `Adjustment history: ${history === 'unavailable' ? 'unavailable' : history.length === 0 ? 'none' : history.map((item) => `${item.kind} ${item.id}${item.allowance ? ` (${item.allowance})` : ''}`).join(', ')}`,
     authorizationLine,
