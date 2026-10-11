@@ -59,6 +59,7 @@ describe('canonical log policy', () => {
     ];
     for (const { name, options } of failures) {
       const policy = await readLogPolicy('/linked-worktree', options);
+      if (policy.sendable) throw new Error(`${name} unexpectedly authorized log delivery`);
       expect(policy, name).toMatchObject({ sendable: false });
       expect(policy.reason, name).not.toContain('do not expose this');
     }
