@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:39
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
