@@ -815,3 +815,67 @@ This is advisory; the prerequisite remains the explicit #2870 dependency above.
 Mechanical authoring validation: the repository's production artifact parsers recognized 23 tasks, 72 criteria/coverage rows and 21 ADR decisions. Criterion grounding, story coverage, coverage-table consistency and architecture-obligation checks passed. `ai-conductor plan-protected-targets` reported no violations. These are artifact checks, not behavioral test results.
 
 Coherence follow-up: the additive Task 16 disabled-backlog notice was independently rechecked against all five affected criterion claims; every claim returned asserts. Production plan and coherence validators passed after the amendment.
+
+### Task rem-as-built-R1: log-config.ts: inherit parent endpoint/headers only when parent protocol is a valid HTTP OTLP protocol and parent header references validate; add log-config.test.ts cases for unknown parent protocol and malformed parent headers
+**Gate:** as-built
+**Rationale:** Under D27, inheritance is allowed only from a valid HTTP parent. log-config.ts accepts any non-grpc protocol and inherits headers unvalidated. This is clear implementation drift owned by Tasks 1/2, which are outside this remediation projection, so a concrete build task is appended.
+**Governing clause:** adr-014-otel-observability-exporter decision 27
+**Done when:**
+- adr-014-otel-observability-exporter decision 27 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: event-sinks.ts: make logs declaration required/exhaustive (explicit logs:false for health/excluded events, logs:true for lifecycle events); log-listener.ts: total typed projection table for selected lifecycle events
+**Gate:** as-built
+**Rationale:** D28 requires an exhaustive logs registry, lifecycle projection and an async-scoped render-suppression guard. This is Task 8 scope, which is outside the projection, so a concrete task is appended. The architecture is clear, and no decision is needed.
+**Governing clause:** adr-014-otel-observability-exporter decision 28
+**Done when:**
+- adr-014-otel-observability-exporter decision 28 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R3: operational-log.ts/ui/subscriber.ts/daemon-cli.ts: add withLogRenderSuppressed async-scoped guard around event rendering and delivery-health rendering, with log-listener/operational-log tests
+**Gate:** as-built
+**Rationale:** D28 requires an exhaustive logs registry, lifecycle projection and an async-scoped render-suppression guard. This is Task 8 scope, which is outside the projection, so a concrete task is appended. The architecture is clear, and no decision is needed.
+**Governing clause:** adr-014-otel-observability-exporter decision 28
+**Done when:**
+- adr-014-otel-observability-exporter decision 28 is satisfied by this task.
+- The repair for task rem-as-built-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: log-transport.ts: race policy read/credential resolution/request inside one 2s deadline with cancellation; never fetch after timeout (log-transport.test.ts)
+**Gate:** as-built
+**Rationale:** D29 deadlines are missing across transport (Task 12, outside the projection), the spooled write (Task 15) and shutdown (Task 23). Concrete file-scoped tasks are appended. The architecture is unambiguous.
+**Governing clause:** adr-014-otel-observability-exporter decision 29
+**Done when:**
+- adr-014-otel-observability-exporter decision 29 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-R5: spool-drainer.ts: authorize inside the request deadline and re-check stop/lease before send; spooling-exporter.ts: bound store.write; log-processor.ts: bound exporter-completion await
+**Gate:** as-built
+**Rationale:** D29 deadlines are missing across transport (Task 12, outside the projection), the spooled write (Task 15) and shutdown (Task 23). Concrete file-scoped tasks are appended. The architecture is unambiguous.
+**Governing clause:** adr-014-otel-observability-exporter decision 29
+**Done when:**
+- adr-014-otel-observability-exporter decision 29 is satisfied by this task.
+- The repair for task rem-as-built-R5 is committed and its targeted tests pass.
+
+### Task rem-as-built-R6: wire.ts stop(): one total 2s shutdown budget across forceFlush/shutdown
+**Gate:** as-built
+**Rationale:** D29 deadlines are missing across transport (Task 12, outside the projection), the spooled write (Task 15) and shutdown (Task 23). Concrete file-scoped tasks are appended. The architecture is unambiguous.
+**Governing clause:** adr-014-otel-observability-exporter decision 29
+**Done when:**
+- adr-014-otel-observability-exporter decision 29 is satisfied by this task.
+- The repair for task rem-as-built-R6 is committed and its targeted tests pass.
+
+### Task rem-as-built-R7: log-processor.ts: move protobuf serialization out of onEmit, account admission by normalizeLogRecord.byteSize (propagate from log-listener.ts), flush immediately at batch limit; update log-processor.test.ts
+**Gate:** as-built
+**Rationale:** Under D29, serialization must be off the event callback, admission must count normalized bytes, and a flush must fire at the batch limit. This is Task 9 scope, which is outside the projection.
+**Governing clause:** adr-014-otel-observability-exporter decision 29
+**Done when:**
+- adr-014-otel-observability-exporter decision 29 is satisfied by this task.
+- The repair for task rem-as-built-R7 is committed and its targeted tests pass.
+
+### Task rem-as-built-R8: docs/reference/configuration.md (otel.logs section) and a docs/guides log-export guide: document otel.logs keys plus Loki, Elasticsearch/collector, Sumo Logic and Datadog recipes with suffix behavior and secret-reference syntax, no live credentials
+**Gate:** as-built
+**Rationale:** Verified: ADR-014 line 710 requires destination recipes, and no docs exist. This is documentation drift under clear architecture. No existing plan task admits it, so a concrete docs task is appended.
+**Governing clause:** adr-014-otel-observability-exporter decision 30
+**Done when:**
+- adr-014-otel-observability-exporter decision 30 is satisfied by this task.
+- The repair for task rem-as-built-R8 is committed and its targeted tests pass.
