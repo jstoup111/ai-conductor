@@ -903,8 +903,9 @@ describe('kickback-budget inspect reports remediation lap consumption', () => {
   });
 });
 
-// Covers: task:8 — feature-scoped inspect projects the shared, non-persisting
-// growth budget, including the unresolved fail-closed view.
+// Covers: task:8
+// Feature-scoped inspect projects the shared, non-persisting growth budget,
+// including the unresolved fail-closed view.
 describe('kickback-budget inspect daemon plan-growth budget', () => {
   async function daemonFeature(input: {
     slug?: string;
