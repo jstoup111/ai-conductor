@@ -37,6 +37,8 @@ import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import type { CiFixOutcome } from './ci-fix.js';
+import { makeGitRunner } from './rebase.js';
+import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -420,6 +422,10 @@ export async function sweepMergeableLabels({
                 },
                 false,
               );
+              // Teardown has established all of its own shipped-record and
+              // worktree safety gates. Ref cleanup is best-effort and must not
+              // turn a successful reap into a retained watch entry.
+              await deleteFeatureConductorRefs(entry.slug, makeGitRunner(entry.repoCwd));
               log?.(
                 `[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main`,
               );

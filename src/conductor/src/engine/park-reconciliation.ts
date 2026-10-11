@@ -18,6 +18,8 @@ import { phaseMarkerPath } from './phase-marker.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { ConductorEvent, WorktreeReclaimRetainedReason } from '../types/events.js';
 import { runTrackerAmbientRead } from './tracker-client.js';
+import { makeGitRunner } from './rebase.js';
+import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -1132,6 +1134,12 @@ export async function reconcileMergedPark(
     }
     steps.push('unparked');
   }
+
+  // This line is reachable only after every reclaim gate and each destructive
+  // worktree/branch/unpark operation has succeeded.  A failed local ref
+  // cleanup is retried by the next sweep; it never rewrites the reclaim
+  // decision already proven above.
+  await deleteFeatureConductorRefs(opts.slug, makeGitRunner(opts.projectRoot));
 
   return opts.emitProof && opts.branch !== undefined
     ? { slug: opts.slug, steps, proof }
