@@ -35,7 +35,6 @@ const maintenancePolicies: Record<DaemonMaintenanceOperation, MaintenancePolicy>
 
 /** Schedules shared dispatcher maintenance without exposing executor state. */
 export class DaemonMaintenance {
-  private wasEpisodeActive = false;
   private lastRefreshAt: number | null = null;
   private drainState: DaemonDrainState | undefined;
 
@@ -77,9 +76,14 @@ export class DaemonMaintenance {
     return this.drainState;
   }
 
-  async startup(rekick: () => Promise<void>, sweep: () => Promise<void>): Promise<void> {
+  async startup(
+    rekick: () => Promise<void>,
+    sweep: () => Promise<void>,
+    episodeEndSweep: () => Promise<void>,
+  ): Promise<void> {
     await this.run('rekick', rekick);
     await this.run('sweep', sweep);
+    await this.run('episode-end-sweep', episodeEndSweep);
   }
 
   /** True when the rate limit and pool policy would let a refresh start now. */
@@ -118,8 +122,6 @@ export class DaemonMaintenance {
     staleEngine: (episodeActive: boolean) => Promise<T | null>,
   ): Promise<T | null | undefined> {
     const episodeActive = this.isEpisodeActive();
-    this.wasEpisodeActive = episodeActive;
-
     const restart = await this.run('restart-pending', () => restartPending(episodeActive));
     if (restart) return restart;
     return this.run('stale-engine', () => staleEngine(episodeActive));
@@ -130,11 +132,9 @@ export class DaemonMaintenance {
     episodeEndSweep: () => Promise<void>,
   ): Promise<void> {
     await this.run('sweep', sweep);
-    const episodeActive = this.isEpisodeActive();
-    if (this.wasEpisodeActive && !episodeActive) {
+    if (!this.isEpisodeActive()) {
       await this.run('episode-end-sweep', episodeEndSweep);
     }
-    this.wasEpisodeActive = episodeActive;
   }
 
   async run<T>(

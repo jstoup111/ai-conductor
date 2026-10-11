@@ -1214,10 +1214,22 @@ export async function runDaemon(
   // Startup advance check: refresh so a base that moved on origin while the
   // daemon was DOWN is caught (FR-5 downtime-advance path).
   // FR-14: sweep mergeable labels on startup (after reconciliation).
+  const sweepEpisodeHalts = async () => {
+    if (deps.sweepEpisodeHalts) {
+      try {
+        await deps.sweepEpisodeHalts(deps.isParked);
+      } catch (err) {
+        log(
+          `[daemon] sweepEpisodeHalts error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  };
+
   await maintenance.startup(async () => {
     await maybeRekick(true);
     await deps.consumeResumeAuthorizations?.();
-  }, sweepBestEffort);
+  }, sweepBestEffort, sweepEpisodeHalts);
 
   // Stale-engine restart gate chain (Task 12, gates 1-4) — constant per run.
   const staleGatesArmed =
@@ -1711,18 +1723,8 @@ export async function runDaemon(
         // resolves, so only wake can unblock test-mode daemons.
         await Promise.race([sleep(idlePollMs), waker.armed()]);
         // FR-14: sweep once per idle poll tick, then recover episode-caused
-        // HALTs if the maintenance scheduler observed the episode end.
-        await maintenance.afterIdlePoll(sweepBestEffort, async () => {
-          if (deps.sweepEpisodeHalts) {
-            try {
-              await deps.sweepEpisodeHalts(deps.isParked);
-            } catch (err) {
-              log(
-                `[daemon] sweepEpisodeHalts error: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          }
-        });
+        // HALTs while no rate-limit episode is active.
+        await maintenance.afterIdlePoll(sweepBestEffort, sweepEpisodeHalts);
 
         continue;
       }

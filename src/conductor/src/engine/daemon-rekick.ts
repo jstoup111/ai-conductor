@@ -122,9 +122,9 @@ export async function readKickbackHaltGeneration(worktreePath: string): Promise<
 }
 
 /**
- * Episode-end recovery (Task 20): clear exactly the halts an outage episode
- * caused. Operator intent wins first, then the shared retention predicate — an
- * episode that happened to coincide with a human halt must not clear it.
+ * Episode recovery (Task 10): clear exactly the halts an outage episode caused.
+ * Operator intent wins first, then the shared retention predicate — an episode
+ * that happened to coincide with a human halt must not clear it.
  */
 export async function recoverEpisodeHalts(deps: {
   stampedHalts: () => Promise<string[]>;
@@ -136,19 +136,34 @@ export async function recoverEpisodeHalts(deps: {
 }): Promise<string[]> {
   const cleared: string[] = [];
   for (const slug of await deps.stampedHalts()) {
-    // Operator intent outranks automatic recovery (same rule as rekickSweep).
-    if (deps.isOperatorParked && (await deps.isOperatorParked(slug))) {
-      deps.log?.(`episode-end sweep: ${slug} operator-parked — left for a human`);
-      continue;
+    try {
+      // Operator intent outranks automatic recovery (same rule as rekickSweep).
+      if (deps.isOperatorParked && (await deps.isOperatorParked(slug))) {
+        deps.log?.(`episode-end sweep: ${slug} operator-parked — left for a human`);
+        continue;
+      }
+      let readError: unknown;
+      const decision = await resolveHaltRetention(async () => {
+        try {
+          return await deps.readHaltClass(slug);
+        } catch (error) {
+          readError = error;
+          throw error;
+        }
+      }, { retainUnclassified: true });
+      if (readError !== undefined) {
+        throw readError;
+      }
+      if (decision.retained) {
+        deps.log?.(`episode-end sweep: ${slug} retained — halt disposition ${decision.haltClass}`);
+        continue;
+      }
+      await deps.clearMarker(slug);
+      deps.log?.(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
+      cleared.push(slug);
+    } catch (error) {
+      deps.log?.(`episode-end sweep: failed to evaluate ${slug} (${errMsg(error)})`);
     }
-    const decision = await resolveHaltRetention(() => deps.readHaltClass(slug));
-    if (decision.retained) {
-      deps.log?.(`episode-end sweep: ${slug} retained — halt disposition ${decision.haltClass}`);
-      continue;
-    }
-    await deps.clearMarker(slug);
-    deps.log?.(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
-    cleared.push(slug);
   }
   return cleared;
 }

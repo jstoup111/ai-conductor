@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:14
+// Covers: task:10, task:11, task:12, task:14
 import { describe, expect, it, vi } from 'vitest';
 import {
   DaemonMaintenance,
@@ -57,7 +57,31 @@ vi.mock('../../src/engine/daemon-maintenance.js', async (importOriginal) => {
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 
 describe('engine/daemon-maintenance', () => {
+  it('runs episode recovery at startup and at every inactive idle tick', async () => {
+    let episodeActive = false;
+    const maintenance = new DaemonMaintenance(() => 0, () => episodeActive);
+    const calls: string[] = [];
+    const rekick = async () => { calls.push('rekick'); };
+    const sweep = async () => { calls.push('sweep'); };
+    const recover = async () => { calls.push('recover'); };
+
+    await maintenance.startup(rekick, sweep, recover);
+    await maintenance.afterIdlePoll(sweep, recover);
+    episodeActive = true;
+    await maintenance.afterIdlePoll(sweep, recover);
+    episodeActive = false;
+    await maintenance.afterIdlePoll(sweep, recover);
+
+    expect(calls).toEqual([
+      'rekick', 'sweep', 'recover',
+      'sweep', 'recover',
+      'sweep',
+      'sweep', 'recover',
+    ]);
+  });
+
   it('preserves the recorded N=1 idle-maintenance evaluation trace through the scheduler', async () => {
+    maintenanceTrace.operations.length = 0;
     const trace: string[] = [];
     let stop = false;
     const episodeStates = [false, true, false];
@@ -109,6 +133,7 @@ describe('engine/daemon-maintenance', () => {
       maintenance: [
         'rekick',
         'sweep',
+        'episode-end-sweep',
         'refresh',
         'rekick',
         'restart-pending',
@@ -119,6 +144,7 @@ describe('engine/daemon-maintenance', () => {
       trace: [
         'rekick:startup',
         'sweep',
+        'episode-end-sweep',
         'local-discovery',
         'refresh',
         'rekick',
