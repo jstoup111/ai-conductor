@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:4, task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -118,7 +118,7 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   build_no_progress: [{ type: 'build_no_progress', step: 'build', quietMinutes: 1, resolved: 1, total: 2, activity: 'quiet' }],
   build_active_stall: [{ type: 'build_active_stall', step: 'build', minutes: 45, resolved: 1, total: 2, action: 'warn' }],
   build_stall: [{ type: 'build_stall', step: 'build', reason: 'no_task_progress', resolvedBefore: 1, resolvedAfter: 1 }],
-  pipeline_closeout: [{ type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1, endedAt: 2, ts: 2 }],
+  pipeline_closeout: [{ type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1_788_044_947_584, endedAt: 1_788_045_067_584, ts: 1_788_045_067_790 }],
 };
 function eventSequence(type: ConductorEvent['type']): ConductorEvent[] {
   const events = eventSequences[type];

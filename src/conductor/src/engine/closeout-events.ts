@@ -5,6 +5,7 @@ import type { ConductorEvent } from '../types/events.js';
 import { createConductStateLease } from './conduct-state-lease.js';
 
 export type PipelineCloseoutEvent = Extract<ConductorEvent, { type: 'pipeline_closeout' }>;
+export type PipelineCloseoutStartedEvent = Extract<ConductorEvent, { type: 'pipeline_closeout_started' }>;
 export type BuildReviewExternalEvent = Extract<ConductorEvent,
   { type:
     | 'build_review_disposition_accepted'
@@ -14,6 +15,7 @@ export type BuildReviewExternalEvent = Extract<ConductorEvent,
 export type KickbackBudgetExternalEvent = Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>;
 export type ExternalPipelineEvent =
   | PipelineCloseoutEvent
+  | PipelineCloseoutStartedEvent
   | BuildReviewExternalEvent
   | KickbackBudgetExternalEvent;
 

@@ -17,6 +17,7 @@ import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 import { formatSessionOccurrence, renderedEventTypes } from '../engine/event-sinks.js';
 import { resolveExecutionIdentity } from '../engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal } from '../engine/github-operations.js';
+import { closeoutDurationMs } from '../engine/closeout-trust.js';
 
 export interface TerminalRendererOptions {
   stateFilePath: string;
@@ -370,9 +371,12 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(chalk.yellow(`  ⚠ ${event.step} — active without movement for ${event.minutes}m (${resolved}/${event.total}); action ${event.action}`));
         break;
       }
-      case 'pipeline_closeout':
-        this.region.log(chalk.green(`  ✓ closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`));
+      case 'pipeline_closeout': {
+        const duration = closeoutDurationMs(event);
+        const displayDuration = duration === undefined ? 'duration unavailable' : `${duration}ms`;
+        this.region.log(chalk.green(`  ✓ closeout ${event.obligation} (${displayDuration})`));
         break;
+      }
       case 'build_stall':
         this.region.log(chalk.bold.red(`  ⛔ ${event.step} — build stalled (${event.reason}): ${event.resolvedBefore}→${event.resolvedAfter} resolved`));
         break;

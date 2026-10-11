@@ -1367,22 +1367,45 @@ retirement notice and exits **2**. The help string does not mention the non-zero
 ## `ai-conductor closeout-event`
 
 ```bash
-ai-conductor closeout-event <obligation> <started-at> <ended-at>
+ai-conductor closeout-event start <obligation>
+ai-conductor closeout-event end <obligation>
 ```
 
-Records one pipeline closeout timing event. `<obligation>` must be one of `evaluator`,
-`simplify`, `architecture-diagram`, `memory`, `summary`; `<started-at>` and
-`<ended-at>` are millisecond epoch timestamps. An unrecognized obligation prints the valid list
-to stderr and exits 1; otherwise it appends a `pipeline_closeout` event to the pipeline-owned
-sibling ledger, `.pipeline/pipeline-events.jsonl`, and exits 0.
+Records the start or end of one pipeline closeout obligation. `<obligation>` must be one of
+`evaluator`, `simplify`, `architecture-diagram`, `memory`, `summary`. The command stamps every
+timestamp itself from the clock; callers never pass times.
+
+| Action | Effect |
+| --- | --- |
+| `start` | Appends a `pipeline_closeout_started` event (`obligation`, `ts`) to the pipeline-owned sibling ledger, `.pipeline/pipeline-events.jsonl`, and exits 0. |
+| `end` | Pairs with the latest open `start` for the same obligation and appends a `pipeline_closeout` event whose `startedAt` is that start's `ts` and whose `endedAt` and `ts` are the current time. Exits 0. |
+
+Exit 1, with a message on stderr and nothing appended, when:
+
+- the action is not `start` or `end`, or extra arguments follow the obligation (including the
+  retired `<obligation> <started-at> <ended-at>` form);
+- the obligation is not recognized;
+- `end` finds no open `start` for the obligation (`no open start for <obligation>`);
+- `end` would record a non-positive elapsed time.
+
+Run `start` immediately before the obligation's work and `end` immediately after it. Never run
+`start` and `end` back to back to satisfy a gate.
 
 This command is called by a closeout obligation itself (for example the `evaluator` gate in the
 [pipeline skill](skills.md)), not typed by an operator, so it never starts a
 conductor or daemon and works identically whether `pipeline` is running under the engine or
 invoked inline in a bare session. The sibling ledger is a separate single-writer file from
 `.pipeline/events.jsonl` — when a `build` step is running under the engine, a tail reader
-re-emits each recorded event onto the live bus for the daemon log, terminal UI, and OTel export,
-but `pipeline_closeout` is never persisted a second time into `.pipeline/events.jsonl`.
+re-emits each recorded event onto the live bus. `pipeline_closeout` reaches the daemon log,
+terminal UI, and OTel export but is never persisted a second time into `.pipeline/events.jsonl`;
+`pipeline_closeout_started` is not rendered, persisted, or exported.
+
+Consumers trust a `pipeline_closeout` duration only when `startedAt`, `endedAt`, and `ts` are safe
+integers, both bounds are epoch milliseconds on or after 2020-01-01, neither bound is more than
+60 seconds after `ts`, and `endedAt > startedAt`. An untrusted record renders as
+`closeout <obligation> (duration unavailable)`, is omitted from the
+`conductor.pipeline.closeout.duration` histogram, carries no `durationMs` on its trace span event,
+and makes `build-tail` report `partial` with no closeout total.
 
 ## `ai-conductor build-tail`
 

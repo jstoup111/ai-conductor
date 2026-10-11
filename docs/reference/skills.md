@@ -512,8 +512,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — `.pipeline/audit-trail/batch-N/review.json` and the batch simplification
   records; `.pipeline/progress.log`; `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and
   `.pipeline/HALT` on a stall; at least one `.memory/` entry per batch; a `pipeline_closeout` record in
-  `.pipeline/pipeline-events.jsonl` per completed evaluator gate, written via `ai-conductor
-  closeout-event`. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
+  `.pipeline/pipeline-events.jsonl` per completed evaluator gate, bracketed by `ai-conductor
+  closeout-event start evaluator` before dispatch and `ai-conductor closeout-event end evaluator` after. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
   hooks and must not be hand-edited.
 - **Read-only SHIP verdicts** — BUILD sessions, including remediation retries and every implementer
   dispatch, may read but never write, delete, rename, or recreate the SHIP validator verdict artifacts

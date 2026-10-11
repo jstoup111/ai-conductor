@@ -1,3 +1,4 @@
+// Covers: task:6
 /**
  * RED acceptance specs for `.docs/stories/build-post-task-tail-telemetry.md`.
  *
@@ -16,10 +17,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Writable } from 'node:stream';
 import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
@@ -31,7 +30,7 @@ import {
 } from '@opentelemetry/sdk-metrics';
 
 import { BuildProgressWatcher } from '../../src/engine/build-progress-watcher.js';
-import { dispatchCloseoutEventCommand } from '../../src/engine/closeout-cli.js';
+import { detectCloseoutEventCommand, dispatchCloseoutEventCommand } from '../../src/engine/closeout-cli.js';
 import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import {
@@ -48,9 +47,6 @@ import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import type { ConductorEvent } from '../../src/types/index.js';
-
-const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
-const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 
 type BuildProgress = Extract<ConductorEvent, { type: 'build_progress' }> & {
   tickReason?: 'task-delta' | 'head-moved' | 'heartbeat';
@@ -149,25 +145,21 @@ describe('BUILD post-task tail telemetry acceptance', () => {
     expect(received[0]).toHaveProperty('headMoved');
   });
 
-  it('appends closeout events through the real CLI without a conductor and preserves ledger isolation', async () => {
+  it('appends command-clocked closeout start/end events without a conductor and preserves ledger isolation', async () => {
     vi.useRealTimers();
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     const engineLedger = join(projectRoot, '.pipeline/events.jsonl');
     const originalEngineLedger = '{"type":"step_started","step":"build","ts":1}\n';
     await writeFile(engineLedger, originalEngineLedger, 'utf8');
 
-    const first = spawnSync(
-      REAL_CONDUCT_TS,
-      ['closeout-event', 'evaluator', '100', '140'],
-      { cwd: projectRoot, encoding: 'utf8', timeout: 10_000 },
-    );
-    const second = spawnSync(
-      REAL_CONDUCT_TS,
-      ['closeout-event', 'summary', '150', '180'],
-      { cwd: projectRoot, encoding: 'utf8', timeout: 10_000 },
-    );
-
-    expect({ first: first.status, second: second.status }).toEqual({ first: 0, second: 0 });
+    const evaluatorStart = detectCloseoutEventCommand(['node', 'conduct-ts', 'closeout-event', 'start', 'evaluator']);
+    const evaluatorEnd = detectCloseoutEventCommand(['node', 'conduct-ts', 'closeout-event', 'end', 'evaluator']);
+    const summaryStart = detectCloseoutEventCommand(['node', 'conduct-ts', 'closeout-event', 'start', 'summary']);
+    const summaryEnd = detectCloseoutEventCommand(['node', 'conduct-ts', 'closeout-event', 'end', 'summary']);
+    await expect(dispatchCloseoutEventCommand(evaluatorStart!, projectRoot, () => 1_788_012_000_000)).resolves.toBe(0);
+    await expect(dispatchCloseoutEventCommand(evaluatorEnd!, projectRoot, () => 1_788_012_120_000)).resolves.toBe(0);
+    await expect(dispatchCloseoutEventCommand(summaryStart!, projectRoot, () => 1_788_012_200_000)).resolves.toBe(0);
+    await expect(dispatchCloseoutEventCommand(summaryEnd!, projectRoot, () => 1_788_012_260_000)).resolves.toBe(0);
 
     const [engineAfter, pipelineRaw] = await Promise.all([
       readFile(engineLedger, 'utf8'),
@@ -176,9 +168,12 @@ describe('BUILD post-task tail telemetry acceptance', () => {
     const pipelineEvents = pipelineRaw.trim().split('\n').map((line) => JSON.parse(line));
 
     expect(engineAfter).toBe(originalEngineLedger);
-    expect(pipelineEvents).toHaveLength(2);
-    expect(pipelineEvents.map((event) => event.obligation)).toEqual(['evaluator', 'summary']);
-    expect(pipelineEvents.every((event) => typeof event.ts === 'number')).toBe(true);
+    expect(pipelineEvents).toEqual([
+      { type: 'pipeline_closeout_started', obligation: 'evaluator', ts: 1_788_012_000_000 },
+      { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1_788_012_000_000, endedAt: 1_788_012_120_000, ts: 1_788_012_120_000 },
+      { type: 'pipeline_closeout_started', obligation: 'summary', ts: 1_788_012_200_000 },
+      { type: 'pipeline_closeout', obligation: 'summary', startedAt: 1_788_012_200_000, endedAt: 1_788_012_260_000, ts: 1_788_012_260_000 },
+    ]);
   }, 30_000);
 
   it('rejects an unknown closeout obligation without writing either ledger', async () => {
@@ -187,9 +182,9 @@ describe('BUILD post-task tail telemetry acceptance', () => {
     const result = await dispatchCloseoutEventCommand(
       {
         kind: 'closeout-event',
+        action: 'start',
         obligation: 'not-a-closeout-obligation',
-        startedAt: 100,
-        endedAt: 140,
+        extra: [],
       },
       projectRoot,
       () => 0,
@@ -259,9 +254,9 @@ describe('BUILD post-task tail telemetry acceptance', () => {
     const closeout = {
       type: 'pipeline_closeout',
       obligation: 'evaluator',
-      startedAt: 100,
-      endedAt: 140,
-      ts: 150,
+      startedAt: 1_788_012_000_000,
+      endedAt: 1_788_012_120_000,
+      ts: 1_788_012_120_000,
     } as const;
     await writeFile(
       join(pipelineDir, 'pipeline-events.jsonl'),
