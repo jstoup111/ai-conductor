@@ -153,6 +153,17 @@ describe('resolveLogConfig', () => {
     });
   });
 
+  it.each([
+    ['an unknown parent protocol', { ...parent, protocol: 'other', logs: { enabled: true, endpoint: 'https://logs.example/explicit' } }],
+    ['malformed parent header references', { ...parent, headers: { Authorization: 'literal-secret' }, logs: { enabled: true, endpoint: 'https://logs.example/explicit' } }],
+  ])('keeps %s from supplying headers to an explicit logs destination', (_caseName, otel) => {
+    expect(resolveLogConfig({ otel } as never)).toEqual({
+      enabled: true,
+      endpoint: 'https://logs.example/explicit/v1/logs',
+      spool: { enabled: true, maxBytes: 67_108_864 },
+    });
+  });
+
   it('loads valid logs while leaving malformed log-only settings isolated from valid parent telemetry', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'log-config-loader-'));
     tempDirs.push(projectRoot);
