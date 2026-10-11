@@ -165,6 +165,30 @@ export async function buildRewriteMapForRanges(
 }
 
 /**
+ * Adapts a replay's authoritative correspondence to the flat store format.
+ * Unlike patch-id reconstruction, an empty commit and a resolver-modified
+ * patch retain their identity. Residue remains every old-range commit that
+ * the replay deliberately did not carry.
+ */
+async function buildExactRewriteMap(
+  git: GitRunner,
+  preImageBase: string,
+  origHead: string,
+  exactRewrites: ReadonlyMap<string, string>,
+): Promise<RewriteMapResult> {
+  const map: Record<string, string> = {};
+  for (const [from, to] of exactRewrites) {
+    map[from] = to;
+    map[from.slice(0, SHORT_SHA_LEN)] = to;
+  }
+  const preImage = await git(['rev-list', `${preImageBase}..${origHead}`]);
+  const residue = preImage.exitCode === 0
+    ? parseShaList(preImage.stdout).filter((sha) => map[sha] === undefined)
+    : [];
+  return { map, residue };
+}
+
+/**
  * Resolves `sha` through `map` transitively (follows chained rewrites to the
  * final value). Returns the input unchanged if it is not a key in the map —
  * this is the structural gate that prevents laundering an unrelated/forged
@@ -587,17 +611,14 @@ export async function translateAfterRebase(
   onRebaseline?: ProtectedArtifactSealRebaselineObserver,
   flatten?: FlattenedReplayPlan,
   range?: RebaseTranslationRange,
+  /** Exact map captured by a stacked replay; avoids patch-id reconstruction. */
+  exactRewrites?: ReadonlyMap<string, string>,
 ): Promise<void> {
   const preImageBase = range?.preImageBase ?? onto;
   const postImageBase = range?.postImageBase ?? onto;
-  const { map, residue } = await buildRewriteMapForRanges(
-    git,
-    preImageBase,
-    origHead,
-    postImageBase,
-    head,
-    flatten,
-  );
+  const { map, residue } = exactRewrites === undefined
+    ? await buildRewriteMapForRanges(git, preImageBase, origHead, postImageBase, head, flatten)
+    : await buildExactRewriteMap(git, preImageBase, origHead, exactRewrites);
 
   await persistRewriteMap(projectRoot, map);
   await applyMapToStores(projectRoot, map, range?.additionalPipelineDirs);

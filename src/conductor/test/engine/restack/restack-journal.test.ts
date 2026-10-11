@@ -189,11 +189,11 @@ describe('ref-backed restack journal (real local Git)', () => {
       expect((await createRestackJournal(fixture.repo, 'demo', draft(oldSha))).kind).toBe('created');
       const stored = await readCreated(fixture.repo);
 
-      const changed = await updateRestackChildStatus(fixture.repo, 'demo', stored, child(2), 'replayed', oldSha);
+      const changed = await updateRestackChildStatus(fixture.repo, 'demo', stored, child(2), 'replayed', oldSha, new Map([[oldSha, oldSha]]));
       expect(changed.kind).toBe('updated');
       const after = await readCreated(fixture.repo);
       expect(after.journal.state).toBe('planned');
-      expect(after.journal.children).toContainEqual({ child: child(2), status: 'replayed' });
+      expect(after.journal.children).toContainEqual({ child: child(2), status: 'replayed', rewrites: [{ from: oldSha, to: oldSha }] });
       expect((await fixture.git(['rev-parse', stagingRefFor('demo', child(2))])).stdout.trim()).toBe(oldSha);
 
       const stale = after;
@@ -202,7 +202,7 @@ describe('ref-backed restack journal (real local Git)', () => {
         dirtyPaths: ['changed-by-another-planner'],
       });
       await fixture.git(['update-ref', journalRefFor('demo'), concurrentBlob, stale.blob]);
-      const failed = await updateRestackChildStatus(fixture.repo, 'demo', stale, child(1), 'resolved', oldSha);
+      const failed = await updateRestackChildStatus(fixture.repo, 'demo', stale, child(1), 'resolved', oldSha, new Map());
       expect(failed).toEqual({ kind: 'stale' });
       expect((await makeGitRunner(fixture.repo)(['rev-parse', '-q', '--verify', stagingRefFor('demo', child(1))])).exitCode).toBe(1);
     } finally {

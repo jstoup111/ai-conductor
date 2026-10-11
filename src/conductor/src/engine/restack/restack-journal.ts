@@ -35,6 +35,14 @@ export interface RestackJournalRef {
 export interface RestackJournalChild {
   readonly child: ChildId;
   readonly status: ChildStatus;
+  /** Exact old-to-new identities produced by this child's replay or resolver. */
+  readonly rewrites?: readonly RestackJournalRewrite[];
+}
+
+/** JSON-safe representation of one exact replay correspondence. */
+export interface RestackJournalRewrite {
+  readonly from: CommitSha;
+  readonly to: CommitSha;
 }
 
 /** The immutable data supplied by the planner before a journal is created. */
@@ -171,9 +179,24 @@ function parseChildren(value: unknown): readonly RestackJournalChild[] | undefin
     if (!isRecord(item) || typeof item.child !== 'number' || typeof item.status !== 'string') return undefined;
     const child = parseChildId(item.child);
     if (!child || !childStatuses.has(item.status as ChildStatus)) return undefined;
-    children.push({ child, status: item.status as ChildStatus });
+    const rewrites = item.rewrites === undefined ? undefined : parseRewrites(item.rewrites);
+    if (item.rewrites !== undefined && !rewrites) return undefined;
+    children.push({ child, status: item.status as ChildStatus, ...(rewrites === undefined ? {} : { rewrites }) });
   }
   return children;
+}
+
+function parseRewrites(value: unknown): readonly RestackJournalRewrite[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rewrites: RestackJournalRewrite[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.from !== 'string' || typeof item.to !== 'string') return undefined;
+    const from = parseCommitSha(item.from);
+    const to = parseCommitSha(item.to);
+    if (!from || !to) return undefined;
+    rewrites.push({ from, to });
+  }
+  return rewrites;
 }
 
 function parseJournal(value: unknown): RestackJournal | undefined {
@@ -339,6 +362,7 @@ function childWithStatus(
   journal: RestackJournal,
   child: ChildId,
   status: ChildStatus,
+  rewrites: ReadonlyMap<CommitSha, CommitSha>,
 ): RestackJournal | undefined {
   if (journal.state !== 'planned') return undefined;
   let found = false;
@@ -346,7 +370,7 @@ function childWithStatus(
     if (entry.child !== child) return entry;
     if (!isLegalChildStatusTransition(entry.status, status)) return entry;
     found = true;
-    return { ...entry, status };
+    return { ...entry, status, rewrites: [...rewrites].map(([from, to]) => ({ from, to })) };
   });
   return found ? { ...journal, children } : undefined;
 }
@@ -359,10 +383,11 @@ export async function updateRestackChildStatus(
   child: ChildId,
   status: ChildStatus,
   tip: CommitSha,
+  rewrites: ReadonlyMap<CommitSha, CommitSha>,
   dependencies: RestackJournalDependencies = {},
 ): Promise<UpdateRestackChildStatusResult> {
   if (previous.slug !== slug) return { kind: 'unavailable', detail: 'journal slug does not match staging slug' };
-  const journal = childWithStatus(previous.journal, child, status);
+  const journal = childWithStatus(previous.journal, child, status, rewrites);
   if (!journal) return { kind: 'unavailable', detail: 'invalid restack child-status transition' };
   const git = dependencies.git ?? makeGitRunner(worktree);
   const blob = await writeRestackJournalBlob(worktree, journal, { git });

@@ -339,7 +339,7 @@ async function resumePlanned(
     });
     const ownership = await checkPathOwnership(range, parent, replay.tip, git);
     if (ownership.kind === 'refused') return undefined;
-    const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', replay.tip, { git });
+    const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', replay.tip, replay.rewrites, { git });
     if (updated.kind !== 'updated') return undefined;
     current = updated.journal;
     parent = replay.tip;
@@ -546,6 +546,9 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         ranges: journal.journal.ranges,
         moves,
         git,
+        rewritesByChild: new Map(journal.journal.children.flatMap((entry) => entry.rewrites === undefined
+          ? []
+          : [[entry.child, new Map(entry.rewrites.map(({ from, to }) => [from, to]))] as const])),
         ...(options.events === undefined ? {} : { events: options.events }),
       });
       const applied = journal.journal.cause === 'feature-repair'

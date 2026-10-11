@@ -31,6 +31,8 @@ export interface ApplyRestackTransitionOptions {
   readonly activeChild: ChildId;
   readonly ranges: readonly ChildRange[];
   readonly moves: readonly RestackMoveRef[];
+  /** Exact replay identities retained by the executor or recovered journal. */
+  readonly rewritesByChild?: ReadonlyMap<ChildId, ReadonlyMap<CommitSha, CommitSha>>;
   readonly git: GitRunner;
   readonly events?: ConductorEventEmitter;
 }
@@ -239,6 +241,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
         postImageBase: newParentFor(range),
         additionalPipelineDirs,
       },
+      options.rewritesByChild?.get(range.child),
     );
   }
   if (activeRange && activeRange.kind !== 'closed' && activeMove) {

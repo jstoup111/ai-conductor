@@ -405,7 +405,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
       ranges: plan.ranges,
-      children: plan.ranges.map((range) => ({ child: range.child, status: 'pending' as const })),
+      children: plan.ranges.map((range) => ({ child: range.child, status: 'pending' as const, rewrites: [] })),
     };
     const created = options.replacesAppliedJournal === undefined
       ? await createRestackJournal(options.worktree, options.slug, draft, options.events, { git })
@@ -439,7 +439,8 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           throw new Error(`cannot resolve unentered leaf ${range.child} from its owning child rewrite map`);
         }
         const { child: owner, rewritten } = matches[0]!;
-        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', rewritten, { git });
+        const rewrites = new Map([[range.oldTip, rewritten]]);
+        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', rewritten, rewrites, { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while moving unentered leaf' : updated.detail);
         journal = updated.journal;
         unenteredLeafOwners.set(range.child, owner);
@@ -451,7 +452,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       // highest originating child are rebuilt on the new closure chain.
       if (options.cause === 'feature-repair' && rangeIndex <= lastOriginIndex) {
         const adopted = await requiredSha(git, branchRefForRange(options.slug, range), `branch for child ${range.child}`);
-        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', adopted, { git });
+        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', adopted, new Map(), { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while adopting child' : updated.detail);
         journal = updated.journal;
         overlaps.set(range.child, []);
@@ -501,7 +502,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           terminal = true;
           return { kind: 'halted' };
         }
-        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, { git });
+        const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'resolved', resolution.tip, resolution.rewrites, { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while resolving' : updated.detail);
         journal = updated.journal;
         exactRewrites.set(range.child, resolution.rewrites);
@@ -509,7 +510,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         parent = resolution.tip;
         continue;
       }
-      const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, { git });
+      const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, replay.rewrites, { git });
       if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;
       exactRewrites.set(range.child, replay.rewrites);
@@ -602,6 +603,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       ranges: plan.ranges,
       moves,
       git,
+      rewritesByChild: exactRewrites,
       ...(options.events === undefined ? {} : { events: options.events }),
     });
     journal = options.cause === 'feature-repair'

@@ -1,4 +1,4 @@
-// Covers: task:19, task:rem-prd-audit-R17
+// Covers: task:19, task:rem-prd-audit-R17, task:rem-prd-audit-R16
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -92,6 +92,94 @@ async function fixture() {
 }
 
 describe('restack translation', () => {
+  it('uses the retained exact map for an empty evidence commit, which has no patch-id correspondence', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'restack-empty-evidence-translate-'));
+    repositories.push(repository);
+    const git = (args: string[]) => execFile('git', args, { cwd: repository });
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'restack@example.test']);
+    await git(['config', 'user.name', 'Restack translation']);
+    await writeFile(join(repository, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
+    await git(['commit', '-qm', 'base']);
+    const base = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    await git(['commit', '--allow-empty', '-qm', 'evidence checkpoint']);
+    const oldEvidence = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    await git(['checkout', '-q', 'main']);
+    await writeFile(join(repository, 'upstream.txt'), 'advanced\n');
+    await git(['add', 'upstream.txt']);
+    await git(['commit', '-qm', 'advance']);
+    const advanced = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    await git(['checkout', '-q', 'feat/daemon-demo']);
+    await git(['rebase', '-q', 'main']);
+    const rewrittenEvidence = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    const child = parseChildId(1)!;
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'task-evidence.json'), JSON.stringify({
+      evidenceStamps: { evidence: { sha: oldEvidence } },
+    }));
+
+    await applyRestackTransition({
+      worktree: repository, cause: 'base-refresh', newDefault: advanced, activeChild: child,
+      ranges: [{ child, oldParent: base, oldTip: oldEvidence, kind: 'leaf-active' }],
+      moves: [{ ref: parseRefName('refs/heads/feat/daemon-demo')!, child, oldSha: oldEvidence, newSha: rewrittenEvidence }],
+      git: makeGitRunner(repository),
+      // R16: replay knows the identity correspondence even though patch-id cannot.
+      rewritesByChild: new Map([[child, new Map([[oldEvidence, rewrittenEvidence]])]]),
+    });
+
+    expect(await readJson(join(repository, '.pipeline', 'task-evidence.json'))).toMatchObject({
+      evidenceStamps: { evidence: { sha: rewrittenEvidence } },
+    });
+  });
+
+  it('uses the resolver-written correspondence when conflict resolution changes a commit patch', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'restack-resolved-translate-'));
+    repositories.push(repository);
+    const git = (args: string[]) => execFile('git', args, { cwd: repository });
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'restack@example.test']);
+    await git(['config', 'user.name', 'Restack translation']);
+    await writeFile(join(repository, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
+    await git(['commit', '-qm', 'base']);
+    const base = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    await writeFile(join(repository, 'shared.txt'), 'child\n');
+    await git(['add', 'shared.txt']);
+    await git(['commit', '-qm', 'child change']);
+    const oldCommit = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    await git(['checkout', '-q', 'main']);
+    await writeFile(join(repository, 'shared.txt'), 'upstream\n');
+    await git(['add', 'shared.txt']);
+    await git(['commit', '-qm', 'upstream conflict']);
+    const advanced = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    await git(['checkout', '-qb', 'resolved', 'main']);
+    await writeFile(join(repository, 'shared.txt'), 'resolved\n');
+    await git(['add', 'shared.txt']);
+    await git(['commit', '-qm', 'resolver modified change']);
+    const resolvedCommit = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+    const child = parseChildId(1)!;
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: 'T1', status: 'completed', commit: oldCommit }],
+    }));
+
+    await applyRestackTransition({
+      worktree: repository, cause: 'base-refresh', newDefault: advanced, activeChild: child,
+      ranges: [{ child, oldParent: base, oldTip: oldCommit, kind: 'leaf-active' }],
+      moves: [{ ref: parseRefName('refs/heads/feat/daemon-demo')!, child, oldSha: oldCommit, newSha: resolvedCommit }],
+      git: makeGitRunner(repository),
+      // R16: this is the post-rewrite list captured from the resolver.
+      rewritesByChild: new Map([[child, new Map([[oldCommit, resolvedCommit]])]]),
+    });
+
+    expect(await readJson(join(repository, '.pipeline', 'task-status.json'))).toMatchObject({
+      tasks: [{ commit: resolvedCommit }],
+    });
+  });
+
   it('uses each child range, translates the flat and active stores, and preserves closed state and current-task', async () => {
     const subject = await fixture();
     const pipeline = join(subject.repository, '.pipeline');
