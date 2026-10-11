@@ -199,6 +199,12 @@ async function applyDecision(
  */
 export async function applyRestackTransition(options: ApplyRestackTransitionOptions): Promise<RestackTransitionResult> {
   const moveByChild = new Map(options.moves.filter((move): move is RestackMoveRef & { child: ChildId } => move.child !== undefined).map((move) => [move.child, move]));
+  // A closed child's closure ref can advance to its already-adopted branch
+  // tip. That ref movement is not a replay of the child's own range, so it
+  // must not feed an identity correspondence into the shared rewrite map.
+  const rewrittenChildren = new Set(options.moves
+    .filter((move): move is RestackMoveRef & { child: ChildId } => move.child !== undefined && move.ref.startsWith('refs/heads/') && move.oldSha !== move.newSha)
+    .map((move) => move.child));
   const wouldInvalidate = new Map<ChildId, readonly StepName[]>();
   const newParentFor = (range: ChildRange): CommitSha => {
     const index = options.ranges.indexOf(range);
@@ -215,7 +221,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
   // it. Closed children are historical records and stay byte-identical.
   for (const range of options.ranges) {
     const move = moveByChild.get(range.child);
-    if (!move || move.oldSha === move.newSha) continue;
+    if (!move || !rewrittenChildren.has(range.child)) continue;
     const additionalPipelineDirs = range.child === options.activeChild && range.kind !== 'closed'
       ? [pipelinePathFor(options.worktree, '', range.child)]
       : [];

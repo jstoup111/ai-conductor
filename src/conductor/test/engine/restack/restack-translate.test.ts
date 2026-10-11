@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:19, task:rem-prd-audit-R17
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -140,5 +140,70 @@ describe('restack translation', () => {
     expect(await readJson(join(pipeline, 'children', '2', 'test-suite-evidence.json'))).toMatchObject({ provenanceHeadSha: subject.newChildTwo });
     await expect(readFile(closedStore, 'utf8')).resolves.toBe(closedBefore);
     await expect(readFile(join(pipeline, 'current-task'), 'utf8')).resolves.toBe('T3\n');
+  });
+
+  it('does not map an unchanged closed child or the default during a feature-repair restack', async () => {
+    const repository = await mkdtemp(join(tmpdir(), 'restack-feature-repair-translate-'));
+    repositories.push(repository);
+    const git = (args: string[]) => execFile('git', args, { cwd: repository });
+    const commit = async (message: string, file: string, contents: string) => {
+      await writeFile(join(repository, file), contents);
+      await git(['add', file]);
+      await git(['commit', '-qm', message]);
+      return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    };
+
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'restack@example.test']);
+    await git(['config', 'user.name', 'Restack translation']);
+    await writeFile(join(repository, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
+    const base = await commit('base', 'base.txt', 'base\n');
+
+    await git(['checkout', '-qb', 'feat/c1/demo']);
+    const childOne = await commit('child one', 'one.txt', 'one\n');
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', childOne]);
+    await git(['checkout', '-qb', 'feat/c2/demo']);
+    const childTwo = await commit('child two', 'two.txt', 'two\n');
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    const leaf = await commit('leaf', 'leaf.txt', 'leaf\n');
+
+    await git(['checkout', '-q', 'feat/c1/demo']);
+    const repair = await commit('repair child one closure', 'repair.txt', 'repair\n');
+    await git(['checkout', '-q', 'feat/c2/demo']);
+    await git(['rebase', '-q', '--onto', 'feat/c1/demo', childOne]);
+    const rewrittenChildTwo = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    await git(['checkout', '-q', 'feat/daemon-demo']);
+    await git(['rebase', '-q', '--onto', 'feat/c2/demo', childTwo]);
+    const rewrittenLeaf = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+
+    const firstChild = parseChildId(1)!;
+    const secondChild = parseChildId(2)!;
+    const leafChild = parseChildId(3)!;
+    await applyRestackTransition({
+      worktree: repository,
+      cause: 'feature-repair',
+      newDefault: parseCommitSha(base)!,
+      activeChild: leafChild,
+      ranges: [
+        { child: firstChild, oldParent: parseCommitSha(base)!, oldTip: parseCommitSha(repair)!, kind: 'closed' },
+        { child: secondChild, oldParent: parseCommitSha(childOne)!, oldTip: parseCommitSha(childTwo)!, kind: 'active' },
+        { child: leafChild, oldParent: parseCommitSha(childTwo)!, oldTip: parseCommitSha(leaf)!, kind: 'leaf-active' },
+      ],
+      moves: [
+        { ref: parseRefName('refs/heads/feat/c1/demo')!, child: firstChild, oldSha: parseCommitSha(repair)!, newSha: parseCommitSha(repair)! },
+        { ref: parseRefName('refs/conductor/demo/closed/c1')!, child: firstChild, oldSha: parseCommitSha(childOne)!, newSha: parseCommitSha(repair)! },
+        { ref: parseRefName('refs/heads/feat/c2/demo')!, child: secondChild, oldSha: parseCommitSha(childTwo)!, newSha: parseCommitSha(rewrittenChildTwo)! },
+        { ref: parseRefName('refs/heads/feat/daemon-demo')!, child: leafChild, oldSha: parseCommitSha(leaf)!, newSha: parseCommitSha(rewrittenLeaf)! },
+      ],
+      git: makeGitRunner(repository),
+    });
+
+    const rewrites = await readJson(join(repository, '.pipeline', 'rebase-rewrites.json'));
+    expect(rewrites[childTwo]).toBe(rewrittenChildTwo);
+    expect(rewrites[leaf]).toBe(rewrittenLeaf);
+    expect(rewrites[base]).toBeUndefined();
+    expect(rewrites[childOne]).toBeUndefined();
+    expect(rewrites[repair]).toBeUndefined();
   });
 });
