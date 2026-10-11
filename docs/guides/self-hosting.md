@@ -338,6 +338,14 @@ Four entries carry extra caveats:
   existence is its entire signal and its content is always empty, so excluding it costs no leak
   detection.
 
+One Claude config file is **normalized, not excluded**. Claude refreshes a semantically empty
+root-level `remote-settings.json` between zero bytes and `{}`, which halted two self-host builds on
+2026-10-10 (#3096). The manifest gives every empty form one digest: zero bytes, whitespace only,
+or a JSON object with no keys. Any other content is hashed byte for byte. A file with real
+managed-settings content still trips the guard when it changes, as does creating or deleting the
+file. The rule applies only to the Claude home root. A nested `remote-settings.json`, or one in a
+Codex or Pi home, is hashed normally.
+
 Every entry is usage, log, or cache telemetry that any concurrent provider process writes whether or
 not a build is running. Config surfaces are deliberately **not** excluded: `settings.json` on Claude,
 `config.toml` and `hooks.json` on Codex, plus `rules/`, `skills/`, and `CLAUDE.md`. A leak reaching
