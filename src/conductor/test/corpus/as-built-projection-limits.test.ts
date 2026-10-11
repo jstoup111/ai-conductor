@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, expect, it } from 'vitest';
 
 import { AS_BUILT_PROJECTION_LIMITS } from '../../src/engine/as-built-projection.js';
