@@ -9,7 +9,8 @@ import { BasicTracerProvider, type ReadableSpan } from "@opentelemetry/sdk-trace
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createSpoolRuntime, resolveSpoolDir, warnDisabledSpoolBacklog, warnSpoolUnavailable } from "../../../src/engine/otel/spool-wiring.js";
+import { createSpoolRuntime, resolveSpoolDir, warnDisabledLogSpoolBacklog, warnDisabledSpoolBacklog, warnSpoolUnavailable } from "../../../src/engine/otel/spool-wiring.js";
+import { SpoolStore } from "../../../src/engine/otel/spool-store.js";
 import { buildExporters } from "../../../src/engine/otel/transport.js";
 import { resolveOtelConfig } from "../../../src/engine/otel/otel-config.js";
 import type { ConductorEventEmitter } from "../../../src/ui/events.js";
@@ -57,6 +58,38 @@ afterEach(async () => {
 });
 
 describe("resolveSpoolDir", () => {
+  it("keeps retained logs untouched for a trace/metric-only lease owner and reports them once", async () => {
+    const root = await mkdtemp(join(tmpdir(), "spool-wiring-log-opt-out-"));
+    temporaryDirectories.push(root);
+    await execFile("git", ["init", "--initial-branch=main", root]);
+    const directory = join(root, ".daemon", "otel-spool");
+    const store = new SpoolStore(directory);
+    await store.write("logs", Buffer.from("retained-log"), 1, "sha256:retained");
+    const sends = vi.fn(async () => new Response(undefined, { status: 200 }));
+    const config = resolveOtelConfig({ otel: {
+      exporter: "otlp", endpoint: "http://127.0.0.1:1", spool: { enabled: true },
+    } }, join(root, ".pipeline"));
+    if (!config.enabled || config.exporter !== "otlp") throw new Error("expected OTLP configuration");
+    const runtime = createSpoolRuntime(directory, config, undefined, undefined, false);
+    (runtime.drainer as unknown as { send: typeof fetch }).send = sends;
+
+    const draining = runtime.drainer.drainUntilStopped();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await runtime.drainer.stop();
+    await draining;
+
+    const emit = vi.fn().mockResolvedValue(undefined);
+    const events = { emit } as unknown as ConductorEventEmitter;
+    await warnDisabledLogSpoolBacklog(false, root, events);
+    await warnDisabledLogSpoolBacklog(false, root, events);
+
+    expect(sends).not.toHaveBeenCalled();
+    expect(await store.list("logs")).toHaveLength(1);
+    expect(emit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      type: "renderer_error", rendererName: "otel", error: expect.stringContaining(join(directory, "logs")),
+    }));
+  });
+
   it("resolves referenced headers at drain time through the production runtime", async () => {
     const directory = await mkdtemp(join(tmpdir(), "spool-wiring-headers-"));
     temporaryDirectories.push(directory);

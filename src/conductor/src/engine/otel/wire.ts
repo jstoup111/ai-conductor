@@ -22,7 +22,7 @@ import { buildResource } from './resource.js';
 import { buildExporters, isExportRefused } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
-import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
+import { createSpoolRuntime, resolveSpoolDirSync, type SpoolRuntime, warnDisabledLogSpoolBacklog, warnDisabledSpoolBacklog, warnSpoolUnavailable } from './spool-wiring.js';
 import { LogListener } from './log-listener.js';
 import { BoundedLogProcessor, type LogBatchExporter } from './log-processor.js';
 import { sendLogBatch } from './log-transport.js';
@@ -42,6 +42,16 @@ interface InteractiveSpoolLifecycle {
   leaseStart?: Promise<{ acquired: boolean }>;
   stopping?: boolean;
   stopped?: Promise<void>;
+}
+
+function logDrainEnabled(config: HarnessConfig): boolean {
+  const logs = resolveLogConfig(config);
+  return logs.enabled && logs.spool.enabled;
+}
+
+function logSpoolMaxBytes(config: HarnessConfig): number | undefined {
+  const logs = resolveLogConfig(config);
+  return logs.enabled ? logs.spool.maxBytes : undefined;
 }
 
 const interactiveSpoolLifecycles = new Map<string, InteractiveSpoolLifecycle>();
@@ -213,7 +223,8 @@ function interactiveSpoolLifecycle(
       directory,
       resolved,
       events,
-      (() => { const logs = resolveLogConfig(sourceConfig); return logs.enabled ? logs.spool.maxBytes : undefined; })(),
+      logSpoolMaxBytes(sourceConfig),
+      logDrainEnabled(sourceConfig),
     ), events, visualizerOpen: false, metricsOpen: false,
   };
   const priorStop = interactiveSpoolStops.get(directory);
@@ -267,6 +278,7 @@ export function wireOtelVisualizer(
     warnSpoolUnavailable(context.project ?? dirname(context.pipelineDir), events);
   }
   const activeSpoolRuntime = spoolRuntime ?? interactiveLifecycle?.runtime;
+  if (activeSpoolRuntime) void warnDisabledLogSpoolBacklog(logDrainEnabled(config), context.project ?? dirname(context.pipelineDir), events);
   const registry = registryFactory(events);
   const factory = registry.get<VisualizerFactory>('visualizer', 'otel');
   let visualizer: VisualizerPlugin | null;
@@ -329,7 +341,8 @@ export function wireDaemonOtel(
       join(context.mainRoot, '.daemon', 'otel-spool'),
       resolved,
       context.rootEvents,
-      (() => { const logs = resolveLogConfig(config); return logs.enabled ? logs.spool.maxBytes : undefined; })(),
+      logSpoolMaxBytes(config),
+      logDrainEnabled(config),
     )
     : undefined;
   const exporters = spoolRuntime
@@ -355,6 +368,7 @@ export function wireDaemonOtel(
   }, resolved.attributes));
   listener.start(context.rootEvents);
   const activeSpoolRuntime = spoolRuntime;
+  if (activeSpoolRuntime) void warnDisabledLogSpoolBacklog(logDrainEnabled(config), context.mainRoot, context.rootEvents);
   const leaseStart = activeSpoolRuntime?.lease.acquire();
   if (leaseStart) {
     void leaseStart.then((result) => {
@@ -400,6 +414,7 @@ export function wireInteractiveOtelMetrics(
   }
   if (spoolLifecycle) spoolLifecycle.metricsOpen = true;
   const spoolRuntime = spoolLifecycle?.runtime;
+  if (spoolRuntime) void warnDisabledLogSpoolBacklog(logDrainEnabled(config), context.project ?? dirname(context.pipelineDir), events);
   const exporters = spoolRuntime
     ? buildExporters(resolved, { spoolStore: spoolRuntime.store, events, env: context.env })
     : buildExporters(resolved, { env: context.env });

@@ -17,6 +17,8 @@ export interface SpoolRuntime {
 
 const warnedStarts = new Set<string>();
 const disabledWarnings = new Map<string, Promise<void>>();
+const disabledLogWarnings = new Map<string, Promise<void>>();
+const warnedLogStarts = new Set<string>();
 
 async function spoolSize(directory: string): Promise<number> {
   try {
@@ -58,6 +60,12 @@ export function createSpoolRuntime(
   config: Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>,
   events?: ConductorEventEmitter,
   logMaxBytes?: number,
+  /**
+   * Logs are an independently opted-in signal.  A trace/metric owner must not
+   * attach the retained-log loop merely because it happens to hold the shared
+   * spool lease.
+   */
+  logDrainEnabled = false,
 ): SpoolRuntime {
   const store = new SpoolStore(directory, { maxBytes: config.spool?.maxBytes, logMaxBytes });
   let drainer: SpoolDrainer | undefined;
@@ -68,7 +76,7 @@ export function createSpoolRuntime(
       headers: () => config.headerReferences
         ? Object.fromEntries(Object.entries(config.headerReferences).map(([name, reference]) => [name, process.env[reference.env] ?? '']))
         : config.headers ?? {},
-      authorizeLog: async (destinationId) => {
+      ...(logDrainEnabled ? { authorizeLog: async (destinationId: string | undefined) => {
         const policy = await readLogPolicy(dirname(directory));
         if (!policy.sendable || !policy.config.spool.enabled || policy.destinationId !== destinationId) return undefined;
         return {
@@ -77,7 +85,7 @@ export function createSpoolRuntime(
             ? Object.fromEntries(Object.entries(policy.config.headerReferences).map(([name, reference]) => [name, process.env[reference.env] ?? '']))
             : {},
         };
-      },
+      } } : {}),
       events,
     });
   return { store, lease, drainer };
@@ -106,6 +114,47 @@ export async function warnDisabledSpoolBacklog(
     await warning;
   } finally {
     disabledWarnings.delete(startDir);
+  }
+}
+
+/**
+ * Retained logs carry their own consent and retention switches.  Do not purge
+ * or drain a backlog when either switch is off; tell the local operator once
+ * that it remains on disk.  The authorization read is canonical, so a linked
+ * worktree cannot make a main-checkout backlog eligible by changing its local
+ * configuration.
+ */
+export async function warnDisabledLogSpoolBacklog(
+  logDrainEnabled: boolean,
+  startDir: string,
+  events?: ConductorEventEmitter,
+): Promise<void> {
+  const directory = await resolveSpoolDir(startDir);
+  if (directory === null) return;
+  const existing = disabledLogWarnings.get(directory);
+  if (existing) return existing;
+  const warning = (async () => {
+    const logDirectory = join(directory, 'logs');
+    const size = await spoolSize(logDirectory);
+    if (size === 0) return;
+
+    let disabled = !logDrainEnabled;
+    if (!disabled) {
+      const policy = await readLogPolicy(startDir);
+      disabled = !policy.sendable || !policy.config.spool.enabled;
+    }
+    if (!disabled || warnedLogStarts.has(directory)) return;
+    warnedLogStarts.add(directory);
+    await events?.emit({
+      type: 'renderer_error', rendererName: 'otel',
+      error: `[otel] log spool disabled: retained logs at ${logDirectory} (${size} bytes) left untouched`,
+    });
+  })();
+  disabledLogWarnings.set(directory, warning);
+  try {
+    await warning;
+  } finally {
+    disabledLogWarnings.delete(directory);
   }
 }
 
