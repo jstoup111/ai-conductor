@@ -214,7 +214,7 @@ async function isHaltRecordOnlyDescendant(
   return true;
 }
 
-type MovedRefSide = 'old' | 'new' | 'unknown';
+type MovedRefSide = 'old' | 'new' | 'unchanged' | 'unknown';
 
 async function movedRefSides(
   journal: StoredRestackJournal,
@@ -225,7 +225,9 @@ async function movedRefSides(
   const sides = new Map<RefName, MovedRefSide>();
   for (const move of moves) {
     const live = await resolveSha(git, move.ref);
-    if (live === move.oldSha) {
+    if (live === move.oldSha && move.oldSha === move.newSha) {
+      sides.set(move.ref, 'unchanged');
+    } else if (live === move.oldSha) {
       sides.set(move.ref, 'old');
     } else if (live === move.newSha || (live !== undefined && move.ref === checkedOut
       && await isHaltRecordOnlyDescendant(git, move.newSha, live, journal.slug))) {
@@ -270,7 +272,7 @@ async function verifyMovedRecovery(
   const unenteredLeafOwners = new Map<ChildId, ChildId>();
   for (const range of journal.journal.ranges) {
     if (range.kind !== 'leaf-unentered') continue;
-    const owner = unenteredLeafOwner(journal, range);
+    const owner = await unenteredLeafOwner(journal, range, git);
     if (owner) unenteredLeafOwners.set(range.child, owner.child);
   }
   const verificationRanges = journal.journal.ranges.flatMap((range) => [
@@ -305,17 +307,37 @@ async function verifyMovedRecovery(
   return { kind: 'verified' };
 }
 
-function unenteredLeafOwner(
+async function leafIsInsideRange(git: GitRunner, leafTip: CommitSha, range: ChildRange): Promise<boolean | undefined> {
+  if (leafTip === range.oldParent) return false;
+  const [afterParent, beforeTip] = await Promise.all([
+    runGit(git, ['merge-base', '--is-ancestor', range.oldParent, leafTip]),
+    runGit(git, ['merge-base', '--is-ancestor', leafTip, range.oldTip]),
+  ]);
+  if (!afterParent || !beforeTip || afterParent.exitCode > 1 || beforeTip.exitCode > 1) return undefined;
+  return afterParent.exitCode === 0 && beforeTip.exitCode === 0;
+}
+
+async function unenteredLeafOwner(
   journal: StoredRestackJournal,
   range: ChildRange,
-): { readonly child: ChildId; readonly rewritten: CommitSha } | undefined {
+  git: GitRunner,
+): Promise<{ readonly child: ChildId; readonly rewritten: CommitSha } | undefined> {
   if (range.kind !== 'leaf-unentered') return undefined;
-  const matches = journal.journal.children.flatMap((entry) => {
+  const rewrittenMatches = journal.journal.children.flatMap((entry) => {
     if (entry.child === range.child) return [];
     const rewritten = entry.rewrites?.find((rewrite) => rewrite.from === range.oldTip)?.to;
     return rewritten === undefined ? [] : [{ child: entry.child, rewritten }];
   });
-  return matches.length === 1 ? matches[0] : undefined;
+  if (rewrittenMatches.length > 0) return rewrittenMatches.length === 1 ? rewrittenMatches[0] : undefined;
+  if (journal.journal.cause !== 'feature-repair') return undefined;
+  const identityMatches = (await Promise.all(journal.journal.ranges.map(async (candidate) => {
+    if (candidate.kind === 'leaf-unentered' || !journal.journal.originatingChildren?.includes(candidate.child)) return undefined;
+    const child = journal.journal.children.find((entry) => entry.child === candidate.child);
+    if (child?.status !== 'replayed' || (child.rewrites?.length ?? 0) !== 0) return undefined;
+    const inside = await leafIsInsideRange(git, range.oldTip, candidate);
+    return inside ? { child: candidate.child, rewritten: range.oldTip } : undefined;
+  }))).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined);
+  return identityMatches.length === 1 ? identityMatches[0] : undefined;
 }
 
 /** The committed halt record is the only durable answer after worktree loss. */
@@ -404,7 +426,7 @@ async function resumePlanned(
       continue;
     }
     if (range.kind === 'leaf-unentered') {
-      const owner = unenteredLeafOwner(current, range);
+      const owner = await unenteredLeafOwner(current, range, git);
       if (!owner) return { kind: 'unavailable' };
       const rewrites = new Map([[range.oldTip, owner.rewritten]]);
       const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', owner.rewritten, rewrites, { git });
@@ -637,7 +659,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
 
     if (journal.journal.state === 'ready') {
       const sides = await movedRefSides(journal, moves, checkedOut, git);
-      if ([...sides.values()].some((side) => side !== 'old')) {
+      if ([...sides.values()].some((side) => side !== 'old' && side !== 'unchanged')) {
         const aborted = await transition(options.worktree, journal, 'aborted', git);
         if (!aborted) return { kind: 'unavailable', detail: 'cannot abort changed recovered restack' };
         if (!stopAtSynced) await haltChangedJournalRefs(options.worktree, journal, options.events, git);
@@ -659,7 +681,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
 
     if (journal.journal.state === 'moved') {
       const sides = await movedRefSides(journal, moves, checkedOut, git);
-      if ([...sides.values()].some((side) => side !== 'new')) {
+      if ([...sides.values()].some((side) => side !== 'new' && side !== 'unchanged')) {
         if (!stopAtSynced) await haltChangedJournalRefs(options.worktree, journal, options.events, git);
         return { kind: 'unavailable', detail: 'journaled refs no longer match the moved side' };
       }

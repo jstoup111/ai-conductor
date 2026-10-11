@@ -182,6 +182,68 @@ describe('recoverRestackJournal (real local Git)', () => {
       .resolves.toContain(`\"${haltRecord}\": \"${rewrittenLeaf}\"`);
   });
 
+  // Covers: task:rem-as-built-rem-as-built-R26
+  it('recovers an unentered pre-region halt-record leaf at identity through its adopted originating repair child', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1);
+    const second = parseChildId(2);
+    const leaf = parseChildId(3);
+    if (!child || !second || !leaf) throw new Error('child ids should parse');
+
+    await subject.git(['checkout', '-q', 'main']);
+    await subject.git(['branch', '-D', 'feat/c1/demo']);
+    await subject.git(['checkout', '-qb', 'feat/daemon-demo', subject.base]);
+    await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'halted', 'demo.md'), 'Status: halted\n');
+    await subject.git(['add', '.docs/halted/demo.md']);
+    await subject.git(['commit', '-qm', 'halt record']);
+    const haltRecord = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+    await writeFile(join(subject.repo, 'child.txt'), 'child\n');
+    await subject.git(['add', 'child.txt']);
+    await subject.git(['commit', '-qm', 'child work']);
+    const closure = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
+    await writeFile(join(subject.repo, 'repair.txt'), 'repair\n');
+    await subject.git(['add', 'repair.txt']);
+    await subject.git(['commit', '-qm', 'repair']);
+    const repaired = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await subject.git(['checkout', '-qb', 'feat/c2/demo', closure]);
+    const journal: RestackJournal = {
+      opId: 'crashed-before-unentered-repair-leaf' as RestackOpId,
+      cause: 'feature-repair',
+      newDefault: subject.base,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [
+        { ref: 'refs/heads/feat/c1/demo' as never, oldSha: repaired },
+        { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: closure },
+        { ref: 'refs/heads/feat/c2/demo' as never, oldSha: closure },
+        { ref: 'refs/heads/feat/daemon-demo' as never, oldSha: haltRecord },
+      ],
+      ranges: [
+        { child, oldParent: subject.base, oldTip: repaired, kind: 'closed' },
+        { child: second, oldParent: closure, oldTip: closure, kind: 'active' },
+        { child: leaf, oldParent: haltRecord, oldTip: haltRecord, kind: 'leaf-unentered' },
+      ],
+      originatingChildren: [child],
+      children: [{ child, status: 'pending' }, { child: second, status: 'pending' }, { child: leaf, status: 'pending' }],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
+      .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    await expect(subject.git(['rev-parse', 'feat/daemon-demo'])).resolves.toMatchObject({ stdout: `${haltRecord}\n` });
+    await expect(subject.git(['rev-parse', 'feat/c1/demo'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
+    await expect(subject.git(['rev-parse', 'feat/c2/demo'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
+    await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
+    await expect(subject.git(['merge-base', '--is-ancestor', haltRecord, repaired])).resolves.toMatchObject({ stdout: '' });
+  });
+
   // Covers: task:rem-prd-audit-R14
   it('hands a planned-recovery replay conflict to the configured resolver and applies its result', async () => {
     const subject = await fixture();

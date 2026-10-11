@@ -297,6 +297,54 @@ describe('runRestack (real local Git)', () => {
     await expect(readFile(join(repo, '.pipeline', 'task-evidence.json'), 'utf8')).resolves.toContain(newLeaf);
   });
 
+  // Covers: task:rem-as-built-rem-as-built-R26
+  it('keeps a pre-region halt-record leaf at its original tip when its originating repair child is adopted', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'restack-executor-repair-unentered-leaf-'));
+    repositories.push(repo);
+    const git = (args: string[]) => execFile('git', args, { cwd: repo });
+    const commit = async (message: string, file: string, content: string) => {
+      await writeFile(join(repo, file), content);
+      await git(['add', file]);
+      await git(['commit', '-qm', message]);
+      return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    };
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'restack@example.test']);
+    await git(['config', 'user.name', 'Restack Executor']);
+    await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
+    await commit('base', 'base.txt', 'base\n');
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    await mkdir(join(repo, '.docs', 'halted'), { recursive: true });
+    const haltRecord = await commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
+    await git(['checkout', '-qb', 'feat/c1/demo']);
+    const closure = await commit('child work', 'child.txt', 'child\n');
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
+    const repaired = await commit('repair', 'repair.txt', 'repair\n');
+    await git(['checkout', '-qb', 'feat/c2/demo', closure]);
+    await writeCoverageBindingEnvelope(repo, {
+      version: 1,
+      slug: 'demo',
+      runId: 'run-1',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf 3'] },
+      storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    }, envelopeFilesystem);
+    await writeFile(join(repo, '.pipeline', 'task-evidence.json'), JSON.stringify({
+      evidenceStamps: { halted: { sha: haltRecord } },
+    }));
+
+    await expect(runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }))
+      .resolves.toMatchObject({ kind: 'applied' });
+
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toMatchObject({ stdout: `${haltRecord}\n` });
+    await expect(git(['rev-parse', 'feat/c1/demo'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
+    await expect(git(['rev-parse', 'feat/c2/demo'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
+    await expect(git(['rev-parse', 'refs/conductor/demo/closed/c1'])).resolves.toMatchObject({ stdout: `${repaired}\n` });
+    await expect(git(['merge-base', '--is-ancestor', haltRecord, repaired])).resolves.toMatchObject({ stdout: '' });
+  });
+
   it('refuses a durable child stack without its sealed envelope', async () => {
     const subject = await fixture();
     await rm(join(subject.repo, '.pipeline', 'coverage-binding.json'));

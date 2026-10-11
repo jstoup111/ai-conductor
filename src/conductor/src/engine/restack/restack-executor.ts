@@ -124,6 +124,16 @@ async function commitsInRange(git: GitRunner, range: string, context: string): P
   });
 }
 
+async function leafIsInsideRange(git: GitRunner, leafTip: CommitSha, range: ChildRange): Promise<boolean> {
+  if (leafTip === range.oldParent) return false;
+  const [afterParent, beforeTip] = await Promise.all([
+    runGit(git, ['merge-base', '--is-ancestor', range.oldParent, leafTip]),
+    runGit(git, ['merge-base', '--is-ancestor', leafTip, range.oldTip]),
+  ]);
+  if (afterParent.exitCode > 1 || beforeTip.exitCode > 1) throw new Error(`cannot inspect unentered leaf ${leafTip}`);
+  return afterParent.exitCode === 0 && beforeTip.exitCode === 0;
+}
+
 async function comparisonCommits(
   git: GitRunner,
   cause: RestackCause,
@@ -405,11 +415,23 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       : -1;
     for (const [rangeIndex, range] of plan.ranges.entries()) {
       if (range.kind === 'leaf-unentered') {
-        const matches = [...exactRewrites.entries()]
+        const rewrittenMatches = [...exactRewrites.entries()]
           .flatMap(([child, rewrites]) => {
             const rewritten = rewrites.get(range.oldTip);
             return rewritten === undefined ? [] : [{ child, rewritten }];
           });
+        // A repair adopts its originating children unchanged, so a pre-region
+        // leaf contained by one of those ranges has no rewritten counterpart.
+        // Its durable identity is its original tip, not the adopted child's tip.
+        const identityMatches = rewrittenMatches.length === 0 && options.cause === 'feature-repair'
+          ? (await Promise.all(plan.ranges.slice(0, rangeIndex).map(async (candidate) => {
+            if (!plan.originating.includes(candidate.child)) return undefined;
+            return await leafIsInsideRange(git, range.oldTip, candidate)
+              ? { child: candidate.child, rewritten: range.oldTip }
+              : undefined;
+          }))).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined)
+          : [];
+        const matches = rewrittenMatches.length === 0 ? identityMatches : rewrittenMatches;
         if (matches.length !== 1) {
           throw new Error(`cannot resolve unentered leaf ${range.child} from its owning child rewrite map`);
         }
