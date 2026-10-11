@@ -107,6 +107,12 @@ plugins, histories, sessions, caches, logs, or mutable provider state. Existing 
 configuration is fingerprinted and remains byte-identical except for documented provider-owned
 behavior of the selected authentication source.
 
+> **Amended 2026-10-11 by #3096:** Claude's own refresh of `remote-settings.json`, which rewrites
+> an empty file as `{}` and back, is a second provider-owned exception. The fingerprint treats
+> semantically empty JSON content of that one named file as a single state. Any other content in
+> that file, and every byte of every other file, still breaks byte identity. The exception is a
+> digest equivalence for one listed path, not an exclusion from the fingerprint.
+
 For Codex API-key authentication, the selected key remains a child-only environment value. For
 cached login, the self-host isolation adapter may make an **opaque, temporary handoff of only the
 selected native credential artifact** into the throwaway `CODEX_HOME`. The adapter copies bytes
