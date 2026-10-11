@@ -1700,3 +1700,127 @@ outcomes as one feature (track scope boundary).
 **Done when:**
 - Task 17 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-R27 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-2: restack-executor.ts: on a createRestackJournal refusal for restack-outstanding (live owner), return refused without haltRestack, a HALT marker or a halt-record commit, and emit exactly one restack_refused event
+**Gate:** prd-audit
+**Rationale:** Implementation and test drift within approved Task 31 (two-process race) and Task 28. When createRestackJournal refuses with restack-outstanding, runRestack's refused branch calls haltRestack, which writes a needs-human HALT and commits a halt record on the checked-out branch. That commit moves a ref, which violates the criterion that the loser creates no journal and moves no ref. No test races a CLI resume against a daemon dispatch. This is 95% verified from the audit evidence and needs no architectural decision.
+**Criterion:** S4.8
+**Parent task:** 31
+**Done when:**
+- [test] S4.8 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2: Add a realgit test that races a CLI conductor resume against a daemon dispatch on one feature: the loser emits a single restack_refused (restack-outstanding), creates no journal, moves no ref and commits no halt record, does not drive the winner's journal, and the winner reaches applied
+**Gate:** prd-audit
+**Rationale:** Implementation and test drift within approved Task 31 (two-process race) and Task 28. When createRestackJournal refuses with restack-outstanding, runRestack's refused branch calls haltRestack, which writes a needs-human HALT and commits a halt record on the checked-out branch. That commit moves a ref, which violates the criterion that the loser creates no journal and moves no ref. No test races a CLI resume against a daemon dispatch. This is 95% verified from the audit evidence and needs no architectural decision.
+**Criterion:** S4.8
+**Parent task:** 31
+**Done when:**
+- [test] S4.8 is satisfied by this task.
+- The repair for task rem-prd-audit-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3: Add a test: with the repair journal applied and a follow-on pending, an unrelated runRestack is refused restack-outstanding with no HALT and no halt-record commit, and the next preflight runs the follow-on base refresh to applied
+**Gate:** prd-audit
+**Rationale:** Same defect class as S4.8, within Task 30's approved scope. An unrelated restack refused restack-outstanding against an applied journal that has a pending follow-on currently writes a needs-human HALT and a halt-record commit. That can block or disturb the follow-on. No test asserts that the follow-on still runs to applied. This shares the R1 fix.
+**Criterion:** S9.13
+**Parent task:** 30
+**Done when:**
+- [test] S9.13 is satisfied by this task.
+- The repair for task rem-prd-audit-R3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R4: stack-preflight test: when the repair is refused (cascade cap, dirty overlap or conflict) while baseRefreshDue, restack_refused with reason deferred-base-refresh is persisted and no base-refresh restack runs
+**Gate:** prd-audit
+**Rationale:** Missing behavioral coverage for an existing Task 30 done-when. stack-preflight.ts emits deferred-base-refresh, but only event-sinks.test.ts references it.
+**Criterion:** S9.9
+**Parent task:** 30
+**Done when:**
+- [test] S9.9 is satisfied by this task.
+- The repair for task rem-prd-audit-R4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R5: stack-preflight test: when the repair applies but the follow-on base refresh is refused checked-out-elsewhere, restack_refused with reason deferred-base-refresh is persisted
+**Gate:** prd-audit
+**Rationale:** Missing behavioral coverage for a Task 30 done-when: the follow-on is refused after the repair applied.
+**Criterion:** S9.10
+**Parent task:** 30
+**Done when:**
+- [test] S9.10 is satisfied by this task.
+- The repair for task rem-prd-audit-R5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R6: stack-preflight/recovery test: crash after the feature-repair journal reaches applied with followOnCause; the next preflight's recoverRestackJournal runs runRestack({cause:'base-refresh'}) via replaceAppliedJournalWithFollowOn, with an opId distinct from the repair's
+**Gate:** prd-audit
+**Rationale:** Missing crash-recovery coverage for a Task 30 done-when. Only the replace primitive is tested.
+**Criterion:** S9.12
+**Parent task:** 30
+**Done when:**
+- [test] S9.12 is satisfied by this task.
+- The repair for task rem-prd-audit-R6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R7: FINISH rebase-step test on a three-child stack with a default advance: a base-refresh restack moves child 1 onto B' and restacks child 2 and the leaf; the verdict operation carries cause 'base-refresh' and the whole-stack tuple P/B/O/H
+**Gate:** prd-audit
+**Rationale:** Missing FINISH-boundary coverage for Task 32 done-when 1. The engine reports it unverified.
+**Criterion:** S10.1
+**Parent task:** 32
+**Done when:**
+- [test] S10.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R8-2: FINISH test: after the applied restack, rebase_changed is persisted with allChangedPaths equal to the B..B' delta, and resolveBaseAdvanceForFailure attributes a failure on a path in that delta to the base advance
+**Gate:** prd-audit
+**Rationale:** Missing coverage for Task 32 done-when 2.
+**Criterion:** S10.4
+**Parent task:** 32
+**Done when:**
+- [test] S10.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R8-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R9-2: FINISH test for a stacked feature: a mergeable leaf PR with no review-input delta takes the mergeable-skip and no restack runs; when an active review input changes, a base-refresh restack runs despite mergeability; the preflight runs before classifyMergeableSkip
+**Gate:** prd-audit
+**Rationale:** Missing stacked-case coverage for Task 32 done-when 3.
+**Criterion:** S10.5
+**Parent task:** 32
+**Done when:**
+- [test] S10.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R9-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R10: Test that when B' is already an ancestor of feat/c1/demo, neither the FINISH rebase step nor the daemon re-kick moves any ref
+**Gate:** prd-audit
+**Rationale:** Missing coverage for Task 33 done-when 2. The noop check is implemented but unverified.
+**Criterion:** S10.3
+**Parent task:** 33
+**Done when:**
+- [test] S10.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R11: daemon-rekick test: a re-kick restack refused for dirty-overlap makes resumeRebaseFirst return 'halted' with a needs-human HALT naming the overlapping paths, with no silent skip
+**Gate:** prd-audit
+**Rationale:** Missing coverage for Task 33 done-when 4.
+**Criterion:** S10.7
+**Parent task:** 33
+**Done when:**
+- [test] S10.7 is satisfied by this task.
+- The repair for task rem-prd-audit-R11 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R12: daemon dispatch test: after a crash mid-restack during a re-kick (REKICK consumed), the next dispatch runs only journal recovery, no second re-kick runs, and a performRebase spy records no call; after a restack halt clears and the aborted journal is cleaned, the re-kick's base-refresh restack reaches applied with no restack-outstanding
+**Gate:** prd-audit
+**Rationale:** Missing daemon-dispatch coverage for Task 33 done-when 5 (and the parallel Task 31 done-when 4).
+**Criterion:** S7.17
+**Parent task:** 33
+**Done when:**
+- [test] S7.17 is satisfied by this task.
+- The repair for task rem-prd-audit-R12 is committed and its targeted tests pass.
+
+### Task rem-as-built-R13-2: restack-executor.ts (~:428) and restack-recovery.ts (~:334, and verification at ~:275): accept every adopted child through the highest origin, not only originating children, when resolving an unentered leaf's owner; an adopted owner maps the leaf commit to itself
+**Gate:** as-built
+**Rationale:** Conforming implementation drift against approved ADR decision 2 (adopted children keep their tips, and the unentered leaf resolves to its original commit's rewrite). The origin-only identity filters added in 488ba3a7c6 reject a leaf whose owning child is adopted but not originating. The ADR is authoritative, so no decision is needed. Bound to the executor (Task 8), the planner (Task 5) and recovery (Task 24).
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R13-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R14: realgit test: unchanged closed child 1, originating child 2, active child 3, unentered leaf at commit H inside child 1 — feature-repair execution and pending recovery both succeed, and the leaf stays at H
+**Gate:** as-built
+**Rationale:** Conforming implementation drift against approved ADR decision 2 (adopted children keep their tips, and the unentered leaf resolves to its original commit's rewrite). The origin-only identity filters added in 488ba3a7c6 reject a leaf whose owning child is adopted but not originating. The ADR is authoritative, so no decision is needed. Bound to the executor (Task 8), the planner (Task 5) and recovery (Task 24).
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 2
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R14 is committed and its targeted tests pass.
