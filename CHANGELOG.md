@@ -89,6 +89,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A config that still sets the retired `conflict_check` block is now ignored with a warning instead of failing validation. ([implementation PR #3157](https://github.com/jstoup111/ai-conductor/pull/3157)).
 - Builds no longer halt for a human decision when an as-built review returns more than a handful of findings; the remediation input limit for pending as-built findings now matches the other criterion-bearing inputs. ([implementation PR #3181](https://github.com/jstoup111/ai-conductor/pull/3181)).
 - Stacked-delivery features no longer halt with "Expected last_step to match before record last completed step" when moving between a slice and a feature-wide step. ([implementation PR #3182](https://github.com/jstoup111/ai-conductor/pull/3182)).
+- A refused over-scope finding whose remediation allowance is spent now halts as a recoverable budget cap that `kickback-budget raise` accepts, instead of looping on the same refusal prompt; validation-group refusal halts also keep the underlying cause. ([implementation PR #3183](https://github.com/jstoup111/ai-conductor/pull/3183)).
 
 ## Migration
 
