@@ -1,4 +1,4 @@
-// Covers: task:24
+// Covers: task:7
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolve } from 'node:path';
@@ -76,6 +76,28 @@ describe('GitHub invocation audit', () => {
     expect(auditGithubInvocationSource('engine/bypass.ts', propertyCall)[0]).toMatchObject({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' });
     expect(auditGithubInvocationSource('engine/bypass.ts', readOnlyForwarding)).toEqual([]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', direct)[0]).toMatchObject({ message: 'direct injected GitHub mutation outside guarded adapter' });
+  });
+
+  it('permits ordering-source runner forwarding only through its imported factory', () => {
+    const orderingSourceForwarding = [
+      "import { createOrderingSource } from './ordering-source.js';",
+      "import type { GhRunner } from './tracker-client.js';",
+      'function read(deps: { gh: GhRunner }) {',
+      "  const { gh: run } = deps; return createOrderingSource({ run: (args) => run(args, { cwd: '/tmp' }) });",
+      '}',
+    ].join('\n');
+    const arbitraryForwarding = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'function createLocalResolver(options: { run: (args: string[]) => unknown }) { return options; }',
+      'function read(deps: { gh: GhRunner }) {',
+      "  const { gh: run } = deps; return createLocalResolver({ run: (args) => run(args, { cwd: '/tmp' }) });",
+      '}',
+    ].join('\n');
+
+    expect(auditGithubInvocationSource('engine/bypass.ts', orderingSourceForwarding)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/bypass.ts', arbitraryForwarding)).toEqual([
+      expect.objectContaining({ line: 4, message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' }),
+    ]);
   });
 
   it('scopes dynamic GhRunner-forwarding exemptions to their defining files', () => {

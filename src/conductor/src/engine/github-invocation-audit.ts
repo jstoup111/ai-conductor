@@ -427,6 +427,9 @@ function guardedRemoteGitRunnerCall(file: string, node: ts.CallExpression): bool
 /**
  * `createBlockerResolver` is an import-bound read composition: its `run`
  * callback queries GitHub's dependency graph and does not own a mutation.
+ * `createOrderingSource` is likewise read-only: every GitHub read goes through
+ * `runTrackerRepositoryRead` with operation `issue.read`, which
+ * `assertTrackerReadArgs` restricts to reads.
  * Preserve this narrowly proven dynamic argv path without exempting arbitrary
  * aliases or callbacks that could forward a write.
  */
@@ -438,6 +441,10 @@ function guardedRemoteGitRunnerCall(file: string, node: ts.CallExpression): bool
  * (a later parameter, a captured variable) remains mutable forwarding.
  */
 function runnerAdapterForwarding(node: ts.CallExpression): boolean {
+  const callback = node.parent;
+  if ((ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
+    && ts.isPropertyAssignment(callback.parent)
+    && callback.parent.name.getText() === 'run') return false;
   const argument = node.arguments[0];
   if (!argument || !ts.isIdentifier(argument)) return false;
   for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
@@ -569,9 +576,11 @@ function collectProcessBindings(parsed: ts.SourceFile): ProcessBindings {
       if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) rawGithubImports.add(item.name.text);
       if (statement.importClause?.name) rawGithubImports.add(statement.importClause.name.text);
     }
-    if (module.endsWith('/blocker-resolver.js') && bindings && ts.isNamedImports(bindings)) {
+    if ((module.endsWith('/blocker-resolver.js') || module.endsWith('/ordering-source.js')) && bindings && ts.isNamedImports(bindings)) {
       for (const item of bindings.elements) {
-        if ((item.propertyName?.text ?? item.name.text) === 'createBlockerResolver') readOnlyFactories.add(item.name.text);
+        const imported = item.propertyName?.text ?? item.name.text;
+        if ((module.endsWith('/blocker-resolver.js') && imported === 'createBlockerResolver')
+          || (module.endsWith('/ordering-source.js') && imported === 'createOrderingSource')) readOnlyFactories.add(item.name.text);
       }
     }
   }
