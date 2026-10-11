@@ -63,7 +63,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
     scope.log?.('WARNING: provider unavailable');
     scope.log?.('retrying build (2/3)');
     scope.log?.('subprocess diagnostic: exit 1');
-    await scope.stop();
+    scope.stop();
     // A second feature dispatch must start with fresh presenter memory.  Each
     // event is duplicated within a dispatch to prove the scoped renderer, not
     // the event bus, owns de-duplication.
@@ -73,7 +73,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
         await dispatch.events.emit({ type: 'self_host_boundary_fingerprint', surfaces: [{ label: 'live', elapsedMs: 1, fileCount: 2 }] });
         await dispatch.events.emit({ type: 'session_policy', step: 'build', provider: 'codex', reason: 'fresh session' });
       }
-      await dispatch.stop();
+      dispatch.stop();
     }
     return { slug: item.slug, status: 'done' };
   },

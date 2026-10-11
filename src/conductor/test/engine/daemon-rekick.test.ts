@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:17
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access, chmod } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -14,6 +14,7 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  createRetentionLogGate,
   listHaltedWorktrees,
   readHaltReason,
   type RekickSweepDeps,
@@ -40,10 +41,46 @@ import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
+import { recoveryProcedure } from '../../src/engine/monitor/session.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
 const SHA_C = 'c'.repeat(40);
+
+describe('createRetentionLogGate', () => {
+  it('reports each retained disposition once per slug, with the matching recovery action', () => {
+    const lines: string[] = [];
+    const gate = createRetentionLogGate((line) => lines.push(line));
+
+    for (let index = 0; index < 10; index += 1) gate.observe('a', 'needs-human', 'progress re-kick');
+    gate.observe('a', 'kickback-cap', 're-kick');
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('a retained — halt disposition needs-human');
+    expect(lines[0]).toContain(' — next: ai-conductor monitor all');
+    expect(lines[0]).toContain(recoveryProcedure('needs-human'));
+    expect(lines[1]).toContain('a retained — halt disposition kickback-cap');
+  });
+
+  it('forgets only the cleared slug and falls back to the unclassified recovery procedure', () => {
+    const lines: string[] = [];
+    const gate = createRetentionLogGate((line) => lines.push(line));
+
+    gate.observe('a', 'needs-human', 'progress re-kick');
+    gate.observe('b', 'needs-human', 'progress re-kick');
+    gate.forget('a');
+    gate.observe('a', 'needs-human', 'progress re-kick');
+    gate.observe('unknown', 'not-a-halt-class', 're-kick');
+
+    expect(lines.filter((line) => line.includes('a retained'))).toHaveLength(2);
+    expect(lines.filter((line) => line.includes('b retained'))).toHaveLength(1);
+    expect(lines.at(-1)).toContain(recoveryProcedure('unclassified'));
+
+    const freshLines: string[] = [];
+    createRetentionLogGate((line) => freshLines.push(line)).observe('b', 'needs-human', 'episode-end sweep');
+    expect(freshLines).toHaveLength(1);
+  });
+});
 
 describe('consumeResumeAuthorizations', () => {
   const gateEntry = {
