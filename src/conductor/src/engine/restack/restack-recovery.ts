@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { childBranchFor, leafBranchFor, parseFeatureRef } from '../feature-branch-identity.js';
+import { childBranchFor, isChildRefOf, leafBranchFor } from '../feature-branch-identity.js';
 import type { ChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
@@ -188,8 +188,7 @@ async function corruptJournalRefValues(slug: string, git: GitRunner): Promise<st
     for (const line of listed.stdout.split('\n')) {
       const [name, value] = line.trim().split(/\s+/, 2);
       if (!name || !value) continue;
-      const identity = parseFeatureRef(name);
-      const isChild = identity.kind === 'child' && identity.slug === slug;
+      const isChild = isChildRefOf(name, slug);
       const isClosure = name.startsWith(`refs/conductor/${slug}/closed/`);
       const isStaging = name.startsWith(`refs/conductor/${slug}/restack/staging/`);
       if (isChild || isClosure || isStaging) values.set(name, value);

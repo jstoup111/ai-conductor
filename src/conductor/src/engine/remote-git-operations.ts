@@ -18,7 +18,7 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushedTipSource, type PreparedPushedTip, type PushLeaseGitRunner } from './push-lease.js';
-import { parseFeatureRef } from './feature-branch-identity.js';
+import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
@@ -134,12 +134,12 @@ function featurePushSources(args: readonly string[], destinations: readonly Remo
   const refspecs = args.filter((arg) => !arg.startsWith('-')).slice(2);
   return destinations.flatMap((destination, index) => {
     if (destination.operation !== 'remote-ref.push') return [];
-    const identity = parseFeatureRef(destination.ref);
-    if (identity.kind !== 'leaf' && identity.kind !== 'child') return [];
+    const slug = daemonOwnedSlugOfRef(destination.ref);
+    if (slug === undefined) return [];
     const refspec = refspecs[index];
     const separator = refspec?.indexOf(':') ?? -1;
     if (separator <= 0) return [];
-    return [{ slug: identity.slug, branch: destination.ref.slice('refs/heads/'.length), source: refspec!.slice(0, separator).replace(/^\+/, '') }];
+    return [{ slug, branch: destination.ref.slice('refs/heads/'.length), source: refspec!.slice(0, separator).replace(/^\+/, '') }];
   });
 }
 

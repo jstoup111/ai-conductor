@@ -48,15 +48,14 @@ import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { runTrackerUrlRead } from './tracker-client.js';
-import { parseFeatureRef } from './feature-branch-identity.js';
+import { daemonOwnedSlugOfBranch } from './feature-branch-identity.js';
 
 function leaseSlug(branch: string): string {
   // All production callers use daemon feature branches. Retain a stable,
   // ref-safe fallback for historical/custom branch names rather than letting a
   // post-rebase refresh bypass the lease decision entirely.
   const normalized = branch.replace(/^refs\/heads\//, '');
-  const identity = parseFeatureRef(`refs/heads/${normalized}`);
-  return identity.kind === 'child' || identity.kind === 'leaf' ? identity.slug : normalized.replaceAll('/', '-');
+  return daemonOwnedSlugOfBranch(normalized) ?? normalized.replaceAll('/', '-');
 }
 
 function leaseGit(git: GitRunner, cwd: string): PushLeaseGitRunner {
