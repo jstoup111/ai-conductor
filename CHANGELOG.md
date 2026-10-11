@@ -96,6 +96,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Refused over-scope findings now route to BUILD rework when the same audit round also carries remediable as-built findings, instead of halting on an unexpected-finding fault. ([implementation PR #3186](https://github.com/jstoup111/ai-conductor/pull/3186)).
 - A plan amendment no longer reopens tasks that were implemented after it, so a later rebase no longer halts with "completed BUILD evidence is unavailable after rebase". ([implementation PR #3185](https://github.com/jstoup111/ai-conductor/pull/3185)).
 - Self-host builds no longer halt when Claude rewrites an empty remote-settings.json as {}. ([implementation PR #3178](https://github.com/jstoup111/ai-conductor/pull/3178)).
+- Closeout timing now records real elapsed milliseconds and excludes untrusted durations from reports and telemetry. ([implementation PR #3176](https://github.com/jstoup111/ai-conductor/pull/3176)).
 
 ## Migration
 
