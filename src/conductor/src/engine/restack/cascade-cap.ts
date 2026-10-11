@@ -95,7 +95,7 @@ function parseCounts(value: unknown): CascadeCounts | undefined {
     for (const [id, rawMarker] of Object.entries(record.adjustments as Record<string, unknown>)) {
       if (!id || typeof rawMarker !== 'object' || rawMarker === null || Array.isArray(rawMarker)) return undefined;
       const marker = rawMarker as Record<string, unknown>;
-      const child = parseChildId(marker.child);
+      const child = typeof marker.child === 'number' ? parseChildId(marker.child) : undefined;
       if (
         child === undefined || marker.child !== child ||
         !isNonNegativeSafeInteger(marker.beforeConsumed) || !isNonNegativeSafeInteger(marker.afterConsumed) ||

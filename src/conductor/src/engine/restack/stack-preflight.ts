@@ -116,7 +116,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // Check every origin before creating a journal. runRestack repeats the
   // check with the active child's configured allowance and owns cap evidence.
   for (const child of cursor.repairChildren) {
-    await checkCascadeCap(options.worktree, options.slug, [child], undefined, { git: options.git });
+    await checkCascadeCap(options.worktree, options.slug, [child], { git: options.git });
   }
 
   const repair = await runRestack({
