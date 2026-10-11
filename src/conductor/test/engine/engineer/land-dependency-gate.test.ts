@@ -1,4 +1,4 @@
-// Covers: task:9, task:10
+// Covers: task:9, task:10, task:rem-prd-audit-rem-s5-2
 
 import { describe, expect, it } from 'vitest';
 import type { GitRunner } from '../../../src/engine/rebase.js';
@@ -129,6 +129,43 @@ describe('computeLandDependencyProposals', () => {
         expect.objectContaining({ branch: 'feat/daemon-markerless' }),
       ]));
     }
+  });
+
+  it('computes all seven overlapping open issues as proposals and refuses when the seventh is undecided', async () => {
+    const { gh } = recordingGh({
+      body: '',
+      openIssues: [600, 601, 602, 603, 604, 605, 606].map((number) => ({
+        number,
+        body: 'Touches src/shared.ts.',
+      })),
+    });
+    const { git } = recordingGit({ marker: false });
+
+    const result = await computeLandDependencyProposals({
+      sourceRef: SOURCE,
+      planText: PLAN,
+      gh,
+      git,
+      cwd: '/target',
+      baseRef: 'main',
+    });
+
+    expect(result).toMatchObject({ kind: 'computed' });
+    if (result.kind !== 'computed') throw new Error('expected computed dependency proposals');
+    expect(result.proposals).toEqual([600, 601, 602, 603, 604, 605, 606].map((number) => ({
+      target: `owner/repo#${number}`,
+      source: 'overlap',
+    })));
+
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: result,
+      accepted: [600, 601, 602, 603, 604, 605].map((number) => `owner/repo#${number}`),
+      declined: [],
+    })).toMatchObject({
+      kind: 'refused-undecided',
+      undecided: ['owner/repo#606'],
+    });
   });
 
   it.each([

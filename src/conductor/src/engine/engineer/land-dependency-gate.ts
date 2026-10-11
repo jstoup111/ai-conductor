@@ -231,7 +231,12 @@ export async function computeLandDependencyProposals({
     proposals.push({ target, source: proposalSource });
   };
   for (const edge of comparison.unlinked) add(edge.target, 'declared');
-  for (const suggestion of suggestions.shown) add(suggestion.issue, 'overlap');
+  // `shown` is prompt-capped for advisory callers, but land must require a
+  // decision for every linkable overlap.  Consider the complete linkable set
+  // before `add` filters self and already-linked targets.
+  for (const suggestion of [...suggestions.shown, ...(suggestions.omitted ?? [])]) {
+    add(suggestion.issue, 'overlap');
+  }
 
   const advisory: LandDependencyAdvisory[] = [];
   for (const branch of suggestions.advisory) {
