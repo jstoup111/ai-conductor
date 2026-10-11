@@ -240,4 +240,35 @@ describe('applyRestackTransition', () => {
       kickback: { from: 'rebase' },
     });
   });
+
+  it('uses the unchanged default supplied by a feature repair for the whole-feature tuple without fetching origin/main', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
+    directories.push(root);
+    const leaf = parseChildId(1)!;
+    const oldDefault = sha('a');
+    const calls: string[][] = [];
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'conduct-state.json'), '{}');
+
+    const git = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/child.ts\n', stderr: '' };
+      if (args[0] === 'merge-base') return { exitCode: 0, stdout: `${oldDefault}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' || args[0] === 'merge-tree') return { exitCode: 0, stdout: `${sha('e')}\n`, stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    await applyRestackTransition({
+      worktree: root,
+      cause: 'feature-repair',
+      newDefault: oldDefault,
+      activeChild: leaf,
+      ranges: [{ child: leaf, oldParent: oldDefault, oldTip: sha('c'), kind: 'leaf-active' }],
+      moves: [move(leaf)],
+      git,
+    });
+
+    expect(calls).toContainEqual(['merge-base', sha('c'), oldDefault]);
+    expect(calls.some((args) => args[0] === 'fetch' && args.includes('origin/main'))).toBe(false);
+  });
 });
