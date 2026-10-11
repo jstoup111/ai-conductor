@@ -8,6 +8,7 @@ import {
   PROTECTED_ARTIFACT_SEAL_PATH,
   rotateProtectedArtifactSeal,
 } from '../protected-artifact-seal.js';
+import type { CommitSha } from './restack-types.js';
 
 export interface RestackSyncDependencies {
   readonly git: GitRunner;
@@ -36,8 +37,8 @@ async function hasProtectedArtifactSeal(worktree: string): Promise<boolean> {
  */
 export async function syncRestackedWorktree(
   worktree: string,
-  oldTip: string,
-  newTip: string,
+  oldTip: CommitSha,
+  newTip: CommitSha,
   { git }: RestackSyncDependencies,
 ): Promise<void> {
   const synced = await git(['read-tree', '-m', '-u', oldTip, newTip]);
