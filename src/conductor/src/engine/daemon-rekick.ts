@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   HALT_MARKER,
   HALT_CLASS_MARKER,
+  HALT_EPISODE_MARKER,
   PLAN_GAP_HALT_CLASS,
   type HaltDisposition,
 } from './halt-marker.js';
@@ -638,6 +639,9 @@ export async function clearMarker(worktreePath: string): Promise<void> {
   // Best-effort: the classification sidecar is stale once the HALT it
   // classified is cleared. Absent is fine — no-op-safe.
   await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
+  // An episode stamp is bound to the cleared HALT body and must not survive
+  // into a later halt or recovery attempt. Absence is likewise no-op-safe.
+  await rm(join(worktreePath, HALT_EPISODE_MARKER), { force: true });
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
 }
 
