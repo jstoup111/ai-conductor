@@ -85,6 +85,11 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // Engine repair state uses the same unique temporary-file publication
       // pattern; it does not participate in daemon process ownership.
       'engine/engine-state-store.ts',
+      // Rejected review response records are immutable per-attempt evidence.
+      // Exclusive creation prevents a concurrent replay from overwriting a
+      // retained response; it neither references daemon.pid nor participates
+      // in daemon process ownership.
+      'engine/build-review-rejection-retention.ts',
       // OTel spool files use exclusive creation only to publish immutable
       // batches and elect their independent drainer lease. Neither path
       // participates in daemon process ownership or references daemon.pid.
