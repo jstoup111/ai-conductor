@@ -12,6 +12,8 @@ import {
   formatDaemonActivityLine,
   composeDaemonLineBody,
   formatNextAction,
+  formatDaemonWarning,
+  formatDaemonHalt,
   formatDaemonConsoleTeeLine,
   createDaemonModeLogger,
   createFeatureDaemonLogger,
@@ -37,6 +39,13 @@ describe('engine/daemon-log', () => {
     // Restore perms in case a test chmod'd a dir to 000, else rm fails.
     await chmod(join(dir, '.daemon'), 0o755).catch(() => {});
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('formats raw daemon warnings and halts with a required next action', () => {
+    expect(formatDaemonWarning('x', { kind: 'none', why: 'y' }))
+      .toBe('WARNING: x — no action needed: y');
+    expect(formatDaemonHalt('x', { kind: 'operator', action: 'z' }))
+      .toBe('✋ x — next: z');
   });
 
   describe('openDaemonLog + tailDaemonLog (happy path)', () => {

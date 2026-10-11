@@ -329,7 +329,9 @@ describe('renderDaemonEvent', () => {
   });
 
   it('renders halt and convergence', () => {
-    expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual(['· ✋ loop halted: cap']);
+    expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual([
+      '· ✋ loop halted: cap (details: .pipeline/HALT) — next: ai-conductor monitor',
+    ]);
     expect(lines({
       type: 'halt_marker_write_failed',
       path: '.pipeline/HALT',

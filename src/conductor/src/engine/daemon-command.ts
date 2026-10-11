@@ -6,6 +6,7 @@
 // with no heavy imports, so index.ts can decide whether to dispatch the daemon
 // without eagerly loading the daemon runtime (execa, the provider layer, …).
 // The actual `runDaemonMode` is imported lazily by index.ts only on a match.
+import { formatDaemonWarning } from './daemon-log.js';
 
 /**
  * Options carried from `conduct daemon …` into `runDaemonMode`. A subset of
@@ -210,11 +211,12 @@ export function formatDaemonConcurrencyWarning(
   resolution: DaemonConcurrencyResolution,
 ): string | null {
   if (resolution.concurrency <= 1) return null;
-  return (
-    `WARNING: daemon concurrency ${resolution.concurrency} (source ${resolution.source}) runs that many ` +
+  return formatDaemonWarning(
+    `daemon concurrency ${resolution.concurrency} (source ${resolution.source}) runs that many ` +
     'features at once against one shared repository. Expect the shared .git to be busier, more rebase ' +
     'kickbacks as siblings land on main first, and provider spend to scale with the pool width. ' +
-    'Set daemon_concurrency: 1 (or --concurrency 1) to return to serial dispatch.'
+    'Set daemon_concurrency: 1 (or --concurrency 1) to return to serial dispatch.',
+    { kind: 'operator', action: 'set daemon_concurrency: 1 (or --concurrency 1)' },
   );
 }
 

@@ -135,6 +135,7 @@ import {
   createOwnershipAwareDaemonLogger,
   formatDaemonConsoleTeeLine,
   withDaemonLogFeatureOwnership,
+  formatDaemonWarning,
   type DaemonLogSink,
   type FeatureDaemonLogger,
 } from './engine/daemon-log.js';
@@ -1127,7 +1128,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   log(
     lock.owned
       ? `holding daemon lock (pid ${lock.pid}) for ${projectRoot}`
-      : `WARNING: could not write pidfile for ${projectRoot}; liveness is not observable`,
+      : formatDaemonWarning(`could not write pidfile for ${projectRoot}; liveness is not observable`, { kind: 'operator', action: 'ai-conductor monitor all' }),
   );
   // Crash/signal backstop: best-effort sync unlink + log flush if the process exits
   // abnormally (the normal path removes this and releases asynchronously below). A
@@ -1394,7 +1395,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const globalPresenter = createDaemonEventPresenter({
     log: (entry) => globalSubscriberLog(composeDaemonLineBody(entry)),
     verbose: config?.daemon_verbose ?? false,
-    render: (event, output) => renderDaemonEventWithPresentation(event, output, globalSubscriberLog),
+    render: (event, output) => renderDaemonEventWithPresentation(event, output),
   });
   subscriber.start([daemonLogRenderer]);
   const readOnlyReviewCapabilityProbe =
@@ -1459,7 +1460,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const scopedPresenter = createDaemonEventPresenter({
       log: scopedLog,
       verbose: config?.daemon_verbose ?? false,
-      render: (event, output) => renderDaemonEventWithPresentation(event, output, scopedLog),
+      render: (event, output) => renderDaemonEventWithPresentation(event, output),
     });
     scopedEvents.on('provider_attempt', (event) => scopedPresenter.render(event));
     scopedEvents.on('provider_fallback', (event) => scopedPresenter.render(event));
@@ -1563,7 +1564,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const featurePresenter = createDaemonEventPresenter({
       log: featureLog,
       verbose: config?.daemon_verbose ?? false,
-      render: (event, output) => renderDaemonEventWithPresentation(event, output, featureLog),
+      render: (event, output) => renderDaemonEventWithPresentation(event, output),
     });
     const renderEvent = (event: ConductorEvent) => featurePresenter.render(event);
     const renderableEvents = renderedEventTypes();
@@ -1616,7 +1617,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const memoryResolveCtx = { warnings: [] as string[] };
   const memoryProvider = await resolveMemoryProvider(config ?? {}, registry, memoryResolveCtx);
   if (memoryResolveCtx.warnings.length > 0) {
-    for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
+    for (const w of memoryResolveCtx.warnings) log(formatDaemonWarning(w, { kind: 'none', why: 'the configured fallback remains active' }));
   }
 
   const runConductorInWorktree = async (
@@ -2034,7 +2035,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     opts.maxIdlePolls != null;
   if (continuous && !hasCeiling) {
     log(
-      'WARNING: --continuous with no ceiling (--max-items/--max-cost/--max-runtime/--max-idle-polls) runs unbounded; Ctrl-C to stop.',
+      formatDaemonWarning('--continuous with no ceiling (--max-items/--max-cost/--max-runtime/--max-idle-polls) runs unbounded; Ctrl-C to stop.', { kind: 'operator', action: 'set a ceiling or stop the daemon' }),
     );
   }
 
@@ -2823,11 +2824,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   createDaemonEventPresenter({
                     log: recoveryLog,
                     verbose: config?.daemon_verbose ?? false,
-                    render: (event, output) => renderDaemonEventWithPresentation(
-                      event,
-                      output,
-                      recoveryLog,
-                    ),
+                    render: (event, output) => renderDaemonEventWithPresentation(event, output),
                   }),
                 );
                   // Create a real Tier-2 resolver that dispatches to the /rebase skill
@@ -2939,11 +2936,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 createDaemonEventPresenter({
                   log: recoveryLog,
                   verbose: config?.daemon_verbose ?? false,
-                  render: (event, output) => renderDaemonEventWithPresentation(
-                    event,
-                    output,
-                    recoveryLog,
-                  ),
+                  render: (event, output) => renderDaemonEventWithPresentation(event, output),
                 }),
               );
               const dispatchCiFix = createDaemonCiFixDispatch({
@@ -3154,7 +3147,7 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
       // migrate its cases to the presenter's typed output API one group at a time.
       render: (renderedEvent, output) => {
         try {
-          renderDaemonEventWithPresentation(renderedEvent, output, log);
+          renderDaemonEventWithPresentation(renderedEvent, output);
         } catch {
           // Best-effort: rendering a daemon.log line must never disrupt the run.
         }
@@ -3166,12 +3159,12 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 }
 
 /**
- * Transitional formatter adapter.  It centralizes depth, verbosity and
- * severity in the presenter while the long-lived textual cases retain their
- * proven wording.  New cases belong above the fallback, never in a second
- * logger or event channel.
+ * Event text is produced here, while the presenter remains the only owner of
+ * writing, depth, verbosity, and per-dispatch suppression.  Some established
+ * text cases share the final normalization path until their wording is
+ * simplified; importantly, they never write to a logger directly.
  */
-function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parameters<NonNullable<Parameters<typeof createDaemonEventPresenter>[0]['render']>>[1], legacyLog?: (msg: string) => void): void {
+function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parameters<NonNullable<Parameters<typeof createDaemonEventPresenter>[0]['render']>>[1]): void {
   const gateReruns = { kind: 'none' as const, why: 'the gate re-runs build_review' };
   switch (event.type) {
     case 'build_review_rubric_started':
@@ -3261,7 +3254,7 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
         }
         return;
       }
-      output.info(`${renderedExecutionSubject(event, event.step)} via ${event.provider}`);
+      output.info(`${renderedExecutionSubject(event, event.step)} via ${event.provider}${event.outcome === 'success' ? ' ✓' : ''}`);
       return;
     }
     case 'provider_fallback':
@@ -3282,14 +3275,14 @@ function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parame
       output.detail(formatSessionOccurrence(event, true));
       return;
   }
-  if (!legacyLog) return;
   const captured: string[] = [];
   renderDaemonEventUnsafe(event, (line) => captured.push(line));
-  // Keep byte-stable legacy wording (including color spans) until its case is
-  // explicitly migrated above.  Dispatch wiring is nevertheless unified: the
-  // presenter remains the only event entry point and owns its per-dispatch
-  // suppression memory.
-  for (const line of captured) legacyLog(line);
+  for (const line of captured) output.info(normalizeLegacyDaemonEventText(line));
+}
+
+/** Remove the legacy renderer's visual column; the presentation table owns it. */
+function normalizeLegacyDaemonEventText(line: string): string {
+  return line.replace(/^(?:\x1b\[[0-9;]*m)*·(?:\x1b\[[0-9;]*m)*(?: {1,3})?/, '');
 }
 
 function buildReviewLapTag(lapId: string): string {

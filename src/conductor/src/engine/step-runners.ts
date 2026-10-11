@@ -1,5 +1,6 @@
 import { writeFile, access, readFile, readdir, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { MISSING_PIPELINE_ROOT_WARNING } from './pr-body-region-store.js';
+import { formatDaemonWarning } from './daemon-log.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { execa } from 'execa';
 import { isUtf8 } from 'node:buffer';
@@ -5222,7 +5223,7 @@ export class DefaultStepRunner implements StepRunner {
         containmentAdvisoryLines = renderContainmentFloorReport(containmentReport);
         if (containmentAdvisoryLines.length > 0) {
           for (const line of containmentAdvisoryLines) {
-            this.log(`WARNING: ${line}`);
+            this.log(formatDaemonWarning(line, { kind: 'none', why: 'the build_review gate continues with the containment advisory' }));
           }
         }
       } catch {
