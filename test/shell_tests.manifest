@@ -31,6 +31,27 @@ docs_pages.smoke.test.sh invoked-by:test_docs_pages_smoke.sh Pages fixture invok
 # Shared shell library; sourced by fixture scripts rather than executed.
 test_helpers.sh sourced-helper shared fixture helpers are sourced
 
+# Triage: examples acceptance scripts verified through the isolated shell runner.
+# triage: run_examples_acceptance_specs.sh deleted — obsolete: duplicate parent runner; each child is independently classified below
+# triage: test_examples_common_prompt.sh kept — isolated runner PASS
+test_examples_common_prompt.sh shell-runner verifies tiered prompt resolution and no-TTY failure handling
+# triage: test_examples_common_sandbox.sh kept — isolated runner PASS
+test_examples_common_sandbox.sh shell-runner verifies sandbox isolation and wedged-flow cleanup
+# triage: test_examples_common_timeout.sh kept — isolated runner PASS
+test_examples_common_timeout.sh shell-runner verifies timeout and checkpoint helper behavior
+# triage: test_examples_daemon.sh kept — isolated runner PASS
+test_examples_daemon.sh shell-runner verifies the daemon example's completion and failure paths
+# triage: test_examples_engineer.sh kept — isolated runner PASS
+test_examples_engineer.sh shell-runner verifies the engineer example's headless and guided paths
+# triage: test_examples_intake_loop.sh kept — isolated runner PASS
+test_examples_intake_loop.sh shell-runner verifies the intake-loop example's completion and failure paths
+# triage: test_examples_interactive.sh kept — isolated runner PASS
+test_examples_interactive.sh shell-runner verifies the interactive example's invocation and missing-binary handling
+# triage: test_examples_prompt_fixtures.sh kept — isolated runner PASS
+test_examples_prompt_fixtures.sh shell-runner verifies tiered prompt fixture content
+# triage: test_examples_readme_and_usage.sh kept — isolated runner PASS
+test_examples_readme_and_usage.sh shell-runner verifies example usage failure handling
+
 # Triage: bin/migrate orphan scripts verified through the isolated shell runner.
 # triage: test_bin_migrate_approval.sh fixed — isolated runner PASS after mocking its config CLI boundary
 test_bin_migrate_approval.sh shell-runner verifies migration approval behavior in isolated fixtures
