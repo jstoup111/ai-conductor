@@ -63,7 +63,8 @@ The 20 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 4, SHIP 5.
 
 `test_suite` is the sole engine-native BUILD verifier. Static wiring reachability is retired.
-`build_review` currently runs only its optional `testQuality` rubric. The engine freezes the base/HEAD
+`build_review` runs the default-on `implementationQuality` rubric plus any enabled `testQuality`,
+`security`, or custom rubric. For `testQuality`, the engine freezes the base/HEAD
 source and active feature artifacts, then derives established test regions and concrete uncertain
 candidates from changed declarations, current-feature-owned `Covers` bindings introduced or updated
 after the review base, and relevant shared setup or helper evidence. An unchanged bare marker remains
@@ -80,8 +81,8 @@ reviewed. `build_review` fails before dispatch, and the conductor routes it to B
 mechanical-fault allowance and halts `needs-human` once the kickback cap is spent.
 
 Enabled `testQuality` with no established targets or concrete candidates is a valid empty-scope PASS: it does
-not dispatch its reviewer or counterfactual preflight. An enabled `security` rubric still reviews the diff
-and participates in the joined verdict. This preserves production-only refactors and pure
+not dispatch its reviewer or counterfactual preflight. Enabled `security` and `implementationQuality` rubrics still review the diff
+and participate in the joined verdict. This preserves production-only refactors and pure
 moves/renames as non-coverage work; the aggregate suite and CI remain responsible for broad regression
 execution. An admitted non-convention marker file that cannot be reviewed is named with its reason on the persisted `build_review_scope_summary` event. For each concrete candidate, the normal reviewer returns one source-bound scope resolution:
 `resolved`, `out-of-scope`, or `indeterminate`. An indeterminate candidate preserves any otherwise valid
@@ -302,7 +303,7 @@ detail.
 | `coherence_check` | `.docs/coherence/*.md` | yes | At least one matching file, named with the plan's filename stem |
 | `acceptance_specs` | spec files in the project's test dirs, plus `.pipeline/acceptance-specs-red.json` | specs yes, evidence no | At least one spec file **and** RED evidence proving the feature's own specs ran and failed. A spec that was skipped, deselected, or hit a collection error does not establish RED |
 | `build` | `.pipeline/task-status.json` | no | No `.pipeline/halt-user-input-required` marker, every task completed or skipped, **and** a clean working tree whenever the status probe establishes one. The post-rebase closure applies the same conjunct: a reapplied autostash blocks BUILD until the named paths are committed or discarded. An absent or failed probe fails open to the legacy behavior. Task status is re-seeded and re-derived on each evaluation, so forged rows fail |
-| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid effective `PASS` from the enabled rubric set (currently only `testQuality`, off by default — an empty enabled set is a vacuous `PASS`). An enabled test-quality rubric with a valid empty typed scope also passes without a reviewer or counterfactual dispatch. Missing, prior-session, malformed, unresolved findings, or uncovered `scope-incomplete`/infrastructure faults all block. Raw outcomes and valid findings remain recorded; effective dispositions control routing. |
+| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid effective `PASS` from the enabled rubric set (`implementationQuality` by default; `testQuality` and `security` opt in — an empty enabled set is a vacuous `PASS`). An enabled test-quality rubric with a valid empty typed scope also passes without a reviewer or counterfactual dispatch. Missing, prior-session, malformed, unresolved findings, or uncovered `scope-incomplete`/infrastructure faults all block. Raw outcomes and valid findings remain recorded; effective dispositions control routing. |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | no | A live re-inspection returning `CURRENT`. File presence alone can never satisfy this gate |
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. `WARN` rows record unavailable browser capability without blocking. After a recorded FAIL, HEAD must have moved before a later FAIL-free attempt is accepted |
 | `prd_audit` | `.pipeline/prd-audit.json` | no | A typed, engine-persisted judgment from the current dispatch (or one whose reviewed code stamp `gate_code_validity` still preserves), with a non-null code stamp and `complete: true`. Completeness requires exactly one judgment per active story criterion — `PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE` — each resolving its criterion, cited tasks, and requirement associations against the projection; a `FIXABLE` names exactly one active owner task and an `OVER_SCOPE` carries an intent relation. Every supplied PRD requirement needs a criterion association or `PLAN_GAP` evidence, except one the feature's coherence waiver discharges ([waived requirements](../explanation/gates.md#waived-prd-requirements)). Any non-`PASS` judgment or no-owner observation blocks unless it is an `OVER_SCOPE` that is `within` intent, `outside-harmless`, or operator-accepted. Missing, unreadable, unsupported-version, incomplete, stale, or unstamped evidence blocks. `.pipeline/prd-audit.md` is a rendered view and is never read as a verdict |
@@ -346,8 +347,8 @@ Dispatch reads a single map keyed by step name. That map is the authority for wh
 `skillName` field on the step definition is not consulted at dispatch time.
 
 Three steps dispatch no skill at all and run entirely in the engine: `build_review`, `test_suite`,
-and `attribution_verify`. Of these, `build_review` dispatches its registered rubric set (currently
-only `testQuality`) and `attribution_verify` dispatches its own attribution-audit logic, both from
+and `attribution_verify`. Of these, `build_review` dispatches its enabled rubric set (by default
+only `implementationQuality`) and `attribution_verify` dispatches its own attribution-audit logic, both from
 engine code; `test_suite` is a deterministic aggregate verifier.
 
 Two steps dispatch the `conduct` skill with an argument rather than a skill of their own name:
