@@ -42,7 +42,7 @@ async function fixture() {
   const repo = await mkdtemp(join(tmpdir(), 'kickback-budget-restack-'));
   repos.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
-  await git(['init', '-q']);
+  await git(['init', '-q', '-b', 'main']);
   const update = await cascadeUpdateLines(repo, 'demo', [child(1)], { git: makeGitRunner(repo) });
   if (update.kind !== 'lines') throw new Error(update.detail);
   await makeGitRunner(repo)(['update-ref', '--stdin'], { input: ['start', ...update.lines, 'prepare', 'commit', ''].join('\n') });
