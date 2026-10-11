@@ -8,7 +8,7 @@ import {
   resolveGateSmokeFile,
 } from '../src/engine/smoke-capability.js';
 import type { SmokeCapability } from '../src/engine/smoke-capability.js';
-import { runSmokeCli } from '../src/engine/smoke-runner.js';
+import { parseSmokeCapabilityDeclarations, runSmokeCli } from '../src/engine/smoke-runner.js';
 import { LIVE_E2E_PROVIDERS } from '../src/engine/live-e2e-providers.js';
 
 const acceptedCredentialedCapabilities: readonly SmokeCapability[] = [
@@ -52,6 +52,18 @@ describe('smoke capability declarations', () => {
       'credentialed:codex',
       'credentialed:pi',
     ]);
+  });
+
+  it('rejects missing, invalid, and empty smoke capability declarations', () => {
+    expect(() => parseSmokeCapabilityDeclarations([{
+      file: 'test/smoke/undeclared.smoke.test.ts',
+      source: 'import { it } from \'vitest\';',
+    }])).toThrow('Smoke file test/smoke/undeclared.smoke.test.ts declares no capability');
+    expect(() => parseSmokeCapabilityDeclarations([{
+      file: 'test/smoke/invalid.smoke.test.ts',
+      source: "const smokeCapability = 'networked';",
+    }])).toThrow('Smoke file test/smoke/invalid.smoke.test.ts declares invalid capability networked');
+    expect(() => parseSmokeCapabilityDeclarations([])).toThrow('Smoke discovery found no test files');
   });
 
   it('runs hermetic files and skips unavailable toolchain and credentialed files in advisory mode', () => {
@@ -347,18 +359,26 @@ describe('smoke capability declarations', () => {
     ]);
   });
 
-  it('rejects a discovered smoke file with no declaration before running an executor', async () => {
+  it('rejects an undeclared file identically through the parser and runner before running an executor', async () => {
     const runVitest = vi.fn();
     const emit = vi.fn();
+    const discovered = [{
+      file: 'test/smoke/undeclared.smoke.test.ts',
+      source: 'import { it } from \'vitest\';',
+    }];
+    let parserError: unknown;
+
+    try {
+      parseSmokeCapabilityDeclarations(discovered);
+    } catch (error) {
+      parserError = error;
+    }
 
     await expect(runSmokeCli('vitest.smoke.config.ts', {
-      discover: async () => [{
-        file: 'test/smoke/undeclared.smoke.test.ts',
-        source: 'import { it } from \'vitest\';',
-      }],
+      discover: async () => discovered,
       runVitest,
       emit,
-    })).rejects.toThrow('Smoke file test/smoke/undeclared.smoke.test.ts declares no capability');
+    })).rejects.toThrow(parserError);
 
     expect(runVitest).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalledWith(expect.stringContaining('[hermetic]'));
