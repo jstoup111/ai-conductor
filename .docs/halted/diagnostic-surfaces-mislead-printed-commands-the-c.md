@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-11T13:31:17.248Z
+Status: halted
 Slug: diagnostic-surfaces-mislead-printed-commands-the-c
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-diagnostic-surfaces-mislead-printed-commands-the-c
-Head SHA: 04e8fa49a41ed270e1b1eabb65f4efb5dc2da24b
-Halted at: 2026-10-11T10:52:41.098Z
+Head SHA: ecf1a92f2da5f01e5e4a3d2197162b9a82ba6b58
+Halted at: 2026-10-11T15:48:39.161Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
