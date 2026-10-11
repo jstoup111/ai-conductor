@@ -29,6 +29,7 @@ import {
   Context,
 } from '@opentelemetry/api';
 import type { ConductorEvent } from '../../types/events.js';
+import { closeoutDurationMs } from '../closeout-trust.js';
 import type { ResolvedOtelProvenance } from './otel-config.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 import { resolveExecutionIdentity, type ExecutionScope } from '../execution-identity.js';
@@ -557,11 +558,12 @@ export class SpanManager {
       this.warn('pipeline_closeout received but no span available — dropping');
       return;
     }
+    const durationMs = closeoutDurationMs(event);
     targetSpan.addEvent('pipeline_closeout', {
       obligation: event.obligation,
       startedAt: event.startedAt,
       endedAt: event.endedAt,
-      durationMs: event.endedAt - event.startedAt,
+      ...(durationMs === undefined ? {} : { durationMs }),
     });
   }
 

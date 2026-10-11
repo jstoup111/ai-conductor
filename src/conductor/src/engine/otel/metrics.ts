@@ -17,6 +17,7 @@
 import type { Attributes, Meter, Counter, Gauge, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
+import { closeoutDurationMs } from '../closeout-trust.js';
 import type { RunOutcome } from './span-manager.js';
 import { classifyMetering } from '../metering.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
@@ -200,7 +201,9 @@ export class MetricsRecorder {
   }
 
   onPipelineCloseout(event: Extract<ConductorEvent, { type: 'pipeline_closeout' }>): void {
-    this.instruments.closeoutDurationHistogram.record(event.endedAt - event.startedAt, this.withIdentity({ obligation: event.obligation }));
+    const durationMs = closeoutDurationMs(event);
+    if (durationMs === undefined) return;
+    this.instruments.closeoutDurationHistogram.record(durationMs, this.withIdentity({ obligation: event.obligation }));
   }
 
   onRunClose(outcome: RunOutcome, tier?: string): void {

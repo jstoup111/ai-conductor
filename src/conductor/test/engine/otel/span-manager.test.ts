@@ -861,9 +861,9 @@ describe('Task 19: pipeline_closeout span event', () => {
     await emitter.emit({
       type: 'pipeline_closeout',
       obligation: 'summary',
-      startedAt: 300,
-      endedAt: 375,
-      ts: 380,
+      startedAt: 1_788_044_947_584,
+      endedAt: 1_788_045_067_584,
+      ts: 1_788_045_067_790,
     });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
@@ -872,10 +872,34 @@ describe('Task 19: pipeline_closeout span event', () => {
     const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
     expect(closeout?.attributes).toMatchObject({
       obligation: 'summary',
-      startedAt: 300,
-      endedAt: 375,
-      durationMs: 75,
+      startedAt: 1_788_044_947_584,
+      endedAt: 1_788_045_067_584,
+      durationMs: 120_000,
     });
+  });
+
+  it('keeps untrusted closeout timing attributes without a duration', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({
+      type: 'pipeline_closeout',
+      obligation: 'summary',
+      startedAt: 1_788_044_947_584_758_500,
+      endedAt: 1_788_045_067_588_425_500,
+      ts: 1_788_045_067_588_425_500,
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
+    const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
+    expect(closeout?.attributes).toMatchObject({
+      obligation: 'summary',
+      startedAt: 1_788_044_947_584_758_500,
+      endedAt: 1_788_045_067_588_425_500,
+    });
+    expect(closeout?.attributes).not.toHaveProperty('durationMs');
   });
 });
 
