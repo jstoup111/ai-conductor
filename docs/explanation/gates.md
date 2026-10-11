@@ -122,12 +122,13 @@ cites only the declared source path; the suppressed ids are recorded in the aggr
 
 ### Per-step completion gates
 
-These are the twelve gates that decide whether a step's work is real. Ten replace the default
-"did the step's artifact glob match anything" check with a custom predicate; two more run only in the
+These are the thirteen gates that decide whether a step's work is real. Ten replace the default
+"did the step's artifact glob match anything" check with a custom predicate; three more run only in the
 verdict layer, so they can be strict without disturbing the linear walk.
 
 | Step | What it protects against |
 | --- | --- |
+| `architecture_review` | an ADR that locks in an unchecked assumption — every ADR the feature adds, and every changed ADR that has an `## Assumptions` section, must carry a valid [assumptions ledger](../guides/engineer-loop.md#adr-assumptions-ledger). An unsatisfied verdict reopens the step and halts the feature `needs-human` |
 | `stories` | stories that exist but do not specify behavior — every story needs a happy path and a negative path, each with scenarios, and none may be draft |
 | `plan` | a plan that does not cover the feature's stories, scoped to this feature's plan and stories |
 | `build` | tasks reported complete without work — task rows are re-seeded and re-derived from the plan each evaluation, so a forged row fails; a task carrying `Done when:` checks additionally must show each check true before it closes, and a check the approved plan cannot make true is reported as a plan gap rather than repaired off-plan |
