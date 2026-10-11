@@ -451,7 +451,7 @@ describe('sweepMergeableLabels — Task 4 lazy re-read and head tracking', () =>
 // ── Task 5: exhaustive shipped-readiness routing ───────────────────────────
 
 describe('sweepMergeableLabels — Task 5 readiness routes', () => {
-  // Covers: task:5
+  // Covers: task:5, task:rem-prd-audit-R1
   it('routes open PRs by readiness while preserving lifecycle and failed-read handling', async () => {
     const urls = {
       ready: 'https://github.com/foo/bar/pull/51',
