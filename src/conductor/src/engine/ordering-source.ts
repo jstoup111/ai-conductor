@@ -3,8 +3,7 @@ import {
   parseSizeLabel,
   type PriorityBand,
 } from './backlog-priority.js';
-import { parseSourceRef } from './engineer/issue-ref.js';
-import { splitOwnerRepo } from './engineer/source-ref.js';
+import { parseWorkRef, splitOwnerRepo } from './engineer/source-ref.js';
 import type { IntakeEventEmitter } from './intake-backend-composite.js';
 import {
   runTrackerRepositoryRead,
@@ -42,18 +41,45 @@ export interface OrderingSourceDeps {
  */
 export function createOrderingSource(deps: OrderingSourceDeps): OrderingSource {
   const cwd = deps.cwd ?? '.';
+  const unavailableReferences = new Set<string>();
+
+  async function reportUnavailableJira(ref: string): Promise<void> {
+    if (unavailableReferences.has(ref)) return;
+
+    unavailableReferences.add(ref);
+    await deps.events?.emit({
+      type: 'tracker_backend_unavailable',
+      project: ref,
+      backend: 'jira',
+      reason: 'no-adapter',
+    });
+  }
 
   return {
     async readFacts(refs: string[]): Promise<Map<string, FactsOutcome>> {
       const result = new Map<string, FactsOutcome>();
 
       for (const ref of refs) {
+        const parsed = parseWorkRef(ref);
+        if (!parsed) {
+          // Unparseable refs retain the existing not-found behavior, without a gh call.
+          result.set(ref, 'not-found');
+          continue;
+        }
+
+        switch (parsed.kind) {
+          case 'jira':
+            await reportUnavailableJira(ref);
+            result.set(ref, 'unavailable');
+            continue;
+          case 'github':
+            break;
+        }
+
         try {
-          const parsed = parseSourceRef(ref);
-          const ownerRepo = parsed ? splitOwnerRepo(parsed.repo) : null;
-          if (!parsed || !ownerRepo) {
-            // Unparseable ref (including Jira-shaped refs) — treat as not found,
-            // without making a gh call.
+          const ownerRepo = splitOwnerRepo(parsed.repo);
+          if (!ownerRepo) {
+            // A malformed GitHub repository slug is not found, without a gh call.
             result.set(ref, 'not-found');
             continue;
           }
@@ -86,9 +112,17 @@ export function createOrderingSource(deps: OrderingSourceDeps): OrderingSource {
     },
 
     async readBlockers(sourceRef: string): Promise<BlockersOutcome> {
-      const parsed = parseSourceRef(sourceRef);
+      const parsed = parseWorkRef(sourceRef);
       if (!parsed) {
         return { indeterminate: `unparseable sourceRef: ${sourceRef}` };
+      }
+
+      switch (parsed.kind) {
+        case 'jira':
+          await reportUnavailableJira(sourceRef);
+          return 'unavailable';
+        case 'github':
+          break;
       }
 
       const { repo, number } = parsed;
