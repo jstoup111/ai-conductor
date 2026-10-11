@@ -34,6 +34,7 @@ import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/res
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ChildId } from '../../src/engine/child-context.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
@@ -1336,8 +1337,10 @@ describe('build_review structured rubric dispatch', () => {
       invoke,
     };
     const events = new ConductorEventEmitter();
-    const failures: Array<{ readonly retainedResponsePath?: string }> = [];
-    events.on('build_review_rubric_infrastructure_failure', (event) => failures.push(event));
+    const failures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => {
+      if (event.type === 'build_review_rubric_infrastructure_failure') failures.push(event);
+    });
     const entry: ResolvedBuildReviewCustomCatalogEntry = {
       id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
       policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
@@ -1557,8 +1560,10 @@ describe('build_review structured rubric dispatch', () => {
       lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke,
     };
     const events = new ConductorEventEmitter();
-    const failures: Array<{ readonly excerpt: string; readonly retainedResponsePath?: string }> = [];
-    events.on('build_review_rubric_infrastructure_failure', (event) => failures.push(event));
+    const failures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => {
+      if (event.type === 'build_review_rubric_infrastructure_failure') failures.push(event);
+    });
     const entry: ResolvedBuildReviewCustomCatalogEntry = {
       id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
       policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
