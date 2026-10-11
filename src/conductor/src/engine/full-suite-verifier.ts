@@ -756,13 +756,10 @@ async function quarantineClaimedStaleLock(
     };
   }
   if (currentOwner !== expectedOwner || currentClaim !== serializedClaim) {
+    // Another caller recovered the stale lock first and now owns a fresh one.
+    // Losing that race is contention, not a fault: wait on the new owner.
     const released = await removeOwnedRecoveryClaim(lockPath, serializedClaim);
-    return {
-      status: 'FAILED',
-      message: released.ok
-        ? 'Full-suite lock ownership changed during stale recovery'
-        : released.message,
-    };
+    return released.ok ? { status: 'OCCUPIED' } : { status: 'FAILED', message: released.message };
   }
 
   const quarantine = `${lockPath}.stale.${process.pid}.${randomUUID()}`;

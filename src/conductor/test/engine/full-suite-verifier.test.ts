@@ -3565,10 +3565,12 @@ describe('FullSuiteVerifier', () => {
     }).ensure();
 
     expect({ racingResult, canonicalOwner, blockedResult, executions }).toEqual({
+      // Losing the recovery race waits on the replacement owner (here with a
+      // zero wait budget) instead of failing as an internal error.
       racingResult: {
         status: 'FAILED',
         reason: 'internal_error',
-        message: 'Full-suite lock ownership changed during stale recovery',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
       },
       canonicalOwner: replacementOwner,
       blockedResult: {
