@@ -1,5 +1,5 @@
 import * as fsPromises from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { execa } from 'execa';
 import {
@@ -36,6 +36,49 @@ export class TaskReopenError extends Error {
  */
 function planAmendmentObligationId(planIdentity: string, taskId: string, digest: string): string {
   return `plan_amendment:${planIdentity}:${canonicalTaskId(taskId)}:${digest}`;
+}
+
+/**
+ * A changed digest means the plan text moved since the digests were last
+ * recorded, not that it moved after the task was implemented: an amendment can
+ * reach the branch (operator PR on main, then a rebase) while BUILD is still
+ * pending on that task, and no seed runs before the task is built. Reopening
+ * such a task demands fresh Task evidence for work that already implements the
+ * amended text, halting the post-rebase BUILD check (#3177).
+ *
+ * The task's current text was introduced by the newest plan commit at or
+ * below HEAD whose predecessor carried a different digest. The work postdates
+ * it when a branch commit trailered with the task was authored strictly later
+ * (a same-second tie reopens, the safe direction). Author dates survive
+ * rebases, unlike ancestry and committer dates. An
+ * uncommitted plan edit is newer than every commit, so it always reopens.
+ */
+async function implementedAgainstCurrentText(
+  projectRoot: string,
+  planPath: string,
+  taskId: string,
+  digest: string,
+): Promise<boolean> {
+  const rel = relative(projectRoot, planPath.startsWith('/') ? planPath : join(projectRoot, planPath));
+  const history = await execa('git', ['log', '--format=%H %at', 'HEAD', '--', rel], { cwd: projectRoot, reject: false });
+  if (history.exitCode !== 0 || !history.stdout.trim()) return false;
+  let introducedAt: number | undefined;
+  for (const line of history.stdout.trim().split('\n')) {
+    const [sha, at] = line.split(' ');
+    const shown = await execa('git', ['show', `${sha}:${rel}`], { cwd: projectRoot, reject: false });
+    if (shown.exitCode !== 0 || planTaskDigests(shown.stdout).get(taskId) !== digest) break;
+    introducedAt = Number(at);
+  }
+  if (introducedAt === undefined) return false;
+
+  const canonical = canonicalTaskId(taskId);
+  const commits = await listCommitsWithTrailers(projectRoot).catch(() => []);
+  for (const commit of commits) {
+    if (!(commit.trailers['Task'] ?? []).some((id) => canonicalTaskId(id) === canonical)) continue;
+    const authored = await execa('git', ['show', '-s', '--format=%at', commit.sha], { cwd: projectRoot, reject: false });
+    if (authored.exitCode === 0 && Number(authored.stdout.trim()) > introducedAt) return true;
+  }
+  return false;
 }
 
 export interface TaskStatusRecord {
@@ -302,7 +345,7 @@ export async function seedTaskStatus(
       throw new Error(`Unable to seed task status from task digests: ${recordedDigests.message}`);
     }
     if (recordedDigests.kind === 'present') {
-      const changedTaskIds = Object.entries(currentDigests)
+      const digestChangedTaskIds = Object.entries(currentDigests)
         .filter(([taskId, digest]) => {
           const recorded = recordedDigests.digests[taskId];
           // Missing or unrecognised digest versions are a migration baseline,
@@ -310,6 +353,12 @@ export async function seedTaskStatus(
           return recorded?.startsWith('v1:') === true && recorded !== digest;
         })
         .map(([taskId]) => taskId);
+      const changedTaskIds: string[] = [];
+      for (const taskId of digestChangedTaskIds) {
+        if (!await implementedAgainstCurrentText(projectRoot, resolvedPlanPath, taskId, currentDigests[taskId]!)) {
+          changedTaskIds.push(taskId);
+        }
+      }
       if (changedTaskIds.length > 0) {
         const [head, tree, resolvedTaskIds] = await Promise.all([
           currentCommitSha(projectRoot),
