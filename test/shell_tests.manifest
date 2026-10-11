@@ -30,3 +30,17 @@ docs_pages.smoke.test.sh invoked-by:test_docs_pages_smoke.sh Pages fixture invok
 
 # Shared shell library; sourced by fixture scripts rather than executed.
 test_helpers.sh sourced-helper shared fixture helpers are sourced
+
+# Triage: bin/migrate orphan scripts verified through the isolated shell runner.
+# triage: test_bin_migrate_approval.sh fixed — isolated runner PASS after mocking its config CLI boundary
+test_bin_migrate_approval.sh shell-runner verifies migration approval behavior in isolated fixtures
+# triage: test_bin_migrate_blocks.sh kept — isolated runner PASS
+test_bin_migrate_blocks.sh shell-runner verifies migration block safety constraints
+# triage: test_bin_migrate_exec.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_bin_migrate_exec.sh shell-runner verifies migration block execution and ledger persistence
+# triage: test_bin_migrate_ledger.sh fixed — isolated runner PASS with a fixture-owned Python interpreter
+test_bin_migrate_ledger.sh shell-runner verifies migration ledger behavior in isolated consumers
+# triage: test_bin_migrate_multi_version_jump.sh fixed — isolated runner PASS after mocking its config CLI boundary
+test_bin_migrate_multi_version_jump.sh shell-runner verifies multi-version migration behavior in isolated fixtures
+# triage: test_bin_migrate_parse.sh kept — isolated runner PASS
+test_bin_migrate_parse.sh shell-runner verifies migration fence parsing and ordering

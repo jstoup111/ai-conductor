@@ -67,7 +67,19 @@ if [ "${1:-}" = setup-token ]; then
 fi
 exit 0
 EOF
-chmod +x "$STUBS_DIR/npm" "$STUBS_DIR/claude"
+cat > "$STUBS_DIR/ai-conductor" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -eq 3 ] && [ "$1" = config ] && [ "$2" = read ] && [ "$3" = conductor.current_version ]; then
+  awk '/^[[:space:]]*current_version:[[:space:]]*/ { sub(/^[[:space:]]*current_version:[[:space:]]*/, ""); print; exit }' "$HOME/.ai-conductor/config.yml"
+  exit 0
+fi
+
+printf 'unexpected ai-conductor invocation: %s\n' "$*" >&2
+exit 2
+EOF
+chmod +x "$STUBS_DIR/npm" "$STUBS_DIR/claude" "$STUBS_DIR/ai-conductor"
 TEST_PATH="$STUBS_DIR:$REPO_ROOT/bin:$PATH"
 
 make_harness() {
