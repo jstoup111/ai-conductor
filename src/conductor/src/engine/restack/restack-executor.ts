@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { parseChildId, type ChildId } from '../child-context.js';
 import { childBranchFor, leafBranchFor, parseFeatureBranch } from '../feature-branch-identity.js';
-import { makeGitRunner, type GitRunner } from '../rebase.js';
+import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
   createRestackJournal,
@@ -13,7 +13,14 @@ import {
   type RestackJournalDraft,
   type StoredRestackJournal,
 } from './restack-journal.js';
-import { applyRestackMove, haltRestack, rollbackRestackMove, verifyRestackMove, type RestackMoveRef } from './restack-move.js';
+import {
+  applyRestackMove,
+  checkRestackPreMove,
+  haltRestack,
+  rollbackRestackMove,
+  verifyRestackMove,
+  type RestackMoveRef,
+} from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
 import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import {
@@ -153,7 +160,7 @@ async function transitionState(
   return { slug: journal.slug, blob, journal: next };
 }
 
-async function cleanAppliedJournal(worktree: string, journal: StoredRestackJournal, git: GitRunner): Promise<void> {
+async function cleanAppliedJournal(journal: StoredRestackJournal, git: GitRunner): Promise<void> {
   const lines = [
     `delete ${journalRefFor(journal.slug)} ${journal.blob}`,
     ...journal.journal.ranges.map((range) => `delete ${stagingRefFor(journal.slug, range.child)}`),
@@ -236,9 +243,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
 
     journal = await transitionState(options.worktree, journal, 'ready', git);
+    const readyJournal = journal;
     moves = plan.ranges.flatMap((range) => {
       const branchRef = branchRefForRange(options.slug, range);
-      const branchOld = journal.journal.refs.find((entry) => entry.ref === branchRef)?.oldSha;
+      const branchOld = readyJournal.journal.refs.find((entry) => entry.ref === branchRef)?.oldSha;
       if (!branchOld) throw new Error(`missing journaled branch ref for child ${range.child}`);
       return [
         { ref: branchRef, oldSha: branchOld, newSha: range.oldTip, child: range.child },
@@ -248,6 +256,17 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // Each staged ref is the source of truth for its move; resolve it after all
     // replays so the transaction never relies on an in-memory replay result.
     moves = await Promise.all(moves.map(async (move) => ({ ...move, newSha: await requiredSha(git, stagingRefFor(options.slug, move.child!), `staging ref for child ${move.child}`) })));
+    const checkedOut = await checkedOutRef(git);
+    const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
+    if (preMove.kind === 'refused') {
+      await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
+      return { kind: 'halted' };
+    }
+    if (preMove.kind === 'seal-refused') {
+      await writeSealHalt(options.worktree, preMove.detail, options.events);
+      return { kind: 'halted' };
+    }
+    if (preMove.kind === 'unavailable') throw new Error(preMove.detail);
     const moved = await applyRestackMove(options.worktree, journal, moves, { git, events: options.events });
     // applyRestackMove normally aborts before returning a refusal. Keep this
     // frame live, however, so the finally path repairs a failed abort rather
@@ -265,7 +284,6 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
     if (verified.kind === 'unavailable') throw new Error(verified.detail);
 
-    const checkedOut = await checkedOutRef(git);
     const checkedOutMove = moves.find((move) => move.ref === checkedOut);
     if (!checkedOutMove) throw new Error('checked-out branch is not part of restack move');
     const synced = await runGit(git, ['read-tree', '-m', '-u', checkedOutMove.oldSha, checkedOutMove.newSha]);
@@ -275,7 +293,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     // Task 18 supplies the durable transition hook; this Task 8 boundary keeps
     // state ordering correct until that implementation is available.
     journal = await transitionState(options.worktree, journal, 'applied', git);
-    if (journal.journal.followOnCause === undefined) await cleanAppliedJournal(options.worktree, journal, git);
+    if (journal.journal.followOnCause === undefined) await cleanAppliedJournal(journal, git);
     for (const range of plan.ranges) {
       const move = moves.find((entry) => entry.child === range.child);
       if (!move) throw new Error(`missing move for child ${range.child}`);

@@ -1,6 +1,13 @@
 import type { ChildId } from '../child-context.js';
 import { writeHaltMarker, type HaltMarkerWriteResult } from '../halt-marker.js';
-import { makeGitRunner, type GitRunner } from '../rebase.js';
+import {
+  confirmUntrackedRebasePaths,
+  makeGitRunner,
+  moveRebaseUntrackedPathsToQuarantine,
+  type GitRunner,
+} from '../rebase.js';
+import { verifyProtectedArtifactSeal } from '../protected-artifact-seal.js';
+import { resolve } from 'node:path';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
   journalRefFor,
@@ -33,6 +40,16 @@ export interface RestackMoveDependencies {
   readonly events?: ConductorEventEmitter;
 }
 
+export type RestackPreMoveResult =
+  | { readonly kind: 'clear' }
+  | {
+    readonly kind: 'refused';
+    readonly reason: Extract<RestackRefusalReason, 'checked-out-elsewhere' | 'dirty-overlap' | 'sync-collision'>;
+    readonly detail: string;
+  }
+  | { readonly kind: 'seal-refused'; readonly detail: string }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
 export type ApplyRestackMoveResult =
   | { readonly kind: 'moved'; readonly journal: StoredRestackJournal }
   | { readonly kind: 'refused'; readonly reason: Extract<RestackRefusalReason, 'stack-ref-changed' | 'lock-unavailable'>; readonly detail: string; readonly journal?: StoredRestackJournal }
@@ -56,6 +73,119 @@ async function runGit(git: GitRunner, args: string[], input?: string) {
     return await git(args, input === undefined ? undefined : { input });
   } catch {
     return undefined;
+  }
+}
+
+function paths(output: string): string[] {
+  return output.split('\n').map((path) => path.trim()).filter(Boolean);
+}
+
+function worktreeRecords(output: string): { readonly path: string; readonly branch?: string }[] {
+  return output.split(/\n\s*\n/).flatMap((record) => {
+    const lines = record.split('\n');
+    const worktree = lines.find((line) => line.startsWith('worktree '));
+    if (!worktree) return [];
+    const branch = lines.find((line) => line.startsWith('branch '));
+    return [{
+      path: worktree.slice('worktree '.length).trim(),
+      ...(branch === undefined ? {} : { branch: branch.slice('branch '.length).trim() }),
+    }];
+  });
+}
+
+async function changedPaths(git: GitRunner, oldSha: CommitSha, newSha: CommitSha): Promise<string[] | undefined> {
+  const changed = await runGit(git, ['diff', '--name-only', oldSha, newSha]);
+  return changed?.exitCode === 0 ? paths(changed.stdout) : undefined;
+}
+
+async function dirtyTrackedPaths(git: GitRunner): Promise<string[] | undefined> {
+  const [unstaged, staged] = await Promise.all([
+    runGit(git, ['diff', '--name-only']),
+    runGit(git, ['diff', '--cached', '--name-only']),
+  ]);
+  if (!unstaged || !staged || unstaged.exitCode !== 0 || staged.exitCode !== 0) return undefined;
+  return [...new Set([...paths(unstaged.stdout), ...paths(staged.stdout)])];
+}
+
+async function untrackedAddedPaths(
+  worktree: string,
+  git: GitRunner,
+  oldSha: CommitSha,
+  newSha: CommitSha,
+): Promise<string[] | undefined> {
+  const added = await runGit(git, ['diff', '--name-only', '--diff-filter=A', oldSha, newSha]);
+  if (!added || added.exitCode !== 0) return undefined;
+  const candidates: string[] = [];
+  for (const path of paths(added.stdout)) {
+    const status = await runGit(git, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', path]);
+    if (!status || status.exitCode !== 0) return undefined;
+    if (status.stdout === `?? ${path}\0`) candidates.push(path);
+  }
+  try {
+    return await confirmUntrackedRebasePaths(git, worktree, candidates);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Check the live worktree immediately before the journaled ref transaction.
+ * Nothing here rewrites refs; an unsuccessful check leaves the executor's
+ * ready journal available for its normal abort path.
+ */
+export async function checkRestackPreMove(
+  worktree: string,
+  moves: readonly RestackMoveRef[],
+  checkedOut: RefName,
+  dependencies: Pick<RestackMoveDependencies, 'git'> = {},
+): Promise<RestackPreMoveResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const changedMoves = moves.filter((move) => move.oldSha !== move.newSha && move.ref.startsWith('refs/heads/'));
+  const listed = await runGit(git, ['worktree', 'list', '--porcelain']);
+  if (!listed || listed.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot list Git worktrees before restack move' };
+  const thisWorktree = resolve(worktree);
+  for (const record of worktreeRecords(listed.stdout)) {
+    if (resolve(record.path) === thisWorktree || record.branch === undefined) continue;
+    const move = changedMoves.find((candidate) => candidate.ref === record.branch);
+    if (move) return { kind: 'refused', reason: 'checked-out-elsewhere', detail: record.path };
+  }
+
+  const checkedOutMove = moves.find((move) => move.ref === checkedOut);
+  if (!checkedOutMove) return { kind: 'unavailable', detail: 'checked-out branch is not part of restack move' };
+  if (checkedOutMove.oldSha === checkedOutMove.newSha) return { kind: 'clear' };
+
+  const [delta, dirty] = await Promise.all([
+    changedPaths(git, checkedOutMove.oldSha, checkedOutMove.newSha),
+    dirtyTrackedPaths(git),
+  ]);
+  if (delta === undefined || dirty === undefined) return { kind: 'unavailable', detail: 'cannot inspect restack worktree changes' };
+  const overlap = delta.find((path) => dirty.includes(path));
+  if (overlap) return { kind: 'refused', reason: 'dirty-overlap', detail: overlap };
+
+  const untracked = await untrackedAddedPaths(worktree, git, checkedOutMove.oldSha, checkedOutMove.newSha);
+  if (untracked === undefined) return { kind: 'unavailable', detail: 'cannot inspect untracked restack collisions' };
+  if (untracked.length > 0) {
+    try {
+      await moveRebaseUntrackedPathsToQuarantine(worktree, untracked);
+    } catch {
+      return { kind: 'refused', reason: 'sync-collision', detail: untracked[0]! };
+    }
+  }
+
+  const dryRun = await runGit(git, ['read-tree', '-m', '-u', '-n', checkedOutMove.oldSha, checkedOutMove.newSha]);
+  if (!dryRun || dryRun.exitCode !== 0) {
+    return {
+      kind: 'refused',
+      reason: 'sync-collision',
+      detail: untracked[0] ?? (dryRun?.stderr.trim() || 'read-tree dry run failed'),
+    };
+  }
+
+  try {
+    const seal = await verifyProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: checkedOutMove.oldSha });
+    return seal.ok ? { kind: 'clear' } : { kind: 'seal-refused', detail: seal.reason };
+  } catch (error) {
+    return { kind: 'seal-refused', detail: error instanceof Error ? error.message : String(error) };
   }
 }
 
