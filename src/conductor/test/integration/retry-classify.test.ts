@@ -42,6 +42,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunOptions } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 // ── shared fixtures ───────────────────────────────────────────────────────
@@ -827,12 +828,20 @@ describe('integration/retry-classify (#646)', () => {
   it('Story 7: a fresh blocking prd_audit still routes on try 1 (single evaluation)', async () => {
     await seedTailAt(statePath, 'prd_audit', { build_review: 'skipped' });
     const runner = withRemediation(dir, {
-      prd_audit: async () => {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(
-          join(dir, '.pipeline/prd-audit.md'),
-          '# PRD Audit\n\n' + AUDIT_HEADER + '| FR-3 | DIVERGED | intended-drift | baz.ts:88 | no |\n',
-        );
+      prd_audit: async (options) => {
+        await persistPrdAuditVerdict(dir, {
+          complete: true,
+          judgment: {
+            version: 'v1',
+            criterionJudgments: [{
+              criterion: { storyId: '3', ordinal: 1 }, criterionId: 'S3.1', grade: 'PLAN_GAP',
+              evidence: 'baz.ts:88', rationale: 'The fixture requires a DECIDE-targeted intended drift.',
+              requirementAssociations: [], evidenceTaskIds: [],
+            }],
+            noOwnerObservations: [],
+          },
+          diagnostics: [], recordedDispositions: [],
+        }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
       },
     });
     const { stepRetries } = collect();

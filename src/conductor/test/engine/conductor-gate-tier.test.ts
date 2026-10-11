@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { Conductor } from '../test-conductor.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -63,7 +64,19 @@ async function runValidationKickback(
           `# Results\n\n| Story | Result |\n|--|--|\n| s1 | ${manualTest} |\n`,
         );
       } else if (step === 'prd_audit') {
-        await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | MISSING | impl-gap | feature.ts:1 | no |\n');
+        await persistPrdAuditVerdict(projectRoot, {
+          complete: true,
+          judgment: {
+            version: 'v1',
+            criterionJudgments: [{
+              criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
+              evidence: 'feature.ts:1', rationale: 'Fixture requires a repairable validation gap.',
+              requirementAssociations: [], evidenceTaskIds: ['1'], ownerTaskId: '1',
+            }],
+            noOwnerObservations: [],
+          },
+          diagnostics: [], recordedDispositions: [],
+        }, { attemptId: options?.runId ?? 'test-run', codeStamp: null });
       } else if (step === 'architecture_review_as_built') {
         await persistAsBuiltVerdict(projectRoot, {
           version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],

@@ -10,6 +10,7 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
@@ -218,7 +219,19 @@ async function runTieredGateTelemetry(): Promise<{ events: ConductorEvent[]; met
         if (step === 'manual_test') {
           await writeFile(join(projectRoot, '.pipeline', 'manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
         } else if (step === 'prd_audit') {
-          await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | MISSING | impl-gap | feature.ts:1 | no |\n');
+          await persistPrdAuditVerdict(projectRoot, {
+            complete: true,
+            judgment: {
+              version: 'v1',
+              criterionJudgments: [{
+                criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
+                evidence: 'feature.ts:1', rationale: 'Fixture requires a repairable validation gap.',
+                requirementAssociations: [], evidenceTaskIds: ['1'], ownerTaskId: '1',
+              }],
+              noOwnerObservations: [],
+            },
+            diagnostics: [], recordedDispositions: [],
+          }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null });
         } else if (step === 'architecture_review_as_built') {
           await persistAsBuiltVerdict(projectRoot, {
             version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
@@ -929,34 +942,30 @@ describe('serial conductor telemetry parity', () => {
     expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === failedMember)?.attributes.outcome).toBe('failure');
   });
 
-  it('classifies objective group refusal per settled member without extending its frozen duration', async () => {
-    // verifyArtifacts makes the real join reject the deliberately absent
-    // evidence; the fake runner itself still reports success.  That boundary
-    // proves a member cannot receive a successful terminal merely because its
-    // dispatch returned success.
-    const enabled = await runBuiltinGroup({ verifyArtifacts: true, asBuiltRemediationEnabled: false });
-    const disabled = await runBuiltinGroup({ verifyArtifacts: true, asBuiltRemediationEnabled: false, telemetry: 'disabled' });
-    const failing = await runBuiltinGroup({ verifyArtifacts: true, asBuiltRemediationEnabled: false, telemetry: 'failing-exporter' });
+  it('classifies a no-verdict group failure per settled member with its retry duration', async () => {
+    const outcomes = Object.fromEntries(VALIDATION_GROUP.members.map((member) => [member, [
+      { success: false, output: 'controlled validator failure' },
+      { success: false, output: 'controlled validator failure' },
+    ]])) as Partial<Record<StepName, Array<Awaited<ReturnType<StepRunner['run']>>>>>
+    const enabled = await runBuiltinGroup({ outcomes, asBuiltRemediationEnabled: false });
+    const disabled = await runBuiltinGroup({ outcomes, asBuiltRemediationEnabled: false, telemetry: 'disabled' });
+    const failing = await runBuiltinGroup({ outcomes, asBuiltRemediationEnabled: false, telemetry: 'failing-exporter' });
 
     for (const fixture of [enabled, disabled, failing]) {
-      // The normal join may ask the existing remediation seam to classify a
-      // missing PRD artifact; this fixture's boundary is the initial group
-      // admission, not that unrelated follow-up dispatch.
-      expect(fixture.calls.slice(0, VALIDATION_GROUP.members.length)).toEqual(VALIDATION_GROUP.members);
+      expect(fixture.calls).toHaveLength(VALIDATION_GROUP.members.length * 2);
       expect(fixture.events.filter((event) => event.type === 'step_completed')).toHaveLength(0);
       for (const member of VALIDATION_GROUP.members) {
         const started = fixture.events.find((event) => event.type === 'step_started' && event.step === member);
-        const refusal = fixture.ledger.find((event) => event.type === 'step_refused' && event.step === member);
-        expect(refusal).toMatchObject({
+        const failure = fixture.ledger.find((event) => event.type === 'step_failed' && event.step === member);
+        expect(failure).toMatchObject({
           executionContext: started && 'executionContext' in started ? started.executionContext : undefined,
           activeInterval: { startedAtMs: 1_000, durationMs: expect.any(Number) },
         });
-        expect((refusal?.activeInterval as { durationMs: number }).durationMs).toBeLessThanOrEqual(30);
-        expect(fixture.state[member as StepName]).toBe('refused');
+        expect((failure?.activeInterval as { durationMs: number }).durationMs).toBeLessThanOrEqual(60);
       }
     }
     expect(enabled.spans.filter((span) => VALIDATION_GROUP.members.includes(span.name as StepName))).toHaveLength(VALIDATION_GROUP.members.length);
-    expect(enabled.spans.filter((span) => VALIDATION_GROUP.members.includes(span.name as StepName)).every((span) => span.attributes['conductor.step.status'] === 'refused')).toBe(true);
+    expect(enabled.spans.filter((span) => VALIDATION_GROUP.members.includes(span.name as StepName)).every((span) => span.attributes['conductor.step.status'] === 'failed')).toBe(true);
     expect(disabled.spans).toHaveLength(0);
     expect(disabled.metrics.getMetrics()).toHaveLength(0);
     expect(failing.warnings.length).toBeGreaterThan(0);

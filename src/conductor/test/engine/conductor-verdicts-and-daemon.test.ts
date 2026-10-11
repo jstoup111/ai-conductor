@@ -2014,10 +2014,7 @@ describe('engine/conductor', () => {
     async function satisfyUnrelatedValidation(step: StepName, runId?: string): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       if (step === 'prd_audit') {
-        await writeFile(
-          join(dir, '.pipeline/prd-audit.md'),
-          '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n',
-        );
+        await writePrdAuditFixture(dir, runId);
       } else if (step === 'architecture_review_as_built') {
         await writeAsBuiltFixture(dir, runId, asBuiltApprovedFixture());
       }
@@ -2212,7 +2209,7 @@ describe('engine/conductor', () => {
       expect(kickbacks).toHaveLength(0);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/step 'manual_test' failed/);
+      expect(halt).toMatch(/branch "manual_test" produced no-verdict/);
     });
 
     it('auto mode non-daemon: a failing manual_test HALTs — never silently auto-skipped (#367 gating flip)', async () => {
