@@ -45,7 +45,7 @@ type DeferralCase = RemediationCaseRecord & {
 };
 
 export type PersistBuildReviewDecisionStopResult =
-  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted'; readonly caseId: string }
+  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted' | 'already-resolved'; readonly caseId: string }
   | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` };
 
 /** The shared lifecycle vocabulary for reducers and effect execution. */
@@ -74,6 +74,11 @@ function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRec
     });
 }
 
+function sameSourceIds(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  const ids = (record: RemediationCaseRecord) => [...new Set(record.sources.map((source) => source.sourceId))].sort();
+  return JSON.stringify(ids(left)) === JSON.stringify(ids(right));
+}
+
 /**
  * The effect-state owner persists decision stops through its existing lease,
  * but deliberately has no publication, tracker, artifact, or charge adapter.
@@ -85,6 +90,19 @@ export async function persistBuildReviewDecisionStop(input: {
   if (!isBuildReviewDecisionStop(input.record)) return { ok: false, reason: 'invalid-decision-stop' };
   const mutation = await input.store.mutate<PersistBuildReviewDecisionStopResult>(async (state) => {
     const existing = state.cases.find((record) => record.id === input.record.id);
+    if (existing && !isOpenRemediationCase(existing)) {
+      // A judgement can name a settled case as its existing case. Re-raising
+      // exactly the sources that settlement already decided changes nothing;
+      // anything else is new blocking state and must not overwrite history.
+      if (sameSourceIds(existing, input.record)) {
+        return { value: { ok: true as const, status: 'already-resolved' as const, caseId: existing.id } };
+      }
+      const record = { ...input.record, id: randomUUID() };
+      return {
+        value: { ok: true as const, status: 'persisted' as const, caseId: record.id },
+        nextState: { ...state, cases: [...state.cases, record] },
+      };
+    }
     if (existing) {
       return {
         value: sameDecisionStop(existing, input.record)

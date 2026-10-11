@@ -151,6 +151,72 @@ describe('reduceBuildReviewAdjudication', () => {
     await expect(readFile(sealedArtifact, 'utf8')).resolves.toBe('approved baseline\n');
   });
 
+  it('treats a re-raised stop on a resolved case with the same sources as settled, without halting state', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-review-resolved-stop-'));
+    const feature = { version: 'v1', repository: 'acme/repo', feature: 'resolved-stop' } as const;
+    const resolved: RemediationCaseRecord = { ...decisionStop('architecture'), resolution: 'resolved' };
+    await expect(persistBuildReviewDecisionStop({
+      store: new RemediationCaseStore(projectRoot, feature), record: { ...resolved, resolution: 'open' },
+    })).resolves.toMatchObject({ ok: true, status: 'persisted' });
+    await new RemediationCaseStore(projectRoot, feature).mutate(async (state) => ({
+      value: undefined,
+      nextState: { ...state, cases: state.cases.map((record) => ({ ...record, resolution: 'resolved' as const })) },
+    }));
+
+    const reRaised = {
+      ...decisionStop('architecture'),
+      rationale: 'A fresh judgement worded differently.',
+      sources: decisionStop('architecture').sources.map((source) => ({ ...source, recordedAt: '2030-01-01T00:00:00.000Z' })),
+    };
+    await expect(persistBuildReviewDecisionStop({
+      store: new RemediationCaseStore(projectRoot, feature), record: reRaised,
+    })).resolves.toEqual({ ok: true, status: 'already-resolved', caseId: resolved.id });
+
+    const persisted = await new RemediationCaseStore(projectRoot, feature).read();
+    expect(persisted).toMatchObject({ ok: true, state: { cases: [{ id: resolved.id, resolution: 'resolved' }] } });
+    if (!persisted.ok) return;
+    expect(persisted.state.cases).toHaveLength(1);
+    expect(reduceBuildReviewAdjudication(reducerInput({ cases: persisted.state.cases })).route).not.toBe('halt');
+  });
+
+  it('persists a stop with new sources under a fresh id instead of overwriting a resolved case', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-review-resolved-new-source-'));
+    const feature = { version: 'v1', repository: 'acme/repo', feature: 'resolved-new-source' } as const;
+    const original = decisionStop('architecture');
+    await persistBuildReviewDecisionStop({ store: new RemediationCaseStore(projectRoot, feature), record: original });
+    await new RemediationCaseStore(projectRoot, feature).mutate(async (state) => ({
+      value: undefined,
+      nextState: { ...state, cases: state.cases.map((record) => ({ ...record, resolution: 'resolved' as const })) },
+    }));
+
+    const newSource = {
+      ...original,
+      sources: [{ ...original.sources[0], sourceId: 'finding-new' }],
+    };
+    const result = await persistBuildReviewDecisionStop({ store: new RemediationCaseStore(projectRoot, feature), record: newSource });
+
+    expect(result).toMatchObject({ ok: true, status: 'persisted' });
+    expect(result.ok && result.caseId).not.toBe(original.id);
+    await expect(new RemediationCaseStore(projectRoot, feature).read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [
+        { id: original.id, resolution: 'resolved', sources: original.sources },
+        { resolution: 'open', sources: [{ sourceId: 'finding-new' }] },
+      ] },
+    });
+  });
+
+  it('still refuses a conflicting stop that reuses an open case id', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-review-open-conflict-'));
+    const feature = { version: 'v1', repository: 'acme/repo', feature: 'open-conflict' } as const;
+    const stop = decisionStop('architecture');
+    await persistBuildReviewDecisionStop({ store: new RemediationCaseStore(projectRoot, feature), record: stop });
+
+    await expect(persistBuildReviewDecisionStop({
+      store: new RemediationCaseStore(projectRoot, feature), record: { ...stop, rationale: 'changed' },
+    })).resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
+  });
+
   it('persists a blocked consistency stop and derives its halt from the durable evidence', async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'build-review-consistency-stop-'));
     const feature = { version: 'v1', repository: 'acme/repo', feature: 'consistency-stop' } as const;
