@@ -99,7 +99,7 @@ async function requiredSha(git: GitRunner, revision: string, context: string): P
   return value;
 }
 
-async function defaultTip(git: GitRunner, supplied?: string): Promise<CommitSha> {
+export async function defaultTip(git: GitRunner, supplied?: string): Promise<CommitSha> {
   if (supplied !== undefined) {
     const parsed = parseCommitSha(supplied);
     if (!parsed) throw new Error('newDefault is not a full Git object name');

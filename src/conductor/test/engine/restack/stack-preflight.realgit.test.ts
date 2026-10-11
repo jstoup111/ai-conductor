@@ -245,4 +245,27 @@ describe('runStackPreflight (real local Git)', () => {
     expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
+
+  // Covers: S10.3, task:33
+  it('repairs without chaining a base refresh when a due re-kick finds the default already inside child 1', async () => {
+    const subject = await fixture();
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('operator change', 'operator.txt', 'X\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const operatorCommit = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
+    const consumed: string[] = [];
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo, slug: 'demo', baseRefreshDue: true,
+      consumeRekick: async () => { consumed.push('consume'); }, events, git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toEqual({ kind: 'repaired' });
+    expect(records.filter((record) => record.type === 'restack_planned').map((record) => record.cause))
+      .toEqual(['feature-repair']);
+    expect(consumed).toEqual(['consume']);
+    // The repair adopts X into child 1 as-is; no base refresh rewrites it.
+    expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(operatorCommit);
+    expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim()).toBe(operatorCommit);
+  });
 });

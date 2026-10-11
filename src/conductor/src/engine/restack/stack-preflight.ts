@@ -3,11 +3,12 @@ import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { hasDurableChildState, resolveActiveChild } from '../child-cursor.js';
-import type { GitRunner } from '../rebase.js';
+import { childBranchFor } from '../feature-branch-identity.js';
+import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { HALT_MARKER } from '../halt-marker.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { checkCascadeCap } from './cascade-cap.js';
-import { runRestack } from './restack-executor.js';
+import { defaultTip, runRestack } from './restack-executor.js';
 import type { RestackResolver } from './restack-resolver.js';
 import { emitRestackRefused } from './restack-events.js';
 import { readRestackJournal } from './restack-journal.js';
@@ -119,22 +120,30 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     await checkCascadeCap(options.worktree, options.slug, [child], { git: options.git });
   }
 
+  // A re-kick asks for a base refresh, but when the default is already inside
+  // child 1 there is nothing to carry: chaining one would only rewrite every
+  // child to new SHAs. The REKICK is then satisfied by the repair alone.
+  const baseRefreshDue = options.baseRefreshDue === true
+    && !(await defaultAlreadyInStack(options.slug, options.git ?? makeGitRunner(options.worktree)));
   const repair = await runRestack({
     worktree: options.worktree,
     slug: options.slug,
     cause: 'feature-repair',
     originatingChildren: cursor.repairChildren,
-    ...(options.baseRefreshDue ? { followOnCause: 'base-refresh' as const } : {}),
+    ...(baseRefreshDue ? { followOnCause: 'base-refresh' as const } : {}),
     ...(options.events === undefined ? {} : { events: options.events }),
     ...(options.git === undefined ? {} : { git: options.git }),
     ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
     ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
   });
   if (repair.kind !== 'applied') {
-    if (options.baseRefreshDue) await deferredBaseRefresh(options.events);
+    if (baseRefreshDue) await deferredBaseRefresh(options.events);
     return repair.kind === 'unavailable' ? repair : { kind: 'halted' };
   }
-  if (!options.baseRefreshDue) return { kind: 'repaired' };
+  if (!baseRefreshDue) {
+    if (options.baseRefreshDue) await options.consumeRekick?.();
+    return { kind: 'repaired' };
+  }
 
   // A successful repair intentionally leaves its applied journal in place.
   // Replacing it with the named follow-on is the atomic hand-off which also
@@ -163,4 +172,15 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     return followOn.kind === 'unavailable' ? followOn : { kind: 'halted' };
   }
   return { kind: 'repaired' };
+}
+
+async function defaultAlreadyInStack(slug: string, git: GitRunner): Promise<boolean> {
+  const first = childBranchFor(slug, 1);
+  if (!first.ok) return false;
+  try {
+    const tip = await defaultTip(git);
+    return (await git(['merge-base', '--is-ancestor', tip, `refs/heads/${first.branch}`])).exitCode === 0;
+  } catch {
+    return false;
+  }
 }
