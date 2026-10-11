@@ -8,11 +8,11 @@ import { detectDaemonCommand, detectDaemonSupervisorCommand } from '../src/engin
 import { detectEngineerCommand } from '../src/engine/engineer-cli.js';
 import {
   formatPreGuardCommand,
+  isTopLevelHelpRequest,
   PRE_GUARD_COMMAND_FIXTURES,
   REMEDIATION_COMMAND_FIXTURES,
 } from '../src/remediation-commands.js';
 import { formatInlineGuardGuidance } from '../src/remediation-guidance.js';
-import { isTopLevelHelpRequest } from '../src/index.js';
 
 export interface HandWrittenCommand {
   readonly line: number;

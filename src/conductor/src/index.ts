@@ -6,13 +6,8 @@ export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.j
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
 import { emitDaemonSessionRefusal, guardDaemonSessionInvocation } from './execution/daemon-session.js';
-import { formatPreGuardCommand } from './remediation-commands.js';
+import { formatPreGuardCommand, isTopLevelHelpRequest } from './remediation-commands.js';
 import { formatInlineGuardGuidance } from './remediation-guidance.js';
-
-/** True when argv requests the top-level command reference. */
-export function isTopLevelHelpRequest(argv: readonly string[]): boolean {
-  return argv.slice(2).some((arg) => arg === '--help' || arg === '-h');
-}
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {

@@ -43,6 +43,11 @@ export const PRE_GUARD_COMMAND_FIXTURES: readonly PreGuardCommand[] = Object.fre
   { kind: 'daemon-start' },
 ]);
 
+/** True when argv requests the top-level command reference. */
+export function isTopLevelHelpRequest(argv: readonly string[]): boolean {
+  return argv.slice(2).some((arg) => arg === '--help' || arg === '-h');
+}
+
 /** Returns argv after the `ai-conductor` binary name. */
 export function remediationArgv(command: RemediationCommand): string[] {
   const args = ['inline'];
