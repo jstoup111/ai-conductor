@@ -91,6 +91,42 @@ async function defaultTip(git: GitRunner, supplied?: string): Promise<CommitSha>
   throw new Error('cannot resolve default branch tip; provide newDefault');
 }
 
+async function commitsInRange(git: GitRunner, range: string, context: string): Promise<CommitSha[]> {
+  const result = await runGit(git, ['rev-list', '--reverse', range]);
+  if (result.exitCode !== 0) throw new Error(`cannot list ${context}`);
+  return result.stdout.split('\n').filter(Boolean).map((value) => {
+    const commit = parseCommitSha(value);
+    if (!commit) throw new Error(`cannot parse ${context} commit`);
+    return commit;
+  });
+}
+
+async function comparisonCommits(
+  git: GitRunner,
+  slug: string,
+  cause: RestackCause,
+  ranges: readonly ChildRange[],
+  originating: readonly ChildId[],
+  newDefault: CommitSha,
+): Promise<CommitSha[]> {
+  if (cause === 'base-refresh') {
+    const first = ranges[0];
+    return first === undefined ? [] : commitsInRange(git, `${first.oldParent}..${newDefault}`, 'new default commits');
+  }
+
+  const commits: CommitSha[] = [];
+  for (const child of originating) {
+    const range = ranges.find((entry) => entry.child === child);
+    if (!range) throw new Error(`missing repair range for child ${child}`);
+    commits.push(...await commitsInRange(
+      git,
+      `refs/conductor/${slug}/closed/c${child}..${range.oldTip}`,
+      `repair commits for child ${child}`,
+    ));
+  }
+  return commits;
+}
+
 async function committerStamp(git: GitRunner): Promise<CommitterStamp> {
   const [name, email] = await Promise.all([
     runGit(git, ['config', '--get', 'user.name']),
@@ -234,9 +270,14 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     journal = created.journal;
     await options.events?.emit({ type: 'restack_planned', opId: draft.opId, cause: draft.cause, children: plan.ranges.map((range) => range.child) });
 
+    const newStackCommits = await comparisonCommits(
+      git, options.slug, options.cause, plan.ranges, plan.originating, newDefault,
+    );
     let parent = newDefault;
     for (const range of plan.ranges) {
-      const replay = await replayChildRange(range, parent, journal.journal.committer, git);
+      const replay = await replayChildRange(range, parent, journal.journal.committer, git, {
+        comparisonCommits: newStackCommits,
+      });
       const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, { git });
       if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;
