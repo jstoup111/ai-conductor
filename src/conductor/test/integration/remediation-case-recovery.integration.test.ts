@@ -1,4 +1,4 @@
-// Covers: task:19, task:rem-as-built-rem-ab2-4
+// Covers: task:5, task:19, task:rem-as-built-rem-ab2-4
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -410,5 +410,95 @@ describe('remediation case recovery', () => {
     expect(reduceBuildReviewAdjudication({
       currentSourceIds: [buildReviewAdjudicationSourceId(distinctSource)], cases: persisted.state.cases, mechanical: 'healthy',
     })).toEqual({ route: 'halt', remainingMechanical: false, reason: 'remediation effect is not finalized' });
+  });
+
+  it('recovers from a cleared rejected-transition halt without changing its valid persisted history', async () => {
+    const projectRoot = await root();
+    const rejectedAggregate = actionAggregate('rejected-transition', [{ name: 'already-linked finding', path: 'test/linked.test.ts' }]);
+    const admissibleAggregate = actionAggregate('admissible-transition', [{ name: 'unlinked finding', path: 'test/unlinked.test.ts' }]);
+    const rejectedSourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(rejectedAggregate)![0]!);
+    const admissibleSourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(admissibleAggregate)![0]!);
+    const store = new RemediationCaseStore(projectRoot, feature);
+    const storePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const haltPath = join(projectRoot, '.pipeline/HALT');
+    const haltClassPath = join(projectRoot, '.pipeline/HALT.class');
+
+    await store.mutate(async () => ({
+      value: undefined,
+      nextState: {
+        version: 'v1', feature,
+        cases: [{
+          id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'This applied repair remains the authoritative history.', resolution: 'resolved',
+          sources: [{ sourceId: rejectedSourceId, outcome: 'acted', recordedAt: '2026-10-10T00:00:00.000Z' }],
+          effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+        }],
+      },
+    }));
+    const savedStore = await readFile(storePath, 'utf8');
+    const savedCaseR = (JSON.parse(savedStore) as { cases: readonly unknown[] }).cases[0];
+
+    const rejectedJudgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: rejectedSourceId, outcome: 'acted', caseRef: 'case-N' }],
+      cases: [{
+        caseRef: 'case-N', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'This incorrectly proposes a second owner for the existing source.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Do not duplicate the linked finding' }] },
+      }],
+    };
+    const run = (
+      aggregate: ReturnType<typeof actionAggregate>,
+      judgement: RemediationCaseJudgement,
+      ids: readonly [string, string],
+      events: unknown[],
+    ) =>
+      coordinateBuildReviewAdjudication({
+        projectRoot, feature, aggregate, mechanical: 'healthy', operatorResolvedFindingIds: new Set<string>(),
+        judge: async () => judgement,
+        chargeInput: { treeHash: `tree-${aggregate.lapId}`, resolvedCount: 1, reason: 'rejected transition recovery proof' },
+        generateId: (() => { const generated = [...ids]; return () => generated.shift()!; })(),
+        emit: async (event) => { events.push(event); },
+      });
+
+    const initialEvents: unknown[] = [];
+    await expect(run(rejectedAggregate, rejectedJudgement, ['case-N', 'effect-N'], initialEvents)).resolves.toMatchObject({ ok: false, detail: expect.stringContaining('case transition rejected') });
+    expect(await readFile(storePath, 'utf8')).toBe(savedStore);
+
+    // HALT ownership belongs to Conductor; exercise its real on-disk recovery
+    // contract here while the coordinator and case store remain production code.
+    await writeFile(haltPath, 'build_review adjudication halted');
+    await writeFile(haltClassPath, 'needs-human');
+    await Promise.all([rm(haltPath), rm(haltClassPath)]);
+
+    // Repeat before the successful alternative so this branch proves the whole
+    // persisted file is still byte-identical to the saved valid history.
+    const repeatedEvents: unknown[] = [];
+    await expect(run(rejectedAggregate, rejectedJudgement, ['case-N', 'effect-N'], repeatedEvents)).resolves.toMatchObject({ ok: false });
+    expect(repeatedEvents).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_failed',
+      rejectedTransition: { invariant: 'source-linked-by-multiple-cases', caseIds: ['case-R', 'case-N'], sourceIds: [rejectedSourceId] },
+    }));
+    expect(await readFile(storePath, 'utf8')).toBe(savedStore);
+
+    await writeFile(haltPath, 'build_review adjudication halted');
+    await writeFile(haltClassPath, 'needs-human');
+    await Promise.all([rm(haltPath), rm(haltClassPath)]);
+
+    const admissibleJudgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: admissibleSourceId, outcome: 'acted', caseRef: 'case-U' }],
+      cases: [{
+        caseRef: 'case-U', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'This is a distinct source.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the unlinked finding' }] },
+      }],
+    };
+    const admissibleEvents: unknown[] = [];
+    await expect(run(admissibleAggregate, admissibleJudgement, ['case-U', 'effect-U'], admissibleEvents)).resolves.toMatchObject({ ok: true });
+    const recovered = await new RemediationCaseStore(projectRoot, feature).read();
+    expect(recovered).toMatchObject({ ok: true, state: { cases: expect.arrayContaining([expect.objectContaining({ id: 'case-U' })]) } });
+    if (!recovered.ok) throw new Error(`unexpected case-store recovery failure: ${recovered.reason}`);
+    const caseR = recovered.state.cases.find((record) => record.id === 'case-R');
+    expect(JSON.stringify(caseR)).toBe(JSON.stringify(savedCaseR));
   });
 });
