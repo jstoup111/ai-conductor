@@ -4,6 +4,13 @@ spec_hash: 54dbdc6c328fb6ee94bf1815de82f3eb2c03a6ddf960310a8a620bc8283dc96c
 pr: https://github.com/jstoup111/ai-conductor/pull/3176
 shipped: 2026-10-11
 engine_version: 20261011T003623Z-5f233d35b433
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "These are repository-corpus engineering constants refreshed so the test suite passes against plans that have grown on main. They are unrelated to closeout timing. They change no closeout behavior and no user-facing output, only internal bounds the projections check against, so the widening is outside the feature's intent but not user-visible."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
