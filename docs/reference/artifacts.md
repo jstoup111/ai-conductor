@@ -981,10 +981,15 @@ It never includes the corrupt line's contents or an exception message.
 ### `.pipeline/pipeline-events.jsonl`
 
 The pipeline's own closeout timing ledger, written by `ai-conductor closeout-event` — see
-[`ai-conductor closeout-event`](cli.md#ai-conductor-closeout-event). One JSON `pipeline_closeout`
-`ConductorEvent` per line: `obligation` (one of `evaluator`, `simplify`, `architecture-diagram`,
-`memory`, `summary`), `startedAt`/`endedAt` epoch milliseconds, and a
-pipeline-stamped `ts`. Append-only, gitignored, never committed.
+[`ai-conductor closeout-event`](cli.md#ai-conductor-closeout-event). One JSON `ConductorEvent` per
+line, each with an `obligation` (one of `evaluator`, `simplify`, `architecture-diagram`, `memory`,
+`summary`) and a command-stamped epoch-millisecond `ts`:
+
+- `pipeline_closeout_started` — written by `closeout-event start`.
+- `pipeline_closeout` — written by `closeout-event end`; `startedAt` is the paired start's `ts`,
+  and `endedAt` equals `ts`.
+
+Append-only, gitignored, never committed.
 
 This is a deliberate second single-writer ledger, not a duplicate of `events.jsonl`: the pipeline
 process that runs closeout obligations may have no conductor or daemon attached (an inline run),
@@ -993,7 +998,8 @@ running under the engine, `CloseoutEventTail` tails this file incrementally (ski
 trailing lines) and re-emits each valid complete record onto the live bus exactly once. A malformed
 complete line is consumed once so later valid records remain observable; the tail emits one
 `pipeline_tail_diagnostic` instead of replaying or exposing the line. An inline run produces the
-same records with no tail and no re-emission. `computeBuildTailRollup` (see
+same records with no tail and no re-emission. A re-emitted `pipeline_closeout_started` reaches bus
+listeners only; its sink entry disables rendering, persistence, audit, and OTel. `computeBuildTailRollup` (see
 [`ai-conductor build-tail`](cli.md#ai-conductor-build-tail)) merges this ledger with `events.jsonl` by
 `ts` to decompose a `build` window into task execution, remediation, and closeout segments.
 
