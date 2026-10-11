@@ -1,4 +1,5 @@
 // Covers: task:22
+// Covers: task:rem-prd-audit-R19
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -110,5 +111,28 @@ describe('restack cascade cap (real local Git)', () => {
     await expect(readKickbackLedger(subject.repo, child(2))).resolves.toMatchObject({
       gates: { restack: { capEvidence: { allowance: 'restacks', consumed: 3, limit: 3 } } },
     });
+  });
+
+  it('halts before journal creation when the cascade counter ref is corrupt', async () => {
+    const subject = await fixture();
+    const blob = (await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], { input: '{not-json' })).stdout.trim();
+    await subject.git(['update-ref', cascadesRefFor('demo'), blob]);
+    const records: Array<{ type: string; reason?: string; child?: number }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('restack_refused', (event) => { records.push(event); });
+
+    const result = await runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      events,
+      git: makeGitRunner(subject.repo),
+    });
+
+    expect(result).toEqual({ kind: 'halted' });
+    await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
+    expect(records).toMatchObject([{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }]);
+    expect(await readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(cascadesRefFor('demo'));
   });
 });
