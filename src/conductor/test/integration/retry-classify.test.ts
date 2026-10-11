@@ -47,7 +47,6 @@ import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 
 // ── shared fixtures ───────────────────────────────────────────────────────
 
-const AUDIT_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
   planGap: { enabled: true, reason: 'test fixture' },
