@@ -262,7 +262,7 @@ export interface AutoresolveDispatchOpts {
    * (AC3) — the git work itself happens inside this callback.
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' } | void>;
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack' } | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -680,6 +680,11 @@ export async function sweepMergeableLabels({
           survivors[idx] = { ...updated, resolveAttempts: 0 };
         } else if (dispatchResult?.kind === 'escalated') {
           survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
+        } else if (dispatchResult?.kind === 'published-stack') {
+          // A stacked branch is intentionally escalated before any replay.
+          // That is not an exhausted resolution attempt, so preserve the
+          // counter which existed when this sweep began.
+          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
         } else if (dispatchResult?.kind === 'setup-stop') {
           survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
           try {

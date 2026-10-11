@@ -48,6 +48,8 @@ import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-ope
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import type { GithubOperationEventEmitter, GithubOperationRunner } from './github-operations.js';
 import { isTestPath } from './gate-invalidation.js';
+import { hasDurableChildState } from './child-cursor.js';
+import { emitRestackRefused } from './restack/restack-events.js';
 
 const execFile = promisify(execFileCb);
 
@@ -1078,9 +1080,26 @@ export async function resolveConflictingPr(
     /** Injectable preservation guard boundary for resolution-flow tests. */
     runAcceptanceGuards?: typeof runAcceptanceGuards;
   },
-): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' }> {
+): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack' }> {
   const { prUrl, slug, repoCwd } = entry;
   const { log } = deps;
+
+  // A published stacked feature has one public leaf but several private
+  // branches whose replay would rewrite the stack under an already-open PR.
+  // Escalate before creating the resolution worktree: no rebase, merge-tree,
+  // or remote write is a valid recovery for this state (#2945).
+  if (await hasDurableChildState(repoCwd, slug) === true) {
+    const reason = 'published stacked feature requires manual resolution (#2945)';
+    await deps.events?.emit(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));
+    await escalate(prUrl, 'published-stack', reason, {
+      runGh: deps.runGh,
+      operations: deps.operations,
+      cwd: repoCwd,
+      log,
+    });
+    logOutcome(log, prUrl, 'published-stack', 'escalated');
+    return { kind: 'published-stack' };
+  }
 
   return withResolveWorktree(slug, branch, repoCwd, async (worktreePath) => {
     const emitResolutionStage = async (
