@@ -22,6 +22,7 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
+import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import {
@@ -274,6 +275,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       git, options.slug, options.cause, plan.ranges, plan.originating, newDefault,
     );
     const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
+    const overlaps = new Map<number, string[]>();
     let parent = newDefault;
     for (const range of plan.ranges) {
       const replay = await replayChildRange(range, parent, journal.journal.committer, git, {
@@ -282,6 +284,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, { git });
       if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;
+      const ownership = await checkPathOwnership(range, parent, replay.tip, git);
+      if (ownership.kind === 'refused') {
+        await haltRestack(options.worktree, 'replay-mismatch', options.events, {
+          child: range.child,
+          detail: ownership.paths.join(', '),
+        });
+        return { kind: 'halted' };
+      }
+      overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
       parent = replay.tip;
       mergeAudit.flattenedMerges.push(...replay.audit.flattenedMerges);
       mergeAudit.ancestryOnlyMerges.push(...replay.audit.ancestryOnlyMerges);
@@ -344,7 +355,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       if (!move) throw new Error(`missing move for child ${range.child}`);
       await options.events?.emit({
         type: 'restack_applied', opId: draft.opId, cause: draft.cause, child: range.child,
-        oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [], parentOverlapPaths: [],
+        oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [], parentOverlapPaths: overlaps.get(range.child) ?? [],
       });
     }
     if (mergeAudit.flattenedMerges.length > 0 || mergeAudit.ancestryOnlyMerges.length > 0 || mergeAudit.sideLineageCount > 0) {
