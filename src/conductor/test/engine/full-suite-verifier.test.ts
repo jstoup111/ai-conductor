@@ -4039,7 +4039,6 @@ describe('FullSuiteVerifier', () => {
         CONCURRENT_ENSURE_FIXTURE,
         projectRoot,
         resultPath,
-        '--with-inspection',
       ],
       { cwd: CONDUCTOR_ROOT },
     );
