@@ -40,14 +40,14 @@ function failedWorkflowLog(): string {
   const fetch = Array.from({ length: 520 }, (_, index) =>
     `conductor\tUNKNOWN STEP\t2026-09-21T19:43:43Z  * [new branch]        feat/x-${index} -> origin/feat/x-${index}`,
   );
-  const body = [
+  const prefix = [...fetch, [
     ' RUN  v4.1.11 /worktree',
     ' FAIL  test/engine/foo.test.ts > foo > bar',
     'AssertionError: expected 1 to be 2',
-    ...Array.from({ length: 4_000 }, (_, index) => `padding output ${index}`),
-    '##[error]Process completed with exit code 1.',
-  ];
-  return [...fetch, ...body].join('\n');
+  ]].flat().join('\n');
+  const lastLine = '##[error]Process completed with exit code 1.';
+  const padding = 'p'.repeat(127_189 - Buffer.byteLength(`${prefix}\n\n${lastLine}`, 'utf8'));
+  return `${prefix}\n${padding}\n${lastLine}`;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -86,6 +86,7 @@ describe('ci-fix: buildCiLogExcerpt failure lines', () => {
   it('puts matching failure lines ahead of the final log lines without setup noise', () => {
     const excerpt = buildCiLogExcerpt(failedWorkflowLog());
 
+    expect(Buffer.byteLength(failedWorkflowLog(), 'utf8')).toBe(127_189);
     expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(CI_FIX_LOG_EXCERPT_MAX_BYTES);
     expect(excerpt).toMatch(/^\[failure lines\]/);
     expect(excerpt).toContain('FAIL  test/engine/foo.test.ts > foo > bar');
@@ -118,6 +119,14 @@ describe('ci-fix: buildCiLogExcerpt failure lines', () => {
     expect(Buffer.byteLength(failureSection, 'utf8')).toBeLessThanOrEqual(CI_FIX_LOG_EXCERPT_MAX_BYTES / 2 + 1);
     expect(failureSection).toMatch(/\[\d+ failure lines omitted\]/);
     expect(excerpt).not.toContain('�');
+  });
+
+  it('limits an oversized failure line to 512 bytes with its marker', () => {
+    const excerpt = buildCiLogExcerpt(`FAIL ${'x'.repeat(2_000)}\n${'padding\n'.repeat(3_000)}last`);
+    const failureLine = excerpt.split('\n')[1];
+
+    expect(Buffer.byteLength(failureLine, 'utf8')).toBeLessThanOrEqual(512);
+    expect(failureLine.endsWith('[line truncated]')).toBe(true);
   });
 });
 

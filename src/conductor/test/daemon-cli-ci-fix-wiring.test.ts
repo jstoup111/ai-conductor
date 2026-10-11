@@ -23,13 +23,14 @@ const selected: PrMergeState = {
 };
 
 function longFailedLog(): string {
-  return [
+  const prefix = [
     ...Array.from({ length: 600 }, (_, index) => `* [new branch] feat/fail-fast-${index} -> origin/feat/fail-fast-${index}`),
     'FAIL  test/engine/foo.test.ts > foo > bar',
     'AssertionError: expected 1 to be 2',
-    ...Array.from({ length: 3_000 }, (_, index) => `padding ${index}`),
-    '##[error]Process completed with exit code 1.',
   ].join('\n');
+  const lastLine = '##[error]Process completed with exit code 1.';
+  const padding = 'p'.repeat(127_189 - Buffer.byteLength(`${prefix}\n\n${lastLine}`, 'utf8'));
+  return `${prefix}\n${padding}\n${lastLine}`;
 }
 
 function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>[0]> = {}) {
