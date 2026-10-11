@@ -114,13 +114,78 @@ describe('build_review declared replication suppressions', () => {
       declaredReplicationSuppressions,
     });
 
-  it('persists a target-anchored source-only-evidence duplication from the active plan as a declaredReplicationSuppression', () => {
-    const finding = duplication();
-    const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;
-    const result = aggregate(finding, [{ findingId: identity.id, sourcePath, targetPath }]);
+  it('persists a target-anchored source-only-evidence duplication from the active plan as a declaredReplicationSuppression', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'declared-replication-runner-'));
+    const planPath = join(projectDir, '.docs/plans/feature.md');
+    const planBody = `# Plan\n\n**Pattern-source:** ${sourcePath}\n**Rename-map:** source-widget -> target-widget\n`;
+    let effective!: ReturnType<typeof deriveEffectiveBuildReviewVerdict>;
+    let finding: ReturnType<typeof duplication> | undefined;
 
-    expect(result).toMatchObject({ verdict: 'FAIL', declaredReplicationSuppressions: [{ findingId: identity.id, sourcePath, targetPath }] });
-    expect(deriveEffectiveBuildReviewVerdict(result)).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id] });
+    try {
+      await mkdir(join(projectDir, '.docs/plans'), { recursive: true });
+      await mkdir(join(projectDir, 'src'), { recursive: true });
+      await writeFile(planPath, planBody, 'utf8');
+      await writeFile(join(projectDir, sourcePath), 'export const widget = true;\n', 'utf8');
+      await writeFile(join(projectDir, targetPath), 'export const widget = true;\n', 'utf8');
+      const gitRunner = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\0${targetPath}\0`, stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${targetPath} b/${targetPath}\n@@ -1 +1 @@\n-export const widget = false;\n+export const widget = true;\n`, stderr: '' };
+        if (args[0] === 'show' && args[1] === 'head:.docs/plans/feature.md') return { exitCode: 0, stdout: planBody, stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = false;\n', stderr: '' };
+        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      const runner = new DefaultStepRunner(createMockProvider(), 'replication', projectDir, {
+        gitRunner,
+        planPath,
+        config: {
+          build_review: {
+            enabled: true,
+            rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
+          },
+        } as HarnessConfig,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' } } as never),
+        },
+        buildReviewEffectiveResolver: async (_projectRoot, result) => {
+          const resolved = deriveEffectiveBuildReviewVerdict(result);
+          if (!resolved) throw new Error('expected build_review aggregate to yield an effective verdict');
+          effective = resolved;
+          return { ok: true, feature: { version: 'v1', repository: projectDir, feature: 'replication' }, effective };
+        },
+      });
+      vi.spyOn(runner as any, 'fileExists').mockImplementation(async (...args: any[]) => args[0] === join(projectDir, sourcePath));
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => {
+        return {
+          kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v3', findings: [finding = {
+            ...duplication(),
+            anchor: {
+              rubric: 'implementationQuality',
+              locus: {
+                path: targetPath,
+                contentHash: projection.changedFiles[0].hunks[0].contentHash,
+                display: 'declared target copy',
+              },
+            },
+          }], verdict: 'FAIL',
+        };
+      });
+
+      const runResult = await runner.run('build_review', emptyState);
+      expect(runResult).toMatchObject({ success: true });
+
+      const persisted = JSON.parse(await readFile(join(projectDir, '.pipeline/build-review.json'), 'utf8'));
+      const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding!.concernKind, anchor: finding!.anchor })!;
+      expect(persisted.declaredReplicationSuppressions).toEqual([{ findingId: identity.id, sourcePath, targetPath }]);
+      expect(effective).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id] });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it.each([
