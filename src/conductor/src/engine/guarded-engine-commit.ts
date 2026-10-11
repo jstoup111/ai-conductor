@@ -52,7 +52,7 @@ async function runHook(
   hook: 'pre-commit' | 'prepare-commit-msg' | 'commit-msg' | 'post-commit',
   args: readonly string[] = [],
 ): Promise<boolean> {
-  const result = await execa('git', ['hook', 'run', hook, ...(args.length === 0 ? [] : ['--', ...args])], {
+  const result = await execa('git', ['hook', 'run', '--ignore-missing', hook, ...(args.length === 0 ? [] : ['--', ...args])], {
     cwd, env, reject: false,
   });
   return result.exitCode === 0;
