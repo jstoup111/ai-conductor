@@ -1,55 +1,80 @@
-/**
- * Episode-caused HALT tracker — records which HALTs were written during an
- * active rate-limit episode, so they can be recovered when the episode ends.
- *
- * Task 20: HALTs written during an active episode carry a stamp. When the
- * episode ends, stamped HALTs are recovered via the existing rekick path.
- */
+/** Durable tracker for HALTs caused by a rate-limit episode. */
 
-/**
- * Create a tracker for episode-caused HALTs.
- * Returns callbacks for onHaltWritten and sweepEpisodeHalts.
- */
-export interface EpisodeHaltTracker {
-  /**
-   * Called when a HALT is written. Records whether it was episode-caused.
-   */
-  onHaltWritten(slug: string, episodeCaused: boolean): void;
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  readEpisodeStamp,
+  removeEpisodeStamp,
+  writeEpisodeStamp,
+} from './halt-marker.js';
 
-  /**
-   * Get all episode-caused HALTs that are still active (not cleared).
-   */
-  getEpisodeHalts(isHalted: (slug: string) => Promise<boolean>): Promise<string[]>;
-
-  /**
-   * Clear the tracker (typically on daemon restart or when episode scope ends).
-   */
-  clear(): void;
+export interface EpisodeHaltTrackerOptions {
+  /** Parent directory containing feature worktrees, keyed by slug. */
+  worktreeBase: string;
+  /** Best-effort diagnostic sink; tracker failures must never interrupt parking. */
+  log: (message: string) => void;
 }
 
-export function createEpisodeHaltTracker(): EpisodeHaltTracker {
-  // Slugs that had HALTs written during an active episode
-  const episodeCausedSlugs = new Set<string>();
+export interface EpisodeHaltTracker {
+  /** Persist episode causality for a HALT that was just written. */
+  onHaltWritten(slug: string, episodeCaused: boolean, deadlineMs: number): Promise<void>;
+
+  /** Return worktrees whose current, matching stamp has expired. */
+  listRecoverable(nowMs: number): Promise<string[]>;
+}
+
+/**
+ * Create a per-worktree, sidecar-backed episode HALT tracker. A failed stamp
+ * is only logged: the existing HALT remains an operator-owned stop.
+ */
+export function createEpisodeHaltTracker(options: EpisodeHaltTrackerOptions): EpisodeHaltTracker {
+  const worktreeFor = (slug: string) => join(options.worktreeBase, slug);
 
   return {
-    onHaltWritten(slug: string, episodeCaused: boolean) {
-      if (episodeCaused) {
-        episodeCausedSlugs.add(slug);
+    async onHaltWritten(slug, episodeCaused, deadlineMs) {
+      if (!episodeCaused) return;
+
+      const result = await writeEpisodeStamp(worktreeFor(slug), deadlineMs);
+      if (result.status === 'failed') {
+        options.log(`[episode-halt-tracker] failed to stamp ${slug}: ${result.reason}`);
       }
     },
 
-    async getEpisodeHalts(isHalted: (slug: string) => Promise<boolean>): Promise<string[]> {
-      const active: string[] = [];
-      for (const slug of episodeCausedSlugs) {
-        if (await isHalted(slug)) {
-          active.push(slug);
+    async listRecoverable(nowMs) {
+      let entries;
+      try {
+        entries = await readdir(options.worktreeBase, { withFileTypes: true });
+      } catch (error) {
+        options.log(`[episode-halt-tracker] failed to list worktrees: ${formatError(error)}`);
+        return [];
+      }
+
+      const recoverable: string[] = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+
+        const slug = entry.name;
+        const worktree = worktreeFor(slug);
+        const stamp = await readEpisodeStamp(worktree);
+        if (stamp.kind === 'valid') {
+          if (stamp.deadlineMs <= nowMs) recoverable.push(slug);
+          continue;
+        }
+
+        // An invalid stamp describes no live, matching HALT. Remove only the
+        // sidecar; never alter the HALT that made validation fail.
+        if (stamp.reason === 'absent') continue;
+        try {
+          await removeEpisodeStamp(worktree);
+        } catch (error) {
+          options.log(`[episode-halt-tracker] failed to discard stamp for ${slug}: ${formatError(error)}`);
         }
       }
-      return active;
-    },
-
-    clear() {
-      episodeCausedSlugs.clear();
+      return recoverable;
     },
   };
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
