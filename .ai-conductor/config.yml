@@ -133,7 +133,10 @@ test_suite:
   # aggregate-basis PASS (subject to verification.full_suite), so `commands` runs in full before
   # SHIP. Changes to dependencies, config, test infrastructure (setup, helpers,
   # vitest configs) or scripts/ fail closed to the full `commands` sequence.
-  changed_command: 'node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && cd ../.. && test/test_harness_integrity.sh'
+  # Repo-wide structural guards scan the tree by path rather than importing
+  # what they police, so `--changed` never selects them; a second run always
+  # includes them (~35s) so a guard violation fails here, not first in CI (#3192).
+  changed_command: 'node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && node scripts/run-vitest.mjs run --reporter=dot --silent=true test/structural/ guard.test.ts audit.test.ts drift.test.ts projection.test.ts && cd ../.. && test/test_harness_integrity.sh'
   # Ordered aggregate entries each choose their own directory; scoped runs use
   # this shared fallback to reach the conductor package's Vitest binary.
   working_directory: src/conductor
