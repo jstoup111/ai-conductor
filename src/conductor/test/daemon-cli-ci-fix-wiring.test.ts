@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:4, task:11
 import { describe, expect, it, vi } from 'vitest';
 import {
   ciRepairOutcomeDiagnostic,
