@@ -12,6 +12,21 @@ export interface CascadeCounts {
   readonly counts: Readonly<Record<string, number>>;
   /** Per-originating-child operator overrides.  Absent means the default cap. */
   readonly limits?: Readonly<Record<string, number>>;
+  /** Completed operator adjustments, retained to make a post-CAS replay idempotent. */
+  readonly adjustments?: Readonly<Record<string, CascadeAdjustmentMarker>>;
+}
+
+/** The exact cascade transition authorized by one durable adjustment id. */
+export interface CascadeAdjustmentMarker {
+  readonly child: ChildId;
+  readonly beforeConsumed: number;
+  readonly afterConsumed: number;
+  readonly beforeLimit: number;
+  readonly afterLimit: number;
+}
+
+export interface CascadeAdjustment extends CascadeAdjustmentMarker {
+  readonly id: string;
 }
 
 export type ReadCascadeCountsResult =
@@ -73,7 +88,42 @@ function parseCounts(value: unknown): CascadeCounts | undefined {
       limits[rawChild] = rawLimit;
     }
   }
-  return { version: 1, counts, ...(limits === undefined ? {} : { limits }) };
+  let adjustments: Record<string, CascadeAdjustmentMarker> | undefined;
+  if (record.adjustments !== undefined) {
+    if (typeof record.adjustments !== 'object' || record.adjustments === null || Array.isArray(record.adjustments)) return undefined;
+    adjustments = {};
+    for (const [id, rawMarker] of Object.entries(record.adjustments as Record<string, unknown>)) {
+      if (!id || typeof rawMarker !== 'object' || rawMarker === null || Array.isArray(rawMarker)) return undefined;
+      const marker = rawMarker as Record<string, unknown>;
+      const child = parseChildId(marker.child);
+      if (
+        child === undefined || marker.child !== child ||
+        !isNonNegativeSafeInteger(marker.beforeConsumed) || !isNonNegativeSafeInteger(marker.afterConsumed) ||
+        !isPositiveSafeInteger(marker.beforeLimit) || !isPositiveSafeInteger(marker.afterLimit)
+      ) return undefined;
+      adjustments[id] = {
+        child,
+        beforeConsumed: marker.beforeConsumed,
+        afterConsumed: marker.afterConsumed,
+        beforeLimit: marker.beforeLimit,
+        afterLimit: marker.afterLimit,
+      };
+    }
+  }
+  return {
+    version: 1,
+    counts,
+    ...(limits === undefined ? {} : { limits }),
+    ...(adjustments === undefined ? {} : { adjustments }),
+  };
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 }
 
 function emptyCounts(): CascadeCounts {
@@ -97,7 +147,13 @@ export async function updateCascadeLimit(
   const state = await readCascadeCounts(worktree, slug, { git });
   if (state.kind === 'unreadable') return { kind: 'unreadable', detail: state.detail };
   if (state.blob !== expectedBlob) return { kind: 'stale' };
-  const next = update(state.counts);
+  const updated = update(state.counts);
+  const next: CascadeCounts = {
+    ...updated,
+    ...(state.counts.adjustments === undefined && updated.adjustments === undefined
+      ? {}
+      : { adjustments: { ...(state.counts.adjustments ?? {}), ...(updated.adjustments ?? {}) } }),
+  };
   if (!next.limits?.[String(child)]) return { kind: 'unreadable', detail: 'updated cascade limit is missing its child' };
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(next));
   const blob = written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
@@ -105,6 +161,63 @@ export async function updateCascadeLimit(
   const result = await runGit(git, ['update-ref', state.ref, blob, expectedBlob ?? '0000000000000000000000000000000000000000']);
   if (result?.exitCode !== 0) return { kind: 'stale' };
   return { kind: 'updated', counts: next };
+}
+
+/**
+ * Apply one operator-authorized cascade transition exactly once.  The marker is
+ * deliberately co-located with the count and limit it protects: a crash after
+ * this CAS and before the ledger write can be replayed without charging the
+ * cascade twice.
+ */
+export async function applyCascadeAdjustment(
+  worktree: string,
+  slug: string,
+  adjustment: CascadeAdjustment,
+  defaultLimit = MAX_RESTACK_CASCADES_PER_CHILD,
+  dependencies: CascadeCapDependencies = {},
+): Promise<CascadeLimitUpdateResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const state = await readCascadeCounts(worktree, slug, { git });
+  if (state.kind === 'unreadable') return { kind: 'unreadable', detail: state.detail };
+  const existing = state.counts.adjustments?.[adjustment.id];
+  if (existing) {
+    return sameAdjustment(existing, adjustment)
+      ? { kind: 'updated', counts: state.counts }
+      : { kind: 'stale' };
+  }
+  const childKey = String(adjustment.child);
+  const currentConsumed = state.counts.counts[childKey] ?? 0;
+  const currentLimit = state.counts.limits?.[childKey] ?? defaultLimit;
+  if (currentConsumed !== adjustment.beforeConsumed || currentLimit !== adjustment.beforeLimit) return { kind: 'stale' };
+  const next: CascadeCounts = {
+    version: 1,
+    counts: { ...state.counts.counts, [childKey]: adjustment.afterConsumed },
+    limits: { ...(state.counts.limits ?? {}), [childKey]: adjustment.afterLimit },
+    adjustments: {
+      ...(state.counts.adjustments ?? {}),
+      [adjustment.id]: {
+        child: adjustment.child,
+        beforeConsumed: adjustment.beforeConsumed,
+        afterConsumed: adjustment.afterConsumed,
+        beforeLimit: adjustment.beforeLimit,
+        afterLimit: adjustment.afterLimit,
+      },
+    },
+  };
+  const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(next));
+  const blob = written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+  if (!blob) return { kind: 'unreadable', detail: `cannot write cascade counts for ${state.ref}` };
+  const result = await runGit(git, ['update-ref', state.ref, blob, state.blob ?? '0000000000000000000000000000000000000000']);
+  if (result?.exitCode !== 0) return { kind: 'stale' };
+  return { kind: 'updated', counts: next };
+}
+
+function sameAdjustment(left: CascadeAdjustmentMarker, right: CascadeAdjustment): boolean {
+  return left.child === right.child &&
+    left.beforeConsumed === right.beforeConsumed &&
+    left.afterConsumed === right.afterConsumed &&
+    left.beforeLimit === right.beforeLimit &&
+    left.afterLimit === right.afterLimit;
 }
 
 /** Read the durable ref-backed cascade counters; malformed state fails closed. */
@@ -175,6 +288,7 @@ export async function cascadeUpdateLines(
     version: 1,
     counts: next,
     ...(state.counts.limits === undefined ? {} : { limits: state.counts.limits }),
+    ...(state.counts.adjustments === undefined ? {} : { adjustments: state.counts.adjustments }),
   };
   const blobResult = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(counts));
   const blob = blobResult?.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;

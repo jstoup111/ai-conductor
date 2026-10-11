@@ -8,7 +8,7 @@ import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readGrowth, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackLedger } from './kickback-ledger.js';
+import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readGrowth, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackGateEntry, type KickbackLedger } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView, type KickbackPlanGrowthView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
@@ -19,7 +19,7 @@ import { loadConfig } from './config.js';
 import { kickbackBudgetFallbackLimit, prdAuditAppendCap } from './remediation-caps.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
-import { MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCounts, updateCascadeLimit } from './restack/cascade-cap.js';
+import { applyCascadeAdjustment, MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCounts } from './restack/cascade-cap.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
@@ -83,7 +83,7 @@ async function appendAuthorizationEvent(
   persister.stop();
 }
 
-async function reconcilePendingAdjustments(worktree: string, child?: ChildId): Promise<void> {
+async function reconcilePendingAdjustments(worktree: string, slug: string, child?: ChildId): Promise<void> {
   const ledger = await readKickbackLedger(worktree, child);
   // An unreadable ledger is reported by each caller's own unreadable branch, in
   // its own words; reconciliation simply has nothing it may safely act on.
@@ -101,8 +101,38 @@ async function reconcilePendingAdjustments(worktree: string, child?: ChildId): P
     });
     const recorded = records.some((event) => event.adjustmentId === pending.id);
     if (!recorded) await discardPendingKickbackBudgetAdjustment(worktree, gate, pending.id, child);
-    else await applyKickbackBudgetAdjustment(worktree, gate, pending, defaults[gate] ?? 1, child);
+    else {
+      if (gate === 'restack') await applyRestackCascadeAdjustment(worktree, slug, pending, entry);
+      await applyKickbackBudgetAdjustment(worktree, gate, pending, gate === 'restack' ? pending.beforeLimit : (defaults[gate] ?? 1), child);
+    }
   }
+}
+
+function restackOriginatingChild(entry: KickbackGateEntry | undefined): ChildId | undefined {
+  const evidence = entry?.capEvidence;
+  if (evidence?.gate !== 'restack' || evidence.allowance !== 'restacks') return undefined;
+  const matched = /^restack cascade cap for originating child (\d+)$/.exec(evidence.latestReason);
+  return matched ? parseChildId(matched[1]) : undefined;
+}
+
+async function applyRestackCascadeAdjustment(
+  worktree: string,
+  slug: string,
+  adjustment: KickbackBudgetAdjustment,
+  entry: KickbackGateEntry,
+): Promise<void> {
+  const originatingChild = restackOriginatingChild(entry);
+  if (originatingChild === undefined) throw new Error('restack cap evidence does not name an originating child');
+  const changed = await applyCascadeAdjustment(worktree, slug, {
+    id: adjustment.id,
+    child: originatingChild,
+    beforeConsumed: adjustment.beforeConsumed,
+    afterConsumed: adjustment.afterConsumed,
+    beforeLimit: adjustment.beforeLimit,
+    afterLimit: adjustment.afterLimit,
+  });
+  if (changed.kind === 'stale') throw new Error('cascade counts changed concurrently; no resume authorization was installed');
+  if (changed.kind === 'unreadable') throw new Error(changed.detail);
 }
 
 /** Dispatch read-only inspect or an interactive, halted-feature-only mutation. */
@@ -113,7 +143,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   const worktree = await resolveCliFeatureWorktree(command.feature, { cwd: deps.cwd, resolveMainRoot: deps.resolveMainRoot });
   if (!worktree) { print(`kickback-budget: feature '${command.feature}' is unavailable.`); return 1; }
   const reconcile = async (child?: ChildId): Promise<number | undefined> => {
-    try { await reconcilePendingAdjustments(worktree, child); return undefined; }
+    try { await reconcilePendingAdjustments(worktree, command.feature, child); return undefined; }
     catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   };
   if (command.action === 'inspect') {
@@ -137,7 +167,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     // kickback-budget command", and `inspect` is the command an operator
     // reaches for first after a crash — a pending record left unreconciled
     // here would render a budget the ledger does not actually hold.
-    const refused = await reconcile();
+    const refused = await reconcile(child);
     if (refused !== undefined) return refused;
     const ledger = await readKickbackLedger(worktree, child);
     if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
@@ -279,7 +309,8 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       const liveHaltClass = (await readFile(join(worktree, HALT_CLASS_MARKER), 'utf8')).trim();
       if (liveHaltClass !== RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate]) throw new Error('live halt is not eligible for recovery');
       const current = await readKickbackLedger(worktree, ledgerChild);
-      if (gate === 'restack' && !current.gates[gate]?.capEvidence?.latestReason.includes(`originating child ${restackChild}`)) {
+      if (isUnreadableKickbackLedger(current)) throw new Error('kickback ledger is unreadable');
+      if (gate === 'restack' && restackOriginatingChild(current.gates[gate]) !== restackChild) {
         throw new Error('restack cap evidence names a different originating child');
       }
       liveHaltGeneration = current.gates[gate]?.capEvidence?.haltGeneration ?? '';
@@ -296,31 +327,20 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       allowance: adjustment.allowance,
     };
     await appendAuthorizationEvent(worktree, event, deps.appendEvent);
-    if (restackChild !== undefined && cascadeState !== undefined) {
-      const changed = await updateCascadeLimit(
-        worktree,
-        command.feature,
-        restackChild,
-        cascadeState.blob,
-        (current) => {
-          const currentLimit = current.limits?.[String(restackChild)] ?? MAX_RESTACK_CASCADES_PER_CHILD;
-          return {
-            version: 1,
-            counts: {
-              ...current.counts,
-              ...(action === 'reset' ? { [String(restackChild)]: 0 } : {}),
-            },
-            limits: {
-              ...(current.limits ?? {}),
-              [String(restackChild)]: action === 'raise' ? currentLimit + command.by! : currentLimit,
-            },
-          };
-        },
-      );
-      if (changed.kind === 'stale') throw new Error('cascade counts changed concurrently; no resume authorization was installed');
-      if (changed.kind === 'unreadable') throw new Error(changed.detail);
+    if (restackChild !== undefined) {
+      const stagedLedger = await readKickbackLedger(worktree, ledgerChild);
+      if (isUnreadableKickbackLedger(stagedLedger)) throw new Error('kickback ledger is unreadable');
+      const stagedEntry = stagedLedger.gates[gate];
+      if (!stagedEntry) throw new Error('current cap evidence is missing or no longer matches the live halt');
+      await applyRestackCascadeAdjustment(worktree, command.feature, adjustment, stagedEntry);
     }
-    const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate], ledgerChild);
+    const applied = await applyKickbackBudgetAdjustment(
+      worktree,
+      gate,
+      adjustment,
+      gate === 'restack' ? adjustment.beforeLimit : defaults[gate],
+      ledgerChild,
+    );
     committed = true;
     const adjustedLedger = await readKickbackLedger(worktree, ledgerChild);
     const planGrowth = await planGrowthViewFor(worktree, adjustedLedger);
