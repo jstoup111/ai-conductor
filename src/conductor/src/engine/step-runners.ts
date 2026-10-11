@@ -205,6 +205,7 @@ import {
   classifyBuildReviewPolicyIncompatibility,
   type BuildReviewLapId,
 } from './build-review-domain.js';
+import { retainBuildReviewRejectedResponse } from './build-review-rejection-retention.js';
 import { discoverClaudeReviewPolicies, type ClaudeMetadataCommand, type ClaudeReviewPolicyFilesystem } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills, type CodexAppServerTransport } from './build-review-policy-codex.js';
 import { renderBuildReviewFrozenInputScope } from './build-review-materialization.js';
@@ -4698,9 +4699,16 @@ export class DefaultStepRunner implements StepRunner {
         branch.rubric,
         { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
       );
-      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, {
+      const detail = 'root: a structured result is required';
+      const retainedResponsePath = await retainBuildReviewRejectedResponse({
+        pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+        lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
+        structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
+      });
+      return makeBuildReviewDispatchFailure(detail, undefined, {
         cause: 'invalid-structured-result',
         rejection,
+        ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
       });
     }
     if (!initial.success && initial.output?.startsWith(`${CODEX_DISPLAY_NAME} native schema scratch home failed:`)) {
@@ -4717,9 +4725,16 @@ export class DefaultStepRunner implements StepRunner {
         branch.rubric,
         { lapId: projection.lapId, snapshotDigest: projection.snapshotDigest },
       );
-      return makeBuildReviewDispatchFailure('root: a structured result is required', undefined, {
+      const detail = 'root: a structured result is required';
+      const retainedResponsePath = await retainBuildReviewRejectedResponse({
+        pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+        lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
+        structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
+      });
+      return makeBuildReviewDispatchFailure(detail, undefined, {
         cause: 'invalid-structured-result',
         rejection,
+        ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
       });
     }
     const initialResult = validateBuildReviewDispatchedResult(initial.finalStructuredResult, branch.rubric, projection);
@@ -4731,8 +4746,15 @@ export class DefaultStepRunner implements StepRunner {
       buildReviewFindingReferenceContext(projection),
       buildReviewCandidateScopeResolutionContext(projection),
     );
-    return makeBuildReviewDispatchFailure(renderBuildReviewJudgedResultRejection(rejection), undefined, {
+    const detail = renderBuildReviewJudgedResultRejection(rejection);
+    const retainedResponsePath = await retainBuildReviewRejectedResponse({
+      pipelineDir: join(this.projectDir, '.pipeline'), worktreeRoot: this.projectDir,
+      lapId: projection.lapId, rubric: branch.rubric, rubricKind: 'builtin', detail: `invalid-structured-result: ${detail}`, rejection,
+      structuredResult: initial.finalStructuredResult ?? null, output: initial.output,
+    });
+    return makeBuildReviewDispatchFailure(detail, undefined, {
       cause: 'invalid-structured-result', rejection,
+      ...(retainedResponsePath === undefined ? {} : { retainedResponsePath }),
     });
   }
 
