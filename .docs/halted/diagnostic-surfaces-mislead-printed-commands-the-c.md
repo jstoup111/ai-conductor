@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-11T13:31:17.248Z
 Slug: diagnostic-surfaces-mislead-printed-commands-the-c
 Class: needs-human
 Halting step: unknown
