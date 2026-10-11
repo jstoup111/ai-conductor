@@ -22,6 +22,16 @@ const selected: PrMergeState = {
   ],
 };
 
+function longFailedLog(): string {
+  return [
+    ...Array.from({ length: 600 }, (_, index) => `* [new branch] feat/fail-fast-${index} -> origin/feat/fail-fast-${index}`),
+    'FAIL  test/engine/foo.test.ts > foo > bar',
+    'AssertionError: expected 1 to be 2',
+    ...Array.from({ length: 3_000 }, (_, index) => `padding ${index}`),
+    '##[error]Process completed with exit code 1.',
+  ].join('\n');
+}
+
 function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>[0]> = {}) {
   const gh = vi.fn(async (args: string[]) => {
     if (args[0] === 'pr') return { stdout: JSON.stringify({ headRefName: 'repair-branch' }) };
@@ -68,6 +78,31 @@ describe('daemon CI-fix production dispatch callback', () => {
     expect(run).toHaveBeenCalledOnce();
     expect(gh.mock.calls.filter(([args]) => args[0] === 'pr')).toHaveLength(1);
     expect(gh.mock.calls.filter(([args]) => args[0] === 'run')).toHaveLength(2);
+  });
+
+  it('hands the repair callback the failure excerpt from a long workflow log', async () => {
+    const run = vi.fn(async (_entry, _branch, hint) => {
+      expect(hint).toContain('FAIL  test/engine/foo.test.ts > foo > bar');
+      expect(hint).toContain('AssertionError: expected 1 to be 2');
+      expect(hint).not.toContain('* [new branch] feat/fail-fast-');
+      return { kind: 'noop' as const };
+    });
+    const diagnostic = vi.fn();
+    const dispatch = createDaemonCiFixDispatch({
+      tracker: {
+        getPullRequestHeadRef: async () => 'repair-branch',
+        viewWorkflowRunFailedLog: async () => longFailedLog(),
+      } as any,
+      createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }),
+      diagnostic,
+      run,
+    });
+
+    await expect(dispatch(entry, { ...selected, statusCheckRollup: [selected.statusCheckRollup![0]] })).resolves.toEqual({ kind: 'noop' });
+    expect(run).toHaveBeenCalledOnce();
+    expect(diagnostic).not.toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'log-enrichment', reason: 'log-unavailable',
+    }));
   });
 
   it('forwards the available event emitter to the CI repair publication boundary', async () => {

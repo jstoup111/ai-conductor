@@ -39,6 +39,7 @@ import {
   makeProductionGh,
   type GhRunner,
 } from '../../src/engine/tracker-client.js';
+import { CI_FIX_LOG_MAX_BUFFER, CI_FIX_LOG_TIMEOUT_MS } from '../../src/engine/ci-fix.js';
 import { executeGithubOperation } from '../../src/engine/github-operations.js';
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
 
@@ -283,6 +284,23 @@ describe('makeProductionGh bot write credential', () => {
       maxBuffer: 32 * 1024 * 1024,
       timeout: undefined,
     });
+  });
+
+  it('forwards the CI-fix long-log limit and returns the complete stdout', async () => {
+    const longLog = 'x'.repeat(127_189);
+    productionGh.stdout = longLog;
+    const tracker = createGithubTrackerClient(makeMockedProductionGh());
+
+    await expect(tracker.viewWorkflowRunFailedLog('acme/repo', '41', '/worktree', {
+      timeout: CI_FIX_LOG_TIMEOUT_MS,
+      maxBuffer: CI_FIX_LOG_MAX_BUFFER,
+    })).resolves.toBe(longLog);
+    expect(execFileCb).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(execFileCb).mock.calls[0]?.slice(0, 3)).toEqual([
+      'gh',
+      ['run', 'view', '41', '--repo', 'acme/repo', '--log-failed'],
+      { cwd: '/worktree', maxBuffer: 8_388_608, timeout: 10_000 },
+    ]);
   });
 
   it('refuses an unavailable configured bot token before spawning', async () => {
