@@ -50,20 +50,26 @@ async function assertSyncPathsAreRecoverable(
   oldTip: CommitSha,
   newTip: CommitSha,
   git: GitRunner,
-): Promise<void> {
+): Promise<string[]> {
   const changed = await git(['diff', '--name-only', oldTip, newTip]);
   if (changed.exitCode !== 0) throw new Error(`cannot inspect restack sync delta: ${changed.stderr}`);
+  const alreadyNew: string[] = [];
   for (const path of paths(changed.stdout)) {
     const [oldContent, newContent] = await Promise.all([
       git(['diff', '--quiet', oldTip, '--', path]),
       git(['diff', '--quiet', newTip, '--', path]),
     ]);
-    if (oldContent.exitCode === 0 || newContent.exitCode === 0) continue;
+    if (oldContent.exitCode === 0) continue;
+    if (newContent.exitCode === 0) {
+      alreadyNew.push(path);
+      continue;
+    }
     if (oldContent.exitCode !== 1 || newContent.exitCode !== 1) {
       throw new Error(`cannot inspect restack sync path ${path}`);
     }
     throw new RestackSyncOperatorEditError(path);
   }
+  return alreadyNew;
 }
 
 /**
@@ -78,7 +84,14 @@ export async function syncRestackedWorktree(
   newTip: CommitSha,
   { git }: RestackSyncDependencies,
 ): Promise<void> {
-  await assertSyncPathsAreRecoverable(oldTip, newTip, git);
+  const alreadyNew = await assertSyncPathsAreRecoverable(oldTip, newTip, git);
+  if (alreadyNew.length > 0) {
+    // An interrupted `read-tree -u` can leave a path's new blob in the
+    // worktree while the index still holds the old one. Record that file in the
+    // index as-is so the merge below keeps it instead of refusing it as dirty.
+    const staged = await git(['update-index', '--remove', '--', ...alreadyNew]);
+    if (staged.exitCode !== 0) throw new Error(`cannot record half-synchronized restack paths: ${staged.stderr}`);
+  }
   const synced = await git(['read-tree', '-m', '-u', oldTip, newTip]);
   if (synced.exitCode !== 0) throw new Error(`cannot synchronize restacked worktree: ${synced.stderr}`);
 
