@@ -499,33 +499,29 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       });
     });
 
-    it("captures a thrown verifier as a no-verdict outcome", async () => {
-      const runner = successfulRunner();
+    it("settles a thrown verifier without rejecting and preserves the one-call result without a verifier", async () => {
+      const throwingRunner = successfulRunner();
       const verifyDispatch = vi
         .fn<NonNullable<BranchExecutorDeps["verifyDispatch"]>>()
         .mockRejectedValue(new Error("verify crashed"));
 
+      await expect(runGroupBranch(
+        verificationMember(),
+        fakeState,
+        { stepRunner: throwingRunner, verifyDispatch },
+        1,
+      )).resolves.toEqual({ kind: "no-verdict", reason: "verify crashed" });
+      expect(throwingRunner.calls).toHaveLength(1);
+
+      const unverifiedRunner = successfulRunner();
       const outcome = await runGroupBranch(
         verificationMember(),
         fakeState,
-        { stepRunner: runner, verifyDispatch },
+        { stepRunner: unverifiedRunner },
         1,
       );
 
-      expect(outcome).toEqual({ kind: "no-verdict", reason: "verify crashed" });
-    });
-
-    it("keeps successful dispatches unchanged when no verifier is supplied", async () => {
-      const runner = successfulRunner();
-
-      const outcome = await runGroupBranch(
-        verificationMember(),
-        fakeState,
-        { stepRunner: runner },
-        1,
-      );
-
-      expect({ outcome, runnerCalls: runner.calls.length }).toEqual({
+      expect({ outcome, runnerCalls: unverifiedRunner.calls.length }).toEqual({
         outcome: { kind: "verdict", verdict: "pass" },
         runnerCalls: 1,
       });

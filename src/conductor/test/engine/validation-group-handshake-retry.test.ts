@@ -131,23 +131,36 @@ describe('validation-group dispatch handshake retries', () => {
   });
 
   it.each(['manual_test', 'prd_audit', 'architecture_review_as_built'] as const)(
-    'includes the %s handshake reason in its retry event',
+    'retries the stale %s dispatch exactly once and includes its handshake reason in the retry event',
     async (member) => {
       const { dir, statePath } = await fixture();
       const retries: ConductorEvent[] = [];
+      const calls: StepName[] = [];
       const emitter = new ConductorEventEmitter();
       emitter.on('step_retry', (event) => { retries.push(event); });
-      const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+      const runner: StepRunner = { run: vi.fn(async (step) => {
+        calls.push(step);
+        return { success: true };
+      }) };
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events: emitter,
         fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true,
         config: { gate_code_validity: { enabled: false }, defaults: { max_retries: 2 } },
       });
+      let memberHandshakeAttempts = 0;
       (conductor as unknown as { verdictDispatchHandshake(step: StepName): Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined> }).verdictDispatchHandshake =
-        async (step) => step === member ? { done: false, routeClass: 'absent', reason: `${member} handshake absent` } : undefined;
+        async (step) => {
+          if (step !== member || ++memberHandshakeAttempts > 1) return undefined;
+          return { done: false, routeClass: 'absent', reason: `${member} handshake absent` };
+        };
 
       await conductor.run();
 
+      for (const validationMember of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+        expect(calls.filter((step) => step === validationMember)).toHaveLength(
+          validationMember === member ? 2 : 1,
+        );
+      }
       expect(retries).toContainEqual(expect.objectContaining({
         type: 'step_retry', step: member, reason: expect.stringContaining(`${member} handshake absent`),
       }));
