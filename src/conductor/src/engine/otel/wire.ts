@@ -32,6 +32,7 @@ import { SpoolingLogExporter } from './spooling-exporter.js';
 import { LogHealth } from './log-health.js';
 
 const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
+const LOG_STOP_BUDGET_MS = 2_000;
 
 interface InteractiveSpoolLifecycle {
   runtime: SpoolRuntime;
@@ -146,7 +147,11 @@ export async function wireOtelLogs(
       flush: () => withinLogStopBudget(() => provider.forceFlush()),
       stop: () => stopped ??= (async () => {
         listener.stop();
-        await withinLogStopBudget(async () => { await provider.forceFlush(); await provider.shutdown(); });
+        // Each phase consumes the same deadline.  In particular, a slow
+        // flush must not grant shutdown a second two-second allowance.
+        const deadline = Date.now() + LOG_STOP_BUDGET_MS;
+        await withinLogStopBudget(() => provider.forceFlush(), deadline);
+        await withinLogStopBudget(() => provider.shutdown(), deadline);
       })(),
     };
   } catch {
@@ -156,12 +161,17 @@ export async function wireOtelLogs(
 }
 
 /** A single deadline bounds all shutdown work, including a stalled durable write. */
-async function withinLogStopBudget(operation: () => Promise<void>, timeoutMs = 2_000): Promise<void> {
+async function withinLogStopBudget(
+  operation: () => Promise<void>,
+  deadline = Date.now() + LOG_STOP_BUDGET_MS,
+): Promise<void> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       operation(),
-      new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); timer.unref?.(); }),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); timer.unref?.(); }),
     ]);
   } catch {
     // Logging must not alter the calling lifecycle result.
