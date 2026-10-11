@@ -209,3 +209,13 @@ Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de: In src/conductor/src/engine/build-review-adjudication-coordinator.ts, restore the suppression-store prefix: change line 215 to `failStore('suppression store', suppressionHistory)` and the persisted suppression write at line 213 to `failStore('suppression store', persisted)`. Leave all child-scoped `store` call sites as 'case store' and keep the rejected-transition branch of failStore unchanged.
+**Gate:** prd-audit
+**Rationale:** Verified (100%): build-review-adjudication-coordinator.ts:215 relabels the suppressionStore read failure from 'suppression store' (main) to failStore('case store', ...). suppressionStore (line 203) is a separate, non-child-scoped RemediationCaseStore, so the relabel is accidental. The repair keeps Task 4's rejected-transition diagnostic in failStore. It only restores the store prefix the decision records, which is removal/rework with no new behavior. The decision also names the persisted suppression path at line 213, which writes through suppressionStore, so that failure gets the 'suppression store' prefix too. Task 4 admits coordinator HALT-path edits. Sibling sites at 277/288/367/501/630/677 use the child-scoped `store` and correctly keep 'case store'. They are excluded.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision d18cb085-2ffb-44bf-9999-75aa58a055de r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision d18cb085-2ffb-44bf-9999-75aa58a055de r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de is committed and its targeted tests pass.
