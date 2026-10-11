@@ -1,5 +1,5 @@
 // Covers: task:6, task:7
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -71,5 +71,40 @@ describe('closeout-event CLI', () => {
 
     await expect(readFile(join(root, '.pipeline/pipeline-events.jsonl'), 'utf8')).resolves.toBe(before);
     expect(errors).toEqual(['closeout-event: non-positive elapsed time for evaluator']);
+  });
+
+  it('refuses caller-timed, unpaired, and unknown requests without writing', async () => {
+    const root = await projectRoot();
+    const errors: string[] = [];
+    const refused = [
+      ['node', 'conduct-ts', 'closeout-event', 'evaluator', '1788012400000', '1788012520000'],
+      ['node', 'conduct-ts', 'closeout-event', 'stop', 'evaluator'],
+      ['node', 'conduct-ts', 'closeout-event', 'start', 'evaluator', '1788012400000'],
+      ['node', 'conduct-ts', 'closeout-event', 'end', 'evaluator'],
+      ['node', 'conduct-ts', 'closeout-event', 'start', 'retro'],
+    ];
+
+    for (const argv of refused) {
+      await expect(dispatch(argv, root, () => 1_788_012_000_000, errors)).resolves.toBe(1);
+      await expect(readFile(join(root, '.pipeline/pipeline-events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(errors.join('\n')).toContain('start <obligation>');
+    expect(errors).toContain('closeout-event: no open start for evaluator');
+    expect(errors).toContain('closeout-event: obligation must be one of evaluator, simplify, architecture-diagram, memory, summary');
+  });
+
+  it('ignores malformed records while pairing a valid open start only once', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline/pipeline-events.jsonl'), [
+      '{not-json}',
+      JSON.stringify({ type: 'pipeline_closeout_started', obligation: 'evaluator', ts: 1_788_012_000_000 }),
+    ].join('\n') + '\n');
+
+    await expect(dispatch(['node', 'conduct-ts', 'closeout-event', 'end', 'evaluator'], root, () => 1_788_012_120_000)).resolves.toBe(0);
+    const errors: string[] = [];
+    await expect(dispatch(['node', 'conduct-ts', 'closeout-event', 'end', 'evaluator'], root, () => 1_788_012_180_000, errors)).resolves.toBe(1);
+
+    expect(errors).toEqual(['closeout-event: no open start for evaluator']);
   });
 });
