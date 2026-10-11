@@ -1253,6 +1253,16 @@ describe('prd_audit kickback', () => {
     expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
     expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
     expect(fixture.retryReasons[0]).toContain('.pipeline/architecture-review-as-built.json');
+    // The dispatch is not the outcome: the round must admit both repairs and
+    // reach BUILD. The planner keys the refusal by its bare decision id, which
+    // the as-built exact-match check once rejected as an unexpected finding.
+    expect(fixture.calls).toContain('build');
+    const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8').catch(() => '');
+    expect(halt).not.toContain('Refused — rework required');
+    expect(halt).not.toContain('do not exactly match parsed REMEDIABLE findings');
+    const plan = await readFile(fixture.planPath, 'utf8');
+    expect(plan).toContain(`rem-prd-audit-refusal-${fixture.decisionId}`);
+    expect(plan).toContain('rem-as-built-restore-boundary');
   });
 
   it.each([
