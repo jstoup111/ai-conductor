@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
@@ -224,13 +223,13 @@ export async function replayChildRange(
 
     const replayedMessage = merge === undefined
       ? message
-      : `${message.trimEnd()}\n\nFlattened-merge: ${commit}\n`;
+      : `${message}\nFlattened-merge: ${commit}\n`;
     const result = await git([
       'commit-tree',
       ...(sign ? ['-S'] : []),
       mergedTree,
       '-p', accumulator,
-    ], { input: `${withDaemonCoAuthorTrailer(replayedMessage.trimEnd())}\n`, env: commitEnvironment(author, stamp) });
+    ], { input: replayedMessage, env: commitEnvironment(author, stamp) });
     if (result.exitCode !== 0) throw new Error(`commit-tree failed for ${commit}: ${result.stderr}`);
     const rewritten = requiredSha(result.stdout, `commit-tree for ${commit}`);
     rewrites.set(commit, rewritten);
