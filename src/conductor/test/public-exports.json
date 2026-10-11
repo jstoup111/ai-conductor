@@ -21,6 +21,7 @@
   "detectHaltClearCommand",
   "detectKickbackBudgetCommand",
   "detectOverlapScanCommand",
+  "installInteractiveDiagnosticBridge",
   "overlapScanCommand",
   "parseArgs",
   "probeInteractiveReadOnlyReviewCapabilities",
