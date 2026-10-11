@@ -782,7 +782,10 @@ describe('SpoolDrainer', () => {
     const draining = drainer.drainUntilStopped();
 
     try {
-      for (let turns = 0; turns < 1_000 && rendererErrors.length < 2; turns += 1) {
+      // Retry progress is asynchronous even with injected sleep. Bound polling
+      // by wall time, rather than event-loop turns that a loaded CI shard can
+      // exhaust before the recovery event is emitted.
+      for (const deadline = Date.now() + 5_000; rendererErrors.length < 2 && Date.now() < deadline;) {
         pendingSleeps.splice(0).forEach((release) => release());
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
@@ -791,7 +794,7 @@ describe('SpoolDrainer', () => {
 
       await store.write('traces', Buffer.from('network-refusal-after-recovery'));
       const refusing = drainer.drainUntilStopped();
-      for (let turns = 0; turns < 1_000 && rendererErrors.length < 3; turns += 1) {
+      for (const deadline = Date.now() + 5_000; rendererErrors.length < 3 && Date.now() < deadline;) {
         pendingSleeps.splice(0).forEach((release) => release());
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
