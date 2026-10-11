@@ -381,13 +381,19 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       }
     }
 
+    // A repair keeps the stack on the default it already sits on: child 1's
+    // old parent. The resolved default tip may be a freshly fetched
+    // origin/main, which only a later base refresh may carry into the stack.
+    const stackDefault = options.cause === 'feature-repair' && plan.ranges[0] !== undefined
+      ? plan.ranges[0].oldParent
+      : planningDefault;
     const comparison = await comparisonCommits(git, options.cause, plan.ranges, planningDefault);
     const draft: RestackJournalDraft = {
       opId: randomUUID() as RestackOpId,
       cause: options.cause,
       ...(options.followOnCause === undefined ? {} : { followOnCause: options.followOnCause }),
       committer: await committerStamp(git),
-      newDefault: planningDefault,
+      newDefault: stackDefault,
       comparisonCommits: comparison,
       ...(options.cause === 'feature-repair' ? { originatingChildren: plan.originating } : {}),
       dirtyPaths: [],
@@ -609,8 +615,8 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       cause: options.cause,
       // The journaled range records the old side of a base refresh; a repair
       // keeps both sides at its unchanged default.
-      oldDefault: options.cause === 'feature-repair' ? planningDefault : journal.journal.ranges[0]!.oldParent,
-      newDefault: options.cause === 'feature-repair' ? planningDefault : journal.journal.newDefault ?? planningDefault,
+      oldDefault: options.cause === 'feature-repair' ? stackDefault : journal.journal.ranges[0]!.oldParent,
+      newDefault: options.cause === 'feature-repair' ? stackDefault : journal.journal.newDefault ?? planningDefault,
       activeChild: active.child,
       ranges: plan.ranges,
       moves,
