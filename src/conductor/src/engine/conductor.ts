@@ -6462,12 +6462,12 @@ export class Conductor {
         if ((entry?.laps ?? 0) >= lapCap) {
           return { kind: 'exhausted', allowance: 'laps', consumed: entry?.laps ?? 0, limit: lapCap, fallbackLapCap: prdAuditRemediationLapCap };
         }
-        const { growth, cap: growthCap, capSource } = await readPlanGrowthBudget(this.projectRoot, this.config, { persist: true });
+        const { growth, cap: growthCap, capSource, authoredSource } = await readPlanGrowthBudget(this.projectRoot, this.config, { persist: true });
         if (growth.remaining > 0) return undefined;
         return {
           kind: 'exhausted', allowance: 'growth', consumed: growth.added, limit: growthCap,
           fallbackLapCap: prdAuditRemediationLapCap,
-          growth: { ...growth, cap: growthCap, capSource },
+          growth: { ...growth, cap: growthCap, capSource, authoredSource },
         };
       } catch {
         return { kind: 'unreadable' };
