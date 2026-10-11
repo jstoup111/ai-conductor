@@ -96,7 +96,14 @@ export async function commitEngineChange(options: CommitEngineChangeOptions): Pr
     const commit = await execa('git', [
       'commit-tree', tree.stdout.trim(), '-p', oldHead,
       ...(signing.exitCode === 0 && signing.stdout.trim() === 'true' ? ['-S'] : []),
-    ], { cwd: options.worktree, env, input: await readFile(messagePath), reject: false });
+    ], {
+      cwd: options.worktree,
+      env,
+      // Hooks may rewrite the message file; the helper is idempotent and
+      // restores the daemon trailer if a hook dropped it.
+      input: withDaemonCoAuthorTrailer(await readFile(messagePath, 'utf8')),
+      reject: false,
+    });
     if (commit.exitCode !== 0 || commit.stdout.trim() === '') return { kind: 'failed', reason: commandFailure(commit) };
 
     if (!await journalAllowsCommit(options.worktree, options.slug)) return { kind: 'refused', reason: 'restack journal began moving refs' };
