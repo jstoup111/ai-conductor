@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-11T13:31:19.074Z
+Status: halted
 Slug: shipped-is-fire-and-forget-no-reconciliation-sweep
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-shipped-is-fire-and-forget-no-reconciliation-sweep
-Head SHA: 1ea5f5bfdcad01ce75d61c713278a54e98b7557e
-Halted at: 2026-10-11T10:51:59.048Z
+Head SHA: 61d2b91db64f7879f08826b02da59bee23872ff9
+Halted at: 2026-10-11T22:49:03.195Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
