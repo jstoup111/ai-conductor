@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-R18
 // Covers: task:rem-prd-audit-R15
 // Covers: task:8
 import { execFile as execFileCallback } from 'node:child_process';
@@ -9,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { readVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -44,6 +46,7 @@ async function fixture() {
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await git(['add', '.gitignore']);
   const base = await commit('base', 'base.txt', 'base\n');
+  const oldDefault = await commit('old default', 'default.txt', 'old default\n');
 
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const a1 = await commit('A1', 'a1.txt', 'a1\n');
@@ -61,7 +64,7 @@ async function fixture() {
   await git(['checkout', '-q', 'main']);
   const advancedDefault = await commit('B-prime', 'base.txt', 'base advanced\n');
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  return { repo, git, base, a1, a2, c1, c2, l1, advancedDefault };
+  return { repo, git, base, oldDefault, a1, a2, c1, c2, l1, advancedDefault };
 }
 
 async function revList(git: (args: string[]) => Promise<{ stdout: string }>, range: string): Promise<string[]> {
@@ -138,6 +141,79 @@ describe('runRestack (real local Git)', () => {
     await expect(git(['rev-parse', '--verify', 'refs/heads/feat/daemon-demo'])).rejects.toBeDefined();
     expect((await git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).not.toBe(closed);
     expect((await git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).not.toBe(base);
+  });
+
+  it('preserves the unchanged old default in the whole-feature transition for an intermediate active-child repair', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'restack-executor-intermediate-repair-'));
+    repositories.push(repo);
+    const git = (args: string[]) => execFile('git', args, { cwd: repo });
+    const commit = async (message: string, file: string) => {
+      await writeFile(join(repo, file), `${message}\n`);
+      await git(['add', file]);
+      await git(['commit', '-qm', message]);
+      return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    };
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'restack@example.test']);
+    await git(['config', 'user.name', 'Restack Executor']);
+    await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
+    await commit('base', 'base.txt');
+    const oldDefault = await commit('old default', 'default.txt');
+    await git(['checkout', '-qb', 'feat/c1/demo']);
+    const c1Closure = await commit('closed child', 'closed.txt');
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', c1Closure]);
+    await git(['checkout', '-qb', 'feat/c2/demo']);
+    const c2Closure = await commit('closed intermediate child', 'active.txt');
+    await git(['update-ref', 'refs/conductor/demo/closed/c2', c2Closure]);
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    const oldLeafTip = await git(['rev-parse', 'HEAD']).then((result) => result.stdout.trim());
+    await git(['checkout', '-q', 'feat/c1/demo']);
+    await commit('repair', 'repair.txt');
+    await git(['checkout', '-q', 'feat/c2/demo']);
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, '.pipeline', 'conduct-state.json'), '{}');
+
+    await expect(runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }))
+      .resolves.toMatchObject({ kind: 'applied' });
+
+    const rebase = await readVerdict(repo, 'rebase');
+    const completedHead = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    expect(rebase?.rebaseOperation).toMatchObject({
+      cause: 'feature-repair',
+      replay: {
+        preRebaseHead: oldLeafTip,
+        mergeBase: oldDefault,
+        target: oldDefault,
+        completedHead,
+      },
+    });
+  });
+
+  it('uses the journaled old and new default tuple in the whole-feature base-refresh transition', async () => {
+    const subject = await fixture();
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), '{}');
+
+    await expect(runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: subject.advancedDefault,
+      git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    const rebase = await readVerdict(subject.repo, 'rebase');
+    const completedHead = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    expect(rebase?.rebaseOperation).toMatchObject({
+      cause: 'base-refresh',
+      replay: {
+        preRebaseHead: subject.l1,
+        mergeBase: subject.oldDefault,
+        target: subject.advancedDefault,
+        completedHead,
+      },
+    });
   });
 
   // Covers: task:rem-prd-audit-R15

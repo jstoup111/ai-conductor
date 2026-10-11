@@ -541,6 +541,9 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       await applyRestackTransition({
         worktree: options.worktree,
         cause: journal.journal.cause,
+        oldDefault: journal.journal.cause === 'feature-repair'
+          ? journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent
+          : journal.journal.ranges[0]!.oldParent,
         newDefault: journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent,
         activeChild: activeMove.child,
         ranges: journal.journal.ranges,

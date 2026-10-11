@@ -49,6 +49,7 @@ describe('applyRestackTransition', () => {
     await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
+      oldDefault: sha('b'),
       newDefault: sha('b'),
       activeChild: child,
       ranges: [{ child, oldParent: sha('b'), oldTip: sha('c'), kind: 'active' }],
@@ -79,6 +80,7 @@ describe('applyRestackTransition', () => {
     await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
+      oldDefault: sha('b'),
       newDefault: sha('b'),
       activeChild: child,
       ranges: [{ child, oldParent: sha('b'), oldTip: sha('c'), kind: 'active' }],
@@ -129,6 +131,7 @@ describe('applyRestackTransition', () => {
     await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
+      oldDefault: sha('b'),
       newDefault: sha('b'),
       activeChild: child,
       ranges: [{ child, oldParent: sha('b'), oldTip: sha('c'), kind: 'active' }],
@@ -160,6 +163,7 @@ describe('applyRestackTransition', () => {
     await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
+      oldDefault: sha('b'),
       newDefault: sha('b'),
       activeChild: parseChildId(2)!,
       ranges: [{ child: leaf, oldParent: sha('b'), oldTip: sha('c'), kind: 'leaf-active' }],
@@ -197,6 +201,7 @@ describe('applyRestackTransition', () => {
     const result = await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
+      oldDefault: sha('b'),
       newDefault: sha('b'),
       activeChild: parseChildId(2)!,
       ranges: [{ child: closed, oldParent: sha('b'), oldTip: sha('c'), kind: 'closed' }],
@@ -228,6 +233,7 @@ describe('applyRestackTransition', () => {
     await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
+      oldDefault: sha('b'),
       newDefault: sha('b'),
       activeChild: leaf,
       ranges: [{ child: leaf, oldParent: sha('b'), oldTip: sha('c'), kind: 'leaf-active' }],
@@ -261,6 +267,7 @@ describe('applyRestackTransition', () => {
     await applyRestackTransition({
       worktree: root,
       cause: 'feature-repair',
+      oldDefault,
       newDefault: oldDefault,
       activeChild: leaf,
       ranges: [{ child: leaf, oldParent: oldDefault, oldTip: sha('c'), kind: 'leaf-active' }],

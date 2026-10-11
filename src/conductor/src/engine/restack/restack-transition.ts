@@ -26,7 +26,9 @@ import type { ChildRange, CommitSha, RestackCause } from './restack-types.js';
 export interface ApplyRestackTransitionOptions {
   readonly worktree: string;
   readonly cause: RestackCause;
-  /** The current default tip (also the unchanged default for a repair). */
+  /** The default tip before this restack. */
+  readonly oldDefault: CommitSha;
+  /** The default tip after this restack (unchanged for a repair). */
   readonly newDefault: CommitSha;
   readonly activeChild: ChildId;
   readonly ranges: readonly ChildRange[];
@@ -270,7 +272,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
   if (first && leaf && leafMove && await exists(featureState)) {
     const wholeOutcome = await outcomeFor(options.worktree, options.git, {
         previous: leaf.oldTip,
-        base: await mergeBase(options.git, first.oldTip, options.newDefault),
+        base: await mergeBase(options.git, first.oldTip, options.oldDefault),
         onto: options.newDefault,
         head: leafMove.newSha,
       });

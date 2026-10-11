@@ -121,7 +121,7 @@ describe('restack translation', () => {
     }));
 
     await applyRestackTransition({
-      worktree: repository, cause: 'base-refresh', newDefault: advanced, activeChild: child,
+      worktree: repository, cause: 'base-refresh', oldDefault: base, newDefault: advanced, activeChild: child,
       ranges: [{ child, oldParent: base, oldTip: oldEvidence, kind: 'leaf-active' }],
       moves: [{ ref: parseRefName('refs/heads/feat/daemon-demo')!, child, oldSha: oldEvidence, newSha: rewrittenEvidence }],
       git: makeGitRunner(repository),
@@ -167,7 +167,7 @@ describe('restack translation', () => {
     }));
 
     await applyRestackTransition({
-      worktree: repository, cause: 'base-refresh', newDefault: advanced, activeChild: child,
+      worktree: repository, cause: 'base-refresh', oldDefault: base, newDefault: advanced, activeChild: child,
       ranges: [{ child, oldParent: base, oldTip: oldCommit, kind: 'leaf-active' }],
       moves: [{ ref: parseRefName('refs/heads/feat/daemon-demo')!, child, oldSha: oldCommit, newSha: resolvedCommit }],
       git: makeGitRunner(repository),
@@ -189,6 +189,7 @@ describe('restack translation', () => {
     await applyRestackTransition({
       worktree: subject.repository,
       cause: 'base-refresh',
+      oldDefault: parseCommitSha(subject.base)!,
       newDefault: parseCommitSha(subject.advancedBase)!,
       activeChild: subject.childTwo,
       ranges: [
@@ -271,6 +272,7 @@ describe('restack translation', () => {
     await applyRestackTransition({
       worktree: repository,
       cause: 'feature-repair',
+      oldDefault: parseCommitSha(base)!,
       newDefault: parseCommitSha(base)!,
       activeChild: leafChild,
       ranges: [

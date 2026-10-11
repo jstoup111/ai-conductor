@@ -342,17 +342,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const staleCleanup = await cleanClearedAbortedRestackJournal(options.worktree, options.slug, { git });
     if (staleCleanup === 'unavailable') return { kind: 'unavailable', detail: 'cannot remove cleared aborted restack journal' };
     const active = await activeFor(options.worktree, options.slug, git);
-    // A feature repair preserves its original base. Resolving origin/main here
-    // would silently turn a repair into a base refresh.
-    const newDefault = options.cause === 'feature-repair'
-      ? undefined
-      : await defaultTip(git, options.newDefault);
-    const planningDefault = newDefault ?? await requiredSha(git, `refs/conductor/${options.slug}/closed/c${active.child}`, 'active closure').catch(async () => {
-      const result = await runGit(git, ['merge-base', active.branchRef, 'HEAD']);
-      const parsed = result.exitCode === 0 ? parseCommitSha(result.stdout.trim()) : undefined;
-      if (!parsed) throw new Error('cannot resolve old default for feature repair');
-      return parsed;
-    });
+    // A repair's default is unchanged. Resolve that local default before
+    // planning instead of borrowing the active child's closure, which is an
+    // intermediate stack tip rather than the whole feature's base.
+    const planningDefault = await defaultTip(git, options.cause === 'base-refresh' ? options.newDefault : undefined);
     const plan = await planRestackRanges(options.worktree, {
       slug: options.slug,
       oldDefaultTip: planningDefault,
@@ -598,7 +591,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const transition = await applyRestackTransition({
       worktree: options.worktree,
       cause: options.cause,
-      newDefault: planningDefault,
+      // The journaled range records the old side of a base refresh; a repair
+      // keeps both sides at its unchanged default.
+      oldDefault: options.cause === 'feature-repair' ? planningDefault : journal.journal.ranges[0]!.oldParent,
+      newDefault: options.cause === 'feature-repair' ? planningDefault : journal.journal.newDefault ?? planningDefault,
       activeChild: active.child,
       ranges: plan.ranges,
       moves,
