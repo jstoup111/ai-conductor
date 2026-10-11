@@ -2,6 +2,7 @@
 // Covers: task:rem-prd-audit-R15
 // Covers: task:rem-as-built-R21
 // Covers: task:8
+// Covers: task:rem-as-built-rem-as-built-R16
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
 import { readVerdict } from '../../../src/engine/gate-verdicts.js';
+import { installDaemonBotCoAuthor } from '../../../src/engine/bot-co-author.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -82,6 +84,45 @@ async function revList(git: (args: string[]) => Promise<{ stdout: string }>, ran
 }
 
 describe('runRestack (real local Git)', () => {
+  it('preserves a historical raw message while daemon co-author configuration is active', async () => {
+    const subject = await fixture();
+    const trailer = 'Co-authored-by: conductor-bot <4242+conductor-bot@users.noreply.github.com>';
+    const message = 'ordinary historical message  \n\ntrailing spaces  \n\n\n';
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'co-author'), `${trailer}\n`);
+    await writeFile(join(subject.repo, '.pipeline', 'original-message'), message);
+    await writeFile(join(subject.repo, 'historical.txt'), 'historical\n');
+    await subject.git(['add', 'historical.txt']);
+    await subject.git(['commit', '--cleanup=verbatim', '-F', '.pipeline/original-message']);
+    const original = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    installDaemonBotCoAuthor({
+      prepare: async () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
+      current: () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
+    });
+    const rawMessage = async (commit: string) => {
+      const object = (await subject.git(['cat-file', 'commit', commit])).stdout;
+      const separator = object.indexOf('\n\n');
+      if (separator === -1) throw new Error('commit object has no message separator');
+      return object.slice(separator + 2);
+    };
+
+    try {
+      await expect(runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'base-refresh',
+        newDefault: subject.advancedDefault,
+        git: makeGitRunner(subject.repo),
+      })).resolves.toMatchObject({ kind: 'applied' });
+
+      const rewritten = (await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim();
+      expect(await rawMessage(rewritten)).toBe(await rawMessage(original));
+      expect(await rawMessage(rewritten)).not.toContain(trailer);
+    } finally {
+      installDaemonBotCoAuthor(undefined);
+    }
+  });
+
   it('replays the complete stack, atomically moves its refs, synchronizes HEAD, cleans durable state, and emits spine events', async () => {
     const subject = await fixture();
     const events = new ConductorEventEmitter();

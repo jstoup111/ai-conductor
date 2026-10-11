@@ -1,4 +1,4 @@
-// Covers: task:24, task:rem-prd-audit-R15, task:rem-as-built-rem-as-built-R27
+// Covers: task:24, task:rem-prd-audit-R15, task:rem-as-built-rem-as-built-R27, task:rem-as-built-rem-as-built-R16
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { installDaemonBotCoAuthor } from '../../../src/engine/bot-co-author.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import {
   journalRefFor,
@@ -59,6 +60,56 @@ async function fixture() {
 }
 
 describe('recoverRestackJournal (real local Git)', () => {
+  it('preserves a historical raw message while recovering a pending journal with daemon co-author configuration', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1);
+    if (!child) throw new Error('child id should parse');
+    const trailer = 'Co-authored-by: conductor-bot <4242+conductor-bot@users.noreply.github.com>';
+    const message = 'ordinary historical message  \n\ntrailing spaces  \n\n\n';
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'co-author'), `${trailer}\n`);
+    await writeFile(join(subject.repo, '.pipeline', 'original-message'), message);
+    await writeFile(join(subject.repo, 'historical.txt'), 'historical\n');
+    await subject.git(['add', 'historical.txt']);
+    await subject.git(['commit', '--cleanup=verbatim', '-F', '.pipeline/original-message']);
+    const original = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const journal: RestackJournal = {
+      opId: 'co-author-message-recovery' as RestackOpId,
+      cause: 'base-refresh',
+      newDefault: subject.advanced,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [{ ref: 'refs/heads/feat/c1/demo' as never, oldSha: original }],
+      ranges: [{ child, oldParent: subject.base, oldTip: original, kind: 'active' }],
+      children: [{ child, status: 'pending' }],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+    installDaemonBotCoAuthor({
+      prepare: async () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
+      current: () => ({ kind: 'resolved', login: 'conductor-bot', id: 4242, trailer }),
+    });
+    const rawMessage = async (commit: string) => {
+      const object = (await subject.git(['cat-file', 'commit', commit])).stdout;
+      const separator = object.indexOf('\n\n');
+      if (separator === -1) throw new Error('commit object has no message separator');
+      return object.slice(separator + 2);
+    };
+
+    try {
+      await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
+        .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+      const rewritten = (await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim();
+      expect(await rawMessage(rewritten)).toBe(await rawMessage(original));
+      expect(await rawMessage(rewritten)).not.toContain(trailer);
+    } finally {
+      installDaemonBotCoAuthor(undefined);
+    }
+  });
+
   it('removes an aborted journal after a lost worktree has no committed outstanding halt', async () => {
     const subject = await fixture();
     const child = parseChildId(1);
