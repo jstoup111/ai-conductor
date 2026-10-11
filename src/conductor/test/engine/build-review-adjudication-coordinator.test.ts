@@ -327,6 +327,11 @@ describe('coordinateBuildReviewAdjudication', () => {
       }],
     });
     const events: ConductorEvent[] = [];
+    const detail = `case transition rejected: source-linked-by-multiple-cases (cases case-R, case-N; sources ${sourceId})\n` +
+      'persisted case history is valid and unchanged\n' +
+      'Inspect with ai-conductor build-review findings --feature feature, then clear with ' +
+      'ai-conductor halt clear --feature feature --rationale "<why>" once the proposed transition is admissible ' +
+      '(an engine admits it or a judgement no longer proposes it).';
 
     const result = await coordinateBuildReviewAdjudication({
       ...input(root, async () => actionJudgement()),
@@ -339,12 +344,12 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect([result, events.filter((event) => event.type === 'remediation_adjudication_failed')]).toEqual([{
       ok: false,
-      detail: `case transition rejected: source-linked-by-multiple-cases (cases case-R, case-N; sources ${sourceId})`,
+      detail,
     }, [{
       type: 'remediation_adjudication_failed',
       domain: 'build_review',
       lapId: 'lap-1',
-      reason: `case transition rejected: source-linked-by-multiple-cases (cases case-R, case-N; sources ${sourceId})`,
+      reason: detail,
       rejectedTransition: {
         invariant: 'source-linked-by-multiple-cases',
         caseIds: ['case-R', 'case-N'],
