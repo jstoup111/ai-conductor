@@ -206,6 +206,8 @@ interface FixtureOptions {
   readonly custom?: boolean;
   /** A feature-owned creation capability is available unless this fake denies it. */
   readonly featureCreationAuthorized?: boolean;
+  /** Fails before the coordinator can settle durable cases. */
+  readonly effectiveResolutionFailure?: boolean;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -262,6 +264,9 @@ async function fixture(options: FixtureOptions = {}) {
   const uncoveredScopeIncomplete = options.scopeIncomplete === 'uncovered'
     ? (['testQuality'] as const) : ([] as const);
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
+    if (options.effectiveResolutionFailure) {
+      return { ok: false as const, reason: 'effective resolution unavailable' };
+    }
     const acceptedFindingIds = [...(options.acceptedFindingIds?.() ?? [])];
     const suppressedFindingIds = [...(options.suppressedFindingIds ?? [])];
     const effectivePass = clean || suppressedFindingIds.includes(FINDING_ID);
@@ -297,12 +302,16 @@ async function fixture(options: FixtureOptions = {}) {
   const kickbackEvidence: string[] = [];
   const gateVerdicts: Array<{ step: StepName; satisfied: boolean }> = [];
   const lifecycle: ConductorEvent[] = [];
+  const adjudications: Extract<ConductorEvent, { type: 'build_review_adjudicated' }>[] = [];
   const loopHalts: ConductorEvent[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') { kickbacks.push({ from: event.from, to: event.to }); kickbackEvidence.push(event.evidence ?? ''); } });
   events.on('gate_verdict', (event) => {
     if (event.type === 'gate_verdict') gateVerdicts.push({ step: event.step, satisfied: event.satisfied });
   });
   events.on('loop_halt', (event) => { loopHalts.push(event); });
+  events.on('build_review_adjudicated', (event) => {
+    if (event.type === 'build_review_adjudicated') adjudications.push(event);
+  });
   for (const type of [
     'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
     'remediation_effect_applied', 'remediation_case_reconciled',
@@ -358,7 +367,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   return {
-    projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, gateVerdicts, lifecycle, loopHalts, ghCalls, resolver,
+    projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, gateVerdicts, lifecycle, loopHalts, adjudications, ghCalls, resolver,
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
@@ -950,6 +959,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.remediateDispatches()).toBeGreaterThanOrEqual(1);
     expect(run.dispatched).not.toContain('build');
     expect(run.kickbacks).toEqual([]);
+    expect(run.adjudications.map((event) => event.outcome)).toEqual(['retry', 'retry', 'retry', 'halt']);
     const ledger = await run.readJson('.pipeline/kickback-ledger.json') as { gates: { build_review?: { count?: number; mechanicalFaults?: number } } };
     expect(ledger.gates.build_review?.count ?? 0).toBe(0);
     // The mechanical allowance bounds the re-land loop and then halts.
@@ -970,5 +980,35 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(await run.haltMarker()).toContain('uncovered build-review coverage failure');
     expect(await run.haltMarker()).toContain('scope-incomplete testQuality test/example.test.ts:2');
     expect(await run.haltMarker()).toContain('the pinned binding is incomplete');
+  });
+
+  it('emits one final halt event when effective resolution fails before case settlement', async () => {
+    const run = await fixture({ effectiveResolutionFailure: true });
+
+    expect(run.adjudications).toEqual([expect.objectContaining({
+      outcome: 'halt', overturned: false, findings: [], cases: [],
+    })]);
+  });
+
+  it('emits one final halt event when the adjudication kickback ledger is unreadable', async () => {
+    const run = await fixture({
+      seedPipeline: async (root) => {
+        await mkdir(join(root, '.pipeline', 'kickback-ledger.json'));
+      },
+    });
+
+    expect(run.adjudications).toEqual([expect.objectContaining({
+      outcome: 'halt', overturned: false, findings: [], cases: [],
+    })]);
+  });
+
+  it('reports durable case disposition and resolution, and only its finding titles', async () => {
+    const run = await fixture();
+    const [event] = run.adjudications;
+
+    expect(run.adjudications).toHaveLength(1);
+    expect(event).toMatchObject({ outcome: 'build', overturned: false });
+    expect(event?.cases).toEqual([expect.objectContaining({ disposition: 'act', resolution: 'open' })]);
+    expect(event?.findings).toEqual([expect.objectContaining({ rubric: 'testQuality', title: FINDING.summary })]);
   });
 });

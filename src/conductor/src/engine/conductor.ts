@@ -32,6 +32,7 @@ import {
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
+import { buildReviewAdjudicationSourceId } from './build-review-adjudication-context.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   applyBuildReviewOutcome,
@@ -12606,6 +12607,20 @@ export class Conductor {
                 // scalar/legacy verdicts retain the historical raw route, while
                 // a current raw aggregate defaults to the post-join path.
                 if (aggregate && this.buildReviewAdjudicationEnabled()) {
+                  const emitAdjudicated = async (
+                    outcome: 'pass' | 'build' | 'decision-stop' | 'halt' | 'retry',
+                    cases: readonly { readonly caseId: string; readonly disposition: string; readonly resolution: string; readonly sourceIds: readonly string[] }[] = [],
+                  ) => {
+                    const settledSourceIds = new Set(cases.flatMap((record) => record.sourceIds));
+                    const findings = (projectBuildReviewAggregateSources(aggregate) ?? [])
+                      .filter((source) => settledSourceIds.has(buildReviewAdjudicationSourceId(source)))
+                      .map((source) => ({ rubric: source.rubric, title: source.summary, disposition: outcome }));
+                    await emitTracked({
+                      type: 'build_review_adjudicated', lapId: aggregate.lapId,
+                      outcome, overturned: outcome === 'pass', findings,
+                      cases: cases.map(({ caseId, disposition, resolution }) => ({ caseId, disposition, resolution })),
+                    });
+                  };
                   const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                     this.projectRoot,
                     verdictRaw,
@@ -12630,6 +12645,7 @@ export class Conductor {
                     return;
                   }
                   if (!effective.ok && !legacyAdjudicationInput) {
+                    await emitAdjudicated('halt');
                     const reason = `build_review adjudication halted: ${effective.reason}`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -12646,6 +12662,7 @@ export class Conductor {
                   const uncoveredScopeIncomplete = effective.effective.uncoveredScopeIncompleteRubrics ?? [];
                   const mechanicalLedger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
                   if (isUnreadableKickbackGate(mechanicalLedger, 'build_review')) {
+                    await emitAdjudicated('halt');
                     const reason = `build_review adjudication halted: kickback ledger gate 'build_review' is unreadable`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -12763,17 +12780,8 @@ export class Conductor {
                   // Keep the human-facing settlement on the event spine.  The
                   // coordinator trace remains diagnostic evidence, never a
                   // second raw daemon-log channel.
-                  const emitAdjudicated = async (kind: 'pass' | 'build' | 'decision-stop' | 'halt' | 'retry') => {
-                    const sources = projectBuildReviewAggregateSources(aggregate) ?? [];
-                    await emitTracked({
-                      type: 'build_review_adjudicated', lapId: aggregate.lapId,
-                      outcome: kind, overturned: kind === 'pass',
-                      findings: sources.map((source) => ({ rubric: source.rubric, title: source.summary, disposition: kind })),
-                      cases: 'caseIds' in outcome ? outcome.caseIds.map((caseId) => ({ caseId, disposition: kind, resolution: kind })) : [],
-                    });
-                  };
                   if (outcome.kind === 'decision-stop' || (outcome.kind === 'infrastructure' && outcome.status === 'halt')) {
-                    await emitAdjudicated(outcome.kind === 'decision-stop' ? 'decision-stop' : 'halt');
+                    await emitAdjudicated(outcome.kind === 'decision-stop' ? 'decision-stop' : 'halt', outcome.cases);
                     const detail = outcome.kind === 'decision-stop'
                       ? [
                         outcome.detail,
@@ -12795,12 +12803,12 @@ export class Conductor {
                     return;
                   }
                   if (outcome.kind === 'settled') {
-                    await emitAdjudicated('pass');
+                    await emitAdjudicated('pass', outcome.cases);
                     await this.saveConductorStepStatus(state, step.name, 'done');
                     continue;
                   }
                   if (outcome.kind === 'repair') {
-                    await emitAdjudicated('build');
+                    await emitAdjudicated('build', outcome.cases);
                     const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
                     const count = ledger.gates.build_review?.count ?? 1;
                     // The trace remains durable adjudication evidence, but is not
@@ -12851,13 +12859,14 @@ export class Conductor {
                     this.activeRegionChild,
                   );
                   if (bumpedMechanicalFaults.kind === 'unreadable') {
-                    await emitAdjudicated('halt');
+                    await emitAdjudicated('halt', outcome.cases);
                     const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     await this.emitLoopHalt(reason);
                     return;
                   }
+                  await emitAdjudicated('retry', outcome.cases);
                   await this.saveConductorStepStatus(state, step.name, 'failed');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review

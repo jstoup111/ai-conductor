@@ -6,10 +6,17 @@ import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import type { BuildReviewScopeIncompleteFault } from './build-review-domain.js';
 
 export type BuildReviewOutcome =
-  | { readonly kind: 'repair'; readonly lapId: string; readonly caseIds: readonly string[]; readonly trace: string; readonly remainingInfrastructure: boolean }
-  | { readonly kind: 'decision-stop'; readonly lapId: string; readonly stops: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[]; readonly detail: string; readonly trace: string; readonly remainingInfrastructure: boolean }
-  | { readonly kind: 'infrastructure'; readonly lapId?: string; readonly status: 'retry' | 'halt'; readonly reason: string; readonly trace?: string }
-  | { readonly kind: 'settled'; readonly lapId: string; readonly trace: string };
+  | { readonly kind: 'repair'; readonly lapId: string; readonly caseIds: readonly string[]; readonly cases: readonly BuildReviewSettledCase[]; readonly trace: string; readonly remainingInfrastructure: boolean }
+  | { readonly kind: 'decision-stop'; readonly lapId: string; readonly stops: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[]; readonly cases: readonly BuildReviewSettledCase[]; readonly detail: string; readonly trace: string; readonly remainingInfrastructure: boolean }
+  | { readonly kind: 'infrastructure'; readonly lapId?: string; readonly status: 'retry' | 'halt'; readonly reason: string; readonly cases: readonly BuildReviewSettledCase[]; readonly trace?: string }
+  | { readonly kind: 'settled'; readonly lapId: string; readonly cases: readonly BuildReviewSettledCase[]; readonly trace: string };
+
+export type BuildReviewSettledCase = {
+  readonly caseId: string;
+  readonly disposition: string;
+  readonly resolution: string;
+  readonly sourceIds: readonly string[];
+};
 
 /**
  * The application boundary shared by attended and daemon review consumers.
@@ -29,6 +36,7 @@ export async function applyBuildReviewOutcome(input: {
     return {
       kind: 'infrastructure', status: 'halt',
       reason: 'build-review aggregate is not a complete settled lap',
+      cases: [],
     };
   }
 
@@ -37,22 +45,24 @@ export async function applyBuildReviewOutcome(input: {
     aggregate,
   });
   if (!adjudication.ok) {
-    return { kind: 'infrastructure', lapId: aggregate.lapId, status: 'halt', reason: adjudication.detail };
+    return { kind: 'infrastructure', lapId: aggregate.lapId, status: 'halt', reason: adjudication.detail, cases: [] };
   }
   if (adjudication.route === 'build') {
     // Coordinator validation and the durable effect lease must both have
     // produced an admitted action before any consumer can receive repair work.
     if (adjudication.durable.repairCaseIds.length === 0) {
-      return { kind: 'infrastructure', lapId: aggregate.lapId, status: 'halt', reason: 'adjudication selected BUILD without a durable admitted repair', trace: adjudication.trace };
+      return { kind: 'infrastructure', lapId: aggregate.lapId, status: 'halt', reason: 'adjudication selected BUILD without a durable admitted repair', cases: adjudication.durable.settledCases, trace: adjudication.trace };
     }
     return {
       kind: 'repair', lapId: aggregate.lapId, caseIds: adjudication.durable.repairCaseIds,
+      cases: adjudication.durable.settledCases,
       trace: adjudication.trace, remainingInfrastructure: adjudication.remainingMechanical,
     };
   }
   if (adjudication.durable.decisionStops.length > 0) {
     return {
       kind: 'decision-stop', lapId: aggregate.lapId, stops: adjudication.durable.decisionStops,
+      cases: adjudication.durable.settledCases,
       detail: adjudication.detail, trace: adjudication.trace,
       remainingInfrastructure: adjudication.remainingMechanical,
     };
@@ -61,10 +71,10 @@ export async function applyBuildReviewOutcome(input: {
     return {
       kind: 'infrastructure', lapId: aggregate.lapId,
       status: adjudication.route === 'mechanical-retry' ? 'retry' : 'halt',
-      reason: adjudication.detail, trace: adjudication.trace,
+      reason: adjudication.detail, cases: adjudication.durable.settledCases, trace: adjudication.trace,
     };
   }
-  return { kind: 'settled', lapId: aggregate.lapId, trace: adjudication.trace };
+  return { kind: 'settled', lapId: aggregate.lapId, cases: adjudication.durable.settledCases, trace: adjudication.trace };
 }
 
 /** Operator-facing lines for every structured stop, so none is reduced to the summary detail. */

@@ -54,6 +54,13 @@ export type BuildReviewAdjudicationCoordinatorResult =
       readonly durable: {
         readonly repairCaseIds: readonly string[];
         readonly decisionStops: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[];
+        /** The durable case state that settled this lap's terminal route. */
+        readonly settledCases: readonly {
+          readonly caseId: string;
+          readonly disposition: RemediationCaseRecord['disposition'];
+          readonly resolution: RemediationCaseRecord['resolution'];
+          readonly sourceIds: readonly string[];
+        }[];
       } }
   | { readonly ok: false; readonly detail: string };
 
@@ -380,6 +387,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
             sourceIds: record.consistencyStop?.sourceIds ?? record.sources.map((source) => source.sourceId),
             rationale: record.consistencyStop?.rationale ?? record.rationale,
           })),
+        settledCases: settledCases.map((record) => ({
+          caseId: record.id,
+          disposition: record.disposition,
+          resolution: record.resolution,
+          sourceIds: record.sources.map((source) => source.sourceId),
+        })),
       };
       if (!completedEmitted && !options.terminalFailureEmitted) {
         completedEmitted = true;
