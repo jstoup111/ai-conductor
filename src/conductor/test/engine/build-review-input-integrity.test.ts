@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -157,6 +157,23 @@ describe('engine/build-review-input-integrity', () => {
       '/evidence/step-heartbeat': '{"ts":"after"}\n',
       '/evidence/build-review/cache/security.json': 'cached after',
       '/evidence/build-review/policy-material/portable/SKILL.md': 'captured again',
+      '/evidence/build-review/lap-old/portable.json': 'rewritten prior lap evidence',
+    }));
+
+    await expect(diffBuildReviewInputDigests(before, after)).resolves.toEqual(['evidenceRoot:build-review/lap-old/portable.json']);
+  });
+
+  it('excludes rejected reviewer output while prior-lap build-review evidence stays hashed', async () => {
+    const tree: FileTree = {
+      ...initialTree,
+      '/evidence/build-review-rejections/lap-a/eventSpine.1.json': 'rejected reviewer output',
+      '/evidence/build-review/lap-old/portable.json': 'prior lap evidence',
+    };
+    const excluded = { ...roots(), evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES };
+    const before = await captureBuildReviewInputDigest(excluded, filesystem(tree));
+    const after = await captureBuildReviewInputDigest(excluded, filesystem({
+      ...tree,
+      '/evidence/build-review-rejections/lap-a/eventSpine.1.json': 'rewritten rejected reviewer output',
       '/evidence/build-review/lap-old/portable.json': 'rewritten prior lap evidence',
     }));
 
