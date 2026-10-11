@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { loadMergedConfigForRead, projectConfigPath } from '../config.js';
 import { resolveMainRepoRootStrict } from '../park-marker.js';
 import { resolveLogConfig, type ResolvedLogConfig } from './log-config.js';
@@ -39,9 +40,11 @@ function stableLogBlock(config: { otel?: unknown }): string {
 export function logDestinationId(config: Extract<ResolvedLogConfig, { enabled: true }>): string {
   const headers = Object.entries(config.headerReferences ?? {})
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, reference]) => `${name}=$${reference.env}`)
-    .join('&');
-  return `${config.endpoint}|${headers}`;
+    .map(([name, reference]) => [name, reference.env]);
+  // The durable filename is observable local metadata. Keep its matching
+  // contract opaque while still binding it to the normalized endpoint and
+  // header reference names (never their resolved values).
+  return `sha256:${createHash('sha256').update(JSON.stringify([config.endpoint, headers])).digest('hex')}`;
 }
 
 /**

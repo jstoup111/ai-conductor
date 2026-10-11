@@ -26,7 +26,9 @@ describe('canonical log policy', () => {
     expect(calls).toEqual(['/main', '/linked-worktree']);
     expect(warnings).toEqual(['log settings in this worktree are ignored; using canonical project policy at /main/.ai-conductor/config.yml']);
     expect(policy.destinationId).toBe(logDestinationId(policy.config));
-    expect(policy.destinationId).toContain('$LOG_TOKEN');
+    expect(policy.destinationId).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(policy.destinationId).not.toContain('logs.example');
+    expect(policy.destinationId).not.toContain('LOG_TOKEN');
     expect(policy.destinationId).not.toContain('secret-value');
     expect(JSON.stringify(policy)).not.toContain('secret-value');
 

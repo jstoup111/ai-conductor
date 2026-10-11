@@ -155,6 +155,42 @@ describe('log transport', () => {
     expect(JSON.stringify(config)).not.toMatch(/loki-token|elastic-token|sumo-token|parent-secret/);
   });
 
+  it.each([
+    ['disabled', { ok: true, config: { otel: { logs: { enabled: false } } } }],
+    ['invalid', { ok: true, config: { otel: { logs: { enabled: true, endpoint: 'file:///not-otlp' } } } }],
+    ['unreadable', { ok: false }],
+  ] as const)('does not issue a direct request when current canonical policy is %s', async (_state, current) => {
+    const admitted = resolvedDestination(enabledLogConfig().otel);
+    let requests = 0;
+    const result = await sendLogBatch([], {
+      startDir: '/project', destinationId: logDestinationId(admitted),
+      policy: {
+        resolveRoot: async () => '/project',
+        loadConfig: async () => current as never,
+      },
+      fetch: async () => { requests += 1; return new Response(undefined, { status: 200 }); },
+    });
+
+    expect({ result, requests }).toEqual({ result: { ok: false, reason: 'policy' }, requests: 0 });
+  });
+
+  it('does not reroute a directly queued batch after its header reference changes', async () => {
+    const admitted = resolvedDestination(enabledLogConfig().otel);
+    let requests = 0;
+    const result = await sendLogBatch([], {
+      startDir: '/project', destinationId: logDestinationId(admitted),
+      policy: {
+        resolveRoot: async () => '/project',
+        loadConfig: async () => ({ ok: true, config: {
+          otel: { logs: { enabled: true, endpoint: 'https://logs.example', headers: { Authorization: { env: 'ROTATED_REFERENCE' } } } },
+        } }),
+      },
+      fetch: async () => { requests += 1; return new Response(undefined, { status: 200 }); },
+    });
+
+    expect({ result, requests }).toEqual({ result: { ok: false, reason: 'policy' }, requests: 0 });
+  });
+
   it('never begins a late request after its shared authorization deadline', async () => {
     let fetches = 0;
     const result = await sendLogBatch([], {
@@ -172,7 +208,7 @@ describe('log transport', () => {
     let resolveCredentials!: (headers: Record<string, string>) => void;
     try {
       const result = sendLogBatch([], {
-        startDir: '/project', destinationId: 'https://logs.example/v1/logs|Authorization=$LOG_TOKEN',
+        startDir: '/project', destinationId: logDestinationId(resolvedDestination(enabledLogConfig().otel)),
         policy: {
           resolveRoot: async () => '/project',
           loadConfig: async () => ({ ok: true, config: enabledLogConfig() }),
@@ -201,7 +237,7 @@ describe('log transport', () => {
     let fetches = 0;
     try {
       const result = sendLogBatch([], {
-        startDir: '/project', destinationId: 'https://logs.example/v1/logs|Authorization=$LOG_TOKEN',
+        startDir: '/project', destinationId: logDestinationId(resolvedDestination(enabledLogConfig().otel)),
         policy: {
           resolveRoot: (_startDir, signal) => new Promise<string>((resolve) => {
             resolveRoot = resolve;
