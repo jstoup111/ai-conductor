@@ -4,7 +4,7 @@ import type { Context } from '@opentelemetry/api';
 import type { SdkLogRecord } from '@opentelemetry/sdk-logs';
 
 export interface LogBatchExporter {
-  export(records: SdkLogRecord[], done: (result: ExportResult) => void): void;
+  export(records: SdkLogRecord[], done: (result: ExportResult) => void): void | Promise<void>;
   shutdown?(): Promise<void>;
 }
 
@@ -25,6 +25,7 @@ export class BoundedLogProcessor {
   private readonly queue: SdkLogRecord[] = [];
   private timer: ReturnType<typeof setTimeout> | undefined;
   private inFlight = 0;
+  private inFlightBytes = 0;
   private queuedBytes = 0;
   private flushing: Promise<void> | undefined;
   private stopped = false;
@@ -45,7 +46,7 @@ export class BoundedLogProcessor {
   onEmit(record: SdkLogRecord, _context?: Context): void {
     if (this.stopped) return;
     const bytes = serializedBytes([record]);
-    if (this.queue.length + this.inFlight >= this.maxRecords || this.queuedBytes + bytes > this.maxBytes) {
+    if (this.queue.length + this.inFlight >= this.maxRecords || this.queuedBytes + this.inFlightBytes + bytes > this.maxBytes) {
       this.options.onDrop?.(1); return;
     }
     this.queue.push(record); this.queuedBytes += bytes;
@@ -87,13 +88,19 @@ export class BoundedLogProcessor {
         this.queue.shift(); this.queuedBytes -= serializedBytes([next]); batch.push(next);
       }
       if (!batch.length) { this.queue.shift(); this.options.onDrop?.(1); continue; }
+      const batchBytes = serializedBytes(batch);
       this.inFlight += batch.length;
+      this.inFlightBytes += batchBytes;
       await new Promise<void>((resolve) => {
         let settled = false;
         const settle = (_result?: ExportResult) => { if (!settled) { settled = true; resolve(); } };
-        try { this.exporter.export(batch, settle); } catch { settle({ code: ExportResultCode.FAILED }); }
+        try {
+          const exported = this.exporter.export(batch, settle);
+          if (exported) void exported.then(() => settle(), () => settle({ code: ExportResultCode.FAILED }));
+        } catch { settle({ code: ExportResultCode.FAILED }); }
       });
       this.inFlight -= batch.length;
+      this.inFlightBytes -= batchBytes;
     }
   }
 }
