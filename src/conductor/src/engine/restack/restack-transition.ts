@@ -26,6 +26,8 @@ import type { ChildRange, CommitSha, RestackCause } from './restack-types.js';
 export interface ApplyRestackTransitionOptions {
   readonly worktree: string;
   readonly cause: RestackCause;
+  /** The restack operation id; every verdict transition and refund receipt uses it. */
+  readonly opId?: string;
   /** The default tip before this restack. */
   readonly oldDefault: CommitSha;
   /** The default tip after this restack (unchanged for a repair). */
@@ -170,6 +172,7 @@ async function applyDecision(
   decision: { readonly invalidated: readonly StepName[]; readonly reverified: readonly StepName[]; readonly preserved: readonly StepName[]; readonly preservedCandidates: readonly RebasePreservedCandidate[]; readonly replay?: ReplayEvidence },
   events: ConductorEventEmitter | undefined,
   cause?: RestackCause,
+  opId?: string,
 ): Promise<void> {
   if (outcome.kind !== 'changed' || outcome.replay === undefined) return;
   const transition = await applyRebaseTransition({
@@ -183,6 +186,7 @@ async function applyDecision(
     reverified: decision.reverified,
     ...(child === undefined ? {} : { child }),
     ...(cause === undefined ? {} : { cause }),
+    ...(opId === undefined ? {} : { operationId: opId }),
   });
   if (transition.stateResult === 'refused') throw new Error('restack verdict transition was refused');
   if (events) {
@@ -257,8 +261,8 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
     if (await exists(childState)) {
       await withActiveChildProjection(options.worktree, options.activeChild, async (projectionRoot) => {
         const projectedState = pipelinePathFor(projectionRoot, 'conduct-state.json', options.activeChild);
-        const verdict = await applyRebaseVerdicts(projectionRoot, activeOutcome, false, undefined, options.git, undefined, options.activeChild);
-        await applyDecision(projectionRoot, projectedState, options.activeChild, activeOutcome, regionDecision(verdict), options.events, options.cause);
+        const verdict = await applyRebaseVerdicts(projectionRoot, activeOutcome, false, undefined, options.git, undefined, options.activeChild, options.cause);
+        await applyDecision(projectionRoot, projectedState, options.activeChild, activeOutcome, regionDecision(verdict), options.events, options.cause, options.opId);
       });
     }
   }
@@ -285,6 +289,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
       options.git,
       undefined,
       leaf.child,
+      options.cause,
     );
     // Whole-stack policy owns the flat gates, but its region effects belong
     // to the leaf child. Apply that child's state transition through the
@@ -301,10 +306,11 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
           regionDecision(verdict),
           options.events,
           options.cause,
+          options.opId,
         );
       });
     }
-    await applyDecision(options.worktree, featureState, undefined, wholeOutcome, featureDecision(verdict), options.events, options.cause);
+    await applyDecision(options.worktree, featureState, undefined, wholeOutcome, featureDecision(verdict), options.events, options.cause, options.opId);
   }
 
   for (const range of options.ranges) {

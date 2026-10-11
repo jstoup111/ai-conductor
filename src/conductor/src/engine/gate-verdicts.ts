@@ -159,6 +159,8 @@ export interface GateVerdict {
   kickback?: {
     from: StepName | 'decide-change';
     evidence: string;
+    /** A stacked restack's cause; the legacy rebase refund credits only base refreshes. */
+    cause?: RestackCause;
   };
   /** Optional additive authority for a previously judged pass after one replay. */
   preservation?: ReplayPreservationRecord;

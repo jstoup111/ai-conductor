@@ -14594,7 +14594,9 @@ export class Conductor {
           if (!verdict || verdict.satisfied || verdict.kickback?.from !== 'rebase') continue;
 
           let convergenceCredit: { gate: 'build_review' } | undefined;
-          if (target === 'build_review') {
+          // Only a base refresh (or an N=1 rebase, which has no cause) earns a
+          // refund; a feature repair's invalidation is the repair's own cost.
+          if (target === 'build_review' && verdict.kickback.cause !== 'feature-repair') {
             const credited = await updateKickbackLedger(this.projectRoot, (ledger) => {
               const entry = ledger.gates.build_review;
               if (!entry) return { result: false };

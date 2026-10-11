@@ -155,6 +155,7 @@ export async function completeInterruptedRebaseOperation(
           : 'persisted rebase transition has no preservation evidence',
         true,
         options.child,
+        options.operation.cause,
       );
     }
     return applyRebaseTransition({
@@ -193,6 +194,7 @@ export async function completeInterruptedRebaseOperation(
       'persisted rebase preservation candidate no longer matches its original verdict',
       true,
       options.child,
+      options.operation.cause,
     );
     if (result.kind === 'reverified') reverified.push(candidate.gate);
     else invalidated.push(candidate.gate);

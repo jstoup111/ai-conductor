@@ -48,6 +48,7 @@ import {
 import type { ReplayEvidence } from './gate-verdicts.js';
 import { currentPreservedJudgeIdentity, gateVerdictStillValid, isApplicableOriginalPass } from './gate-code-validity.js';
 import type { RebasePreservedCandidate } from './gate-verdicts.js';
+import type { RestackCause } from './restack/restack-types.js';
 import {
   REBASE_REGRADE_GATES,
   computeOwnContributionDelta,
@@ -2432,6 +2433,7 @@ export async function reverifyOrInvalidateRebaseGate(
   evidence: string,
   invalidateOnFailure = true,
   child?: ChildId,
+  cause?: RestackCause,
 ): Promise<{ kind: 'reverified'; preservationBasis?: 'test_suite_drift_budget' } | { kind: 'invalidated' } | { kind: 'unverified' }> {
   const gateChild = isRegionStep(gate) ? child : undefined;
   const definition = ALL_STEPS.find((step) => step.name === gate);
@@ -2457,7 +2459,7 @@ export async function reverifyOrInvalidateRebaseGate(
     satisfied: false,
     reason: 'invalidated by file-changing rebase',
     checkedAt: Date.now(),
-    kickback: { from: 'rebase', evidence },
+    kickback: { from: 'rebase', evidence, ...(cause === undefined ? {} : { cause }) },
   }, gateChild);
   return { kind: 'invalidated' };
 }
@@ -2475,6 +2477,7 @@ export async function applyRebaseVerdicts(
     emit?: (event: Extract<ConductorEvent, { type: 'rebase_regrade_judged' }>) => Promise<void>;
   },
   child?: ChildId,
+  cause?: RestackCause,
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
@@ -2757,7 +2760,7 @@ export async function applyRebaseVerdicts(
         continue;
       }
     }
-    await reverifyOrInvalidateRebaseGate(projectRoot, target, undefined, evidence, true, child);
+    await reverifyOrInvalidateRebaseGate(projectRoot, target, undefined, evidence, true, child, cause);
     kickedBack.push(target);
   }
   // A completed changed rebase without P/B/O is still a first-class,

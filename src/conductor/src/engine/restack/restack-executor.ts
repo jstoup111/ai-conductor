@@ -613,6 +613,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const transition = await applyRestackTransition({
       worktree: options.worktree,
       cause: options.cause,
+      opId: draft.opId,
       // The journaled range records the old side of a base refresh; a repair
       // keeps both sides at its unchanged default.
       oldDefault: options.cause === 'feature-repair' ? stackDefault : journal.journal.ranges[0]!.oldParent,
