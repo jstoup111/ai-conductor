@@ -107,6 +107,12 @@ export class SpoolDrainer {
     while (!this.stopped) {
       const batches = await this.store.list(signal);
       if (batches.length === 0) return;
+      // A retained batch can be ineligible because its destination identity
+      // no longer matches current policy. Keep scanning so that it cannot
+      // block later eligible batches, but yield to the runtime's idle poll
+      // once no batch in this pass was eligible. Otherwise a single retained
+      // mismatch would spin on list()/authorize() until policy changed.
+      let sawEligibleBatch = false;
       for (const batch of batches) {
       if (this.stopped) return;
       let body: Buffer;
@@ -126,6 +132,7 @@ export class SpoolDrainer {
         // restoration); continue this oldest-first scan instead of ending it.
         const delivery = await this.deliver(signal, body, batch.destinationId);
         if (!delivery.authorized) break;
+        sawEligibleBatch = true;
         const { classification } = delivery;
         if (this.stopped) return;
         if (classification.action !== 'keep') {
@@ -163,6 +170,7 @@ export class SpoolDrainer {
         backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
       }
       }
+      if (!sawEligibleBatch) return;
     }
   }
 
