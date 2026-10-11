@@ -64,6 +64,14 @@ async function appendRepair(subject: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('stack preflight live-HALT gate', () => {
+  it('keeps a non-Git N=1 fixture on the flat path without probing journal refs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stack-preflight-non-git-'));
+    repositories.push(root);
+    const git = async () => { throw new Error('journal probe must not run'); };
+
+    await expect(runStackPreflight({ worktree: root, slug: 'demo', git })).resolves.toEqual({ kind: 'no-stack' });
+  });
+
   it('recovers only and leaves an appended child unreplayed while HALT is live', async () => {
     const subject = await fixture();
     await appendRepair(subject);

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -58,6 +59,12 @@ async function liveHaltExists(worktree: string): Promise<boolean> {
  * interrupted stack cannot be made safe by losing its worktree metadata.
  */
 export async function runStackPreflight(options: RunStackPreflightOptions): Promise<StackPreflightResult> {
+  // Unit fixtures and legacy N=1 callers can have neither a Git boundary nor
+  // child state.  They cannot contain a journal ref, so the flat path must not
+  // fail while attempting its Git-backed recovery probe.
+  if (!existsSync(join(options.worktree, '.git')) && !await hasDurableChildState(options.worktree, options.slug, { git: options.git })) {
+    return { kind: 'no-stack' };
+  }
   const recovery = await recoverRestackJournal(options);
   if (recovery.kind === 'live-owner') return { kind: 'halted' };
   if (recovery.kind === 'unavailable') return recovery;

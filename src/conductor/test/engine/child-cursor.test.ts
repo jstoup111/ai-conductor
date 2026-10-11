@@ -256,6 +256,15 @@ describe('resolveActiveChild', () => {
     await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
   });
 
+  it('keeps a non-Git N=1 fixture on the flat path when no child state exists', async () => {
+    const nonGitRoot = await mkdtemp(join(tmpdir(), 'child-cursor-non-git-'));
+    try {
+      await expect(hasDurableChildState(nonGitRoot, 'demo')).resolves.toBe(false);
+    } finally {
+      await rm(nonGitRoot, { recursive: true, force: true });
+    }
+  });
+
   it('writes the in-flight leaf marker when the leaf already contains the last closure rewrite image', async () => {
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);

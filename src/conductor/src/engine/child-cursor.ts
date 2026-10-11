@@ -98,6 +98,10 @@ export async function hasDurableChildState(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'git-error';
   }
+  // Legacy N=1 callers and unit fixtures may intentionally have no Git
+  // boundary.  Without child state on disk they cannot have durable child
+  // refs, so preserve the flat path instead of making resume preflight fail.
+  if (!existsSync(join(worktree, '.git'))) return false;
   const refs = await runGit(git, ['for-each-ref', '--format=%(refname)', 'refs/heads/feat']);
   if (!refs || refs.exitCode !== 0) return 'git-error';
   if (refs.stdout.split('\n').some((ref) => {
