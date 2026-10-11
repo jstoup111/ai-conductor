@@ -334,6 +334,15 @@ describe('CLI', () => {
       expect(parseArgs(rest).status).toBe(true);
     });
 
+    it('accepts no-feature remediation forms only after explicit inline detection', () => {
+      const run = detectInline(['node', 'conduct', 'inline']);
+      const fresh = detectInline(['node', 'conduct', 'inline', '--fresh']);
+
+      expect(parseArgs(run.rest).featureDesc).toBeUndefined();
+      expect(parseArgs(fresh.rest).fresh).toBe(true);
+      expect(() => parseArgs(['node', 'conduct'])).toThrow();
+    });
+
     it('reports non-inline for a bare feature (the now-rejected form)', () => {
       const { isInline, rest } = detectInline(['node', 'conduct', 'URL shortener']);
       expect(isInline).toBe(false);

@@ -16,6 +16,9 @@ import { grantStorePath } from './engine/decide-entry-policy.js';
 import { resolveMainRepoRootStrict } from './engine/park-marker.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+const INLINE_ARGV = Symbol('inline-argv');
+
+type InlineArgv = string[] & { readonly [INLINE_ARGV]?: true };
 
 export interface CLIOptions {
   featureDesc?: string;
@@ -110,7 +113,11 @@ function createBaseProgram(): Command {
  */
 export function detectInline(argv: string[]): { isInline: boolean; rest: string[] } {
   if (argv[2] === 'inline') {
-    return { isInline: true, rest: [argv[0], argv[1], ...argv.slice(3)] };
+    const rest: InlineArgv = [argv[0], argv[1], ...argv.slice(3)];
+    // `parseArgs` remains strict for bare invocations, while the explicit
+    // inline form permits the no-feature remediation commands it prints.
+    Object.defineProperty(rest, INLINE_ARGV, { value: true });
+    return { isInline: true, rest };
   }
   return { isInline: false, rest: argv };
 }
@@ -998,7 +1005,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     result.diagnose ||
     result.report ||
     !!result.from;
-  if (!result.featureDesc && !hasStateFlag) {
+  if (!result.featureDesc && !hasStateFlag && !(argv as InlineArgv)[INLINE_ARGV]) {
     throw new Error('Feature description is required when no state flags are provided');
   }
 
