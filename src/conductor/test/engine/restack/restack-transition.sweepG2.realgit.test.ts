@@ -7,9 +7,6 @@ import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { readVerdict, writeVerdict, type GateVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { selectNextGate } from '../../../src/engine/selector.js';
-import { ALL_STEPS } from '../../../src/engine/steps.js';
-import type { StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from './restack-sweepG2-fixture.js';
 
