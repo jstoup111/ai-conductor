@@ -1,12 +1,12 @@
-// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2
+// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2, task:rem-as-built-rem-asb-3
 
 import { describe, expect, it } from 'vitest';
 import {
   compareEdges,
   declaredEdges,
   sweepDependencyDrift,
-  type DependencyDriftTracker,
 } from '../../../src/engine/engineer/dependency-reconciler.js';
+import type { TrackerClient } from '../../../src/engine/tracker-client.js';
 
 const SOURCE = 'acme/app#20';
 
@@ -142,7 +142,7 @@ interface DriftBlocker {
   state_reason?: 'completed' | 'not_planned';
 }
 
-class RecordingDriftTracker implements DependencyDriftTracker {
+class RecordingDriftTracker implements Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> {
   readonly calls: string[] = [];
   readonly writes: string[] = [];
 
@@ -249,7 +249,7 @@ describe('sweepDependencyDrift', () => {
 
   it('reports a failed blocked-by read as indeterminate while retaining other findings', async () => {
     const calls: string[] = [];
-    const tracker: DependencyDriftTracker = {
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         calls.push(`list:${repository}`);
         return [
@@ -274,7 +274,7 @@ describe('sweepDependencyDrift', () => {
 
   it('reports a rate-limited issue as indeterminate after one blocked-by read', async () => {
     const calls: string[] = [];
-    const tracker: DependencyDriftTracker = {
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         calls.push(`list:${repository}`);
         return [{ number: 45, body: '' }];
@@ -294,7 +294,7 @@ describe('sweepDependencyDrift', () => {
 
   it('returns repository-indeterminate rather than a clean sweep when listing open issues fails', async () => {
     const calls: string[] = [];
-    const tracker: DependencyDriftTracker = {
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         calls.push(`list:${repository}`);
         throw new Error('tracker unavailable');
@@ -314,7 +314,7 @@ describe('sweepDependencyDrift', () => {
 
   it('reports an unreadable cycle member as indeterminate and emits no cycle finding', async () => {
     const calls: string[] = [];
-    const tracker: DependencyDriftTracker = {
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         calls.push(`list:${repository}`);
         return [

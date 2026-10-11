@@ -27,14 +27,11 @@ import { createNotifier } from './engine/engineer/intake/notifier.js';
 import { reconcileClosedIssues, type GetIssueState } from './engine/engineer/intake/reconcile-closed-issues.js';
 import {
   sweepDependencyDrift,
-  type DependencyDriftBlocker,
-  type DependencyDriftIssue,
   type DependencyDriftResult,
-  type DependencyDriftTracker,
 } from './engine/engineer/dependency-reconciler.js';
 import { buildIntake, makeProductionGh } from './engine/engineer-cli.js';
 import type { IntakeEventEmitter } from './engine/intake-backend-composite.js';
-import { runTrackerRepositoryRead } from './engine/tracker-client.js';
+import { createGithubTrackerClient, runTrackerRepositoryRead, type TrackerClient } from './engine/tracker-client.js';
 import { resolveTrackerSelection } from './engine/tracker-selection.js';
 import { resolveEngineerDir } from './engine/engineer-store.js';
 import { sendNotification } from './ui/notifications.js';
@@ -104,65 +101,12 @@ export interface DispatchIntakeLoopOpts {
   events?: IntakeEventEmitter;
   /** Injectable sweep seam; production uses the shared dependency reconciler. */
   sweepDependencyDrift?: typeof sweepDependencyDrift;
-  /** Injectable read-only tracker seam; production uses the guarded repository-read runner. */
-  createDependencyDriftTracker?: () => DependencyDriftTracker;
+  /** Injectable canonical tracker seam for the read-only drift sweep. */
+  createDependencyTracker?: () => Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'>;
   /** Injectable so the composed reconcile boundary can be observed without filesystem fixtures. */
   reconcileClosedIssues?: typeof reconcileClosedIssues;
   engineerDir?: string;
   registryPath?: string;
-}
-
-function parseJson(value: string): unknown {
-  return JSON.parse(value || '[]') as unknown;
-}
-
-function asDriftIssues(value: unknown): DependencyDriftIssue[] {
-  if (!Array.isArray(value)) throw new Error('open issue listing was not an array');
-  return value.map((issue) => {
-    if (!issue || typeof issue !== 'object') throw new Error('open issue listing contained an invalid issue');
-    const item = issue as { number?: unknown; body?: unknown };
-    if (typeof item.number !== 'number' || !Number.isSafeInteger(item.number) || (typeof item.body !== 'string' && item.body !== null && item.body !== undefined)) {
-      throw new Error('open issue listing contained an invalid issue');
-    }
-    return { number: item.number, body: item.body ?? '' };
-  });
-}
-
-function asDriftBlockers(value: unknown): DependencyDriftBlocker[] {
-  if (!Array.isArray(value)) throw new Error('blocked_by response was not an array');
-  return value.map((blocker) => {
-    if (!blocker || typeof blocker !== 'object') throw new Error('blocked_by response contained an invalid blocker');
-    const item = blocker as { number?: unknown; state?: unknown; state_reason?: unknown; repository?: unknown; repository_url?: unknown };
-    if (typeof item.number !== 'number' || !Number.isSafeInteger(item.number) || (item.state !== 'open' && item.state !== 'closed')) {
-      throw new Error('blocked_by response contained an invalid blocker');
-    }
-    return {
-      number: item.number,
-      state: item.state,
-      ...(typeof item.state_reason === 'string' ? { state_reason: item.state_reason } : {}),
-      ...(typeof item.repository === 'string' ? { repository: item.repository } : {}),
-      ...(typeof item.repository_url === 'string' ? { repository_url: item.repository_url } : {}),
-    };
-  });
-}
-
-function productionDependencyDriftTracker(gh: ReturnType<typeof makeProductionGh>, cwd: string): DependencyDriftTracker {
-  return {
-    async listOpenIssues(repository) {
-      const stdout = await runTrackerRepositoryRead(
-        gh, cwd, 'repository.read', repository, { kind: 'repository' },
-        ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '1000', '-R', repository],
-      );
-      return asDriftIssues(parseJson(stdout));
-    },
-    async getBlockedBy(repository, number) {
-      const stdout = await runTrackerRepositoryRead(
-        gh, cwd, 'issue.read', repository, { kind: 'issue', number },
-        ['api', `repos/${repository}/issues/${number}/dependencies/blocked_by`],
-      );
-      return asDriftBlockers(parseJson(stdout));
-    },
-  };
 }
 
 function driftEvent(repository: string, result: DependencyDriftResult): Extract<import('./types/events.js').ConductorEvent, { type: 'dependency_drift_swept' }> {
@@ -226,7 +170,7 @@ export async function dispatchIntakeLoop(
   const engineerDir = opts.engineerDir ?? resolveEngineerDir({});
   const gh = opts.gh ?? makeProductionGh();
   const driftSweep = opts.sweepDependencyDrift ?? sweepDependencyDrift;
-  const driftTracker = opts.createDependencyDriftTracker ?? (() => productionDependencyDriftTracker(gh, engineerDir));
+  const driftTracker = opts.createDependencyTracker ?? (() => createGithubTrackerClient(gh));
   const reconcileClosed = opts.reconcileClosedIssues ?? reconcileClosedIssues;
 
   const { reader, ledger, queue, adapter } = build({
@@ -274,7 +218,7 @@ export async function dispatchIntakeLoop(
       // Stamp before the read: a failed sweep must not hot-loop on every intake tick.
       lastDriftSweepAt.set(repository, tickAt);
       try {
-        const result = await driftSweep({ repository, tracker: driftTracker() });
+        const result = await driftSweep({ repository, tracker: driftTracker(), cwd: engineerDir });
         await opts.events?.emit(driftEvent(repository, result));
       } catch (error) {
         log(`intake loop: dependency drift sweep failed for ${repository}: ${error instanceof Error ? error.message : String(error)}`);

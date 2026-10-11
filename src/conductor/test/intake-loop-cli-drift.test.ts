@@ -1,8 +1,9 @@
-// Covers: task:17
+// Covers: task:17, task:rem-as-built-rem-asb-3
 
 import { describe, expect, it } from 'vitest';
 import { intakeTick } from '../src/engine/engineer/intake/intake-loop.js';
-import type { DependencyDriftResult, DependencyDriftTracker } from '../src/engine/engineer/dependency-reconciler.js';
+import type { DependencyDriftResult } from '../src/engine/engineer/dependency-reconciler.js';
+import type { TrackerClient } from '../src/engine/tracker-client.js';
 import type { IntakeLoopDeps } from '../src/engine/engineer/intake/intake-loop.js';
 
 const REPOSITORY = 'acme/app';
@@ -47,13 +48,13 @@ describe('intake-loop dependency drift sweep', () => {
   it('emits one due summary with every finding list, including a clean summary', async () => {
     const effects: string[] = [];
     const events: unknown[] = [];
-    const tracker: DependencyDriftTracker = { listOpenIssues: async () => [], getBlockedBy: async () => [] };
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = { listOpenIssues: async () => [], getBlockedBy: async () => [] };
     let sweeps = 0;
     await runTicks([new Date('2026-10-10T00:00:00.000Z'), new Date('2026-10-10T00:00:00.000Z')], {
       buildIntake: fakeBuild([REPOSITORY, 'acme/clean'], effects) as any,
       createNotifier: () => ({ notify: async () => undefined }) as any,
       reconcileClosedIssues: async () => effects.push('reconcile-closed') as any,
-      createDependencyDriftTracker: () => tracker,
+      createDependencyTracker: () => tracker,
       sweepDependencyDrift: async ({ repository }) => {
         sweeps++;
         return repository === REPOSITORY ? swept({
@@ -77,12 +78,12 @@ describe('intake-loop dependency drift sweep', () => {
 
   it('skips a repository for 10 minutes and sweeps it again after 61 minutes', async () => {
     const effects: string[] = [];
-    const tracker: DependencyDriftTracker = { listOpenIssues: async () => [], getBlockedBy: async () => { throw new Error('not due'); } };
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = { listOpenIssues: async () => [], getBlockedBy: async () => { throw new Error('not due'); } };
     const events: unknown[] = [];
     let sweeps = 0;
     await runTicks(['00:00', '00:10', '01:01'].map((time) => new Date(`2026-10-10T${time}:00.000Z`)), {
       buildIntake: fakeBuild([REPOSITORY], effects) as any, createNotifier: () => ({ notify: async () => undefined }) as any,
-      reconcileClosedIssues: async () => ({ scanned: 0, forgotten: 0, errors: 0 }), createDependencyDriftTracker: () => tracker,
+      reconcileClosedIssues: async () => ({ scanned: 0, forgotten: 0, errors: 0 }), createDependencyTracker: () => tracker,
       sweepDependencyDrift: async () => { sweeps++; return swept(); }, events: { emit: async (event: unknown) => void events.push(event) } as any,
       engineerDir: '/tmp/intake-loop-drift', log: () => {}, printErr: () => {},
     });
@@ -95,7 +96,7 @@ describe('intake-loop dependency drift sweep', () => {
     await runTicks([new Date('2026-10-10T00:00:00.000Z')], {
       buildIntake: fakeBuild([REPOSITORY], effects) as any, createNotifier: () => ({ notify: async () => undefined }) as any,
       reconcileClosedIssues: async () => effects.push('reconcile-closed') as any,
-      createDependencyDriftTracker: () => ({ listOpenIssues: async () => [], getBlockedBy: async () => [] }),
+      createDependencyTracker: () => ({ listOpenIssues: async () => [], getBlockedBy: async () => [] }),
       sweepDependencyDrift: async () => { throw new Error('rate limited'); },
       engineerDir: '/tmp/intake-loop-drift', log: (line) => logs.push(line), printErr: () => {},
     });
@@ -108,7 +109,7 @@ describe('intake-loop dependency drift sweep', () => {
     const effects: string[] = [];
     const events: unknown[] = [];
     const reads: string[] = [];
-    const tracker: DependencyDriftTracker = {
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         reads.push(`list:${repository}`);
         if (repository === REPOSITORY) throw new Error('listing failed');
@@ -122,7 +123,7 @@ describe('intake-loop dependency drift sweep', () => {
     await runTicks([new Date('2026-10-10T00:00:00.000Z')], {
       buildIntake: fakeBuild([REPOSITORY, 'acme/clean'], effects) as any, createNotifier: () => ({ notify: async () => undefined }) as any,
       reconcileClosedIssues: async () => ({ scanned: 0, forgotten: 0, errors: 0 }),
-      createDependencyDriftTracker: () => tracker,
+      createDependencyTracker: () => tracker,
       events: { emit: async (event: unknown) => void events.push(event) } as any,
       engineerDir: '/tmp/intake-loop-drift', log: () => {}, printErr: () => {},
     });

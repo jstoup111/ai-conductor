@@ -426,6 +426,12 @@ interface AssignedIssue {
   labels: unknown;
 }
 
+/** Minimal open-issue projection used by read-only dependency reconciliation. */
+export interface OpenIssue {
+  number: number;
+  body: string;
+}
+
 /** Explicitly exceed the GitHub CLI's implicit 30-result issue-list default. */
 export const DEFAULT_ASSIGNED_ISSUES_LIMIT = 1000;
 
@@ -452,6 +458,8 @@ export interface TrackerClient {
   viewerIdentity(cwd: string): Promise<string>;
   /** `gh api repos/<repo>/issues/<number>/dependencies/blocked_by` — raw JSON. */
   getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
+  /** List every open issue body needed for dependency-drift reconciliation. */
+  listOpenIssues(repo: string, cwd: string): Promise<OpenIssue[]>;
   /** Remove one blocking issue from this issue without mutating the referenced issue. */
   removeIssueDependency?(
     repo: string,
@@ -983,6 +991,28 @@ export function createGithubTrackerClient(
         ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
       );
       return parseJsonOrThrow('getBlockedBy', stdout);
+    },
+
+    async listOpenIssues(repo, cwd) {
+      const stdout = await runTrackerRead(
+        runner,
+        cwd,
+        'repository.read',
+        repo,
+        { kind: 'repository' },
+        ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '1000', '-R', repo],
+      );
+      const issues = parseJsonOrThrow<unknown[]>('listOpenIssues', stdout || '[]');
+      if (!Array.isArray(issues)) throw new Error('listOpenIssues: listing was not an array');
+      return issues.map((issue) => {
+        if (!issue || typeof issue !== 'object') throw new Error('listOpenIssues: listing contained an invalid issue');
+        const entry = issue as { number?: unknown; body?: unknown };
+        if (typeof entry.number !== 'number' || !Number.isSafeInteger(entry.number)
+          || (typeof entry.body !== 'string' && entry.body != null)) {
+          throw new Error('listOpenIssues: listing contained an invalid issue');
+        }
+        return { number: entry.number, body: entry.body ?? '' };
+      });
     },
 
     async removeIssueDependency(repo, number, dependency, cwd) {

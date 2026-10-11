@@ -1,4 +1,4 @@
-// Covers: task:16
+// Covers: task:16, task:rem-as-built-rem-asb-3
 // The dep-audit command is an engineer CLI boundary: it resolves the registry
 // before it creates its read-only tracker and reports each drift category.
 

@@ -28,6 +28,45 @@ export interface BlockerResolver {
   resolve(sourceRef: string): Promise<BlockerVerdict>;
 }
 
+/**
+ * Find each directed cycle once from a graph already captured by a caller.
+ * Keeping this alongside resolver traversal makes cycle identity consistent
+ * without forcing a second GitHub read after a drift sweep has read each issue.
+ */
+export function findBlockerCycles(graph: ReadonlyMap<string, readonly string[]>): string[][] {
+  const cycles: string[][] = [];
+  const seenCycles = new Set<string>();
+  const visited = new Set<string>();
+  const active = new Set<string>();
+  const stack: string[] = [];
+
+  const visit = (source: string): void => {
+    visited.add(source);
+    active.add(source);
+    stack.push(source);
+    for (const target of graph.get(source) ?? []) {
+      if (!graph.has(target)) continue;
+      if (active.has(target)) {
+        const members = stack.slice(stack.indexOf(target));
+        const identity = [...members].sort().join('|');
+        if (!seenCycles.has(identity)) {
+          seenCycles.add(identity);
+          cycles.push(members);
+        }
+      } else if (!visited.has(target)) {
+        visit(target);
+      }
+    }
+    stack.pop();
+    active.delete(source);
+  };
+
+  for (const source of graph.keys()) {
+    if (!visited.has(source)) visit(source);
+  }
+  return cycles;
+}
+
 /** Format an IssueRef back into `repo#number` for memo keys / comparisons. */
 function refKey(ref: IssueRef): string {
   return `${ref.repo}#${ref.number}`;

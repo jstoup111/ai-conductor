@@ -9,6 +9,8 @@ import {
   type ManualReviewItem,
 } from './issue-dep-migration.js';
 import { parseSourceRef } from './issue-ref.js';
+import { findBlockerCycles } from '../blocker-resolver.js';
+import type { TrackerClient } from '../tracker-client.js';
 
 export interface DeclaredEdgesInput {
   /** Fully-qualified source issue, e.g. `owner/repo#20`. */
@@ -40,28 +42,13 @@ export interface ComparedEdges {
   satisfied: DependencyEdge[];
 }
 
-/** One open issue, including the raw body needed for declaration parsing. */
-export interface DependencyDriftIssue {
-  number: number;
-  body: string;
-}
-
 /** The read-only fields consumed from GitHub's `blocked_by` response. */
-export interface DependencyDriftBlocker {
+interface DependencyDriftBlocker {
   number: number;
   state: 'open' | 'closed';
   state_reason?: string;
   repository?: string;
   repository_url?: string;
-}
-
-/**
- * Deliberately read-only tracker seam for the drift audit. It is narrower than
- * TrackerClient because listing every open issue is only needed by this sweep.
- */
-export interface DependencyDriftTracker {
-  listOpenIssues(repository: string): Promise<readonly DependencyDriftIssue[]>;
-  getBlockedBy(repository: string, number: number): Promise<readonly DependencyDriftBlocker[]>;
 }
 
 export interface DependencyDriftStaleFinding {
@@ -201,43 +188,6 @@ function blockerRef(repository: string, blocker: DependencyDriftBlocker): string
   return `${blocker.repository ?? fromUrl ?? repository}#${blocker.number}`;
 }
 
-/** Return each directed cycle once, using its sorted members as its identity. */
-function findCycles(graph: ReadonlyMap<string, readonly string[]>): DependencyDriftCycleFinding[] {
-  const cycles: DependencyDriftCycleFinding[] = [];
-  const seenCycles = new Set<string>();
-  const visited = new Set<string>();
-  const active = new Set<string>();
-  const stack: string[] = [];
-
-  const visit = (source: string): void => {
-    visited.add(source);
-    active.add(source);
-    stack.push(source);
-
-    for (const target of graph.get(source) ?? []) {
-      if (!graph.has(target)) continue;
-      if (active.has(target)) {
-        const members = stack.slice(stack.indexOf(target));
-        const identity = [...members].sort().join('|');
-        if (!seenCycles.has(identity)) {
-          seenCycles.add(identity);
-          cycles.push({ members });
-        }
-      } else if (!visited.has(target)) {
-        visit(target);
-      }
-    }
-
-    stack.pop();
-    active.delete(source);
-  };
-
-  for (const source of graph.keys()) {
-    if (!visited.has(source)) visit(source);
-  }
-  return cycles;
-}
-
 /**
  * Read and classify dependency drift without mutating the tracker. Every open
  * issue is read once, then cycle detection runs over that captured graph so a
@@ -246,13 +196,15 @@ function findCycles(graph: ReadonlyMap<string, readonly string[]>): DependencyDr
 export async function sweepDependencyDrift({
   repository,
   tracker,
+  cwd = process.cwd(),
 }: {
   repository: string;
-  tracker: DependencyDriftTracker;
+  tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'>;
+  cwd?: string;
 }): Promise<DependencyDriftResult> {
-  let issues: readonly DependencyDriftIssue[];
+  let issues: Awaited<ReturnType<TrackerClient['listOpenIssues']>>;
   try {
-    issues = await tracker.listOpenIssues(repository);
+    issues = await tracker.listOpenIssues(repository, cwd);
   } catch (error: unknown) {
     return {
       kind: 'repository-indeterminate',
@@ -271,7 +223,9 @@ export async function sweepDependencyDrift({
     const source = `${repository}#${issue.number}`;
     let blockedBy: readonly DependencyDriftBlocker[];
     try {
-      blockedBy = await tracker.getBlockedBy(repository, issue.number);
+      const value = await tracker.getBlockedBy(repository, issue.number, cwd);
+      if (!Array.isArray(value)) throw new Error('blocked_by response was not an array');
+      blockedBy = value as readonly DependencyDriftBlocker[];
     } catch {
       indeterminate.push(source);
       continue;
@@ -305,7 +259,7 @@ export async function sweepDependencyDrift({
     kind: 'swept',
     unlinked,
     stale,
-    cycles: findCycles(graph),
+    cycles: findBlockerCycles(graph).map((members) => ({ members })),
     contradictions,
     indeterminate,
   };

@@ -78,13 +78,10 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner, type TrackerClient } from './tracker-client.js';
 import {
   sweepDependencyDrift,
-  type DependencyDriftBlocker,
-  type DependencyDriftIssue,
   type DependencyDriftResult,
-  type DependencyDriftTracker,
 } from './engineer/dependency-reconciler.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
@@ -547,8 +544,8 @@ export interface DispatchEngineerOpts {
   printErr?: (s: string) => void;
   /** Injected gh runner (for tests). */
   gh?: GhRunner;
-  /** Injectable read-only tracker seam for `compose dep-audit`. */
-  createDependencyDriftTracker?: () => DependencyDriftTracker;
+  /** Injectable canonical tracker seam for `compose dep-audit`. */
+  createDependencyTracker?: () => Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'>;
   /** Test seam for fresh machine identity used by independently authorized intake writes. */
   intakeResolveActor?: () => Promise<OwnerResolution>;
   /** Existing event spine for intake mutation fallback telemetry. */
@@ -654,59 +651,6 @@ function spawnInteractiveHost(executable: string, argv: string[], cwd: string): 
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });
-}
-
-function parseDependencyDriftIssues(value: string): DependencyDriftIssue[] {
-  const parsed: unknown = JSON.parse(value || '[]');
-  if (!Array.isArray(parsed)) throw new Error('open issue listing was not an array');
-  return parsed.map((issue) => {
-    if (!issue || typeof issue !== 'object') throw new Error('open issue listing contained an invalid issue');
-    const item = issue as { number?: unknown; body?: unknown };
-    if (typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
-      || (typeof item.body !== 'string' && item.body != null)) {
-      throw new Error('open issue listing contained an invalid issue');
-    }
-    return { number: item.number, body: item.body ?? '' };
-  });
-}
-
-function parseDependencyDriftBlockers(value: string): DependencyDriftBlocker[] {
-  const parsed: unknown = JSON.parse(value || '[]');
-  if (!Array.isArray(parsed)) throw new Error('blocked_by response was not an array');
-  return parsed.map((blocker) => {
-    if (!blocker || typeof blocker !== 'object') throw new Error('blocked_by response contained an invalid blocker');
-    const item = blocker as { number?: unknown; state?: unknown; state_reason?: unknown; repository?: unknown; repository_url?: unknown };
-    if (typeof item.number !== 'number' || !Number.isSafeInteger(item.number)
-      || (item.state !== 'open' && item.state !== 'closed')) {
-      throw new Error('blocked_by response contained an invalid blocker');
-    }
-    return {
-      number: item.number,
-      state: item.state,
-      ...(typeof item.state_reason === 'string' ? { state_reason: item.state_reason } : {}),
-      ...(typeof item.repository === 'string' ? { repository: item.repository } : {}),
-      ...(typeof item.repository_url === 'string' ? { repository_url: item.repository_url } : {}),
-    };
-  });
-}
-
-function productionDependencyDriftTracker(gh: GhRunner, cwd: string): DependencyDriftTracker {
-  return {
-    async listOpenIssues(repository) {
-      const stdout = await runTrackerRepositoryRead(
-        gh, cwd, 'repository.read', repository, { kind: 'repository' },
-        ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '1000', '-R', repository],
-      );
-      return parseDependencyDriftIssues(stdout);
-    },
-    async getBlockedBy(repository, number) {
-      const stdout = await runTrackerRepositoryRead(
-        gh, cwd, 'issue.read', repository, { kind: 'issue', number },
-        ['api', `repos/${repository}/issues/${number}/dependencies/blocked_by`],
-      );
-      return parseDependencyDriftBlockers(stdout);
-    },
-  };
 }
 
 function dependencyRepository(project: { name: string; remote?: string }): string {
@@ -1294,8 +1238,8 @@ export async function dispatchEngineer(
         return 1;
       }
       const repository = dependencyRepository(record);
-      const tracker = opts.createDependencyDriftTracker ?? (() => productionDependencyDriftTracker(gh, record.path));
-      const result = await sweepDependencyDrift({ repository, tracker: tracker() });
+      const tracker = opts.createDependencyTracker ?? (() => createGithubTrackerClient(gh));
+      const result = await sweepDependencyDrift({ repository, tracker: tracker(), cwd: record.path });
       print(formatDependencyDrift(result));
       return 0;
     }
