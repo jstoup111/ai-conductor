@@ -219,3 +219,12 @@ Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5
 - [test] NC-1 is satisfied by this task.
 - Refused NC-1 (decision d18cb085-2ffb-44bf-9999-75aa58a055de r1) is satisfied by this task.
 - The repair for task rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-s2-4-conductor-halt-wording: In src/conductor/test/engine/conductor-build-review-adjudication.test.ts, test 'keeps a corrupt persisted case store malformed without trusted-history recovery guidance' (~line 440): change the expected HALT substring from 'build_review adjudication halted: case store malformed-state' to 'build_review adjudication halted: suppression store malformed-state'. Keep the haltClass 'needs-human', dispatchedBuild false, and the two not.toContain assertions ('case transition rejected', 'persisted case history is valid'). Do not change the coordinator source. Run this test file and test/engine/build-review-adjudication-coordinator.test.ts and confirm both pass at HEAD.
+**Gate:** prd-audit
+**Rationale:** Verified (95%) by reading HEAD. Commit 7194bc1 changed build-review-adjudication-coordinator.ts:213/215 to failStore('suppression store', …). The non-child suppressionStore.read() at :214 is now the first store read, so a corrupt flat store halts as 'suppression store malformed-state'. That commit updated the coordinator unit test but not test/engine/conductor-build-review-adjudication.test.ts:440, which still expects 'build_review adjudication halted: case store malformed-state'. This is stale test drift with clear wording under the restored owner-task behavior. No architecture or product decision is needed. The behavior S2.4 protects stays the same: a corrupt persisted store halts needs-human with malformed-state and no trusted-history guidance or rejected-transition text. Only the store prefix in the assertion changes. This is admitted by owner task rem-prd-audit-refusal-d18cb085's done-when, 'its targeted tests pass'. A sibling check found that the coordinator test was already updated in 7194bc1, and no other assertion on the old wording is in scope.
+**Criterion:** S2.4
+**Parent task:** rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+**Done when:**
+- [test] S2.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-s2-4-conductor-halt-wording is committed and its targeted tests pass.
