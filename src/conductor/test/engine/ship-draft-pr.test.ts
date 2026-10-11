@@ -512,13 +512,18 @@ describe('openShipDraftPr', () => {
     });
 
     expect(result).toEqual({ outcome: 'published', prUrl: PR_URL });
+    expect(gitCalls.filter((call) => call[0] === 'fetch')).toEqual([
+      ['fetch', 'origin', `+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}`],
+    ]);
     const push = gitCalls.find((c) => c[0] === 'push');
     expect(push).toEqual([
       'push', 'origin', `HEAD:refs/heads/${BRANCH}`,
       `--force-with-lease=refs/heads/${BRANCH}:${'a'.repeat(40)}`,
     ]);
-    // A lease, never a bare force: a genuinely-moved remote must still fail closed.
+    // A lease, never a bare force or bare lease: a genuinely-moved remote
+    // must still fail closed against the SHA observed by that single fetch.
     expect(gitCalls.flat()).not.toContain('--force');
+    expect(gitCalls.flat()).not.toContain('--force-with-lease');
   });
 
   it('reports a stale-lease rejection as its own outcome, distinct from push-failed', async () => {

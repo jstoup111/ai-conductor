@@ -1,10 +1,9 @@
 // Covers: task:27
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { execa } from 'execa';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { recordHalt, type HaltRecordInput } from '../../src/engine/halt-record.js';
 import {
@@ -15,29 +14,37 @@ import {
 } from '../../src/engine/restack/restack-journal.js';
 import { type RestackOpId } from '../../src/engine/restack/restack-types.js';
 
-const CONDUCTOR_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
-const ENGINE_ROOT = join(CONDUCTOR_ROOT, 'src/engine');
 const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-const guardedSites = [
-  'conductor.ts',
-  'finish-publication-production.ts',
-  'halt-record.ts',
-  'setup-triage.ts',
-  'shipment-evidence-cli.ts',
-  'shipped-record-cli.ts',
-] as const;
-
 describe('engine commit sites', () => {
-  it.each(guardedSites)('%s selects the guarded path while retaining its N=1 git-commit fallback', async (site) => {
-    const source = await readFile(join(ENGINE_ROOT, site), 'utf8');
+  it('dispatches both halt-record callers through the guarded commit seam with their own pathspec', async () => {
+    const guarded = vi.fn().mockResolvedValue({ kind: 'written', sha: 'b'.repeat(40) });
+    vi.resetModules();
+    vi.doMock('../../src/engine/guarded-engine-commit.js', () => ({
+      commitEngineChangeWhenStacked: guarded,
+    }));
+    try {
+      const { recordHalt: guardedRecordHalt, supersedeHaltRecord: guardedSupersede } = await import('../../src/engine/halt-record.js');
+      const worktree = await featureWorktree();
+      await mkdir(join(worktree, '.docs', 'halted'), { recursive: true });
 
-    expect(source).toContain('commitEngineChangeWhenStacked');
-    expect(source).toMatch(/\[\s*['"]commit['"]/);
+      await expect(guardedRecordHalt(worktree, haltInput())).resolves.toEqual({ kind: 'written' });
+      await expect(guardedSupersede(worktree, 'demo', 'fixed')).resolves.toEqual({ kind: 'written' });
+
+      expect(guarded).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        worktree, slug: 'demo', pathspec: ['.docs/halted/demo.md'], message: 'halt record: demo', noVerify: true,
+      }));
+      expect(guarded).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        worktree, slug: 'demo', pathspec: ['.docs/halted/demo.md'], message: 'halt record resolved: demo', noVerify: true,
+      }));
+    } finally {
+      vi.doUnmock('../../src/engine/guarded-engine-commit.js');
+      vi.resetModules();
+    }
   });
 
   it('recordHalt commits only its record through the guard in durable child state', async () => {
@@ -53,7 +60,7 @@ describe('engine commit sites', () => {
     expect((await execa('git', ['status', '--porcelain', 'stray.txt'], { cwd: worktree })).stdout).toContain('stray.txt');
   });
 
-  it('recordHalt refuses the fenced ready-journal state without advancing HEAD', async () => {
+  it.each(['ready', 'moved', 'rolling-back'] as const)('recordHalt refuses the fenced %s journal state without advancing HEAD', async (state) => {
     const worktree = await featureWorktree();
     await mkdir(join(worktree, '.pipeline', 'children', '1'), { recursive: true });
     const before = (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim();
@@ -64,8 +71,8 @@ describe('engine commit sites', () => {
       dirtyPaths: [], refs: [], ranges: [], children: [],
     } satisfies RestackJournalDraft);
     if (created.kind !== 'created') throw new Error('could not create restack journal');
-    const ready = await writeRestackJournalBlob(worktree, { ...created.journal.journal, state: 'ready' });
-    await execa('git', ['update-ref', journalRefFor('demo'), ready, created.journal.blob], { cwd: worktree });
+    const fenced = await writeRestackJournalBlob(worktree, { ...created.journal.journal, state });
+    await execa('git', ['update-ref', journalRefFor('demo'), fenced, created.journal.blob], { cwd: worktree });
 
     await expect(recordHalt(worktree, haltInput())).resolves.toMatchObject({ kind: 'failed' });
     await expect(execa('git', ['rev-parse', 'HEAD'], { cwd: worktree })).resolves.toMatchObject({ stdout: before });
