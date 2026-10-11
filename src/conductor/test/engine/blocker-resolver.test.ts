@@ -1,3 +1,4 @@
+// Covers: task:5
 // Test: blocker-resolver skeleton (BlockerVerdict union + createBlockerResolver)
 //
 // Task 1 baseline: resolver with a fake runner returning `[]` yields
@@ -9,6 +10,7 @@ import { promisify } from 'node:util';
 import { createBlockerResolver } from '../../src/engine/blocker-resolver.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 import { createGhBlockerRunner } from '../../src/engine/gh-blocker-runner.js';
+import { createOrderingSource, type OrderingSource } from '../../src/engine/ordering-source.js';
 
 const execFile = promisify(execFileCb);
 
@@ -26,10 +28,42 @@ function makeRunner(stdout: string): { run: GhRunner; calls: Call[] } {
   return { run, calls };
 }
 
+function createResolver(run: GhRunner, cwd?: string) {
+  return createBlockerResolver({ source: createOrderingSource({ run, cwd }) });
+}
+
 describe('createBlockerResolver', () => {
+  it('returns the unavailable Jira ordering adapter detail without reading GitHub', async () => {
+    const source: OrderingSource = {
+      readFacts: async () => new Map(),
+      readBlockers: async () => 'unavailable',
+    };
+    const resolver = createBlockerResolver({ source });
+
+    await expect(resolver.resolve('PROJ-123')).resolves.toEqual({
+      kind: 'indeterminate',
+      detail: 'no ordering adapter for jira reference PROJ-123',
+    });
+  });
+
+  it('keeps an open blocker when its own ordering lookup is indeterminate', async () => {
+    const source: OrderingSource = {
+      readFacts: async () => new Map(),
+      readBlockers: async (ref) => ref === 'acme/app#5'
+        ? ['acme/app#7']
+        : { indeterminate: 'boom' },
+    };
+    const resolver = createBlockerResolver({ source });
+
+    await expect(resolver.resolve('acme/app#5')).resolves.toEqual({
+      kind: 'blocked',
+      blockers: [{ repo: 'acme/app', number: '7' }],
+    });
+  });
+
   it('returns unblocked when blocked_by is empty', async () => {
     const { run } = makeRunner('[]');
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -38,7 +72,7 @@ describe('createBlockerResolver', () => {
 
   it('forwards the configured cwd to the runner on every invocation', async () => {
     const { run, calls } = makeRunner('[]');
-    const resolver = createBlockerResolver({ run, cwd: '/tmp/scratch-cwd' });
+    const resolver = createResolver(run, '/tmp/scratch-cwd');
 
     await resolver.resolve('owner/repo#5');
 
@@ -56,7 +90,7 @@ describe('createBlockerResolver', () => {
         },
       ]),
     );
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -77,7 +111,7 @@ describe('createBlockerResolver', () => {
         },
       ]),
     );
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -95,7 +129,7 @@ describe('createBlockerResolver', () => {
         },
       ]),
     );
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -116,7 +150,7 @@ describe('createBlockerResolver', () => {
         },
       ]),
     );
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -141,7 +175,7 @@ describe('createBlockerResolver', () => {
         },
       ]),
     );
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -161,7 +195,7 @@ describe('createBlockerResolver', () => {
         },
       ]),
     );
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -175,7 +209,7 @@ describe('createBlockerResolver', () => {
     const run: GhRunner = async () => {
       throw new Error('gh: connection reset');
     };
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#5');
 
@@ -185,7 +219,7 @@ describe('createBlockerResolver', () => {
 
   it('returns indeterminate for an unparseable sourceRef without calling the runner', async () => {
     const { run, calls } = makeRunner('[]');
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('garbage');
 
@@ -203,7 +237,7 @@ describe('createBlockerResolver', () => {
       }
       return { stdout: '[]' };
     };
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdictA = await resolver.resolve('owner/repoA#1');
     const verdictB = await resolver.resolve('owner/repoB#2');
@@ -233,7 +267,7 @@ describe('createBlockerResolver', () => {
       }
       return { stdout: '[]' };
     };
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdictA = await resolver.resolve('owner/repo#1');
     const verdictB = await resolver.resolve('owner/repo#2');
@@ -270,7 +304,7 @@ describe('createBlockerResolver', () => {
       // C has no blockers — chain terminates.
       return { stdout: '[]' };
     };
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#1');
 
@@ -312,7 +346,7 @@ describe('createBlockerResolver', () => {
       }
       return { stdout: '[]' };
     };
-    const resolver = createBlockerResolver({ run });
+    const resolver = createResolver(run);
 
     const verdict = await resolver.resolve('owner/repo#1');
 
@@ -355,7 +389,7 @@ describe('createGhBlockerRunner (real gh binary smoke)', () => {
     let verdict;
     try {
       const run = createGhBlockerRunner();
-      const resolver = createBlockerResolver({ run });
+      const resolver = createResolver(run);
       try {
         verdict = await resolver.resolve('anthropics/claude-code#229');
       } catch (err) {
