@@ -236,7 +236,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
   });
 
   // Covers: S5.8, task:9
-  it('applies with a modified ignored build-output file that the move also changes underneath', async () => {
+  it('applies while an ignored build-output file is modified and treats it as no dirty work', async () => {
     const subject = await fixture();
     await mkdir(join(subject.repo, 'build'), { recursive: true });
     await writeFile(join(subject.repo, 'build', 'output.txt'), 'first build\n');
