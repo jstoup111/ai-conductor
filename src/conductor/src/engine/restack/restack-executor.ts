@@ -418,6 +418,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', rewritten, rewrites, { git });
         if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while moving unentered leaf' : updated.detail);
         journal = updated.journal;
+        exactRewrites.set(range.child, rewrites);
         unenteredLeafOwners.set(range.child, owner);
         overlaps.set(range.child, []);
         parent = rewritten;

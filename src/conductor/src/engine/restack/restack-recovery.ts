@@ -2,6 +2,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { childBranchFor, leafBranchFor, parseFeatureRef } from '../feature-branch-identity.js';
+import type { ChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
@@ -266,10 +267,21 @@ async function verifyMovedRecovery(
     liveByRef.set(move.ref, live);
   }
   const hasHaltRecordExtension = moves.some((move) => move.ref === checkedOut && liveByRef.get(move.ref) !== move.newSha);
-  if (!hasHaltRecordExtension) return verifyRestackMove(worktree, journal, moves, { git });
+  const unenteredLeafOwners = new Map<ChildId, ChildId>();
+  for (const range of journal.journal.ranges) {
+    if (range.kind !== 'leaf-unentered') continue;
+    const owner = unenteredLeafOwner(journal, range);
+    if (owner) unenteredLeafOwners.set(range.child, owner.child);
+  }
+  const verificationRanges = journal.journal.ranges.flatMap((range) => [
+    ...journal.journal.ranges.filter((candidate) => candidate.kind === 'leaf-unentered' && unenteredLeafOwners.get(candidate.child) === range.child),
+    ...(range.kind !== 'leaf-unentered' || !unenteredLeafOwners.has(range.child) ? [range] : []),
+  ]);
+  const verificationJournal = { ...journal, journal: { ...journal.journal, ranges: verificationRanges } };
+  if (!hasHaltRecordExtension) return verifyRestackMove(worktree, verificationJournal, moves, { git });
 
   let previous: CommitSha | undefined;
-  for (const range of journal.journal.ranges) {
+  for (const range of verificationJournal.journal.ranges) {
     const move = moves.find((entry) => entry.child === range.child && entry.ref.startsWith('refs/heads/'));
     if (!move) return { kind: 'failed', detail: `missing moved ref for child ${range.child}` };
     const live = liveByRef.get(move.ref)!;
@@ -291,6 +303,19 @@ async function verifyMovedRecovery(
     previous = live;
   }
   return { kind: 'verified' };
+}
+
+function unenteredLeafOwner(
+  journal: StoredRestackJournal,
+  range: ChildRange,
+): { readonly child: ChildId; readonly rewritten: CommitSha } | undefined {
+  if (range.kind !== 'leaf-unentered') return undefined;
+  const matches = journal.journal.children.flatMap((entry) => {
+    if (entry.child === range.child) return [];
+    const rewritten = entry.rewrites?.find((rewrite) => rewrite.from === range.oldTip)?.to;
+    return rewritten === undefined ? [] : [{ child: entry.child, rewritten }];
+  });
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** The committed halt record is the only durable answer after worktree loss. */
@@ -373,6 +398,16 @@ async function resumePlanned(
       const staged = await resolveSha(git, stagingRefFor(current.slug, range.child));
       if (!staged) return { kind: 'unavailable' };
       parent = staged;
+      continue;
+    }
+    if (range.kind === 'leaf-unentered') {
+      const owner = unenteredLeafOwner(current, range);
+      if (!owner) return { kind: 'unavailable' };
+      const rewrites = new Map([[range.oldTip, owner.rewritten]]);
+      const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', owner.rewritten, rewrites, { git });
+      if (updated.kind !== 'updated') return { kind: 'unavailable' };
+      current = updated.journal;
+      parent = owner.rewritten;
       continue;
     }
     let replay;

@@ -1,6 +1,6 @@
-// Covers: task:24
+// Covers: task:24, task:rem-prd-audit-R15
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -114,6 +114,72 @@ describe('recoverRestackJournal (real local Git)', () => {
     expect(tip).not.toBe(subject.oldTip);
     expect((await subject.git(['merge-base', '--is-ancestor', subject.advanced, tip])).stdout).toBe('');
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
+  it('recovers an unentered pre-region halt-record leaf through its owning exact rewrite and translates it', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1);
+    const leaf = parseChildId(3);
+    if (!child || !leaf) throw new Error('child ids should parse');
+
+    await subject.git(['checkout', '-q', 'main']);
+    await subject.git(['checkout', '-qb', 'feat/daemon-demo', subject.base]);
+    const haltRecord = await (async () => {
+      await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
+      await writeFile(join(subject.repo, '.docs', 'halted', 'demo.md'), 'Status: halted\n');
+      await subject.git(['add', '.docs/halted/demo.md']);
+      await subject.git(['commit', '-qm', 'halt record']);
+      return sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    })();
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.git(['rebase', '-q', '--onto', 'feat/daemon-demo', subject.base]);
+    const childTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const replay = await replayChildRange(
+      { child, oldParent: subject.base, oldTip: childTip, kind: 'active' },
+      subject.advanced,
+      { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      makeGitRunner(subject.repo),
+    );
+    const rewrittenLeaf = replay.rewrites.get(haltRecord);
+    if (!rewrittenLeaf) throw new Error('child replay did not retain the halt-record rewrite');
+    await pinStagingRef(subject.repo, 'demo', child, replay.tip);
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'task-evidence.json'), JSON.stringify({
+      evidenceStamps: { halted: { sha: haltRecord } },
+    }));
+    const journal: RestackJournal = {
+      opId: 'crashed-before-unentered-leaf' as RestackOpId,
+      cause: 'base-refresh',
+      newDefault: subject.advanced,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [
+        { ref: 'refs/heads/feat/c1/demo' as never, oldSha: childTip },
+        { ref: 'refs/heads/feat/daemon-demo' as never, oldSha: haltRecord },
+      ],
+      ranges: [
+        { child, oldParent: subject.base, oldTip: childTip, kind: 'active' },
+        { child: leaf, oldParent: haltRecord, oldTip: haltRecord, kind: 'leaf-unentered' },
+      ],
+      children: [
+        { child, status: 'replayed', rewrites: [...replay.rewrites].map(([from, to]) => ({ from, to })) },
+        { child: leaf, status: 'pending', rewrites: [] },
+      ],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
+      .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(rewrittenLeaf);
+    expect((await subject.git(['merge-base', '--is-ancestor', rewrittenLeaf, 'feat/c1/demo'])).stdout).toBe('');
+    await expect(readFile(join(subject.repo, '.pipeline', 'task-evidence.json'), 'utf8'))
+      .resolves.toContain(rewrittenLeaf);
+    await expect(readFile(join(subject.repo, '.pipeline', 'rebase-rewrites.json'), 'utf8'))
+      .resolves.toContain(`\"${haltRecord}\": \"${rewrittenLeaf}\"`);
   });
 
   // Covers: task:rem-prd-audit-R14

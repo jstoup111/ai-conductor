@@ -272,6 +272,9 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'base.txt', 'advanced\n');
     await git(['checkout', '-q', 'feat/daemon-demo']);
+    await writeFile(join(repo, '.pipeline', 'task-evidence.json'), JSON.stringify({
+      evidenceStamps: { halted: { sha: haltRecord } },
+    }));
 
     const events = new ConductorEventEmitter();
     const planned: number[][] = [];
@@ -291,6 +294,7 @@ describe('runRestack (real local Git)', () => {
     expect((await git(['show', '-s', '--format=%s', newLeaf])).stdout.trim()).toBe('halt record');
     expect((await git(['merge-base', '--is-ancestor', advanced, newLeaf])).stdout).toBe('');
     expect((await git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(newLeaf);
+    await expect(readFile(join(repo, '.pipeline', 'task-evidence.json'), 'utf8')).resolves.toContain(newLeaf);
   });
 
   it('refuses a durable child stack without its sealed envelope', async () => {
