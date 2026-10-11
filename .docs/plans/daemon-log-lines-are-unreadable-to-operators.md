@@ -836,3 +836,57 @@ Every criterion row below was judged by an independent coverage judge (three rou
 **Done when:**
 - Task 20 is satisfied by this task.
 - The repair for task rem-as-built-R2-AB4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R3-S3.1-a: Rewrite the 'keeps identifier-bearing fixture detail out of every default line' test in src/conductor/test/engine/daemon-presentation-contract.test.ts. It must build a real event fixture for every type in renderedEventTypes(), put a UUID-shaped value in every identifier field (gapId, currentTaskId, decision/finding ids), render each event through the production daemon renderer at default verbosity, and assert that no written line matches the UUID regex.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): test/engine/daemon-presentation-contract.test.ts:44-45 calls presenter.outputFor(type).info/detail directly rather than rendering real events, so the identifier check is tautological. daemon-cli.ts:3974,3983 interpolate event.gapId and :3995 interpolates event.currentTaskId into default lines. This is test and implementation drift against approved architecture. Owner task rem-prd-audit-R2-S3.1-b admits it, so it belongs in BUILD.
+**Criterion:** S3.1
+**Parent task:** rem-prd-audit-R2-S3.1-b
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R3-S3.1-a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R3-S3.1-b: In src/conductor/src/daemon-cli.ts, move identifier interpolation out of default lines and into presenter detail(). This covers remediation_sealed_artifact_redirect (`remediation gap ${event.gapId}`), remediation_disposition_rejected (`remediation gap ${event.gapId}`) and the build_progress `task ${event.currentTaskId}` fallback. It also covers any other case the rewritten contract test catches.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): test/engine/daemon-presentation-contract.test.ts:44-45 calls presenter.outputFor(type).info/detail directly rather than rendering real events, so the identifier check is tautological. daemon-cli.ts:3974,3983 interpolate event.gapId and :3995 interpolates event.currentTaskId into default lines. This is test and implementation drift against approved architecture. Owner task rem-prd-audit-R2-S3.1-b admits it, so it belongs in BUILD.
+**Criterion:** S3.1
+**Parent task:** rem-prd-audit-R2-S3.1-b
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R3-S3.1-b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R3-S4.3-a: Make the daemon-scoped retention gate forget a slug when its HALT is observed cleared. In src/conductor/src/daemon-cli.ts and/or src/conductor/src/engine/daemon.ts, call the shared retentionLogGate.forget(slug) on the cleared-HALT path, for example where isHalted(slug) returns false for a claims-parked slug. Add the Task 17 wiring test: ten evaluations of a retained feature write one retention line to the daemon log; after the HALT is cleared and the slug is evaluated, a re-halt with the same disposition writes a new retention line.
+**Gate:** prd-audit
+**Rationale:** Verified (90%): forget() is called only at daemon-cli.ts:909 and daemon-rekick.ts:176,540, and each call evaluates a slug that is still halted. daemon.ts:157-163 reaches isProgressReKickEligible only while isHalted(slug) is true. A slug whose HALT an operator clears is therefore never forgotten, so a re-halt with the same disposition logs nothing. Task 17's fourth doneWhen explicitly requires this wiring and its test, so this is BUILD work under task 17.
+**Criterion:** S4.3
+**Parent task:** 17
+**Done when:**
+- [test] S4.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R3-S4.3-a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-as-built-R3-AB2-a: In src/conductor/src/daemon-cli.ts, give every warning- or halt-severity rendered type an explicit case before the legacy fallback that calls output.warning()/output.halt() with a typed NextAction. This covers worktree_reclaim_failed, remediation_disposition_rejected, verdict_freshness stale, protected_artifact_rebaseline_refused, protected_artifact_reseal_refused, github_operation_refused, tracker_backend_unavailable, finish_publication_disposition human_required, and every remaining as-built-listed case. Then remove the glyph-prefix classification so the fallback only ever emits info for info-severity types.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): the fallback at daemon-cli.ts:3386-3393 classifies severity only by a bare '⚠ '/'✋ ' prefix after normalizeLegacyDaemonEventText, which strips only the dot. Lines that start with ANSI colour codes, '✗' or no glyph fall to output.info and get no NextAction suffix. This is the unfinished typed severity migration that rem-as-built-R2-AB2 owns, which is implementation drift.
+**Criterion:** S7.1
+**Parent task:** rem-as-built-R2-AB2
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-as-built-R3-AB2-a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-as-built-R3-AB2-b: Add a test in src/conductor/test/engine/daemon-presentation-contract.test.ts that renders a real event fixture for each warning- or halt-severity rendered type, with chalk colour forced on and off. It must assert that every resulting line ends with a ' — next:' NextAction suffix.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): the fallback at daemon-cli.ts:3386-3393 classifies severity only by a bare '⚠ '/'✋ ' prefix after normalizeLegacyDaemonEventText, which strips only the dot. Lines that start with ANSI colour codes, '✗' or no glyph fall to output.info and get no NextAction suffix. This is the unfinished typed severity migration that rem-as-built-R2-AB2 owns, which is implementation drift.
+**Criterion:** S7.1
+**Parent task:** rem-as-built-R2-AB2
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-as-built-R3-AB2-b is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R3-AB2-c: Confirm that no warning- or halt-severity path in renderDaemonEvent (src/conductor/src/daemon-cli.ts) reaches output.info. This includes the ANSI-coloured sites (around :3590, :3614, :3828-3829) and the ✗/no-glyph failure and refusal sites (around :3691, :3699, :3850, :3950-3951, :3963, :3982-3983). Migrate each one onto presenter warning()/halt() with a NextAction, as part of the rem-as-built-R3-AB2-a migration.
+**Gate:** as-built
+**Rationale:** Verified (95%): this is the same defect as S7.1. The glyph-prefix fallback at daemon-cli.ts:3389-3391 contradicts the approved architecture, under which the presenter owns warning/halt next actions. The architecture stays authoritative and no decision is needed, so the conforming repair belongs in BUILD under tasks 4 and rem-as-built-R2-AB2. It shares the S7.1 repair tasks.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R3-AB2-c is committed and its targeted tests pass.
