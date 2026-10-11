@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2, task:rem-as-built-rem-asb-3, task:rem-as-built-rem-asb-7
+// Covers: task:1, task:2, task:14, task:15, task:rem-as-built-rem-asb-1, task:rem-as-built-rem-asb-2, task:rem-as-built-rem-asb-3, task:rem-as-built-rem-asb-7, task:rem-as-built-rem-asb-8
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -151,9 +151,9 @@ class RecordingDriftTracker implements Pick<TrackerClient, 'listOpenIssues' | 'g
     private readonly blockers: ReadonlyMap<number, readonly DriftBlocker[]>,
   ) {}
 
-  async listOpenIssues(repository: string): Promise<readonly DriftIssue[]> {
+  async listOpenIssues(repository: string): Promise<{ issues: DriftIssue[]; complete: boolean }> {
     this.calls.push(`list:${repository}`);
-    return this.issues;
+    return { issues: [...this.issues], complete: true };
   }
 
   async getBlockedBy(repository: string, number: number): Promise<readonly DriftBlocker[]> {
@@ -263,10 +263,10 @@ describe('sweepDependencyDrift', () => {
     const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         calls.push(`list:${repository}`);
-        return [
+        return { issues: [
           { number: 30, body: 'Blocked by #31.' },
           { number: 44, body: '' },
-        ];
+        ], complete: true };
       },
       async getBlockedBy(repository, number) {
         calls.push(`blocked_by:${repository}#${number}`);
@@ -288,7 +288,7 @@ describe('sweepDependencyDrift', () => {
     const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         calls.push(`list:${repository}`);
-        return [{ number: 45, body: '' }];
+        return { issues: [{ number: 45, body: '' }], complete: true };
       },
       async getBlockedBy(repository, number) {
         calls.push(`blocked_by:${repository}#${number}`);
@@ -323,15 +323,32 @@ describe('sweepDependencyDrift', () => {
     expect(calls).toEqual(['list:acme/app']);
   });
 
+  it('returns repository-indeterminate when the tracker reports a truncated open-issue listing', async () => {
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
+      async listOpenIssues() {
+        return { issues: [{ number: 1000, body: '' }], complete: false };
+      },
+      async getBlockedBy() {
+        throw new Error('must not read blockers after a truncated listing');
+      },
+    };
+
+    await expect(sweepDependencyDrift({ repository: 'acme/app', tracker })).resolves.toEqual({
+      kind: 'repository-indeterminate',
+      cause: 'open issue listing is incomplete',
+      unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    });
+  });
+
   it('reports an unreadable cycle member as indeterminate and emits no cycle finding', async () => {
     const calls: string[] = [];
     const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = {
       async listOpenIssues(repository) {
         calls.push(`list:${repository}`);
-        return [
+        return { issues: [
           { number: 34, body: '' },
           { number: 35, body: '' },
-        ];
+        ], complete: true };
       },
       async getBlockedBy(repository, number) {
         calls.push(`blocked_by:${repository}#${number}`);

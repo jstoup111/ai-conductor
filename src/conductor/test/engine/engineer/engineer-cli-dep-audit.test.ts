@@ -23,9 +23,9 @@ function recordingGh(
   const calls: string[][] = [];
   const gh: GhRunner = async (args) => {
     calls.push(args);
-    if (args[0] === 'issue' && args[1] === 'list') {
+    if (args[0] === 'api' && args.includes('--paginate')) {
       if (failListing) throw new Error('tracker unavailable');
-      return { stdout: JSON.stringify(issues) };
+      return { stdout: JSON.stringify([issues]) };
     }
     const path = args.find((arg) => arg.includes('/dependencies/blocked_by'));
     if (path) {

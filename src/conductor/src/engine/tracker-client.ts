@@ -432,6 +432,12 @@ export interface OpenIssue {
   body: string;
 }
 
+/** A bounded open-issue listing must state whether it is complete. */
+export interface OpenIssueListing {
+  issues: OpenIssue[];
+  complete: boolean;
+}
+
 /** Explicitly exceed the GitHub CLI's implicit 30-result issue-list default. */
 export const DEFAULT_ASSIGNED_ISSUES_LIMIT = 1000;
 
@@ -459,7 +465,7 @@ export interface TrackerClient {
   /** `gh api repos/<repo>/issues/<number>/dependencies/blocked_by` — raw JSON. */
   getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
   /** List every open issue body needed for dependency-drift reconciliation. */
-  listOpenIssues(repo: string, cwd: string): Promise<OpenIssue[]>;
+  listOpenIssues(repo: string, cwd: string): Promise<OpenIssueListing>;
   /** Remove one blocking issue from this issue without mutating the referenced issue. */
   removeIssueDependency?(
     repo: string,
@@ -1000,11 +1006,16 @@ export function createGithubTrackerClient(
         'repository.read',
         repo,
         { kind: 'repository' },
-        ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '1000', '-R', repo],
+        ['api', `repos/${repo}/issues?state=open&per_page=100`, '--paginate', '--slurp'],
       );
-      const issues = parseJsonOrThrow<unknown[]>('listOpenIssues', stdout || '[]');
-      if (!Array.isArray(issues)) throw new Error('listOpenIssues: listing was not an array');
-      return issues.map((issue) => {
+      const pages = parseJsonOrThrow<unknown[]>('listOpenIssues', stdout || '[]');
+      if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+        throw new Error('listOpenIssues: paginated listing was not an array of pages');
+      }
+      const issues = pages.flat();
+      return {
+        complete: true,
+        issues: issues.map((issue) => {
         if (!issue || typeof issue !== 'object') throw new Error('listOpenIssues: listing contained an invalid issue');
         const entry = issue as { number?: unknown; body?: unknown };
         if (typeof entry.number !== 'number' || !Number.isSafeInteger(entry.number)
@@ -1012,7 +1023,8 @@ export function createGithubTrackerClient(
           throw new Error('listOpenIssues: listing contained an invalid issue');
         }
         return { number: entry.number, body: entry.body ?? '' };
-      });
+        }),
+      };
     },
 
     async removeIssueDependency(repo, number, dependency, cwd) {

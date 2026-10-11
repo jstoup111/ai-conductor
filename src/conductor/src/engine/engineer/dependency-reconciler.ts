@@ -202,13 +202,21 @@ export async function sweepDependencyDrift({
   tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'>;
   cwd?: string;
 }): Promise<DependencyDriftResult> {
-  let issues: Awaited<ReturnType<TrackerClient['listOpenIssues']>>;
+  let listing: Awaited<ReturnType<TrackerClient['listOpenIssues']>>;
   try {
-    issues = await tracker.listOpenIssues(repository, cwd);
+    listing = await tracker.listOpenIssues(repository, cwd);
   } catch (error: unknown) {
     return {
       kind: 'repository-indeterminate',
       cause: error instanceof Error ? error.message : String(error),
+      unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
+    };
+  }
+
+  if (!listing.complete) {
+    return {
+      kind: 'repository-indeterminate',
+      cause: 'open issue listing is incomplete',
       unlinked: [], stale: [], cycles: [], contradictions: [], indeterminate: [],
     };
   }
@@ -219,7 +227,7 @@ export async function sweepDependencyDrift({
   const indeterminate: string[] = [];
   const graph = new Map<string, string[]>();
 
-  for (const issue of issues) {
+  for (const issue of listing.issues) {
     const source = `${repository}#${issue.number}`;
     let blockedBy: readonly DependencyDriftBlocker[];
     try {

@@ -48,7 +48,7 @@ describe('intake-loop dependency drift sweep', () => {
   it('emits one due summary with every finding list, including a clean summary', async () => {
     const effects: string[] = [];
     const events: unknown[] = [];
-    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = { listOpenIssues: async () => [], getBlockedBy: async () => [] };
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = { listOpenIssues: async () => ({ issues: [], complete: true }), getBlockedBy: async () => [] };
     let sweeps = 0;
     await runTicks([new Date('2026-10-10T00:00:00.000Z'), new Date('2026-10-10T00:00:00.000Z')], {
       buildIntake: fakeBuild([REPOSITORY, 'acme/clean'], effects) as any,
@@ -78,7 +78,7 @@ describe('intake-loop dependency drift sweep', () => {
 
   it('skips a repository for 10 minutes and sweeps it again after 61 minutes', async () => {
     const effects: string[] = [];
-    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = { listOpenIssues: async () => [], getBlockedBy: async () => { throw new Error('not due'); } };
+    const tracker: Pick<TrackerClient, 'listOpenIssues' | 'getBlockedBy'> = { listOpenIssues: async () => ({ issues: [], complete: true }), getBlockedBy: async () => { throw new Error('not due'); } };
     const events: unknown[] = [];
     let sweeps = 0;
     await runTicks(['00:00', '00:10', '01:01'].map((time) => new Date(`2026-10-10T${time}:00.000Z`)), {
@@ -96,7 +96,7 @@ describe('intake-loop dependency drift sweep', () => {
     await runTicks([new Date('2026-10-10T00:00:00.000Z')], {
       buildIntake: fakeBuild([REPOSITORY], effects) as any, createNotifier: () => ({ notify: async () => undefined }) as any,
       reconcileClosedIssues: async () => effects.push('reconcile-closed') as any,
-      createDependencyTracker: () => ({ listOpenIssues: async () => [], getBlockedBy: async () => [] }),
+      createDependencyTracker: () => ({ listOpenIssues: async () => ({ issues: [], complete: true }), getBlockedBy: async () => [] }),
       sweepDependencyDrift: async () => { throw new Error('rate limited'); },
       engineerDir: '/tmp/intake-loop-drift', log: (line) => logs.push(line), printErr: () => {},
     });
@@ -113,7 +113,7 @@ describe('intake-loop dependency drift sweep', () => {
       async listOpenIssues(repository) {
         reads.push(`list:${repository}`);
         if (repository === REPOSITORY) throw new Error('listing failed');
-        return [];
+        return { issues: [], complete: true };
       },
       async getBlockedBy(repository, number) {
         reads.push(`blocked_by:${repository}#${number}`);
