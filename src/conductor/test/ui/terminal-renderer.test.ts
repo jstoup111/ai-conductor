@@ -316,12 +316,29 @@ describe('TerminalRenderer', () => {
     expect(stream.output()).not.toContain('coverage_binding_judged');
   });
 
-  it('writes pipeline closeout details to the live region', async () => {
+  // Covers: task:3
+  it('renders trusted closeout duration', async () => {
     await renderer.handle({
-      type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 100, endedAt: 140, ts: 140,
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 1_788_044_947_584,
+      endedAt: 1_788_045_067_584,
+      ts: 1_788_045_067_790,
     });
 
-    expect(stream.output()).toContain('closeout evaluator (40ms)');
+    expect(stream.output()).toContain('closeout evaluator (120000ms)');
+  });
+
+  it('renders unavailable closeout duration', async () => {
+    await renderer.handle({
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 1_788_012_400_000,
+      endedAt: 178_801_157_372_296_540,
+      ts: 1_788_012_400_000,
+    });
+
+    expect(stream.output()).toContain('closeout evaluator (duration unavailable)');
   });
 
   it('renders active build stalls with their elapsed time and selected action', async () => {

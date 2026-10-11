@@ -1,4 +1,4 @@
-// Covers: task:9, task:14
+// Covers: task:3, task:9, task:14
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon must
 // write `.daemon/gated.json` on EVERY discovery pass — populated, explicitly
@@ -483,18 +483,33 @@ describe('daemon state-store command boundary (Task 17)', () => {
 });
 
 describe('daemon closeout rendering', () => {
-  it('logs the closeout obligation and elapsed milliseconds', () => {
+  // Covers: task:3
+  it('renders trusted closeout duration', () => {
     const lines: string[] = [];
 
     renderDaemonEvent({
       type: 'pipeline_closeout',
       obligation: 'evaluator',
-      startedAt: 100,
-      endedAt: 140,
-      ts: 140,
+      startedAt: 1_788_044_947_584,
+      endedAt: 1_788_045_067_584,
+      ts: 1_788_045_067_790,
     }, (line) => lines.push(line));
 
-    expect(lines).toEqual(['· ✓ closeout evaluator (40ms)']);
+    expect(lines).toEqual(['· ✓ closeout evaluator (120000ms)']);
+  });
+
+  it('renders unavailable closeout duration', () => {
+    const lines: string[] = [];
+
+    renderDaemonEvent({
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 1_788_012_400_000,
+      endedAt: 178_801_157_372_296_540,
+      ts: 1_788_012_400_000,
+    }, (line) => lines.push(line));
+
+    expect(lines).toEqual(['· ✓ closeout evaluator (duration unavailable)']);
   });
 });
 

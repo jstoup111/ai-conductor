@@ -10,6 +10,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
 import { formatHeartbeatAge } from './engine/step-heartbeat.js';
+import { closeoutDurationMs } from './engine/closeout-trust.js';
 import {
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
@@ -3741,9 +3742,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
-    case 'pipeline_closeout':
-      log(`${dot} ${chalk.green('✓')} closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`);
+    case 'pipeline_closeout': {
+      const duration = closeoutDurationMs(event);
+      const displayDuration = duration === undefined ? 'duration unavailable' : `${duration}ms`;
+      log(`${dot} ${chalk.green('✓')} closeout ${event.obligation} (${displayDuration})`);
       break;
+    }
     case 'build_stall':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`)}`,
