@@ -132,7 +132,12 @@ export interface LandSpecResult {
   branch: string;
   repoPath: string;
   /** Present only for an intake-originated land that passed the proposal gate. */
-  dependency?: { proposals: LandDependencyProposalResult; decision: LandDependencyDecision };
+  dependency?: LandDependencyContext;
+}
+
+export interface LandDependencyContext {
+  proposals: LandDependencyProposalResult;
+  decision: LandDependencyDecision;
 }
 
 /** Closed identifiers for every rejection produced by the land gate. */
@@ -168,14 +173,22 @@ export type LandGateIdentifier =
   | 'dependency-decisions-invalid';
 
 export class LandGateError extends Error {
-  constructor(public readonly gate: LandGateIdentifier, message: string) {
+  constructor(
+    public readonly gate: LandGateIdentifier,
+    message: string,
+    public readonly dependency?: LandDependencyContext,
+  ) {
     super(message);
     this.name = 'LandGateError';
   }
 }
 
-export function landGateError(gate: LandGateIdentifier, message: string): LandGateError {
-  return new LandGateError(gate, message);
+export function landGateError(
+  gate: LandGateIdentifier,
+  message: string,
+  dependency?: LandDependencyContext,
+): LandGateError {
+  return new LandGateError(gate, message, dependency);
 }
 
 export type LandGateRejectionIdentifier = LandGateIdentifier | 'unclassified';
@@ -760,17 +773,19 @@ export async function landSpec(
     declined: declinedDependencies,
     skipReason: opts.skipDependencyCheck,
   });
+  const dependency = { proposals: proposalResult, decision: dependencyDecision };
   if (dependencyDecision.kind === 'refused-undecided') {
     throw landGateError(
       'dependency-proposals-undecided',
       `${dependencyDecision.message}${dependencyDecision.skipUnused ? `\n${dependencyDecision.skipUnused}` : ''}`,
+      dependency,
     );
   }
   if (dependencyDecision.kind === 'refused-unavailable') {
-    throw landGateError('dependency-check-unavailable', dependencyDecision.message);
+    throw landGateError('dependency-check-unavailable', dependencyDecision.message, dependency);
   }
   if (dependencyDecision.kind === 'invalid') {
-    throw landGateError('dependency-decisions-invalid', dependencyDecision.message);
+    throw landGateError('dependency-decisions-invalid', dependencyDecision.message, dependency);
   }
 
   // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the

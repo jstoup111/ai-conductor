@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:18
+// Covers: task:11, task:12, task:18, task:rem-prd-audit-rem-s5-1
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -141,6 +141,26 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true, maxRetries: 3 }); });
 
 describe('compose land dependency refusal integration', () => {
+  it('prints every declared and overlap proposal when decisions are absent', async () => {
+    const worktree = await seedOutputFixture();
+    const recording = dependencyGh({ body: 'Depends on #520.' });
+    const gh: GhRunner = async (args, opts) => {
+      if (args.join(' ').includes('issue list')) {
+        return { stdout: JSON.stringify([{ number: 600, body: 'Touches src/example.ts.' }]) };
+      }
+      return recording.gh(args, opts);
+    };
+    const cli = dispatch([
+      '--project', 'target', '--idea', 'dependency gate', '--worktree', worktree,
+      '--source-ref', 'owner/repo#536',
+    ], gh, overlapGit());
+
+    expect(await cli.run()).toBe(1);
+    expect(cli.out.join('\n')).toContain('owner/repo#520 (declared)');
+    expect(cli.out.join('\n')).toContain('owner/repo#600 (overlap)');
+    expect(cli.out.join('\n')).toContain('owner/repo#610 (overlap)');
+  });
+
   it('rejects an undecided proposal before commit and records its closed gate', async () => {
     const worktree = await seed(); const { gh } = recordingGh();
     const cli = dispatch(['--project', 'target', '--idea', 'dependency gate', '--worktree', worktree, '--source-ref', 'owner/repo#536'], gh, quietGit);

@@ -28,7 +28,7 @@ import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo, TargetPathMissingError } from './engineer/target.js';
-import { classifyLandGateRejection, landSpec, type LandSpecResult } from './engineer/land-spec.js';
+import { classifyLandGateRejection, LandGateError, landSpec, type LandSpecResult } from './engineer/land-spec.js';
 import { loadConfig, loadMergedConfig, validateConfig, type ConfigResult } from './config.js';
 import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
@@ -1470,6 +1470,9 @@ export async function dispatchEngineer(
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (err instanceof LandGateError && err.dependency) {
+          renderLandDependencyDecision(err.dependency, print);
+        }
         // Keep-on-failure (FR-6): the per-idea worktree is retained for inspection —
         // report WHERE it is so retention is actionable, not silent clutter.
         printErr(`engineer land: ${msg}`);
