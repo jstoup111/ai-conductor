@@ -1,4 +1,4 @@
-// Covers: task:9, task:10, task:rem-prd-audit-rem-s5-2, task:rem-as-built-rem-asb-4
+// Covers: task:9, task:10, task:rem-prd-audit-rem-s5-2, task:rem-as-built-rem-asb-4, task:rem-as-built-rem-asb-6
 
 import { describe, expect, it } from 'vitest';
 import type { GitRunner } from '../../../src/engine/rebase.js';
@@ -323,6 +323,19 @@ describe('decideLandDependencies', () => {
       accepted: [],
       declined: [],
       skipped: { reason: 'GitHub outage' },
+    });
+  });
+
+  it('rejects contradictory decisions even when an unavailable check has a GitHub-outage skip', () => {
+    expect(decideLandDependencies({
+      sourceRef: SOURCE,
+      proposalResult: { kind: 'unavailable', cause: 'GitHub outage' },
+      accepted: ['owner/repo#520'],
+      declined: ['owner/repo#520'],
+      skipReason: 'GitHub outage',
+    })).toMatchObject({
+      kind: 'invalid',
+      message: expect.stringContaining('owner/repo#520'),
     });
   });
 

@@ -120,6 +120,10 @@ export function decideLandDependencies({
   if (skipReason !== undefined && skipReason.trim() === '') {
     return { kind: 'invalid', message: 'a dependency-check skip requires a reason' };
   }
+  const contradictory = accepted.find((target) => declined.includes(target));
+  if (contradictory) {
+    return { kind: 'invalid', message: `dependency ${contradictory} was both accepted and declined` };
+  }
 
   switch (proposalResult.kind) {
     case 'unavailable':
@@ -133,10 +137,6 @@ export function decideLandDependencies({
       };
     case 'computed': {
       const proposed = new Set(proposalResult.proposals.map((proposal) => proposal.target));
-      const contradictory = accepted.find((target) => declined.includes(target));
-      if (contradictory) {
-        return { kind: 'invalid', message: `dependency ${contradictory} was both accepted and declined` };
-      }
       const invalidDecline = declined.find((target) => !proposed.has(target));
       if (invalidDecline) {
         return { kind: 'invalid', message: `cannot decline dependency ${invalidDecline}: it was never proposed` };
