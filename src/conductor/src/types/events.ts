@@ -790,6 +790,12 @@ type ConductorEventBody =
       domain: 'build_review';
       lapId: string;
       reason: string;
+      /** Present when a proposed case-store transition was refused without corrupting persisted history. */
+      rejectedTransition?: {
+        readonly invariant: 'source-linked-by-multiple-cases' | 'duplicate-case-id' | 'duplicate-effect-id' | 'invalid-next-state';
+        readonly caseIds: readonly string[];
+        readonly sourceIds: readonly string[];
+      };
     }
   | {
       /** One canonical remediation case was reconciled against the current lap. */

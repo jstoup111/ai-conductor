@@ -1,4 +1,4 @@
-// Covers: task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1
+// Covers: task:3, task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-revie
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
-import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
@@ -314,6 +314,75 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  it('emits the rejected case transition detail from reconciliation', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
+        effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+      }],
+    });
+    const events: ConductorEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      generateId: (() => {
+        const ids = ['case-N', 'effect-N'];
+        return () => ids.shift()!;
+      })(),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect([result, events.filter((event) => event.type === 'remediation_adjudication_failed')]).toEqual([{
+      ok: false,
+      detail: `case transition rejected: source-linked-by-multiple-cases (cases case-R, case-N; sources ${sourceId})`,
+    }, [{
+      type: 'remediation_adjudication_failed',
+      domain: 'build_review',
+      lapId: 'lap-1',
+      reason: `case transition rejected: source-linked-by-multiple-cases (cases case-R, case-N; sources ${sourceId})`,
+      rejectedTransition: {
+        invariant: 'source-linked-by-multiple-cases',
+        caseIds: ['case-R', 'case-N'],
+        sourceIds: [sourceId],
+      },
+    }]]);
+  });
+
+  it('keeps corrupt persisted history on the existing malformed case-store event', async () => {
+    const root = await projectRoot();
+    const corruptCases = [{
+      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The earlier repair was applied.', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+    }, {
+      id: 'case-N', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The conflicting persisted case is corrupt history.', resolution: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
+      effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
+    }];
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(remediationCaseStorePath(root), JSON.stringify({ version: 'v1', feature, cases: corruptCases }), 'utf8');
+    const events: ConductorEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect([result, events.filter((event) => event.type === 'remediation_adjudication_failed')]).toEqual([{
+      ok: false,
+      detail: 'case store malformed-state',
+    }, [{
+      type: 'remediation_adjudication_failed', domain: 'build_review', lapId: 'lap-1', reason: 'case store malformed-state',
+    }]]);
+  });
+
   it('keeps child cases local while writing suppression history to the flat store', async () => {
     const root = await projectRoot();
     const child = parseChildId(2)!;
