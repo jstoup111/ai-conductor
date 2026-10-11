@@ -210,6 +210,19 @@ Before committing, `land` refuses on any of:
 `--worktree` is required. `land` never falls back to the primary checkout. On failure the worktree
 is kept for inspection and its path is printed.
 
+With a GitHub `--source-ref`, `land` also proposes dependencies — declared but unlinked edges and
+open issues or in-flight branches that overlap the plan's paths — and refuses until each has an
+operator-confirmed decision:
+
+1. Read the `engineer land: dependency proposal <owner/repo#N> (…)` lines.
+2. Ask the operator about each one. Never auto-answer.
+3. Re-run `land` with `--depends-on <owner/repo#N>` for each accepted edge and
+   `--decline-dependency <owner/repo#N>` for each declined one. Both flags repeat.
+
+If the check itself is unavailable, retry, or — with operator agreement — pass
+`--skip-dependency-check "<reason>"`. Accepted edges are linked after the commit. See
+[land dependency gate](../reference/cli.md#land-dependency-gate) for every refusal and output line.
+
 With `--source-ref`, `land` also comments "Routed to `<repo>`" on the originating issue and advances
 the ledger to `routed`. That write-back is advisory: a `gh` failure never fails a successful land.
 
@@ -311,6 +324,7 @@ Claimed entries that already have a PR are reserved for `resolve`/`forget` and a
 | `ai-conductor compose poll` | One synchronous sweep of the GitHub issues adapter into the durable inbox. No routing, no background process. The ledger dedups, so a double-poll enqueues nothing new. |
 | `ai-conductor compose unclaim <sourceRef>` | Returns one claimed entry to pending so it can be claimed again. Use it for a known stranded claim. |
 | `ai-conductor compose requeue --stale [--older-than <dur>]` | Bulk-recovers stale claimed entries. The default age is `stale_claim_window_hours` (24 hours); `--older-than` overrides it once. |
+| `ai-conductor compose dep-audit --project <name>` | Read-only dependency drift report: unlinked, stale, cyclic, contradictory, and indeterminate edges. Writes nothing; `intake-loop` runs the same sweep hourly. |
 | `ai-conductor compose migrate-issue-deps` | One-time prose-to-structured-link dependency migration. Dry-run by default; prints the proposal and `Dry run — no links written. Re-run with --confirm to apply.` |
 | `ai-conductor compose migrate-issue-deps --confirm` | Applies the migration and prints `N link(s) created, M already present.` |
 

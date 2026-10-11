@@ -722,7 +722,8 @@ returns 1.
 | --- | --- | --- | --- |
 | `projects` | `compose projects` | Prints the registry as JSON. Read-only. | 0; 1 on unknown flag |
 | `worktree` | `compose worktree --project <name> --idea "<text>" [--source-ref <ref>] [--body <text>]` | Resolves the project, resolves the target repo, and creates the per-idea git worktree and branch. Prints `{kind, slug, branch, worktreePath, reconcile}`. With `--source-ref` and no `--body`, loads the Desired-outcome body from the persisted claim record or, if no record exists, from the referenced GitHub issue. A resolved empty or bulletless body stages the source reference with zero outcome bullets. An unreadable, missing, or unparseable source leaves no outcomes file and prints a diagnostic, without failing worktree creation; `--body` takes precedence. | 0; 1 on project not found, target resolution error, or worktree creation error |
-| `land` | `compose land --project <name> --idea "<text>" --worktree <path> [--source-ref <ref>]` | Reads machine owner config, performs a fail-fast identity check, then commits the authored spec artifacts in the worktree onto `spec/<slug>`. With `--source-ref`, comments on the issue and advances the ledger to `routed` — advisory, so a `gh` failure never fails the land. On failure the worktree is kept and its path is reported. | 0; 1 on project not found, unresolved identity, or a land failure |
+| `dep-audit` | `compose dep-audit --project <name>` | Read-only dependency drift report for the project's GitHub repository. Prints counts and findings for `unlinked` (declared in prose, no native link), `stale`, `cycles`, `contradictions` (reverse-direction declarations), and `indeterminate`, or `Dependency drift audit: indeterminate (<cause>)` when the repository cannot be read. Never creates, removes, or changes a link. | 0, including indeterminate results; 1 on project not found or unknown flag |
+| `land` | `compose land --project <name> --idea "<text>" --worktree <path> [--source-ref <ref>] [--depends-on <owner/repo#N>]… [--decline-dependency <owner/repo#N>]… [--skip-dependency-check "<reason>"]` | Reads machine owner config, performs a fail-fast identity check, then commits the authored spec artifacts in the worktree onto `spec/<slug>`. With a GitHub `--source-ref`, it first runs the [dependency gate](#land-dependency-gate). With `--source-ref`, comments on the issue and advances the ledger to `routed` — advisory, so a `gh` failure never fails the land. On failure the worktree is kept and its path is reported. | 0; 1 on project not found, unresolved identity, or a land failure |
 | `handoff` | `compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>]` | Opens the spec PR with the `spec` label and with `gh` running inside the per-idea worktree, then removes the worktree and prints `{kind:'pr-opened', url}` or `{kind:'local-commit', branch, repoPath, reason}`. `--branch` must be `spec/<slug>`, where `<slug>` is 1–50 lowercase alphanumeric segments joined by single hyphens; one trailing hyphen is permitted. Then starts the target repo's daemon, fire-and-forget. With `--source-ref`, writes back to the ledger, applies the `engineer:handled` label, and mirrors the issue's `priority: <band>` criticality labels onto the spec PR (fail-open — a read or write failure logs one `[pr-criticality]` line and never fails the handoff). On failure it records branch evidence and keeps the worktree. | 0, including when worktree removal fails (warned); 1 on project not found, target resolution error, or PR open failure |
 | `poll` | `compose poll` | One synchronous sweep of the GitHub issues adapter, enqueuing every returned envelope into the durable inbox. A registration whose path is absent is skipped without a GitHub call, while other registrations continue polling. Prints `{kind:'poll', enqueued, sourceRefs}`. No routing, no timer, no detached process; the ledger dedups, so a second poll enqueues nothing new. | 0; 1 on unknown flag |
 | `claim` | `compose claim` | Claims the oldest unblocked inbox entry. The whole claim walk holds the inbox lease (`<engineer dir>/inbox.lease`) and waits up to 5 minutes for a concurrent claim. It first returns inbox envelopes left `.claimed` while their ledger entry is still pending, reporting `released <n> stranded intake claim(s)` on stderr. Before selecting work, it also reaps stranded `claimed` entries older than `stale_claim_window_hours` (24 hours by default), returns them to pending, and may serve a reaped entry in that same claim. Builds a fresh blocker resolver per call and reads issue labels uncached. Prints `{empty:true}`, `{allBlocked:true, entries:[…]}`, or the claimed envelope. A real claim acks the queue, moves the ledger to `claimed`, and persists a claim record for a later `worktree --source-ref`. | 0 for each printed outcome; 1 on unknown flag, corrupt intake ledger, lease wait timeout (`engineer claim: Intake claim in progress: …`), or stranded-claim recovery or queue read fault (`engineer claim: <message>`), with nothing claimed |
@@ -733,7 +734,9 @@ returns 1.
 | `migrate-issue-deps` | `compose migrate-issue-deps [--confirm]` | One-time prose-to-structured-link dependency migration over open issues. Dry-run by default: prints the proposal, writes nothing, and reports `Dry run — no links written. Re-run with --confirm to apply.` With `--confirm`, applies the links and prints `N link(s) created, M already present.` | 0; 1 when the repo or issue list cannot be resolved; 1 on unknown flag |
 
 `--source-ref` on `worktree`, `--body` on `worktree`, and the `--idea` and free-text launch forms are
-all accepted by the code but absent from the root `--help` output.
+all accepted by the code but absent from the root `--help` output. Likewise, `land`'s
+`--depends-on`, `--decline-dependency`, and `--skip-dependency-check` are absent from both the root
+guide and `compose land --help`.
 
 Every subcommand that touches the ledger — `launch`'s pre-poll, `land`, `handoff`, `claim`, `forget`,
 `unclaim`, `requeue`, and `resolve` — fails closed on a corrupt ledger: exit 1 with
@@ -745,6 +748,34 @@ modified.` The ledger itself is left untouched for repair. See
 > `forget`, or `resolve` prints the full guide text and exits **0**, not a usage error. A script that
 > checks only the exit code will read a malformed invocation as success. Check for the expected JSON on
 > stdout instead. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+
+#### Land dependency gate
+
+For a GitHub `--source-ref`, `compose land` reads the source issue's body and native `blocked_by`
+links, then proposes every dependency that still needs a decision: each declared but unlinked edge
+(`declared`) and each open issue or in-flight branch whose evidence paths overlap the plan's cited
+paths (`overlap`). Before refusing or printing the final JSON, it prints one line per finding:
+
+```text
+engineer land: dependency proposal <owner/repo#N> (declared|overlap)
+engineer land: dependency satisfied <owner/repo#N>
+engineer land: dependency advisory <reason> [<subject>]
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--depends-on <owner/repo#N>` | Repeatable. Accepts a proposal; after the commit, land creates the native `blocked_by` link. |
+| `--decline-dependency <owner/repo#N>` | Repeatable. Declines a proposal. Declining a target that was never proposed is invalid. |
+| `--skip-dependency-check "<reason>"` | Proceeds when the dependency check is unavailable. Requires a non-empty reason; ignored, with a note, when proposals were computed. |
+
+Land refuses, committing nothing, when any proposal is undecided (`undecided dependencies: …`), when
+a tracker or in-flight read fails and no skip was given (`…; retry or acknowledge with
+--skip-dependency-check "<reason>"`), or when decisions are invalid: a target both accepted and
+declined, decisions without a GitHub `--source-ref`, or an empty skip reason. Link writes run after the
+commit; a failed write prints `engineer land: dependency write failed for <ref>: <reason>` and never
+fails the land. Every decision, including write outcomes, is recorded as a `land_dependency_decided`
+event in the target repository's `.pipeline/composer-events.jsonl`. Declining a proposal never
+removes an existing declaration or link.
 
 `compose land` keeps amendments to artifacts that already existed at the branch's merge base
 under their original feature names. Those amendments remain in the commit and applicable ADR/coherence
@@ -1467,7 +1498,7 @@ These are dispatched by skills, hooks, and the daemon rather than typed by an op
 
 | Command | Syntax | Purpose | Exit codes |
 | --- | --- | --- | --- |
-| `intake-loop` | `ai-conductor intake-loop --continuous \| --once [--interval-ms <n>]` | Polls registered repos into the durable inbox, notifies through the status surface, and reconciles closed GitHub issues each tick so a closed issue cannot be re-claimed. Never spawns a provider session and never opens a PR. `--interval-ms` defaults to 300000. Exactly one of `--continuous` and `--once` is required. | 0 on completion; 1 for the usage guide |
+| `intake-loop` | `ai-conductor intake-loop --continuous \| --once [--interval-ms <n>]` | Polls registered repos into the durable inbox, notifies through the status surface, and reconciles closed GitHub issues each tick so a closed issue cannot be re-claimed. At most once per hour per GitHub-tracked project, it also runs the read-only `compose dep-audit` sweep and records a `dependency_drift_swept` event; a failed sweep is logged and retried the next hour. Never spawns a provider session and never opens a PR. `--interval-ms` defaults to 300000. Exactly one of `--continuous` and `--once` is required. | 0 on completion; 1 for the usage guide |
 | `brain start\|stop\|status` | `ai-conductor brain <verb>` | Host-wide singleton that hosts `ai-conductor intake-loop --continuous` in the tmux session `cc-brain-conductor`. `start` is idempotent; `status` prints `brain loop: running\|stopped`, then the current durable `pending`, `claimed`, and `stranded` intake-ledger counts. When available, it separately prints the recorded prior notification batch as `last notification: <count> at <timestamp>`; that batch is not current queue depth. | 0; 1 on a tmux error or when `status` cannot read the intake ledger |
 | `render-diagrams` | `ai-conductor render-diagrams <file.md>… [--check]` | Renders the Mermaid blocks in each file using the configured `mermaid_renderer` preset. `--check` parse-checks blocks without opening them. | Default mode always 0. `--check`: 1 when any block fails to parse or a file is unreadable; 0 when everything parses, there are no diagrams, or `mmdc` is unavailable. Zero files: 1 |
 | `rate-card` | `ai-conductor rate-card refresh [--model <id>]…` · `ai-conductor rate-card show` | Maintains `<project>/.ai-conductor/rate-card.json`, the committed per-model token price card the harness prices dispatches from for providers that report token counts but no cost (codex, and Pi messages without a provider cost). `refresh` fetches LiteLLM's public `model_prices_and_context_window.json`, prunes it to the models the provider model policies route to and supported opt-in models (plus any `--model`), and rewrites the card with a fresh `as_of`; commit the result. `--model` is repeatable. `show` prints the committed card. The fetch lives here, never on the dispatch path. `.github/workflows/rate-card-refresh.yml` runs `refresh` daily and opens a bot PR on the `automation/rate-card` branch when the published rates actually change — a run that finds identical rates discards its own `as_of`-only diff and opens nothing. A failed fetch, an unparseable payload, or a payload pricing none of the requested models leaves the committed card byte-for-byte unchanged. | 0 on success; 1 for the usage guide, a failed refresh, or a missing/unreadable card under `show` |

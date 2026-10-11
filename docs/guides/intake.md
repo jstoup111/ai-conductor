@@ -39,6 +39,14 @@ recognises it as a non-form body and skips it. Without that skip the Action's de
 *added* alongside the filer's choice rather than replacing it, leaving the issue carrying two
 contradictory bands.
 
+Dependencies are synced from both routes. On every `opened` and `edited` event the Action reads the
+body's same-repo dependency declarations — `Depends on #N`, `Blocked by #N`, or `Gated on #N`,
+including the form's `Depends on` field — and creates each missing native `blocked_by` link. The sync is additive only:
+removing a declaration never deletes a link. To drop a dependency, edit the declaration out of the
+body, then delete the native link by hand. A failed link is logged as
+`[intake-label-sync] dependency link <ref> failed: <reason>` without failing the Action; the next
+edit or the hourly [drift audit](../reference/cli.md#compose-subcommands) surfaces it.
+
 ## The shape
 
 Four sections. Three are required.
