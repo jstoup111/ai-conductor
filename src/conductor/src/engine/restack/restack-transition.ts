@@ -208,20 +208,31 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
   const activeRange = options.ranges.find((range) => range.child === options.activeChild);
   const activeMove = moveByChild.get(options.activeChild);
 
-  // Replay constructs the exact old child range on a new parent. Reuse the
-  // established rebase translator for each moved range: it persists the flat
-  // correspondence and rewrites only flat evidence stores. In particular it
-  // never touches `.pipeline/current-task` or a closed child's region store.
+  // Replay constructs the exact old child range on a new parent. Preserve
+  // those asymmetric boundaries for the translator: using oldParent for both
+  // sides would make a later child's map inspect lower replay commits too.
+  // Flat evidence is shared; only the active child's region evidence follows
+  // it. Closed children are historical records and stay byte-identical.
   for (const range of options.ranges) {
     const move = moveByChild.get(range.child);
     if (!move || move.oldSha === move.newSha) continue;
+    const additionalPipelineDirs = range.child === options.activeChild && range.kind !== 'closed'
+      ? [pipelinePathFor(options.worktree, '', range.child)]
+      : [];
     await translateAfterRebase(
       options.git,
       options.worktree,
-      range.oldParent,
+      newParentFor(range),
       range.oldTip,
       move.newSha,
       options.events,
+      undefined,
+      undefined,
+      {
+        preImageBase: range.oldParent,
+        postImageBase: newParentFor(range),
+        additionalPipelineDirs,
+      },
     );
   }
   if (activeRange && activeRange.kind !== 'closed' && activeMove) {

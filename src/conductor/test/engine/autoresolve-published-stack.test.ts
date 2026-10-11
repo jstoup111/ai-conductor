@@ -1,9 +1,11 @@
 // Covers: Task: 34
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
+import { enrollWatch, readWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import { buildPrFixture, PASSING_SUITE, type PrFixture } from './autoresolve-pr-fixture.js';
 
 const fixtures: PrFixture[] = [];
@@ -46,5 +48,34 @@ describe('published stacked feature autoresolve refusal', () => {
       type: 'restack_refused', reason: 'published-stack', detail: '#2945',
     }));
     expect(fixture.commentBodies().join('\n')).toContain('published-stack');
+  });
+
+  it('does not consume the sweep resolution-attempt budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'published-stack-sweep-'));
+    try {
+      const entry = {
+        prUrl: 'https://github.com/acme/demo/pull/1', slug: 'demo', repoCwd: root,
+        resolveAttempts: 2,
+      };
+      await enrollWatch(root, entry);
+      await sweepMergeableLabels({
+        projectRoot: root,
+        runGh: async () => ({ stdout: '' }),
+        tracker: {
+          readPullRequestMergeState: async () => ({
+            state: 'OPEN', mergeable: 'CONFLICTING', hasFailingOrPendingChecks: false,
+            labels: [], checksOutcome: 'none' as const, isDraft: false,
+          }),
+        },
+        autoresolve: {
+          enabled: true,
+          isEligible: async () => ({ eligible: true }),
+          dispatch: async () => ({ kind: 'published-stack' }),
+        },
+      });
+      expect((await readWatch(root))[0]?.resolveAttempts).toBe(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
