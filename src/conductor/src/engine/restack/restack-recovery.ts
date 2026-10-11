@@ -531,8 +531,18 @@ async function rollBackFromRolling(
   } catch {
     return undefined;
   }
+  // A dead process may have restored only part of the stack. Restore each ref
+  // still on its new side and pin each already-restored one; any other value
+  // fails closed through the transaction's compare-and-swap.
+  const reverse: string[] = [];
+  for (const move of moves) {
+    const live = await resolveSha(git, move.ref);
+    if (live === move.oldSha) reverse.push(`verify ${move.ref} ${move.oldSha}`);
+    else if (live === move.newSha) reverse.push(`update ${move.ref} ${move.oldSha} ${move.newSha}`);
+    else return undefined;
+  }
   const reversed = await runGit(git, ['update-ref', '--stdin'], transaction([
-    ...moves.map((move) => `update ${move.ref} ${move.oldSha} ${move.newSha}`),
+    ...reverse,
     ...journalStateUpdateLines(journal, blob, 'aborted'),
   ]));
   return reversed?.exitCode === 0 ? { slug: journal.slug, blob, journal: aborted } : undefined;
