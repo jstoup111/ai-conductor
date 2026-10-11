@@ -165,6 +165,7 @@ async function applyDecision(
   outcome: RebaseOutcome,
   decision: { readonly invalidated: readonly StepName[]; readonly reverified: readonly StepName[]; readonly preserved: readonly StepName[]; readonly preservedCandidates: readonly RebasePreservedCandidate[]; readonly replay?: ReplayEvidence },
   events: ConductorEventEmitter | undefined,
+  cause?: RestackCause,
 ): Promise<void> {
   if (outcome.kind !== 'changed' || outcome.replay === undefined) return;
   const transition = await applyRebaseTransition({
@@ -177,6 +178,7 @@ async function applyDecision(
     preservedCandidates: decision.preservedCandidates,
     reverified: decision.reverified,
     ...(child === undefined ? {} : { child }),
+    ...(cause === undefined ? {} : { cause }),
   });
   if (transition.stateResult === 'refused') throw new Error('restack verdict transition was refused');
   if (events) {
@@ -234,7 +236,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
       await withActiveChildProjection(options.worktree, options.activeChild, async (projectionRoot) => {
         const projectedState = pipelinePathFor(projectionRoot, 'conduct-state.json', options.activeChild);
         const verdict = await applyRebaseVerdicts(projectionRoot, activeOutcome, false, undefined, options.git, undefined, options.activeChild);
-        await applyDecision(projectionRoot, projectedState, options.activeChild, activeOutcome, regionDecision(verdict), options.events);
+        await applyDecision(projectionRoot, projectedState, options.activeChild, activeOutcome, regionDecision(verdict), options.events, options.cause);
       });
     }
   }
@@ -274,10 +276,11 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
           wholeOutcome,
           regionDecision(verdict),
           options.events,
+          options.cause,
         );
       });
     }
-    await applyDecision(options.worktree, featureState, undefined, wholeOutcome, featureDecision(verdict), options.events);
+    await applyDecision(options.worktree, featureState, undefined, wholeOutcome, featureDecision(verdict), options.events, options.cause);
   }
 
   for (const range of options.ranges) {

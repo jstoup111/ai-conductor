@@ -8,6 +8,7 @@ import {
   type CompletionResult,
 } from './artifacts.js';
 import { isRegionStep, pipelinePathFor, type ChildId } from './child-context.js';
+import type { RestackCause } from './restack/restack-types.js';
 
 /**
  * Objective completion check for a gate. Prefers the richer kickback-target
@@ -96,6 +97,8 @@ export interface RebaseOperationRecord {
   appliedAt?: number;
   transition: RebaseTransitionDescriptor;
   replay: ReplayEvidence;
+  /** Present only for a stacked restack; omitted for byte-compatible N=1 records. */
+  cause?: RestackCause;
   /**
    * Optional for descriptors written before resume could complete an applying
    * operation. New descriptors persist every candidate before state changes.
