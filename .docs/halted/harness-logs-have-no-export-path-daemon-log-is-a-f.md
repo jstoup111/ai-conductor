@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-11T00:49:24.685Z
+Status: halted
 Slug: harness-logs-have-no-export-path-daemon-log-is-a-f
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-harness-logs-have-no-export-path-daemon-log-is-a-f
-Head SHA: cc79708831fd116c6bb244a8340a179b50b541ba
-Halted at: 2026-10-11T00:24:27.081Z
+Head SHA: a9454017ff918200ef55c3c2e9a31aa16771ae6d
+Halted at: 2026-10-11T01:11:43.017Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case repeat 758eafb3-1811-411f-aa51-0612b87b4cf0
+step 'build_review' cannot make progress: its inputs cannot change on a re-dispatch. Re-run 'test_suite' before retrying 'build_review'.
 ```
