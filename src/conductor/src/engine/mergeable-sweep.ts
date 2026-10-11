@@ -465,6 +465,24 @@ export async function sweepMergeableLabels({
         const entryGh = runnerForEntry(gh, entry, operations);
         let state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
 
+        // GitHub can initially return UNKNOWN while it calculates mergeability
+        // for an otherwise readable OPEN PR. Give that lazy result exactly one
+        // more read. Handle a terminal state from that re-read through the
+        // normal lifecycle path below rather than classifying it as OPEN.
+        let mergeabilityReread: 'not-needed' | 'completed' | 'failed' = 'not-needed';
+        if (state.state === 'OPEN' && state.mergeable === 'UNKNOWN') {
+          try {
+            state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
+            mergeabilityReread = 'completed';
+          } catch (error) {
+            mergeabilityReread = 'failed';
+            state = {
+              ...state,
+              readFailure: { kind: 'runner', error },
+            };
+          }
+        }
+
         // Preserve lifecycle reconciliation: closed, merged, and not-found
         // states retain their existing stale CI-label cleanup before taking
         // their dedicated lifecycle path. Open states wait for readiness
@@ -539,24 +557,6 @@ export async function sweepMergeableLabels({
           recordDisposition(log, entry, 'notfound');
           log?.(`[mergeable-sweep] pruning ${entry.prUrl} (state: ${state.state})`);
           continue; // not added to survivors
-        }
-
-        // GitHub can initially return UNKNOWN while it calculates mergeability
-        // for an otherwise readable OPEN PR. Give that lazy result exactly one
-        // more read; a second failure stays explicit on the state so the
-        // readiness classifier can safely call it indeterminate.
-        let mergeabilityReread: 'not-needed' | 'completed' | 'failed' = 'not-needed';
-        if (state.state === 'OPEN' && state.mergeable === 'UNKNOWN') {
-          try {
-            state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
-            mergeabilityReread = 'completed';
-          } catch (error) {
-            mergeabilityReread = 'failed';
-            state = {
-              ...state,
-              readFailure: { kind: 'runner', error },
-            };
-          }
         }
 
         // FR-15: UNKNOWN state (transient read/fetch error) → log + skip this

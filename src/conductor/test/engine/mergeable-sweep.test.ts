@@ -294,6 +294,65 @@ describe('sweepMergeableLabels — Task 4 lazy re-read and head tracking', () =>
   });
 
   // Covers: task:4
+  it.each(['MERGED', 'CLOSED'] as const)(
+    'sends a terminal %s returned by the UNKNOWN re-read through the shipped-record gate',
+    async (terminalState) => {
+      const readPullRequestMergeState = vi.fn()
+        .mockResolvedValueOnce(openMergeState('UNKNOWN', 'A'))
+        .mockResolvedValueOnce(readinessState({ state: terminalState }));
+      const shippedRecordProbe = vi.fn(async () => 'present' as const);
+      const teardownWorktree = vi.fn(async () => undefined);
+      const onEvent = vi.fn();
+      await enrollWatch(tmpDir, entry());
+
+      await sweepMergeableLabels({
+        projectRoot: tmpDir,
+        tracker: { readPullRequestMergeState },
+        shippedRecordProbe,
+        teardownWorktree,
+        onEvent,
+      });
+
+      expect(readPullRequestMergeState).toHaveBeenCalledTimes(2);
+      expect(shippedRecordProbe).toHaveBeenCalledWith('/fake/repo', 'test-feature');
+      expect(teardownWorktree).toHaveBeenCalledWith(
+        {
+          path: join('/fake/repo', '.worktrees', 'test-feature'),
+          branch: 'feat/daemon-test-feature',
+        },
+        false,
+      );
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(await readWatch(tmpDir)).toEqual([]);
+    },
+  );
+
+  // Covers: task:4
+  it('prunes a NOTFOUND state returned by the UNKNOWN re-read without probing or emitting readiness', async () => {
+    const readPullRequestMergeState = vi.fn()
+      .mockResolvedValueOnce(openMergeState('UNKNOWN', 'A'))
+      .mockResolvedValueOnce(readinessState({ state: 'NOTFOUND' }));
+    const shippedRecordProbe = vi.fn(async () => 'present' as const);
+    const teardownWorktree = vi.fn(async () => undefined);
+    const onEvent = vi.fn();
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      tracker: { readPullRequestMergeState },
+      shippedRecordProbe,
+      teardownWorktree,
+      onEvent,
+    });
+
+    expect(readPullRequestMergeState).toHaveBeenCalledTimes(2);
+    expect(shippedRecordProbe).not.toHaveBeenCalled();
+    expect(teardownWorktree).not.toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(await readWatch(tmpDir)).toEqual([]);
+  });
+
+  // Covers: task:4
   it('does not re-read a PR whose first mergeability result is known', async () => {
     const readPullRequestMergeState = vi.fn().mockResolvedValue(openMergeState('MERGEABLE', 'A'));
     await enrollWatch(tmpDir, entry());
