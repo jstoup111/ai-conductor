@@ -8,6 +8,7 @@ import { HALT_MARKER } from '../halt-marker.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { checkCascadeCap } from './cascade-cap.js';
 import { runRestack } from './restack-executor.js';
+import type { RestackResolver } from './restack-resolver.js';
 import { emitRestackRefused } from './restack-events.js';
 import { readRestackJournal } from './restack-journal.js';
 import { haltRestack } from './restack-move.js';
@@ -28,6 +29,9 @@ export interface RunStackPreflightOptions {
   readonly consumeRekick?: () => Promise<void>;
   readonly events?: ConductorEventEmitter;
   readonly git?: GitRunner;
+  /** Provider-backed resolver and its configured attempt budget. */
+  readonly resolver?: RestackResolver;
+  readonly resolverCap?: number;
   /**
    * The dispatcher supplies the committed-halt/authorization operation.  It is
    * deliberately injectable: this restack layer does not own daemon discovery
@@ -123,6 +127,8 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     ...(options.baseRefreshDue ? { followOnCause: 'base-refresh' as const } : {}),
     ...(options.events === undefined ? {} : { events: options.events }),
     ...(options.git === undefined ? {} : { git: options.git }),
+    ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
+    ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
   });
   if (repair.kind !== 'applied') {
     if (options.baseRefreshDue) await deferredBaseRefresh(options.events);
@@ -149,6 +155,8 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     replacesAppliedJournal: applied,
     ...(options.events === undefined ? {} : { events: options.events }),
     ...(options.git === undefined ? {} : { git: options.git }),
+    ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
+    ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
   });
   if (followOn.kind !== 'applied') {
     await deferredBaseRefresh(options.events);

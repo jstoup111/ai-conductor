@@ -857,6 +857,8 @@ export async function resumeRebaseFirst(opts: {
         newDefault: targetSha,
         events: opts.events,
         git,
+        resolver: opts.resolveConflict,
+        resolverCap: opts.resolveAttempts,
       });
       if (restacked.kind !== 'applied') {
         if (restacked.kind === 'unavailable') {

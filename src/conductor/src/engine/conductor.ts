@@ -6121,6 +6121,10 @@ export class Conductor {
           worktree: this.projectRoot,
           slug: resumeSlug,
           events: this.events,
+          resolver: this.stepRunner.resolveRebaseConflict
+            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          resolverCap: resolveRebaseResolutionAttempts(this.config),
           prepareResume: async () => {
             if (await haltMarkerExists(this.projectRoot)) return;
             try {
@@ -15248,6 +15252,10 @@ export class Conductor {
         worktree: this.projectRoot,
         slug: stackSlug,
         events: this.events,
+        resolver: this.stepRunner.resolveRebaseConflict
+          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+          : undefined,
+        resolverCap: resolveRebaseResolutionAttempts(this.config),
       });
       if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
         const reason = preflight.kind === 'unavailable'
@@ -15295,6 +15303,10 @@ export class Conductor {
           newDefault: target,
           events: this.events,
           git,
+          resolver: this.stepRunner.resolveRebaseConflict
+            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          resolverCap: resolveRebaseResolutionAttempts(this.config),
         });
         if (restacked.kind !== 'applied') {
           const reason = restacked.kind === 'unavailable'

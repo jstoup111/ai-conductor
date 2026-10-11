@@ -27,6 +27,7 @@ import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
 import { runRestack, transitionAppliedWithCascade } from './restack-executor.js';
+import type { RestackResolver } from './restack-resolver.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -50,6 +51,9 @@ export interface RecoverRestackJournalOptions {
   readonly slug: string;
   readonly events?: ConductorEventEmitter;
   readonly git?: GitRunner;
+  /** Provider-backed resolver and its configured attempt budget. */
+  readonly resolver?: RestackResolver;
+  readonly resolverCap?: number;
   /**
    * Halt writers need the refs and worktree settled, but must not publish the
    * restack transition while composing their durable halt record.  This mode
@@ -419,6 +423,8 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           cause: journal.journal.followOnCause,
           git,
           ...(options.events === undefined ? {} : { events: options.events }),
+          ...(options.resolver === undefined ? {} : { resolver: options.resolver }),
+          ...(options.resolverCap === undefined ? {} : { resolverCap: options.resolverCap }),
           replacesAppliedJournal: journal,
         });
         return result.kind === 'unavailable'

@@ -1775,6 +1775,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         });
       },
       events: featureEvents,
+      resolver: stepRunner.resolveRebaseConflict
+        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
+        : undefined,
+      resolverCap: resolveRebaseResolutionAttempts(config),
       // Authorizations are consumed by the daemon's pre-dispatch maintenance
       // boundary. A record left by an already-cleared halt can be resolved
       // here, after recovery; never supersede a still-live halt record.

@@ -30,6 +30,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, type CommitterStamp } from './restack-replay.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
 import { cleanClearedAbortedRestackJournal } from './restack-recovery.js';
@@ -485,7 +486,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           stamp: journal.journal.committer,
           comparisonCommits: newStackCommits,
           resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
-          cap: options.resolverCap ?? 0,
+          cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
           git,
         });
         if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
