@@ -1,3 +1,4 @@
+import type { KickbackPlanGrowthView } from './kickback-budget-view.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import {
   PRD_AUDIT_REMEDIATION_GATE_SOURCE,
@@ -102,4 +103,35 @@ export function renderRefusalReworkContext(refusals: readonly RefusalReworkEvide
     blocks.push(lines.join('\n'));
   }
   return blocks.join('\n\n');
+}
+
+/** Why a refusal-rework round cannot be admitted: a spent prd_audit allowance, or unreadable accounting. */
+export type RefusalReworkAllowanceBlocker =
+  | {
+      readonly kind: 'exhausted';
+      readonly allowance: 'laps' | 'growth';
+      readonly consumed: number;
+      readonly limit: number;
+      readonly fallbackLapCap: number;
+      readonly growth?: KickbackPlanGrowthView;
+    }
+  | { readonly kind: 'unreadable' };
+
+/**
+ * The cause shown beside the refused block when a refusal round ends without
+ * a route. The admission refusal already is the refused block, so it adds
+ * nothing; every other cause would otherwise be invisible to the operator.
+ */
+export function refusalRoundFault(outcome?: RefusalRoundOutcome): string | undefined {
+  if (outcome === undefined) return undefined;
+  if (outcome.kind === 'none') return outcome.reason;
+  return outcome.refusalAdmissionRejected ? undefined : outcome.detail;
+}
+
+export type RefusalRoundOutcome =
+  | { kind: 'halt'; detail: string; haltClass?: string; refusalAdmissionRejected?: true }
+  | { kind: 'none'; reason: string };
+
+export function thrownRefusalRoundFault(error: unknown): { kind: 'none'; reason: string } {
+  return { kind: 'none', reason: error instanceof Error ? error.message : String(error) };
 }

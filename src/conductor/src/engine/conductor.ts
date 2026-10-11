@@ -62,6 +62,10 @@ import {
 } from './prd-widening-recovery.js';
 import {
   admitRefusalReworkPlan,
+  refusalRoundFault,
+  thrownRefusalRoundFault,
+  type RefusalReworkAllowanceBlocker,
+  type RefusalRoundOutcome,
 } from './prd-widening-refusal-rework.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import {
@@ -3542,6 +3546,51 @@ export class Conductor {
     return reason;
   }
 
+  /**
+   * A refusal whose prd_audit allowance is spent halts as a recoverable
+   * kickback cap: the refused block stays visible, but the class, cap evidence
+   * and halt generation are the ones `kickback-budget raise` requires. Writing
+   * it as `over-scope` left re-deciding as the only lever, which re-halts the
+   * same way on every lap (#2746). An unreadable ledger cannot establish
+   * exhaustion and keeps the fail-closed refused block.
+   */
+  private async writeRefusalReworkAllowanceHalt(
+    slug: string | undefined,
+    detail: string,
+    refused: readonly OverScopeRenderableFinding[],
+    blocker: RefusalReworkAllowanceBlocker,
+  ): Promise<string> {
+    if (blocker.kind === 'unreadable') return this.writeRefusalReworkHalt(detail, refused);
+    const refusedBlock = renderPrdAuditScopeHalt(detail, renderOverScopeDecisionBlock(refused, refused, []));
+    const findings = `Findings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
+    let generation: string | undefined;
+    let entry: KickbackGateEntry | undefined;
+    try {
+      entry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
+        consumed: blocker.consumed,
+        limit: blocker.limit,
+        latestReason: findings,
+        allowance: blocker.allowance,
+      });
+      generation = entry.capEvidence?.haltGeneration;
+    } catch {
+      // Without durable evidence a raise cannot bind to this halt; keep the
+      // refused block actionable as today.
+      return this.writeRefusalReworkHalt(detail, refused);
+    }
+    const reason = this.withActiveChild(
+      `Refusal rework halted: prd_audit ${blocker.allowance} allowance exhausted.\n` +
+      `${renderKickbackBudgetView(entry, 'prd_audit', blocker.fallbackLapCap, blocker.growth)}\n${findings}\n\n` +
+      `${refusedBlock}\n\n` +
+      renderKickbackRecoveryHint({ slug, gate: 'prd_audit', allowance: blocker.allowance }),
+    );
+    await this.writeHaltMarker(
+      `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
+      KICKBACK_CAP_HALT_CLASS,
+    );
+    return reason;
+  }
+
   private async planRemediation(
     state: ConductState,
     steps: StepDefinition[],
@@ -3554,6 +3603,8 @@ export class Conductor {
       detail: string;
       haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
       kickbackOutcome?: string;
+      /** The planner did not bind every refusal; `detail` is the refused block itself. */
+      refusalAdmissionRejected?: true;
     }
     | { kind: 'none'; reason: string }
   > {
@@ -3983,6 +4034,7 @@ export class Conductor {
         // needs-human prose that drops the decision block.
         return {
           kind: 'halt',
+          refusalAdmissionRejected: true,
           detail: renderPrdAuditScopeHalt(
             refusalReworkRoute.detail,
             renderOverScopeDecisionBlock(refusalReworkRoute.refused, refusalReworkRoute.refused, []),
@@ -6332,24 +6384,34 @@ export class Conductor {
     // process-local round counter this reads the durable gate and growth
     // records, so a daemon restart cannot buy another lap and an operator
     // raise remains effective.
-    const refusalReworkAllowanceAvailable = async (): Promise<boolean> => {
+    const refusalReworkAllowanceBlocker = async (): Promise<RefusalReworkAllowanceBlocker | undefined> => {
       try {
         const ledger = await readKickbackLedger(this.projectRoot);
         if (
           isUnreadableKickbackLedger(ledger) ||
           isUnreadableKickbackGate(ledger, 'prd_audit') ||
           isUnreadableKickbackGrowth(ledger)
-        ) return false;
+        ) return { kind: 'unreadable' };
         const entry = ledger.gates.prd_audit;
         const lapCap = entry?.effectiveLapCap ?? prdAuditRemediationLapCap;
-        if ((entry?.laps ?? 0) >= lapCap) return false;
+        if ((entry?.laps ?? 0) >= lapCap) {
+          return { kind: 'exhausted', allowance: 'laps', consumed: entry?.laps ?? 0, limit: lapCap, fallbackLapCap: prdAuditRemediationLapCap };
+        }
         const unboundedGrowth = await readGrowth(this.projectRoot, Number.MAX_SAFE_INTEGER);
         const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(this.config, unboundedGrowth.authored);
-        return (await readGrowth(this.projectRoot, growthCap)).remaining > 0;
+        const growth = await readGrowth(this.projectRoot, growthCap);
+        if (growth.remaining > 0) return undefined;
+        return {
+          kind: 'exhausted', allowance: 'growth', consumed: growth.added, limit: growthCap,
+          fallbackLapCap: prdAuditRemediationLapCap,
+          growth: { ...growth, cap: growthCap, capSource: ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised' },
+        };
       } catch {
-        return false;
+        return { kind: 'unreadable' };
       }
     };
+    const refusalReworkAllowanceAvailable = async (): Promise<boolean> =>
+      (await refusalReworkAllowanceBlocker()) === undefined;
     // Daemon-only (#367): how many times a manual_test FAIL has routed back to
     // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
     // eventually halts for a human instead of ping-ponging.
@@ -8279,12 +8341,29 @@ export class Conductor {
             // a cap.  For an all-refused PRD row those are all the same
             // operator-facing outcome as the serial tail: preserve the exact
             // refusal decision block instead of replacing it with join prose.
-            const haltGroupedRefusalRework = async (): Promise<boolean> => {
+            // `outcome` is the non-route remediation result that ended the
+            // round. Its cause is kept beside the refused block; a planner cap
+            // halt keeps its own recoverable class, as the serial tail does.
+            // With no outcome the round never dispatched, so a spent allowance
+            // is named as a recoverable cap rather than a decision to revisit.
+            const haltGroupedRefusalRework = async (
+              outcome?: RefusalRoundOutcome,
+            ): Promise<boolean> => {
               if (prdAuditRoute?.kind !== 'over-scope-refusal-rework') return false;
-              const reason = await this.writeRefusalReworkHalt(
-                prdAuditRoute.route.detail,
-                prdAuditRoute.route.refused,
-              );
+              if (outcome?.kind === 'halt' && outcome.haltClass === KICKBACK_CAP_HALT_CLASS) return false;
+              const blocker = outcome === undefined ? await refusalReworkAllowanceBlocker() : undefined;
+              const reason = blocker !== undefined
+                ? await this.writeRefusalReworkAllowanceHalt(
+                  state.feature_desc,
+                  prdAuditRoute.route.detail,
+                  prdAuditRoute.route.refused,
+                  blocker,
+                )
+                : await this.writeRefusalReworkHalt(
+                  prdAuditRoute.route.detail,
+                  prdAuditRoute.route.refused,
+                  refusalRoundFault(outcome),
+                );
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               await closeClassifiedPassingMembers();
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -8465,12 +8544,12 @@ export class Conductor {
                       source: 'validation-group', evidence,
                     });
                   } catch (error) {
-                    if (await haltGroupedRefusalRework()) return undefined;
+                    if (await haltGroupedRefusalRework(thrownRefusalRoundFault(error))) return undefined;
                     throw error;
                   }
                 })();
                 if (remediationOutcome === undefined ||
-                    (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework())) return;
+                    (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework(remediationOutcome))) return;
                 if (remediationOutcome.kind === 'route') {
                   // Each member closes its own admitted execution before the
                   // group does: a member left open here was later reported as
@@ -8594,10 +8673,10 @@ export class Conductor {
                     },
                   );
                 } catch (error) {
-                  if (await haltGroupedRefusalRework()) return;
+                  if (await haltGroupedRefusalRework(thrownRefusalRoundFault(error))) return;
                   throw error;
                 }
-                if (terminalAsBuiltRemediation.kind !== 'route' && await haltGroupedRefusalRework()) return;
+                if (terminalAsBuiltRemediation.kind !== 'route' && await haltGroupedRefusalRework(terminalAsBuiltRemediation)) return;
               } else if (
                 this.daemon &&
                 prdAuditUnsatisfied &&
@@ -8772,12 +8851,12 @@ export class Conductor {
                       evidence,
                     });
                   } catch (error) {
-                    if (await haltGroupedRefusalRework()) return undefined;
+                    if (await haltGroupedRefusalRework(thrownRefusalRoundFault(error))) return undefined;
                     throw error;
                   }
                 })();
                 if (remediationOutcome === undefined ||
-                    (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework())) return;
+                    (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework(remediationOutcome))) return;
 
                 if (remediationOutcome.kind === 'route') {
                   // Merge the two targets: MT's forced 'build' vs. the
@@ -8957,12 +9036,12 @@ export class Conductor {
                       source: 'validation-group', evidence,
                     });
                   } catch (error) {
-                    if (await haltGroupedRefusalRework()) return undefined;
+                    if (await haltGroupedRefusalRework(thrownRefusalRoundFault(error))) return undefined;
                     throw error;
                   }
                 })();
                 if (remediationOutcome === undefined ||
-                    (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework())) return;
+                    (remediationOutcome.kind !== 'route' && await haltGroupedRefusalRework(remediationOutcome))) return;
 
                 if (remediationOutcome.kind === 'route') {
                   await closeSettledMembers(
@@ -11184,12 +11263,17 @@ export class Conductor {
                 // Durable admission is authoritative for refusal rework. A
                 // malformed or spent ledger must preserve the refused block,
                 // not be reclassified by the no-op escalation probe below.
-                const refusalAllowanceAvailable = this.daemon && await refusalReworkAllowanceAvailable();
+                const refusalAllowanceBlocker = this.daemon ? await refusalReworkAllowanceBlocker() : undefined;
+                const refusalAllowanceAvailable = this.daemon && refusalAllowanceBlocker === undefined;
                 if (!refusalAllowanceAvailable) {
-                  const refusedReason = await this.writeRefusalReworkHalt(
-                    refusalRoute.detail,
-                    refusalRoute.refused,
-                  );
+                  const refusedReason = refusalAllowanceBlocker === undefined
+                    ? await this.writeRefusalReworkHalt(refusalRoute.detail, refusalRoute.refused)
+                    : await this.writeRefusalReworkAllowanceHalt(
+                      state.feature_desc,
+                      refusalRoute.detail,
+                      refusalRoute.refused,
+                      refusalAllowanceBlocker,
+                    );
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(refusedReason);
                   await this.emitLoopHalt(refusedReason, prUrl);
@@ -11221,7 +11305,7 @@ export class Conductor {
                     : [];
                   let outcome:
                     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-                    | { kind: 'halt'; detail: string; haltClass?: string; kickbackOutcome?: string }
+                    | { kind: 'halt'; detail: string; haltClass?: string; kickbackOutcome?: string; refusalAdmissionRejected?: true }
                     | { kind: 'none'; reason: string }
                     | undefined;
                   try {
@@ -11286,7 +11370,7 @@ export class Conductor {
                     process.off('SIGTERM', sigterm);
                     return;
                   }
-                  if (outcome?.kind === 'none') plannerFault = outcome.reason;
+                  plannerFault = refusalRoundFault(outcome);
                   // A `halt` or `none` (or an append-side throw) from
                   // planRemediation on a refusal round falls through to the
                   // refused over-scope block below: the operator must see the
