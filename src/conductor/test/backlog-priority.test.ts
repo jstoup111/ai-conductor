@@ -308,7 +308,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
   });
 
   it('treats a thrown GitHub fact read in a Jira-mixed pass as an outage', async () => {
-    const source = {
+    const source: OrderingSource = {
       async readFacts(refs: string[]) {
         if (refs.includes('owner/repo#1')) throw new Error('GitHub unavailable');
         return new Map(refs.map((ref) => [ref, 'unavailable']));

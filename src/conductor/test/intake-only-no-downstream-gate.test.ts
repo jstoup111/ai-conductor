@@ -5,9 +5,10 @@
 // This is a verify-only assertion suite over the state left by Tasks 1-6 —
 // it makes no production code changes. It asserts three independent facts:
 //
-//   1. dependency-claim.ts is untouched and its ClaimOutcome union has
-//      exactly the members { claim, empty, all-blocked } — no
-//      criteria/label-shaped outcome variant exists to gate a claim.
+//   1. dependency-claim.ts keeps a ClaimOutcome union with exactly the
+//      members { claim, empty, all-blocked } — no criteria/label-shaped
+//      outcome variant exists to gate a claim. Its implementation may evolve
+//      for unrelated ordering-source work.
 //   2. github-issues.ts's poll() enqueues an issue that is missing
 //      size:/priority: labels with no blocking flag and no withheld
 //      enqueue — captured exactly like a fully-labelled issue.
@@ -15,7 +16,6 @@
 //      size:/priority:/linking labels as a pass/fail condition.
 
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,40 +28,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // repo root: src/conductor/test/ -> ../../../ (src/conductor -> repo root)
 const REPO_ROOT = join(__dirname, '..', '..', '..');
 
-function git(args: string[]): string {
-  return execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' });
-}
-
-/** Resolve a safe local ref for `main` without fetching. Returns null if none exists. */
-function resolveMainRef(): string | null {
-  const candidates = ['origin/main', 'main'];
-  for (const ref of candidates) {
-    try {
-      git(['rev-parse', '--verify', ref]);
-      return ref;
-    } catch {
-      // try next candidate
-    }
-  }
-  return null;
-}
-
 const DEPENDENCY_CLAIM_PATH = 'src/conductor/src/engine/engineer/intake/dependency-claim.ts';
 const CI_YML_PATH = '.github/workflows/ci.yml';
 
 describe('intake-only enforcement: no downstream criteria gate (Task 7, FR-6)', () => {
-  describe('1. dependency-claim.ts is untouched by criteria gating', () => {
-    it('is byte-identical to main (when a safe main ref is resolvable)', () => {
-      const ref = resolveMainRef();
-      if (ref === null) {
-        // No safe local ref for main without fetching — fall back to the
-        // structural assertion below, which is the load-bearing one anyway.
-        return;
-      }
-      const diff = git(['diff', ref, '--', DEPENDENCY_CLAIM_PATH]);
-      expect(diff).toBe('');
-    });
-
+  describe('1. dependency-claim.ts has no criteria-gating outcome', () => {
     it('exports a ClaimOutcome union with exactly the members claim | empty | all-blocked', () => {
       const src = readFileSync(join(REPO_ROOT, DEPENDENCY_CLAIM_PATH), 'utf8');
 
