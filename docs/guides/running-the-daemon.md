@@ -94,7 +94,7 @@ ai-conductor daemon status
 
 Sweeps the whole project registry and prints one badge line per repo — state, path, pid, since,
 engine version id, pause metadata, last log line and its mtime, and tmux session up/down. It then
-prints `GATED:` and `BLOCKED` sections plus an attribution-agreement line. `BLOCKED` reads the
+prints `GATED:`, `BLOCKED`, and `SHIPPED PRS:` sections plus an attribution-agreement line. `BLOCKED` reads the
 latest discovery snapshot and lists every blocked spec's reason and remedy; it is not yet part of
 the startup dashboard ([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)). The nine
 state badges and what each one means are in [cli reference](../reference/cli.md#daemon-status);
@@ -901,6 +901,28 @@ After publication, watched PRs have a separate recovery loop controlled by
 over CI repair. The harness repository explicitly enables both; see
 [self-host open-PR recovery](self-hosting.md#open-pr-recovery) for its suite command
 and activation requirements. This does not enable automatic merging.
+
+### Shipped-PR readiness
+
+Every sweep tick classifies each open watched PR with one verdict, checked in this order:
+
+| Verdict | Condition | Sweep action |
+|---|---|---|
+| `draft` | The PR is a draft | Adds `needs-remediation` |
+| `indeterminate` | Mergeability is still `UNKNOWN` after one immediate re-read, the re-read failed, or `mergeStateStatus` is undocumented | None — no label changes or repairs; re-checked next tick |
+| `conflicting` | `CONFLICTING` or `DIRTY` | Conflict autoresolve, when enabled |
+| `ci-failing` | A check failed | CI repair, when enabled |
+| `ci-pending` | Checks are running, or no checks exist yet on a non-`main` base or within the grace period | None |
+| `no-checks` | No checks on a `main`-based PR 30 minutes after its current head was first seen | Adds `needs-remediation` |
+| `ready` | Anything else | None |
+
+A new head commit restarts the 30-minute grace period. Each verdict change for a head emits one
+`shipped_pr_readiness` event to `.daemon/events.jsonl`; `ai-conductor daemon status` lists every
+non-`ready` watched PR under [`SHIPPED PRS:`](../reference/cli.md#daemon-status).
+
+The sweep removes `needs-remediation` only when it applied the label itself and the PR later reads
+`ready`, `conflicting`, or `ci-failing` without a halt marker. Labels from a human, a halt, CI-repair
+exhaustion, or conflict resolution stay in place.
 
 An autoresolve attempt whose rebase completes without conflicts still runs the preservation
 checks and configured suite before pushing with a lease. `refreshed` is reported only after that
