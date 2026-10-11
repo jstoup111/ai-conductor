@@ -3958,7 +3958,17 @@ export class DefaultStepRunner implements StepRunner {
           await emitPolicyFailure('runtime', failure.detail, { ...context.candidate, model: actualModel });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         };
-        if (dispatched.kind === 'root-rejection') {
+        // `findings` is optional in the flat native schema because
+        // unsupported-policy does not carry it. It remains required for a
+        // custom-findings result, including when an adapter omits it rather
+        // than returning an explicit empty array.
+        const missingCustomFindings = (() => {
+          const raw = invoked.finalStructuredResult;
+          return raw !== null && typeof raw === 'object' && !Array.isArray(raw) &&
+            (raw as Record<string, unknown>).kind === 'custom-findings' &&
+            !Object.hasOwn(raw, 'findings');
+        })();
+        if (dispatched.kind === 'root-rejection' || missingCustomFindings) {
           return settleCustomStructuredRejection(invoked.finalStructuredResult);
         }
         const parsed = dispatched.kind === 'structured' ? dispatched.parsed : undefined;

@@ -1409,4 +1409,162 @@ describe('build_review structured rubric dispatch', () => {
       await rm(projectDir, { recursive: true, force: true });
     }
   });
+
+  // Covers: task:7
+  it('keeps a rejected custom result when its prompt path is occupied', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-prompt-write-failure-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    const payload = customFindingsWithMismatchedRegion();
+    await mkdir(join(pipelineDir, 'build-review'), { recursive: true });
+    await writeFile(join(pipelineDir, 'build-review', lapId), 'occupied prompt directory', 'utf8');
+    const fixture = customRetentionFixture(projectDir, payload);
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, lapId);
+      const record = JSON.parse(await readFile(join(pipelineDir, 'build-review-rejections', lapId, 'custom-policy.1.json'), 'utf8'));
+
+      expect(fixture.invoke).toHaveBeenCalledOnce();
+      expect(outcome).toMatchObject({
+        success: true,
+        member: { result: { kind: 'infrastructure-failure', reason: 'invalid-structured-result', detail: record.detail } },
+      });
+      expect(record).not.toHaveProperty('promptPath');
+      expect(record).not.toHaveProperty('promptSha256');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still judges an all-matching custom result when its prompt path is occupied', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-prompt-write-judged-'));
+    const baselineProjectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-prompt-write-baseline-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const baselinePipelineDir = join(baselineProjectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    await mkdir(join(pipelineDir, 'build-review'), { recursive: true });
+    await writeFile(join(pipelineDir, 'build-review', lapId), 'occupied prompt directory', 'utf8');
+    const fixture = customRetentionFixture(projectDir, customFindingsWithMatchingRegion());
+    const baseline = customRetentionFixture(baselineProjectDir, customFindingsWithMatchingRegion());
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, lapId);
+      const baselineOutcome = await baseline.dispatch(baselinePipelineDir, lapId);
+      const verdict = (outcome as { member?: { result?: { verdict?: unknown } } }).member?.result?.verdict;
+
+      expect(fixture.invoke).toHaveBeenCalledOnce();
+      expect(outcome).toMatchObject({ success: true, member: { result: { kind: 'judged', verdict } } });
+      expect(baselineOutcome).toMatchObject({ success: true, member: { result: { kind: 'judged' } } });
+      expect(verdict).toBe((baselineOutcome as { member?: { result?: { verdict?: unknown } } }).member?.result?.verdict);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+      await rm(baselineProjectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a rejected custom result and event when its retention directory is occupied', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-retention-write-failure-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    await mkdir(pipelineDir, { recursive: true });
+    await writeFile(join(pipelineDir, 'build-review-rejections'), 'occupied retention directory', 'utf8');
+    const fixture = customRetentionFixture(projectDir, customFindingsWithMismatchedRegion());
+    try {
+      const outcome = await fixture.dispatch(pipelineDir, lapId);
+
+      expect(outcome).toMatchObject({
+        success: true,
+        member: { result: { kind: 'infrastructure-failure', reason: 'invalid-structured-result', detail: fixture.failures[0]?.excerpt } },
+      });
+      expect(fixture.failures).toHaveLength(1);
+      expect(fixture.failures[0]).not.toHaveProperty('retainedResponsePath');
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains the whole root-contract-violating custom payload with no region comparisons', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-root-rejection-retention-'));
+    const pipelineDir = join(projectDir, '.custom-pipeline');
+    const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+    const payload = { kind: 'custom-findings', version: 'v1' };
+    const fixture = customRetentionFixture(projectDir, payload);
+    try {
+      await fixture.dispatch(pipelineDir, lapId);
+      const record = JSON.parse(await readFile(join(pipelineDir, 'build-review-rejections', lapId, 'custom-policy.1.json'), 'utf8'));
+
+      expect(record.structuredResult).toEqual(payload);
+      expect(record.regionComparison).toEqual([]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  function customFindingsWithMismatchedRegion() {
+    return {
+      kind: 'custom-findings', version: 'v1', findings: [{
+        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', evidenceLocations: ['src/a.ts:1'],
+        sourceRegions: [{ path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'0'.repeat(64)}`, display: 'alpha\nbeta' }],
+      }],
+    };
+  }
+
+  function customFindingsWithMatchingRegion() {
+    return {
+      kind: 'custom-findings', version: 'v1', findings: [{
+        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', evidenceLocations: ['src/a.ts:1'],
+        sourceRegions: [{
+          path: 'src/a.ts', startLine: 1, endLine: 2,
+          contentHash: `sha256:${createHash('sha256').update('alpha\nbeta\n').digest('hex')}`, display: 'alpha\nbeta',
+        }],
+      }],
+    };
+  }
+
+  function customRetentionFixture(projectDir: string, payload: unknown) {
+    const invoke = vi.fn(async () => ({ success: true, output: 'rejected custom output', exitCode: 0, finalStructuredResult: payload }));
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke,
+    };
+    const events = new ConductorEventEmitter();
+    const failures: Array<{ readonly excerpt: string; readonly retainedResponsePath?: string }> = [];
+    events.on('build_review_rubric_infrastructure_failure', (event) => failures.push(event));
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: branch.policy, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-retention-write-failure', projectDir, {
+      events,
+      gitRunner: async (args) => args[0] === 'show' && args[1] === 'head:src/a.ts'
+        ? { exitCode: 0, stdout: 'alpha\nbeta\ngamma\n', stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+        nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+        policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const dispatch = async (pipelineDir: string, lapId: string) => (runner as unknown as {
+      dispatchInstalledBuildReviewPolicy: (
+        entry: ResolvedBuildReviewCustomCatalogEntry, inputs: unknown, lapId: string, tier?: unknown, lapGate?: unknown,
+        readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>, pipelineDir?: string,
+      ) => Promise<unknown>;
+    }).dispatchInstalledBuildReviewPolicy(entry, {
+      sourceSnapshot: {
+        contentDigest: `sha256:${'a'.repeat(64)}`, mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot',
+        sourceChanges: [{ kind: 'M' as const, path: 'src/a.ts' }],
+      },
+    }, lapId, undefined, undefined, async (provider) => ({ provider, platform: process.platform, status: 'available' as const }), pipelineDir);
+    return { dispatch, failures, invoke };
+  }
 });
