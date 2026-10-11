@@ -1,8 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { parseChildId } from '../child-context.js';
-import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
+import { childBranchFor, leafBranchFor, parseFeatureRef } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
@@ -23,7 +22,7 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { replayChildRange } from './restack-replay.js';
-import { syncRestackedWorktree } from './restack-sync.js';
+import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
 import { runRestack } from './restack-executor.js';
 import {
@@ -148,6 +147,136 @@ async function refsStillAtOldValues(journal: StoredRestackJournal, git: GitRunne
   return true;
 }
 
+async function refValue(git: GitRunner, name: string): Promise<string> {
+  const result = await runGit(git, ['rev-parse', '-q', '--verify', name]);
+  return result?.exitCode === 0 ? result.stdout.trim() : '<missing>';
+}
+
+async function journaledRefValues(journal: StoredRestackJournal, git: GitRunner): Promise<string> {
+  return Promise.all(journal.journal.refs.map(async ({ ref: name }) => `${name} ${await refValue(git, name)}`))
+    .then((values) => values.join('\n'));
+}
+
+/** Include every durable ref which can identify this feature if its journal is corrupt. */
+async function corruptJournalRefValues(slug: string, git: GitRunner): Promise<string> {
+  const listed = await runGit(git, [
+    'for-each-ref', '--format=%(refname) %(objectname)',
+    'refs/heads/feat/',
+    `refs/conductor/${slug}/closed/`,
+    `refs/conductor/${slug}/restack/staging/`,
+  ]);
+  const values = new Map<string, string>();
+  values.set(journalRefFor(slug), await refValue(git, journalRefFor(slug)));
+  if (listed?.exitCode === 0) {
+    for (const line of listed.stdout.split('\n')) {
+      const [name, value] = line.trim().split(/\s+/, 2);
+      if (!name || !value) continue;
+      const identity = parseFeatureRef(name);
+      const isChild = identity.kind === 'child' && identity.slug === slug;
+      const isClosure = name.startsWith(`refs/conductor/${slug}/closed/`);
+      const isStaging = name.startsWith(`refs/conductor/${slug}/restack/staging/`);
+      if (isChild || isClosure || isStaging) values.set(name, value);
+    }
+  }
+  return [...values].map(([name, value]) => `${name} ${value}`).join('\n');
+}
+
+async function isHaltRecordOnlyDescendant(
+  git: GitRunner,
+  base: CommitSha,
+  tip: CommitSha,
+  slug: string,
+): Promise<boolean> {
+  const commits = await runGit(git, ['rev-list', `${base}..${tip}`]);
+  if (commits?.exitCode !== 0) return false;
+  for (const raw of commits.stdout.split('\n').filter(Boolean)) {
+    const changed = await runGit(git, ['diff-tree', '--no-commit-id', '--name-only', '-r', raw]);
+    const paths = changed?.exitCode === 0 ? changed.stdout.split('\n').filter(Boolean) : undefined;
+    if (!paths || paths.length === 0 || paths.some((path) => path !== `.docs/halted/${slug}.md`)) return false;
+  }
+  return true;
+}
+
+type MovedRefSide = 'old' | 'new' | 'unknown';
+
+async function movedRefSides(
+  journal: StoredRestackJournal,
+  moves: readonly RestackMoveRef[],
+  checkedOut: RefName,
+  git: GitRunner,
+): Promise<Map<RefName, MovedRefSide>> {
+  const sides = new Map<RefName, MovedRefSide>();
+  for (const move of moves) {
+    const live = await resolveSha(git, move.ref);
+    if (live === move.oldSha) {
+      sides.set(move.ref, 'old');
+    } else if (live === move.newSha || (live !== undefined && move.ref === checkedOut
+      && await isHaltRecordOnlyDescendant(git, move.newSha, live, journal.slug))) {
+      sides.set(move.ref, 'new');
+    } else {
+      sides.set(move.ref, 'unknown');
+    }
+  }
+  return sides;
+}
+
+async function haltChangedJournalRefs(
+  worktree: string,
+  journal: StoredRestackJournal,
+  events: ConductorEventEmitter | undefined,
+  git: GitRunner,
+): Promise<void> {
+  await haltRestack(worktree, 'stack-ref-changed', events, { detail: await journaledRefValues(journal, git) });
+}
+
+/**
+ * The normal verifier intentionally requires byte-for-byte staged tips. During
+ * recovery a halt record may be the sole commit after the checked-out moved
+ * tip, so validate the unaffected stack normally and exempt only that durable
+ * record from the tree equality check.
+ */
+async function verifyMovedRecovery(
+  worktree: string,
+  journal: StoredRestackJournal,
+  moves: readonly RestackMoveRef[],
+  checkedOut: RefName,
+  git: GitRunner,
+): Promise<Awaited<ReturnType<typeof verifyRestackMove>>> {
+  // Resolve the small fixed journal set once, before any tree checks.
+  const liveByRef = new Map<RefName, CommitSha>();
+  for (const move of moves) {
+    const live = await resolveSha(git, move.ref);
+    if (!live) return { kind: 'unavailable', detail: `cannot resolve moved ref ${move.ref}` };
+    liveByRef.set(move.ref, live);
+  }
+  const hasHaltRecordExtension = moves.some((move) => move.ref === checkedOut && liveByRef.get(move.ref) !== move.newSha);
+  if (!hasHaltRecordExtension) return verifyRestackMove(worktree, journal, moves, { git });
+
+  let previous: CommitSha | undefined;
+  for (const range of journal.journal.ranges) {
+    const move = moves.find((entry) => entry.child === range.child && entry.ref.startsWith('refs/heads/'));
+    if (!move) return { kind: 'failed', detail: `missing moved ref for child ${range.child}` };
+    const live = liveByRef.get(move.ref)!;
+    const staging = await resolveSha(git, stagingRefFor(journal.slug, range.child));
+    if (!staging) return { kind: 'unavailable', detail: `cannot resolve staging ref for child ${range.child}` };
+    if (!(move.ref === checkedOut && live !== move.newSha)) {
+      const [movedTree, stagedTree] = await Promise.all([
+        resolveSha(git, `${live}^{tree}`),
+        resolveSha(git, `${staging}^{tree}`),
+      ]);
+      if (!movedTree || !stagedTree) return { kind: 'unavailable', detail: `cannot read tree for child ${range.child}` };
+      if (movedTree !== stagedTree) return { kind: 'failed', detail: `tree mismatch for child ${range.child}` };
+    }
+    if (previous !== undefined) {
+      const ancestor = await runGit(git, ['merge-base', '--is-ancestor', previous, live]);
+      if (!ancestor) return { kind: 'unavailable', detail: `cannot inspect ancestry for child ${range.child}` };
+      if (ancestor.exitCode !== 0) return { kind: 'failed', detail: `ancestry mismatch before child ${range.child}` };
+    }
+    previous = live;
+  }
+  return { kind: 'verified' };
+}
+
 /** The committed halt record is the only durable answer after worktree loss. */
 async function hasOutstandingHalt(slug: string, git: GitRunner): Promise<boolean> {
   const record = await runGit(git, ['show', `HEAD:.docs/halted/${slug}.md`]);
@@ -214,11 +343,14 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   const git = options.git ?? makeGitRunner(options.worktree);
   const read = await readRestackJournal(options.worktree, options.slug, { git });
   if (read.kind === 'missing') return { kind: 'none' };
-  if (read.kind === 'unreadable') return { kind: 'unavailable', detail: `cannot read restack journal ${journalRefFor(options.slug)}` };
+  if (read.kind === 'unreadable') {
+    const detail = await corruptJournalRefValues(options.slug, git);
+    await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail });
+    return { kind: 'unavailable', detail: `cannot read restack journal ${journalRefFor(options.slug)}` };
+  }
   if (await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner' };
 
-  const fromState = read.journal.state;
-  let journal = read;
+  let journal: StoredRestackJournal = { slug: read.slug, blob: read.blob, journal: read.journal };
   try {
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
@@ -241,6 +373,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         ? { kind: 'cleaned' }
         : { kind: 'none' };
     }
+    const fromState = journal.journal.state as Exclude<JournalState, 'applied' | 'aborted'>;
     if (journal.journal.state === 'planned') {
       const resumed = await resumePlanned(options.worktree, journal, git);
       if (!resumed) {
@@ -267,6 +400,13 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     if (!checkedOut) return { kind: 'unavailable', detail: 'restack recovery requires a checked-out feature branch' };
 
     if (journal.journal.state === 'ready') {
+      const sides = await movedRefSides(journal, moves, checkedOut, git);
+      if ([...sides.values()].some((side) => side !== 'old')) {
+        const aborted = await transition(options.worktree, journal, 'aborted', git);
+        if (!aborted) return { kind: 'unavailable', detail: 'cannot abort changed recovered restack' };
+        await haltChangedJournalRefs(options.worktree, journal, options.events, git);
+        return { kind: 'recovered', fromState };
+      }
       const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
       if (preMove.kind === 'refused') {
         const aborted = await transition(options.worktree, journal, 'aborted', git);
@@ -282,7 +422,12 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     }
 
     if (journal.journal.state === 'moved') {
-      const verified = await verifyRestackMove(options.worktree, journal, moves, { git });
+      const sides = await movedRefSides(journal, moves, checkedOut, git);
+      if ([...sides.values()].some((side) => side !== 'new')) {
+        await haltChangedJournalRefs(options.worktree, journal, options.events, git);
+        return { kind: 'unavailable', detail: 'journaled refs no longer match the moved side' };
+      }
+      const verified = await verifyMovedRecovery(options.worktree, journal, moves, checkedOut, git);
       if (verified.kind === 'failed') {
         const rolledBack = await rollbackRestackMove(options.worktree, journal, moves, { git });
         if (rolledBack.kind !== 'aborted') return { kind: 'unavailable', detail: rolledBack.detail };
@@ -293,7 +438,16 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       if (verified.kind !== 'verified') return { kind: 'unavailable', detail: verified.detail };
       const checkedOutMove = moves.find((move) => move.ref === checkedOut);
       if (!checkedOutMove) return { kind: 'unavailable', detail: 'checked-out branch is not in recovered restack' };
-      await syncRestackedWorktree(options.worktree, checkedOutMove.oldSha, checkedOutMove.newSha, { git });
+      try {
+        await syncRestackedWorktree(options.worktree, checkedOutMove.oldSha, checkedOutMove.newSha, { git });
+      } catch (error) {
+        if (!(error instanceof RestackSyncOperatorEditError)) throw error;
+        const rolledBack = await rollbackRestackMove(options.worktree, journal, moves, { git });
+        if (rolledBack.kind !== 'aborted') return { kind: 'unavailable', detail: rolledBack.detail };
+        await haltRestack(options.worktree, 'dirty-overlap', options.events, { detail: error.path });
+        await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
+        return { kind: 'recovered', fromState };
+      }
       const synced = await transition(options.worktree, journal, 'synced', git);
       if (!synced) return { kind: 'unavailable', detail: 'cannot record recovered restack sync' };
       journal = synced;

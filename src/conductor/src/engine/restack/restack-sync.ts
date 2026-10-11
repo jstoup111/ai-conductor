@@ -14,6 +14,14 @@ export interface RestackSyncDependencies {
   readonly git: GitRunner;
 }
 
+/** A changed path was edited while the ref move and worktree sync were apart. */
+export class RestackSyncOperatorEditError extends Error {
+  constructor(readonly path: string) {
+    super(`operator edit during restack sync: ${path}`);
+    this.name = 'RestackSyncOperatorEditError';
+  }
+}
+
 function changedProtectedPaths(output: string): string[] {
   return [...new Set(output.split('\n').map((path) => path.trim()).filter(Boolean))]
     .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
@@ -29,6 +37,35 @@ async function hasProtectedArtifactSeal(worktree: string): Promise<boolean> {
   }
 }
 
+function paths(output: string): string[] {
+  return output.split('\n').map((path) => path.trim()).filter(Boolean);
+}
+
+/**
+ * A recovery can find the index and worktree part-way through `read-tree`.
+ * Only the before and after versions of a moved path are safe to complete;
+ * anything else is an operator edit and must remain untouched.
+ */
+async function assertSyncPathsAreRecoverable(
+  oldTip: CommitSha,
+  newTip: CommitSha,
+  git: GitRunner,
+): Promise<void> {
+  const changed = await git(['diff', '--name-only', oldTip, newTip]);
+  if (changed.exitCode !== 0) throw new Error(`cannot inspect restack sync delta: ${changed.stderr}`);
+  for (const path of paths(changed.stdout)) {
+    const [oldContent, newContent] = await Promise.all([
+      git(['diff', '--quiet', oldTip, '--', path]),
+      git(['diff', '--quiet', newTip, '--', path]),
+    ]);
+    if (oldContent.exitCode === 0 || newContent.exitCode === 0) continue;
+    if (oldContent.exitCode !== 1 || newContent.exitCode !== 1) {
+      throw new Error(`cannot inspect restack sync path ${path}`);
+    }
+    throw new RestackSyncOperatorEditError(path);
+  }
+}
+
 /**
  * Synchronize the checked-out worktree after its branch has moved. `read-tree`
  * preserves local edits that do not overlap the old-to-new tree delta; it never
@@ -41,6 +78,7 @@ export async function syncRestackedWorktree(
   newTip: CommitSha,
   { git }: RestackSyncDependencies,
 ): Promise<void> {
+  await assertSyncPathsAreRecoverable(oldTip, newTip, git);
   const synced = await git(['read-tree', '-m', '-u', oldTip, newTip]);
   if (synced.exitCode !== 0) throw new Error(`cannot synchronize restacked worktree: ${synced.stderr}`);
 
