@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-rem-prd-audit-R26
 // Covers: task:31.2
 // Covers: task:rem-prd-audit-rem-prd-audit-R25
 import { execFile as execFileCallback } from 'node:child_process';
@@ -167,6 +168,49 @@ describe('restack kickback budget storage', () => {
       gates: {
         restack: {
           adjustments: [{ beforeConsumed: 3, afterConsumed: 3 }],
+          resumeAuthorization: { consumed: false },
+        },
+      },
+    });
+  });
+
+  it('resets the originating child cascade budget from a real cascade-cap halt', async () => {
+    const subject = await realCascadeCapCliFixture();
+
+    await expect(runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    expect(await dispatchKickbackBudgetCommand(
+      {
+        kind: 'kickback-budget',
+        action: 'reset',
+        feature: 'demo',
+        gate: 'restack',
+        child: '1',
+        rationale: 'reset the stopped cascade',
+        format: 'human',
+      },
+      {
+        cwd: subject.root,
+        resolveMainRoot: async () => subject.root,
+        isInteractive: () => true,
+        resolveOperator: () => 'operator',
+        print: () => {},
+      },
+    )).toBe(0);
+
+    await expect(readCascadeCounts(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'counts',
+      counts: { counts: { 1: 0 } },
+    });
+    await expect(readKickbackLedger(subject.repo, child(2))).resolves.toMatchObject({
+      gates: {
+        restack: {
+          adjustments: [{ beforeConsumed: 3, afterConsumed: 0 }],
           resumeAuthorization: { consumed: false },
         },
       },
