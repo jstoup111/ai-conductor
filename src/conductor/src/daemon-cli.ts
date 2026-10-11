@@ -240,7 +240,7 @@ import {
   resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import { readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { enrollWatch, sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
@@ -254,43 +254,10 @@ import {
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
 import {
   createEpisodeHaltTracker,
-  type EpisodeHaltTracker,
 } from './engine/episode-halt-tracker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCb);
-
-/**
- * Recover only episode-caused HALTs that remain safe for daemon re-kick.
- * Operator parks retain their historical precedence over halt classification.
- */
-export async function sweepEpisodeHalts(
-  episodeHaltTracker: EpisodeHaltTracker,
-  worktreeBase: string,
-  log: (message: string) => void,
-  isParkedDep?: (slug: string) => Promise<boolean>,
-): Promise<void> {
-  const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
-    isHalted(worktreeBase, slug),
-  );
-  for (const slug of stamped) {
-    // Operator intent outranks automatic recovery (same rule as rekickSweep).
-    if (isParkedDep && (await isParkedDep(slug))) {
-      log(`episode-end sweep: ${slug} operator-parked — left for a human`);
-      continue;
-    }
-    const disposition = await readHaltClass(join(worktreeBase, slug));
-    if (isOperatorActionHalt(disposition)) {
-      log(`episode-end sweep: ${slug} ${disposition} — left for a human`);
-      continue;
-    }
-    await clearMarker(join(worktreeBase, slug));
-    log(
-      `episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)` +
-        (disposition === 'legacy' ? ' (halt class: legacy)' : ''),
-    );
-  }
-}
 
 /** One git adapter for WorkOrder build and its executor-side verification. */
 export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunner {
@@ -1323,9 +1290,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   restoreProviderAvailabilityFromDaemonLedger({
     availability: providerAvailability, ledger: daemonSuppressionLedger, now: Date.now(),
   });
-  // Task 20: track which parks were episode-caused so the episode-end sweep
-  // (runDaemon's active→inactive transition hook) can recover exactly those.
-  const episodeHaltTracker = createEpisodeHaltTracker();
+  // Durable across daemon restarts: stamps live beside the halted worktree.
+  const episodeHaltTracker = createEpisodeHaltTracker({ worktreeBase, log });
   const registry = new PluginRegistry();
   const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
   const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
@@ -2329,12 +2295,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // which also fires the watchHaltCleared wake for immediate re-dispatch.
       // NOTE: this binding must stay wired — removing it silently no-ops
       // episode-caused HALT recovery (daemon.ts guards with ?.()).
-      onHaltWritten: async (slug, episodeCaused) =>
-        episodeHaltTracker.onHaltWritten(slug, episodeCaused),
+      onHaltWritten: async (slug, episodeCaused, deadlineMs) => {
+        if (deadlineMs === null || deadlineMs === undefined) return;
+        await episodeHaltTracker.onHaltWritten(slug, episodeCaused, deadlineMs);
+      },
       sweepEpisodeHalts: async (isParkedDep) => {
         await recoverEpisodeHalts({
-          stampedHalts: () =>
-            episodeHaltTracker.getEpisodeHalts((slug) => isHalted(worktreeBase, slug)),
+          stampedHalts: () => episodeHaltTracker.listRecoverable(Date.now()),
           isOperatorParked: isParkedDep,
           // Sealed Story 3: share the base-advance sweep's retention predicate
           // so an episode that coincided with a human halt cannot clear it.

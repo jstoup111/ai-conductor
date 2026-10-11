@@ -588,7 +588,11 @@ export interface DaemonDeps {
    *   outcome was collected (the daemon's best signal for "this HALT is
    *   rate-limit fallout, recover it when the episode ends")
    */
-  onHaltWritten?: (slug: string, episodeCaused: boolean) => Promise<void>;
+  onHaltWritten?: (
+    slug: string,
+    episodeCaused: boolean,
+    deadlineMs: number | null | undefined,
+  ) => Promise<void>;
   /**
    * Sweep for and recover episode-caused HALTs when the rate-limit episode ends.
    * Should iterate over all HALT markers that were written during the episode
@@ -1078,7 +1082,11 @@ export async function runDaemon(
       // tracker is consistent before the next pickEligible consults isHalted.
       if (deps.onHaltWritten) {
         const episodeCaused = deps.rateLimitEpisode?.active?.() ?? false;
-        await deps.onHaltWritten(slug, episodeCaused).catch(() => {
+        await deps.onHaltWritten(
+          slug,
+          episodeCaused,
+          deps.rateLimitEpisode?.deadline?.(),
+        ).catch(() => {
           // Best-effort: tracking failures never disrupt the park/collect flow.
         });
       }
