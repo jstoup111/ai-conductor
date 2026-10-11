@@ -298,8 +298,8 @@ describe('rewind --child derived records, event, and rollback', () => {
     const child2 = pipelinePathFor(root, 'conduct-state.json', parseChildId(2)!);
     const child3 = pipelinePathFor(root, 'conduct-state.json', parseChildId(3)!);
     await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.pipeline', 'gates'), { recursive: true });
     await Promise.all([
-      mkdir(join(root, '.pipeline', 'gates'), { recursive: true }),
       ...[1, 2, 3].map(async (child) => {
         const childRoot = join(root, '.pipeline', 'children', String(child));
         await mkdir(join(childRoot, 'gates'), { recursive: true });

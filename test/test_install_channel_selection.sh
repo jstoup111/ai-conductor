@@ -30,6 +30,12 @@ for tool in rtk npm claude codex uv; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/$tool"
   chmod +x "$STUBS/$tool"
 done
+# Interactive viewer setup must not escape this fixture through a host package
+# manager when a pseudo-TTY selects an unavailable viewer.
+for tool in go brew cargo curl; do
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$STUBS/$tool"
+  chmod +x "$STUBS/$tool"
+done
 printf '#!/usr/bin/env bash\n[ "${1:-}" = "--version" ] && { echo v26.7.0; exit 0; }\nexit 0\n' > "$STUBS/node"
 chmod +x "$STUBS/node"
 PY3="$(python3 -c 'import sys; print(sys.executable)')"

@@ -159,7 +159,7 @@ fi
 
 # ── Bash fallback: same two forms, computed locally ───────────────────────
 commit_msg=$(git log -1 --format=%B "$commit" 2>/dev/null || echo "")
-if echo "$commit_msg" | grep -qE "^Task: ${TASK_ID_PATTERN}\$"; then
+if echo "$commit_msg" | grep -qE "^Task: ${TASK_ID_PATTERN}$"; then
   # Valid Task trailer found (H9 grammar) — commit is evidenced
   exit 0
 fi

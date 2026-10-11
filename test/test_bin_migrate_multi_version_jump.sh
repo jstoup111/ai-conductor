@@ -447,17 +447,22 @@ printf 'already-current\n' >> execution.log
 EOF
 run_migrate "$NO_LEDGER_MAIN_HARNESS" "$NO_LEDGER_MAIN_CONSUMER" "$NO_LEDGER_MAIN_HOME" --yes
 NO_LEDGER_MAIN_LEDGER=$(find_ledger "$NO_LEDGER_MAIN_HOME")
-assert 'a no-ledger main@sha run bootstraps a durable candidate baseline even when its first range is empty' "$(
-  [ "$CODE" -eq 0 ] \
-    && [ -n "$NO_LEDGER_MAIN_LEDGER" ] \
-    && if python3 - "$NO_LEDGER_MAIN_LEDGER" <<'PY'
+NO_LEDGER_MAIN_BASELINE_OK=1
+if python3 - "$NO_LEDGER_MAIN_LEDGER" <<'PY'
 import json
 import sys
 
 ledger = json.load(open(sys.argv[1]))
 raise SystemExit(0 if ledger.get("candidateBaseline") == "v1.2.0" and ledger["appliedBlocks"] == [] else 1)
 PY
-then echo 0; else echo 1; fi
+then
+  NO_LEDGER_MAIN_BASELINE_OK=0
+fi
+assert 'a no-ledger main@sha run bootstraps a durable candidate baseline even when its first range is empty' "$(
+  [ "$CODE" -eq 0 ] \
+    && [ -n "$NO_LEDGER_MAIN_LEDGER" ] \
+    && [ "$NO_LEDGER_MAIN_BASELINE_OK" -eq 0 ] \
+    && echo 0 || echo 1
 )"
 printf '1.3.0\n' > "$NO_LEDGER_MAIN_HARNESS/VERSION"
 cat >> "$NO_LEDGER_MAIN_HARNESS/CHANGELOG.md" <<'EOF'
@@ -476,17 +481,22 @@ printf 'pending-second\n' >> execution.log
 EOF
 set_version "$NO_LEDGER_MAIN_HOME" 'main@def5678'
 run_migrate "$NO_LEDGER_MAIN_HARNESS" "$NO_LEDGER_MAIN_CONSUMER" "$NO_LEDGER_MAIN_HOME" --yes
-assert 'a later main@sha run applies every block after the durable candidate baseline' "$(
-  [ "$CODE" -eq 0 ] \
-    && [ "$(cat "$NO_LEDGER_MAIN_CONSUMER/execution.log" 2>/dev/null || true)" = $'pending-first\npending-second' ] \
-    && if python3 - "$NO_LEDGER_MAIN_LEDGER" <<'PY'
+NO_LEDGER_MAIN_APPLIED_OK=1
+if python3 - "$NO_LEDGER_MAIN_LEDGER" <<'PY'
 import json
 import sys
 
 ledger = json.load(open(sys.argv[1]))
 raise SystemExit(0 if len(ledger["appliedBlocks"]) == 2 else 1)
 PY
-then echo 0; else echo 1; fi
+then
+  NO_LEDGER_MAIN_APPLIED_OK=0
+fi
+assert 'a later main@sha run applies every block after the durable candidate baseline' "$(
+  [ "$CODE" -eq 0 ] \
+    && [ "$(cat "$NO_LEDGER_MAIN_CONSUMER/execution.log" 2>/dev/null || true)" = $'pending-first\npending-second' ] \
+    && [ "$NO_LEDGER_MAIN_APPLIED_OK" -eq 0 ] \
+    && echo 0 || echo 1
 )"
 
 cat >> "$MAIN_HARNESS/CHANGELOG.md" <<'EOF'

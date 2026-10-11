@@ -26,6 +26,8 @@ case "$*" in
     ;;
   'run build')
     printf '%s\n' "$*" >> "$NPM_CALLS"
+    mkdir -p dist
+    : > dist/index.js
     ;;
   list*)
     ;;
