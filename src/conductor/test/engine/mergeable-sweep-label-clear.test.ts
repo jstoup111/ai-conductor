@@ -1,5 +1,3 @@
-// Covers: task:13, task:rem-prd-audit-refusal-7c10a767-f289-4d69-a726-5c1817437dc6
-
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -50,9 +48,13 @@ function fakeGh(
   removed: string[],
   added: string[] = [],
   refuseLabelRemoval = false,
+  reads: string[][] = [],
 ): GhRunner & GithubOperationRunner {
   const read: GhRunner = async (args) => {
-    if (args[0] === 'pr' && args[1] === 'view') return { stdout: state };
+    if (args[0] === 'pr' && args[1] === 'view') {
+      reads.push(args);
+      return { stdout: state };
+    }
     return { stdout: '' };
   };
   return Object.assign(read, {
@@ -71,6 +73,7 @@ function fakeGh(
   });
 }
 
+// Covers: task:13
 describe('sweepMergeableLabels — escalation cause registry', () => {
   it('persists conflict-resolution after an escalated autoresolve dispatch', async () => {
     const project = await tempProject();
@@ -94,6 +97,7 @@ describe('sweepMergeableLabels — escalation cause registry', () => {
     ]);
   });
 
+  // Covers: task:3
   it('round-trips a legacy labeled entry without a cause and leaves its label alone', async () => {
     const project = await tempProject();
     const daemonDir = join(project, '.daemon');
@@ -101,19 +105,41 @@ describe('sweepMergeableLabels — escalation cause registry', () => {
       .catch(async () => {
         await (await import('node:fs/promises')).mkdir(daemonDir, { recursive: true });
         await writeFile(join(daemonDir, 'mergeable-watch.jsonl'), `${JSON.stringify(legacyEntry)}\n`);
-      });
+    });
     const removed: string[] = [];
+    const reads: string[][] = [];
+    const mergeState = stateJson('MERGEABLE', ['needs-remediation']);
 
     const loaded = await readWatch(project);
     expect(loaded[0].escalationCause).toBeUndefined();
     await sweepMergeableLabels({
       projectRoot: project,
+      runGh: fakeGh(mergeState, removed, [], false, reads),
+    });
+
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toContain(PR_URL);
+    expect(JSON.parse(mergeState).labels).toEqual([{ name: 'needs-remediation' }]);
+    expect(removed).toEqual([]);
+    const saved = JSON.parse(await readFile(join(daemonDir, 'mergeable-watch.jsonl'), 'utf8')) as WatchEntry;
+    expect(saved).toMatchObject(legacyEntry);
+    expect(saved).not.toHaveProperty('escalationCause');
+  });
+
+  // Covers: task:rem-prd-audit-refusal-7c10a767-f289-4d69-a726-5c1817437dc6
+  it('clears an attributed conflict-remediation label in the same mergeable sweep tick', async () => {
+    const project = await tempProject();
+    const removed: string[] = [];
+    await rewriteWatch(project, [{ ...legacyEntry, escalationCause: 'conflict-resolution' }]);
+
+    await sweepMergeableLabels({
+      projectRoot: project,
       runGh: fakeGh(stateJson('MERGEABLE', ['needs-remediation']), removed),
     });
 
-    expect(removed).toEqual([]);
-    const saved = JSON.parse(await readFile(join(daemonDir, 'mergeable-watch.jsonl'), 'utf8')) as WatchEntry;
-    expect(saved).not.toHaveProperty('escalationCause');
+    expect(removed).toEqual(['repos/acme/widgets/issues/7/labels/needs-remediation']);
+    const [persisted] = await readWatch(project);
+    expect(persisted).not.toHaveProperty('escalationCause');
   });
 });
 
@@ -124,11 +150,13 @@ describe('maybeClearConflictLabel', () => {
     labels: ['needs-remediation'], checksOutcome: 'none',
   };
 
-  it('removes exactly once and records a retry for an eligible clear', async () => {
+  it('removes exactly once and clears its cause for an eligible clear', async () => {
     const removed: string[] = [];
     const result = await maybeClearConflictLabel(caused, mergeable, fakeGh('', removed));
     expect(removed).toHaveLength(1);
-    expect(result).toMatchObject({ escalationCause: 'conflict-resolution', labelClearAttempts: 1 });
+    expect(result).toMatchObject(legacyEntry);
+    expect(result).not.toHaveProperty('escalationCause');
+    expect(result).not.toHaveProperty('labelClearAttempts');
   });
 
   it('keeps the label state for conflicts, unreadable state, halt markers, and unattributed entries', async () => {

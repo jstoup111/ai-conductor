@@ -115,7 +115,8 @@ export async function maybeClearConflictLabel(
     log?.(`[mergeable-sweep] label clear retry cap reached for ${entry.prUrl}`);
     return clear();
   }
-  await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+  const result = await removeLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+  if (result.kind === 'executed') return clear();
   return { ...entry, labelClearAttempts: (entry.labelClearAttempts ?? 0) + 1 };
 }
 
