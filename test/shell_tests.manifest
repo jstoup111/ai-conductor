@@ -92,3 +92,11 @@ test_install_worktree_guard.sh shell-runner verifies installer worktree-root gua
 test_bin_update.sh shell-runner verifies standalone update flow behavior
 # triage: test_bin_setup_failure_propagation.sh kept — isolated runner PASS
 test_bin_setup_failure_propagation.sh shell-runner verifies setup failure propagation and worktree isolation
+
+# Triage: Codex and documentation acceptance runners and their children.
+# triage: run_first_class_codex_harness_parity_904_acceptance.sh deleted — obsolete: duplicate runner; child shell scripts are classified below and its Vitest acceptance file is in the default suite
+# triage: test_codex_guidance_contract.sh kept — isolated runner PASS
+test_codex_guidance_contract.sh shell-runner verifies Codex-facing bootstrap guidance contracts
+# triage: test_codex_skill_installation.sh fixed — isolated runner PASS after removing retired Unreleased changelog-migration assertions
+test_codex_skill_installation.sh shell-runner verifies isolated Codex catalog installation, update, check, and uninstall behavior
+# triage: run_browsable_documentation_site_acceptance.sh deleted — obsolete: duplicate runner; test_docs_navigation.sh and test_docs_pages_smoke.sh retain integrity ownership

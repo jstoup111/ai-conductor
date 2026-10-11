@@ -496,14 +496,12 @@ reporting green. `bin/install --check` warns when `rg` is missing; nothing the h
 runtime needs it.
 
 `test/docs_pages.smoke.test.sh` is a real, opt-in Pages probe — run it by hand after a default-branch
-deployment; it is never invoked from integrity or CI. `test/run_browsable_documentation_site_acceptance.sh`
-runs `test_docs_navigation.sh` and `test_docs_pages_smoke.sh` together as the deterministic acceptance
-suite for the hosted documentation site story; nothing invokes it automatically.
+deployment; it is never invoked from integrity or CI. The deterministic hosted-documentation contracts
+run independently through `test_docs_navigation.sh` and `test_docs_pages_smoke.sh` in integrity.
 
 > **Known limitation.** The rest — `test_bin_update.sh`, `test_conduct_worktree.sh`, the five
 > `test_install_*.sh`, the ten `test_examples_*.sh`, `test_skill_pipeline_contract.sh`,
-> `test_release_unreleased_state.sh`, `docs_pages.smoke.test.sh`, and
-> `run_browsable_documentation_site_acceptance.sh` — are statically checked only: `bash -n` by integrity
+> `test_release_unreleased_state.sh` and `docs_pages.smoke.test.sh` — are statically checked only: `bash -n` by integrity
 > check 1 and ShellCheck by check 1b. Nothing *executes* them, in CI or locally, and no documented
 > command runs them as a suite. Static analysis raises the floor but does not make them tests: a
 > behavioral regression in `bin/install`, `bin/update`, or `bin/setup` is still caught by no automated
