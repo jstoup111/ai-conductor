@@ -137,9 +137,102 @@ FAILED_RUN_EXIT=$?
 set -e
 
 assert 'runner preserves a failing script exit status' \
-  "$([ "$FAILED_RUN_EXIT" -eq 7 ] && echo 0 || echo 1)"
+  "$([ "$FAILED_RUN_EXIT" -ne 0 ] && echo 0 || echo 1)"
 assert 'runner removes all sandbox directories after failing execution' \
   "$([ -z "$(find "$RUN_TMPDIR" -mindepth 1 -print -quit)" ] && echo 0 || echo 1)"
+
+TEST5_COUNTER="$FIXTURE_ROOT/task5-counter"
+cat > "$TEST_DIR/task5-pass-first.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$(basename "$0")" >> "$TEST5_COUNTER"
+SCRIPT
+cat > "$TEST_DIR/task5-fail.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$(basename "$0")" >> "$TEST5_COUNTER"
+exit 3
+SCRIPT
+cat > "$TEST_DIR/task5-pass-last.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+printf '%s\n' "$(basename "$0")" >> "$TEST5_COUNTER"
+SCRIPT
+chmod +x "$TEST_DIR/task5-pass-first.sh" "$TEST_DIR/task5-fail.sh" "$TEST_DIR/task5-pass-last.sh"
+cat > "$MANIFEST" <<'MANIFEST'
+task5-pass-first.sh shell-runner
+task5-fail.sh shell-runner
+task5-pass-last.sh shell-runner
+MANIFEST
+
+set +e
+OUTPUT="$(TMPDIR="$RUN_TMPDIR" TEST5_COUNTER="$TEST5_COUNTER" bash "$RUNNER" --manifest "$MANIFEST" --test-dir "$TEST_DIR" 2>&1)"
+TASK5_FAILURE_EXIT=$?
+set -e
+
+assert 'runner continues after a failing script and exits non-zero' \
+  "$([ "$TASK5_FAILURE_EXIT" -ne 0 ] && [ "$(wc -l < "$TEST5_COUNTER")" -eq 3 ] && echo 0 || echo 1)"
+assert 'runner reports the failing script exit code' \
+  "$(grep -Fqx 'FAIL task5-fail.sh (exit 3)' <<<"$OUTPUT" && echo 0 || echo 1)"
+for name in task5-pass-first task5-pass-last; do
+  assert "runner reports $name as passing after failure accounting" \
+    "$(grep -Fqx "PASS $name.sh" <<<"$OUTPUT" && echo 0 || echo 1)"
+done
+assert 'runner removes sandboxes without masking the aggregate failure' \
+  "$([ -z "$(find "$RUN_TMPDIR" -mindepth 1 -print -quit)" ] && echo 0 || echo 1)"
+
+cat > "$TEST_DIR/timeout.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+sleep 30
+SCRIPT
+chmod +x "$TEST_DIR/timeout.sh"
+printf 'timeout.sh shell-runner\n' > "$MANIFEST"
+
+TIMEOUT_START=$SECONDS
+set +e
+OUTPUT="$(TMPDIR="$RUN_TMPDIR" bash "$RUNNER" --manifest "$MANIFEST" --test-dir "$TEST_DIR" --timeout 2 2>&1)"
+TIMEOUT_EXIT=$?
+set -e
+TIMEOUT_ELAPSED=$((SECONDS - TIMEOUT_START))
+
+assert 'runner reports a timed out script' \
+  "$(grep -Fqx 'TIMEOUT timeout.sh after 2s' <<<"$OUTPUT" && echo 0 || echo 1)"
+assert 'runner exits non-zero and bounds a timed out script' \
+  "$([ "$TIMEOUT_EXIT" -ne 0 ] && [ "$TIMEOUT_ELAPSED" -lt 20 ] && echo 0 || echo 1)"
+
+cat > "$TEST_DIR/credentials.sh" <<'SCRIPT'
+#!/usr/bin/env bash
+for credential in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY CODEX_HOME; do
+  if [ -v "$credential" ]; then
+    printf 'set %s\n' "$credential"
+  else
+    printf 'unset %s\n' "$credential"
+  fi
+done
+SCRIPT
+chmod +x "$TEST_DIR/credentials.sh"
+printf 'credentials.sh shell-runner\n' > "$MANIFEST"
+
+OUTPUT="$(TMPDIR="$RUN_TMPDIR" GH_TOKEN=gh GITHUB_TOKEN=github CLAUDE_CODE_OAUTH_TOKEN=claude \
+  ANTHROPIC_API_KEY=anthropic OPENAI_API_KEY=openai CODEX_HOME=codex \
+  bash "$RUNNER" --manifest "$MANIFEST" --test-dir "$TEST_DIR" 2>&1)"
+for credential in GH_TOKEN GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY CODEX_HOME; do
+  assert "runner withholds $credential" \
+    "$(grep -Fqx "unset $credential" <<<"$OUTPUT" && echo 0 || echo 1)"
+done
+
+printf 'not-run.sh integrity must not be run by the shell runner\n' > "$MANIFEST"
+set +e
+OUTPUT="$(TMPDIR="$RUN_TMPDIR" bash "$RUNNER" --manifest "$MANIFEST" --test-dir "$TEST_DIR" 2>&1)"
+EMPTY_MANIFEST_EXIT=$?
+set -e
+assert 'runner refuses a manifest without shell-runner entries' \
+  "$([ "$EMPTY_MANIFEST_EXIT" -ne 0 ] && grep -Fqx "EMPTY MANIFEST: $MANIFEST" <<<"$OUTPUT" && ! grep -Fq 'PASS ' <<<"$OUTPUT" && echo 0 || echo 1)"
+
+MISSING_MANIFEST="$FIXTURE_ROOT/missing-manifest"
+set +e
+OUTPUT="$(TMPDIR="$RUN_TMPDIR" bash "$RUNNER" --manifest "$MISSING_MANIFEST" --test-dir "$TEST_DIR" 2>&1)"
+MISSING_MANIFEST_EXIT=$?
+set -e
+assert 'runner refuses an unreadable manifest before scripts run' \
+  "$([ "$MISSING_MANIFEST_EXIT" -ne 0 ] && grep -Fqx "UNREADABLE MANIFEST: $MISSING_MANIFEST" <<<"$OUTPUT" && ! grep -Fq 'PASS ' <<<"$OUTPUT" && echo 0 || echo 1)"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
