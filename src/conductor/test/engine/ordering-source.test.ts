@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, it } from 'vitest';
 
 import { createOrderingSource } from '../../src/engine/ordering-source.js';
@@ -83,5 +83,82 @@ describe('Task 1 — GitHub ordering facts', () => {
     const read = createOrderingSource({ run }).readFacts(['acme/app#16']);
 
     await expect(read).rejects.toBe(outage);
+  });
+});
+
+describe('Task 2 — GitHub ordering blockers', () => {
+  it('reads open blockers through the canonical GitHub runner', async () => {
+    const argv: string[][] = [];
+    const run: GhRunner = async (args) => {
+      argv.push(args);
+      return {
+        stdout: JSON.stringify([
+          {
+            number: 7,
+            repository_url: 'https://api.github.com/repos/acme/app',
+            state: 'open',
+          },
+        ]),
+      };
+    };
+
+    const blockers = await createOrderingSource({ run }).readBlockers('acme/app#12');
+
+    expect({ blockers, argv }).toEqual({
+      blockers: ['acme/app#7'],
+      argv: [['api', 'repos/acme/app/issues/12/dependencies/blocked_by']],
+    });
+  });
+
+  it('returns no blockers for empty or entirely closed responses', async () => {
+    const run: GhRunner = async (args) => ({
+      stdout: args[1]?.includes('/issues/12/')
+        ? '[]'
+        : JSON.stringify([
+          { number: 7, repository_url: 'https://api.github.com/repos/acme/app', state: 'closed', state_reason: 'completed' },
+          { number: 8, repository_url: 'https://api.github.com/repos/acme/app', state: 'closed', state_reason: 'not_planned' },
+        ]),
+    });
+    const source = createOrderingSource({ run });
+
+    const outcomes = await Promise.all([
+      source.readBlockers('acme/app#12'),
+      source.readBlockers('acme/app#13'),
+    ]);
+
+    expect(outcomes).toEqual([[], []]);
+  });
+
+  it('returns runner failures as indeterminate details', async () => {
+    const run: GhRunner = async () => Promise.reject(new Error('boom'));
+
+    const blockers = await createOrderingSource({ run }).readBlockers('acme/app#12');
+
+    expect(blockers).toEqual({ indeterminate: 'boom' });
+  });
+
+  it('returns malformed blocker bodies as indeterminate details', async () => {
+    const run: GhRunner = async () => ({ stdout: 'not-json' });
+
+    const blockers = await createOrderingSource({ run }).readBlockers('acme/app#12');
+
+    expect(blockers).toEqual({
+      indeterminate: expect.stringMatching(/^unparseable blocked_by response:/),
+    });
+  });
+
+  it('does not invoke the runner for an unparseable blocker ref', async () => {
+    let calls = 0;
+    const run: GhRunner = async () => {
+      calls += 1;
+      return { stdout: '[]' };
+    };
+
+    const blockers = await createOrderingSource({ run }).readBlockers('not-a-ref');
+
+    expect({ blockers, calls }).toEqual({
+      blockers: { indeterminate: 'unparseable sourceRef: not-a-ref' },
+      calls: 0,
+    });
   });
 });

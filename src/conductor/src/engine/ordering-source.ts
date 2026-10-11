@@ -85,8 +85,48 @@ export function createOrderingSource(deps: OrderingSourceDeps): OrderingSource {
       return result;
     },
 
-    async readBlockers(): Promise<BlockersOutcome> {
-      return 'not-found';
+    async readBlockers(sourceRef: string): Promise<BlockersOutcome> {
+      const parsed = parseSourceRef(sourceRef);
+      if (!parsed) {
+        return { indeterminate: `unparseable sourceRef: ${sourceRef}` };
+      }
+
+      const { repo, number } = parsed;
+
+      let stdout: string;
+      try {
+        stdout = await runTrackerRepositoryRead(deps.run, cwd, 'issue.read', `${repo}`, { kind: 'issue', number: Number(number) }, ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`]);
+      } catch (err: unknown) {
+        const detail = err instanceof Error ? err.message : String(err);
+        return { indeterminate: detail };
+      }
+
+      let blockedBy: unknown;
+      try {
+        blockedBy = JSON.parse(stdout);
+      } catch (err: unknown) {
+        const detail = err instanceof Error ? err.message : String(err);
+        return { indeterminate: `unparseable blocked_by response: ${detail}` };
+      }
+
+      if (!Array.isArray(blockedBy) || blockedBy.length === 0) {
+        return [];
+      }
+
+      const openBlockers: string[] = [];
+      for (const item of blockedBy) {
+        const entry = item as { number?: unknown; repository_url?: unknown; state?: unknown };
+        if (entry.state === 'closed') continue;
+
+        const repositoryUrl = typeof entry.repository_url === 'string' ? entry.repository_url : '';
+        const match = repositoryUrl.match(/repos\/([^/]+\/[^/]+)$/);
+        const repo = match ? match[1] : repositoryUrl;
+        const number = String(entry.number ?? '');
+
+        openBlockers.push(`${repo}#${number}`);
+      }
+
+      return openBlockers;
     },
   };
 }
