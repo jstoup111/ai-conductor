@@ -4,6 +4,13 @@ spec_hash: 28d9e791c771f9833c1472823fe061828b5c3a1c0819e857e6d614c40b984149
 pr: https://github.com/jstoup111/ai-conductor/pull/3136
 shipped: 2026-10-11
 engine_version: 20261011T003623Z-5f233d35b433
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is unplanned maintenance unrelated to the ADR assumption ledger, so it falls outside feature intent. It is comment-only and changes no runtime or user-visible behavior."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
