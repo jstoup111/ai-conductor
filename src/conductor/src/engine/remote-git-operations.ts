@@ -126,6 +126,10 @@ function messageFor(error: unknown): string {
 
 type PushRecording = { readonly prepared: PreparedPushedTip };
 
+type PushRecordingPreparation =
+  | { readonly kind: 'prepared'; readonly recordings: readonly PushRecording[] }
+  | { readonly kind: 'refused'; readonly recordings: readonly PushRecording[]; readonly error: string };
+
 function featurePushSources(args: readonly string[], destinations: readonly RemoteGitDestination[]): Array<{ slug: string; branch: string; source: string }> {
   const refspecs = args.filter((arg) => !arg.startsWith('-')).slice(2);
   return destinations.flatMap((destination, index) => {
@@ -143,17 +147,30 @@ async function preparePushRecordings(
   args: readonly string[],
   destinations: readonly RemoteGitDestination[],
   dependencies: RemoteGitOperationDependencies,
-): Promise<PushRecording[]> {
+): Promise<PushRecordingPreparation> {
   const recordings: PushRecording[] = [];
   for (const candidate of featurePushSources(args, destinations)) {
     const source = await resolvePushedTipSource({ cwd: dependencies.cwd, source: candidate.source, git: dependencies.pushLeaseGit });
-    if (!source) continue;
+    if (!source) {
+      return {
+        kind: 'refused',
+        recordings,
+        error: `could not resolve feature push source ${candidate.source}`,
+      };
+    }
     const prepared = await preparePushedTip({
       cwd: dependencies.cwd, slug: candidate.slug, branch: candidate.branch, new: source, git: dependencies.pushLeaseGit,
     });
-    if (prepared) recordings.push({ prepared });
+    if (!prepared) {
+      return {
+        kind: 'refused',
+        recordings,
+        error: `could not prepare durable pushed-tip intent for ${candidate.branch}`,
+      };
+    }
+    recordings.push({ prepared });
   }
-  return recordings;
+  return { kind: 'prepared', recordings };
 }
 
 async function completePushRecordings(
@@ -254,7 +271,12 @@ export async function executeRemoteGit(
     }
   }
 
-  const recordings = await preparePushRecordings(args, resolution.targets, dependencies);
+  const preparation = await preparePushRecordings(args, resolution.targets, dependencies);
+  if (preparation.kind === 'refused') {
+    await discardPushRecordings(preparation.recordings, dependencies);
+    return { kind: 'failed', error: preparation.error, targets: resolution.targets };
+  }
+  const recordings = preparation.recordings;
   try {
     await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'write', endpoint: resolution.targets[0].endpoint });
     await completePushRecordings(recordings, dependencies);

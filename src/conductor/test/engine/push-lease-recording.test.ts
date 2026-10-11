@@ -1,4 +1,4 @@
-// Covers: task:35
+// Covers: task:35, rem-as-built-R10
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -59,11 +59,15 @@ function mutation(): GithubMutationExecutionContext {
   };
 }
 
-function dependencies(repository: string, runner?: PushLeaseGitRunner) {
+function dependencies(
+  repository: string,
+  runner?: PushLeaseGitRunner,
+  runRemoteGit = (args: string[]) => git(repository, args),
+) {
   return {
     cwd: repository,
     config: async () => ({ stdout: 'git@github.com:acme/rocket.git\n' }),
-    runRemoteGit: (args: string[]) => git(repository, args),
+    runRemoteGit,
     mutation: mutation(),
     pushLeaseGit: runner,
   };
@@ -123,5 +127,95 @@ describe('feature-branch push lease recording', () => {
 
     expect(await ref(repository, pushedTipRef('demo', 'feat/daemon-demo'))).toBeUndefined();
     expect(await ref(repository, pushedTipIntentRef('demo', 'feat/daemon-demo'))).toBeDefined();
+  });
+
+  it('does not perform a remote feature push when its source cannot resolve', async () => {
+    const { repository } = await fixture();
+    const missingSource = 'refs/heads/intentionally-missing';
+    let sourceResolutionAttempts = 0;
+    const resolveMissingSource: PushLeaseGitRunner = async (args, input) => {
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        sourceResolutionAttempts += 1;
+        expect(args).toEqual(['rev-parse', '--verify', '--quiet', `${missingSource}^{commit}`]);
+        return { stdout: '', exitCode: 1 };
+      }
+      const result = await execa('git', [...args], { cwd: repository, input, reject: false });
+      return { stdout: result.stdout, exitCode: result.exitCode ?? 1 };
+    };
+    let remoteWrites = 0;
+    const runRemoteGit = async () => {
+      remoteWrites += 1;
+      return { stdout: '', exitCode: 0 };
+    };
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', `${missingSource}:refs/heads/feat/daemon-demo`],
+      dependencies(repository, resolveMissingSource, runRemoteGit),
+    )).resolves.toMatchObject({ kind: 'failed', error: `could not resolve feature push source ${missingSource}` });
+
+    expect(sourceResolutionAttempts).toBe(1);
+    expect(remoteWrites).toBe(0);
+  });
+
+  it('does not perform a remote feature push when recording its intent CAS fails', async () => {
+    const { repository } = await fixture();
+    await git(repository, ['checkout', '-b', 'feat/daemon-demo']);
+    const real: PushLeaseGitRunner = async (args, input) => {
+      const result = await execa('git', [...args], { cwd: repository, input, reject: false });
+      return { stdout: result.stdout, exitCode: result.exitCode ?? 1 };
+    };
+    let intentCasAttempts = 0;
+    const failIntentCas: PushLeaseGitRunner = async (args, input) => {
+      if (args[0] === 'update-ref') {
+        expect(args[1]).toBe(pushedTipIntentRef('demo', 'feat/daemon-demo'));
+        expect(args[3]).toBe('');
+        intentCasAttempts += 1;
+        return { stdout: '', exitCode: 1 };
+      }
+      return real(args, input);
+    };
+    let remoteWrites = 0;
+    const runRemoteGit = async () => {
+      remoteWrites += 1;
+      return { stdout: '', exitCode: 0 };
+    };
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo'],
+      dependencies(repository, failIntentCas, runRemoteGit),
+    )).resolves.toMatchObject({ kind: 'failed', error: 'could not prepare durable pushed-tip intent for feat/daemon-demo' });
+
+    expect(intentCasAttempts).toBe(1);
+    expect(remoteWrites).toBe(0);
+  });
+
+  it('does not perform a remote feature push when storing its intent fails', async () => {
+    const { repository } = await fixture();
+    await git(repository, ['checkout', '-b', 'feat/daemon-demo']);
+    const real: PushLeaseGitRunner = async (args, input) => {
+      const result = await execa('git', [...args], { cwd: repository, input, reject: false });
+      return { stdout: result.stdout, exitCode: result.exitCode ?? 1 };
+    };
+    let intentStorageAttempts = 0;
+    const failIntentStorage: PushLeaseGitRunner = async (args, input) => {
+      if (args[0] === 'hash-object') {
+        intentStorageAttempts += 1;
+        return { stdout: '', exitCode: 1 };
+      }
+      return real(args, input);
+    };
+    let remoteWrites = 0;
+    const runRemoteGit = async () => {
+      remoteWrites += 1;
+      return { stdout: '', exitCode: 0 };
+    };
+
+    await expect(executeRemoteGit(
+      ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo'],
+      dependencies(repository, failIntentStorage, runRemoteGit),
+    )).resolves.toMatchObject({ kind: 'failed', error: 'could not prepare durable pushed-tip intent for feat/daemon-demo' });
+
+    expect(intentStorageAttempts).toBe(1);
+    expect(remoteWrites).toBe(0);
   });
 });
