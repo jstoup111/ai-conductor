@@ -31,6 +31,12 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
     }, true)).toEqual(['·   build_review [lap-12345678] testQuality started']);
   });
 
+  it('suppresses a started rubric branch at default verbosity', () => {
+    expect(lines({
+      type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'lap-12345678',
+    })).toEqual([]);
+  });
+
   it('labels a cached rubric branch distinctly from a fresh start', () => {
     expect(lines({
       type: 'build_review_cache_hit', rubric: 'testQuality', lapId: 'lap-12345678',

@@ -3167,6 +3167,9 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 function renderDaemonEventWithPresentation(event: ConductorEvent, output: Parameters<NonNullable<Parameters<typeof createDaemonEventPresenter>[0]['render']>>[1], legacyLog?: (msg: string) => void): void {
   const gateReruns = { kind: 'none' as const, why: 'the gate re-runs build_review' };
   switch (event.type) {
+    case 'build_review_rubric_started':
+      output.info(`build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} started`);
+      return;
     case 'build_review_cache_discarded':
       output.warning(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`, gateReruns);
       return;
