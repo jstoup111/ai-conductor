@@ -1,4 +1,4 @@
-// Covers: task:24, task:rem-prd-audit-R15
+// Covers: task:24, task:rem-prd-audit-R15, task:rem-as-built-rem-as-built-R27
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -289,6 +289,66 @@ describe('recoverRestackJournal (real local Git)', () => {
     expect(calls).toBe(1);
     await expect(subject.git(['show', 'feat/c1/demo:base.txt'])).resolves.toMatchObject({ stdout: 'resolved\n' });
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
+  it('refuses a merge-bearing planned-recovery conflict before resolver dispatch or ref moves', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1);
+    if (!child) throw new Error('child id should parse');
+
+    await subject.git(['checkout', '-qb', 'merge-side', subject.oldTip]);
+    await writeFile(join(subject.repo, 'side.txt'), 'side\n');
+    await subject.git(['add', 'side.txt']);
+    await subject.git(['commit', '-qm', 'merge side']);
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await writeFile(join(subject.repo, 'base.txt'), 'child\n');
+    await subject.git(['add', 'base.txt']);
+    await subject.git(['commit', '-qm', 'child conflicts with advance']);
+    await subject.git(['merge', '--no-ff', '-m', 'merge side history', 'merge-side']);
+    const merge = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const journal: RestackJournal = {
+      opId: 'crashed-planned-merge-conflict' as RestackOpId,
+      cause: 'base-refresh',
+      newDefault: subject.advanced,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [{ ref: 'refs/heads/feat/c1/demo' as never, oldSha: merge }],
+      ranges: [{ child, oldParent: subject.base, oldTip: merge, kind: 'active' }],
+      children: [{ child, status: 'pending' }],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+    const refsBefore = (await subject.git([
+      'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
+    ])).stdout;
+    const events = new ConductorEventEmitter();
+    const refusals: unknown[] = [];
+    events.on('restack_refused', (event) => { refusals.push(event); });
+    let resolverCalls = 0;
+
+    const result = await recoverRestackJournal({
+      worktree: subject.repo,
+      slug: 'demo',
+      events,
+      git: makeGitRunner(subject.repo),
+      resolver: async () => {
+        resolverCalls += 1;
+        return { resolved: false, reason: 'must not be called' };
+      },
+    });
+
+    expect(result).toEqual({ kind: 'halted' });
+    expect(resolverCalls).toBe(0);
+    expect((await subject.git([
+      'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
+    ])).stdout).toBe(refsBefore);
+    expect(refusals).toContainEqual(expect.objectContaining({
+      reason: 'flatten_refused', child: 1, detail: expect.stringContaining(merge),
+    }));
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/resolve.*feat\/c1\/demo.*resume/is);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toMatch(/git\s+rebase/i);
   });
 
   // Covers: task:rem-as-built-R22

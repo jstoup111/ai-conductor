@@ -29,7 +29,7 @@ import { replayChildRange } from './restack-replay.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
-import { runRestack, transitionAppliedWithCascade } from './restack-executor.js';
+import { mergeInRange, runRestack, transitionAppliedWithCascade } from './restack-executor.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import {
@@ -370,6 +370,12 @@ export async function cleanClearedAbortedRestackJournal(
 type ResumePlannedResult =
   | { readonly kind: 'resumed'; readonly journal: StoredRestackJournal }
   | {
+    readonly kind: 'flatten-refused';
+    readonly journal: StoredRestackJournal;
+    readonly range: ChildRange;
+    readonly merge: CommitSha;
+  }
+  | {
     readonly kind: 'ownership-refused';
     readonly journal: StoredRestackJournal;
     readonly child: ChildRange['child'];
@@ -454,6 +460,8 @@ async function resumePlanned(
     } catch (error) {
       const conflict = await replayConflict(git, error);
       if (!conflict) throw error;
+      const merge = await mergeInRange(git, range);
+      if (merge) return { kind: 'flatten-refused', journal: current, range, merge };
       const resolution = await resolveRestackConflict({
         worktree,
         range,
@@ -606,6 +614,19 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         return { kind: 'recovered', fromState };
       }
       const resumed = await resumePlanned(options.worktree, journal, git, options);
+      if (resumed.kind === 'flatten-refused') {
+        journal = resumed.journal;
+        if (!await pinStagingRef(options.worktree, options.slug, resumed.range.child, resumed.range.oldTip, { git })) {
+          return { kind: 'unavailable', detail: `cannot pin original tip for merge-bearing child ${resumed.range.child}` };
+        }
+        const aborted = await transition(options.worktree, journal, 'aborted', git);
+        if (!aborted) return { kind: 'unavailable', detail: 'cannot abort merge-bearing recovered restack conflict' };
+        await haltRestack(options.worktree, 'flatten_refused', options.events, {
+          child: resumed.range.child,
+          detail: `merge ${resumed.merge}; resolve the conflict on child branch ${branchRefForRange(options.slug, resumed.range).slice('refs/heads/'.length)} and resume`,
+        });
+        return { kind: 'halted' };
+      }
       if (resumed.kind === 'conflict-unresolved') {
         journal = resumed.journal;
         if (!await pinStagingRef(options.worktree, options.slug, resumed.child, journal.journal.ranges.find((range) => range.child === resumed.child)!.oldTip, { git })) {
