@@ -1,0 +1,32 @@
+# Scripts executed directly by the repository integrity check.
+check_as_built_markdown_authority.sh integrity integrity validates its contract directly
+check_build_review_rubric_skill_vocabularies.sh integrity integrity validates its contract directly
+check_github_invocation_boundary.sh integrity integrity validates its contract directly
+check_halt_writers.sh integrity integrity validates its contract directly
+check_interpreter_source.sh integrity integrity validates its contract directly
+check_migration_block_authoring.sh integrity integrity validates its contract directly
+check_skill_invocation_policy.sh integrity integrity validates its contract directly
+check_update_flow_config_ownership.sh integrity integrity validates its contract directly
+lint_shell.sh integrity integrity runs shell syntax and static checks
+test_as_built_markdown_authority.sh integrity integrity runs its fixture suite
+test_bootstrap_installer.sh integrity integrity runs its fixture suite
+test_ci_detect_docs_only.sh integrity integrity runs its fixture suite
+test_docs_navigation.sh integrity integrity runs its fixture suite
+test_docs_pages_smoke.sh integrity integrity runs its fixture suite
+test_harness_integrity.sh integrity integrity is the integrity entry point
+test_harness_integrity_failure_reporting.sh integrity integrity runs its fixture suite
+test_harness_integrity_update_flow.sh integrity integrity runs its fixture suite
+test_legacy_cli_guard_backends.sh integrity integrity runs its fixture suite
+test_lint_shell_enumeration.sh integrity integrity runs its fixture suite
+test_migration_block_authoring.sh integrity integrity runs its fixture suite
+test_no_legacy_cli_references.sh integrity integrity runs its fixture suite
+test_provider_skill_contracts.sh integrity integrity runs its fixture suite
+test_release_pr_workflow.sh integrity integrity runs its fixture suite
+test_skill_invocation_policy.sh integrity integrity runs its fixture suite
+
+# Scripts called by an integrity-run fixture suite.
+check_docs_navigation.sh invoked-by:test_docs_navigation.sh documentation fixture invokes it
+docs_pages.smoke.test.sh invoked-by:test_docs_pages_smoke.sh Pages fixture invokes it
+
+# Shared shell library; sourced by fixture scripts rather than executed.
+test_helpers.sh sourced-helper shared fixture helpers are sourced
