@@ -280,6 +280,56 @@ describe('recoverRestackJournal (real local Git)', () => {
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 
+  // Covers: task:rem-as-built-rem-as-built-R25
+  it('adopts pending lower and originating feature-repair children before their staging refs exist', async () => {
+    const subject = await fixture();
+    const first = parseChildId(1);
+    const second = parseChildId(2);
+    if (!first || !second) throw new Error('child ids should parse');
+
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', subject.oldTip]);
+    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+    const secondTip = await (async () => {
+      await writeFile(join(subject.repo, 'second.txt'), 'second\n');
+      await subject.git(['add', 'second.txt']);
+      await subject.git(['commit', '-qm', 'second child']);
+      return sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    })();
+
+    const journal: RestackJournal = {
+      opId: 'crashed-planned-feature-repair' as RestackOpId,
+      cause: 'feature-repair',
+      newDefault: subject.advanced,
+      committer: { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      dirtyPaths: [],
+      refs: [
+        { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.oldTip },
+        { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.oldTip },
+        { ref: 'refs/heads/feat/c2/demo' as never, oldSha: secondTip },
+      ],
+      ranges: [
+        { child: first, oldParent: subject.base, oldTip: subject.oldTip, kind: 'closed' },
+        { child: second, oldParent: subject.oldTip, oldTip: secondTip, kind: 'active' },
+      ],
+      originatingChildren: [second],
+      children: [{ child: first, status: 'pending' }, { child: second, status: 'pending' }],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
+    await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
+
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
+      .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    await expect(subject.git(['rev-parse', 'refs/heads/feat/c1/demo']))
+      .resolves.toMatchObject({ stdout: `${subject.oldTip}\n` });
+    await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c1']))
+      .resolves.toMatchObject({ stdout: `${subject.oldTip}\n` });
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
   // Covers: task:rem-as-built-R23
   it('aborts an ownership-refused planned recovery and surfaces its replay-mismatch halt', async () => {
     const subject = await fixture();

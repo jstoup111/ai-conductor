@@ -391,7 +391,10 @@ async function resumePlanned(
   let current = journal;
   let parent = current.journal.newDefault ?? current.journal.ranges[0]?.oldParent;
   if (!parent) return { kind: 'unavailable' };
-  for (const range of current.journal.ranges) {
+  const lastOriginIndex = current.journal.cause === 'feature-repair'
+    ? Math.max(-1, ...current.journal.ranges.map((range, index) => current.journal.originatingChildren?.includes(range.child) ? index : -1))
+    : -1;
+  for (const [rangeIndex, range] of current.journal.ranges.entries()) {
     const child = current.journal.children.find((entry) => entry.child === range.child);
     if (!child) return { kind: 'unavailable' };
     if (child.status !== 'pending') {
@@ -408,6 +411,17 @@ async function resumePlanned(
       if (updated.kind !== 'updated') return { kind: 'unavailable' };
       current = updated.journal;
       parent = owner.rewritten;
+      continue;
+    }
+    // Feature repair retains every existing tip through the highest
+    // originating child. Only descendants beyond that point are rebuilt.
+    if (current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex) {
+      const adopted = await resolveSha(git, branchRefForRange(current.slug, range));
+      if (!adopted) return { kind: 'unavailable' };
+      const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', adopted, new Map(), { git });
+      if (updated.kind !== 'updated') return { kind: 'unavailable' };
+      current = updated.journal;
+      parent = adopted;
       continue;
     }
     let replay;
