@@ -2251,19 +2251,22 @@ export class Conductor {
     consumeGrant = false,
   ): Promise<ReturnType<typeof decideEntryDisposition>> {
     const targetStep = input.steps.find((step) => step.name === input.target);
+    const artifactPresent =
+      (await findArtifactFilesForStep(this.projectRoot, input.target)).length > 0;
+    const dispositionInput = { ...input, artifactPresent };
     if (!input.daemon || targetStep?.phase !== 'DECIDE') {
-      return decideEntryDisposition(input);
+      return decideEntryDisposition(dispositionInput);
     }
 
     const grant = await readOperatorGrant(this.projectRoot);
-    const disposition = decideEntryDisposition({ ...input, grant });
+    const disposition = decideEntryDisposition({ ...dispositionInput, grant });
     if (!consumeGrant || disposition.kind !== 'enter' || grant?.step !== input.target) {
       return disposition;
     }
 
     return (await consumeOperatorGrant(this.projectRoot, input.target))
       ? disposition
-      : decideEntryDisposition({ ...input, grant: null });
+      : decideEntryDisposition({ ...dispositionInput, grant: null });
   }
 
   /** Read expectations immediately before constructing a guarded mutation. */

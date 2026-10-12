@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:7
 import { expect, it } from 'vitest';
 import {
   consumeOperatorGrant,
@@ -35,6 +35,7 @@ function input(target: StepName, steps: StepDefinition[]): Input {
     daemon: true,
     tier: 'L',
     hasContract: true,
+    artifactPresent: true,
     satisfied: false,
     grant: null,
     sourceGate: 'forward-walk',
@@ -43,7 +44,9 @@ function input(target: StepName, steps: StepDefinition[]): Input {
 
 function summary(disposition: ReturnType<typeof decideEntryDisposition>): string {
   return disposition.kind === 'fast-forward'
-    ? `${disposition.kind}:${disposition.as}`
+    ? disposition.reason === undefined
+      ? `${disposition.kind}:${disposition.as}`
+      : `${disposition.kind}:${disposition.as}:${disposition.reason}`
     : disposition.kind;
 }
 
@@ -184,6 +187,48 @@ it('applies every ordered autonomous DECIDE-entry disposition rule', () => {
     {
       name: 'an unsatisfied configured DECIDE target halts',
       input: input(customTarget, [customDecideStep]),
+      expected: 'halt',
+    },
+  ];
+
+  expect(cases.map(({ name, input: value }) => ({
+    name,
+    disposition: summary(decideEntryDisposition(value)),
+  }))).toEqual(cases.map(({ name, expected }) => ({ name, disposition: expected })));
+});
+
+it('fast-forwards only an absent artifact for a DECIDE step that declares the structural disposition', () => {
+  const review = decideStep({
+    name: 'stories',
+    label: 'Plan Review',
+    absentArtifactDisposition: 'skipped',
+    absentArtifactReason: 'landed-before-plan-review',
+  } as Partial<StepDefinition>);
+  const grant = { step: 'stories' as StepName, grantedBy: 'operator' };
+  const cases: Array<{ name: string; input: Input; expected: string }> = [
+    {
+      name: 'daemon step with a wholly absent artifact',
+      input: { ...input('stories', [review]), artifactPresent: false } as Input,
+      expected: 'fast-forward:skipped:landed-before-plan-review',
+    },
+    {
+      name: 'a valid grant for the step still wins',
+      input: { ...input('stories', [review]), artifactPresent: false, grant } as Input,
+      expected: 'enter',
+    },
+    {
+      name: 'a present but unsatisfied artifact remains refused',
+      input: { ...input('stories', [review]), artifactPresent: true } as Input,
+      expected: 'halt',
+    },
+    {
+      name: 'an interactive run enters normally',
+      input: { ...input('stories', [review]), daemon: false, artifactPresent: false } as Input,
+      expected: 'enter',
+    },
+    {
+      name: 'an absent artifact without the declared disposition remains refused',
+      input: { ...input('stories', [decideStep({ name: 'stories', label: 'Stories' })]), artifactPresent: false } as Input,
       expected: 'halt',
     },
   ];

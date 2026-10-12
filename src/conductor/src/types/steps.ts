@@ -54,6 +54,14 @@ export interface StepDefinition {
   prerequisites: StepName[];
   skippableForTiers: ComplexityTier[];
   /**
+   * A legacy feature may predate this DECIDE step's artifact contract. When
+   * every artifact matching the contract is absent, record this disposition
+   * instead of autonomously entering the authoring step.
+   */
+  absentArtifactDisposition?: 'skipped';
+  /** Human-readable provenance recorded with an absent-artifact skip. */
+  absentArtifactReason?: string;
+  /**
    * Tracks (product/technical) for which this step is skipped. `prd` is skipped
    * on the `technical` track (no product requirements to spec). Empty/absent →
    * runs on every track. The conductor resolves the track from state and treats
