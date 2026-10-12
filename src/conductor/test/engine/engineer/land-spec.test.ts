@@ -2052,11 +2052,11 @@ describe('landSpec plan task-count validation', () => {
 
   it('refuses a hard-stop plan with no scope exception', async () => {
     const dir = await seedValidWorktree();
-    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), planWithAddressableTaskCount(41));
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), planWithAddressableTaskCount(30));
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
-    ).rejects.toThrow(/41 addressable tasks.*hard-stop boundary 41.*no scope exception/i);
+    ).rejects.toThrow(/30 addressable tasks.*hard-stop boundary 30.*no scope exception/i);
   });
 
   it('lands an authorized hard-stop plan and preserves its rationale verbatim', async () => {
@@ -2064,7 +2064,7 @@ describe('landSpec plan task-count validation', () => {
     const rationale = 'The coordinated migration needs all changes reviewed together.';
     await writeFile(
       join(dir, '.docs', 'plans', 'dep-bump.md'),
-      planWithAddressableTaskCount(41, `**Scope-exception:** ${rationale}`),
+      planWithAddressableTaskCount(30, `**Scope-exception:** ${rationale}`),
     );
 
     const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
@@ -2080,18 +2080,18 @@ describe('landSpec plan task-count validation', () => {
     const dir = await seedValidWorktree();
     await writeFile(
       join(dir, '.docs', 'plans', 'dep-bump.md'),
-      planWithAddressableTaskCount(41, declaration),
+      planWithAddressableTaskCount(30, declaration),
     );
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
-    ).rejects.toThrow(/41 addressable tasks.*hard-stop boundary 41.*scope exception declaration is malformed/i);
+    ).rejects.toThrow(/30 addressable tasks.*hard-stop boundary 30.*scope exception declaration is malformed/i);
   });
 
   it.each([
-    ['one task below the hard-stop boundary', planWithAddressableTaskCount(40)],
-    ['fenced extra task headings', planWithAddressableTaskCount(40, `\`\`\`markdown\n${planWithAddressableTaskCount(41)}\n\`\`\``)],
-    ['an inert declaration', planWithAddressableTaskCount(40, '**Scope-exception:** Not needed below the boundary.')],
+    ['one task below the hard-stop boundary', planWithAddressableTaskCount(29)],
+    ['fenced extra task headings', planWithAddressableTaskCount(29, `\`\`\`markdown\n${planWithAddressableTaskCount(30)}\n\`\`\``)],
+    ['an inert declaration', planWithAddressableTaskCount(29, '**Scope-exception:** Not needed below the boundary.')],
   ])('lands a below-boundary plan with %s', async (_caseName, plan) => {
     const dir = await seedValidWorktree();
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), plan);

@@ -191,7 +191,7 @@ from specs that would waste a build.
 | diagram presence | a non-Small architecture artifact with no fenced Mermaid block |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
 | plan completion checks | a task with no `Done when:` block, a blank check (including a bare `[test]`), fewer than two checks, more than five checks, or a malformed test tag — a leading bracketed token starting with `test` that is not exactly `[test]`; fenced-code examples are ignored |
-| plan task count | a plan with 41 or more parsed tasks unless it has exactly one `**Scope-exception:**` declaration with a non-empty rationale; 21–40 tasks are a plan-authoring warning, not a land refusal |
+| plan task count | a plan with 30 or more parsed tasks unless it has exactly one `**Scope-exception:**` declaration with a non-empty rationale; 21–29 tasks are a plan-authoring warning, not a land refusal |
 | architecture obligation coverage | a decision in a changed land-accepted ADR (`APPROVED` or `SUPERSEDED`) with no unique disposition, an invented decision, an invalid disposition, a nonexistent task, or task evidence absent from the cited task's `Done when:` block |
 
 Before land, plan authoring runs `ai-conductor plan-protected-targets <plan-path>`. It is a blocking,
