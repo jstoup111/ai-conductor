@@ -103,6 +103,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators receive clear recovery guidance when build review rejects a case transition while valid history remains preserved. ([implementation PR #3171](https://github.com/jstoup111/ai-conductor/pull/3171)).
 - The destructive-git PreToolUse hook parses under macOS's system bash 3.2 again, so Bash tool calls work on a Mac. ([implementation PR #3035](https://github.com/jstoup111/ai-conductor/pull/3035)).
 - Spec authors receive a clear land-gate error when draft artifacts retain dated amendment notes. ([implementation PR #3137](https://github.com/jstoup111/ai-conductor/pull/3137)).
+- Validation groups reliably retry members that report stale verdicts. ([implementation PR #3179](https://github.com/jstoup111/ai-conductor/pull/3179)).
 
 ## Migration
 
