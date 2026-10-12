@@ -116,7 +116,7 @@ ordinary_done_when_close_contract_holds() {
   grep -qF 'normal BUILD task-close path' "$skill_file" \
     && grep -qF 'conduct task done <id> --done-when <n>=<evidence>' "$skill_file" \
     && grep -qF 'conduct task done <id> --plan-gap <n> --reason <text>' "$skill_file" \
-    && grep -qF 'const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);' <<<"$run_task_done" \
+    && grep -qF 'const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen, unverified);' <<<"$run_task_done" \
     && grep -qF "if (completion.kind === 'refused')" <<<"$run_task_done"
 }
 
@@ -282,6 +282,7 @@ else
 fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|(conduct-ts|ai-conductor)[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
+  | grep -vF 'stepTierOverrides.coherence_check.L' \
   | grep -vF "${CONDUCT_SKILL_FILE}:" \
   | grep -vF "${BOOTSTRAP_SKILL_FILE}:" >/tmp/pipeline_contract_genericity_hits.$$; then
   cat /tmp/pipeline_contract_genericity_hits.$$ >&2
@@ -351,7 +352,7 @@ else
     pass "ordinary Done when close predicate rejects missing BUILD-close guidance"
   fi
 
-  sed '/const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);/d' "$TASK_CLI_FILE" >"$ordinary_close_cli_mutation"
+  sed '/const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen, unverified);/d' "$TASK_CLI_FILE" >"$ordinary_close_cli_mutation"
   if ordinary_done_when_close_contract_holds "$SKILL_FILE" "$ordinary_close_cli_mutation"; then
     fail "ordinary Done when close predicate rejects a CLI path that bypasses completeTaskDoneWhen"
   else

@@ -1571,6 +1571,63 @@ else
   assert "test/check_halt_writers.sh exists" 1
 fi
 
+# ── 16b. Shell-test classification ─────────────────────────────────────────
+# The classification checker audits the delivered tree; its fixture suites pin
+# the checker and isolated runner contracts that make the audit meaningful.
+echo ""
+echo -e "${BOLD}16b. Shell-test classification${NC}"
+
+shell_test_classification_check="${HARNESS_DIR}/test/check_shell_test_classification.sh"
+if [ -f "$shell_test_classification_check" ]; then
+  set +e
+  shell_test_classification_output=$(bash "$shell_test_classification_check" 2>&1)
+  shell_test_classification_exit=$?
+  set -e
+
+  if [ "$shell_test_classification_exit" -eq 0 ]; then
+    assert "test/check_shell_test_classification.sh — delivered tree is fully classified" 0
+  else
+    echo "$shell_test_classification_output" | sed 's/^/    /'
+    assert "test/check_shell_test_classification.sh — delivered tree is fully classified" 1
+  fi
+else
+  assert "test/check_shell_test_classification.sh exists" 1
+fi
+
+shell_test_classification_fixture="${HARNESS_DIR}/test/test_shell_test_classification.sh"
+if [ -f "$shell_test_classification_fixture" ]; then
+  set +e
+  shell_test_classification_fixture_output=$(bash "$shell_test_classification_fixture" 2>&1)
+  shell_test_classification_fixture_exit=$?
+  set -e
+
+  if [ "$shell_test_classification_fixture_exit" -eq 0 ]; then
+    assert "test/test_shell_test_classification.sh — classification fixtures pass" 0
+  else
+    echo "$shell_test_classification_fixture_output" | sed 's/^/    /'
+    assert "test/test_shell_test_classification.sh — classification fixtures pass" 1
+  fi
+else
+  assert "test/test_shell_test_classification.sh exists" 1
+fi
+
+shell_test_runner_fixture="${HARNESS_DIR}/test/test_run_shell_tests.sh"
+if [ -f "$shell_test_runner_fixture" ]; then
+  set +e
+  shell_test_runner_fixture_output=$(bash "$shell_test_runner_fixture" 2>&1)
+  shell_test_runner_fixture_exit=$?
+  set -e
+
+  if [ "$shell_test_runner_fixture_exit" -eq 0 ]; then
+    assert "test/test_run_shell_tests.sh — shell-test runner fixtures pass" 0
+  else
+    echo "$shell_test_runner_fixture_output" | sed 's/^/    /'
+    assert "test/test_run_shell_tests.sh — shell-test runner fixtures pass" 1
+  fi
+else
+  assert "test/test_run_shell_tests.sh exists" 1
+fi
+
 # ── 17. Hosted documentation contracts ─────────────────────────────────────
 # The navigation suite first exercises complete and invalid fixture trees, then
 # checks the real repository tree. Its site-contract mode intentionally stops

@@ -76,6 +76,44 @@ jobs:
         working-directory: src/conductor
       - run: bash test/test_harness_integrity.sh
 
+  shell-tests:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install shell-test tooling
+        run: |
+          install_apt_packages() {
+            # ShellCheck and ripgrep come from Ubuntu. Restrict the update to
+            # that source so an unrelated preinstalled repository cannot block
+            # these checks.
+            timeout --foreground --kill-after=10s 60s sudo apt-get \
+              -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" \
+              -o Dir::Etc::sourceparts="-" \
+              -o Acquire::Retries=0 \
+              -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 \
+              "$@"
+          }
+          for attempt in 1 2 3; do
+            if install_apt_packages update \
+              && install_apt_packages install --yes shellcheck ripgrep; then
+              exit 0
+            fi
+            echo "apt attempt $attempt/3 failed; retrying" >&2
+            sleep 5
+          done
+          exit 1
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: bash test/run_shell_tests.sh
+
   shellcheck:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -248,13 +286,14 @@ jobs:
           fail: true
 
   ci-gate:
-    needs: [changes, integrity, shellcheck, lint, typecheck, conductor, conductor-e2e, links]
+    needs: [changes, integrity, shell-tests, shellcheck, lint, typecheck, conductor, conductor-e2e, links]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - env:
           CHANGES: ${{ needs.changes.result }}
           INTEGRITY: ${{ needs.integrity.result }}
+          SHELL_TESTS: ${{ needs.shell-tests.result }}
           SHELLCHECK: ${{ needs.shellcheck.result }}
           LINT: ${{ needs.lint.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
@@ -262,8 +301,8 @@ jobs:
           CONDUCTOR_E2E: ${{ needs.conductor-e2e.result }}
           LINKS: ${{ needs.links.result }}
         run: |
-          summary="changes=$CHANGES integrity=$INTEGRITY shellcheck=$SHELLCHECK lint=$LINT typecheck=$TYPECHECK conductor=$CONDUCTOR conductor_e2e=$CONDUCTOR_E2E links=$LINKS"
-          for r in "$CHANGES" "$INTEGRITY" "$SHELLCHECK" "$LINT" "$TYPECHECK" "$CONDUCTOR" "$CONDUCTOR_E2E" "$LINKS"; do
+          summary="changes=$CHANGES integrity=$INTEGRITY shell_tests=$SHELL_TESTS shellcheck=$SHELLCHECK lint=$LINT typecheck=$TYPECHECK conductor=$CONDUCTOR conductor_e2e=$CONDUCTOR_E2E links=$LINKS"
+          for r in "$CHANGES" "$INTEGRITY" "$SHELL_TESTS" "$SHELLCHECK" "$LINT" "$TYPECHECK" "$CONDUCTOR" "$CONDUCTOR_E2E" "$LINKS"; do
             case "$r" in
               failure|cancelled)
                 echo "CI gate failed: $summary" >&2

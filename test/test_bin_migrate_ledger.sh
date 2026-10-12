@@ -24,6 +24,11 @@ assert() {
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
+TEST_BIN="$TMP_ROOT/bin"
+mkdir -p "$TEST_BIN"
+ln -s "$(command -p -v python3)" "$TEST_BIN/python3"
+PATH="$TEST_BIN:$PATH"
+
 TEST_HOME="$TMP_ROOT/home"
 CONSUMER="$TMP_ROOT/consumer"
 OTHER_CONSUMER="$TMP_ROOT/other-consumer"

@@ -60,6 +60,18 @@ function parseSmokeCapabilityDeclaration(
   return match[1] as SmokeCapability;
 }
 
+/** Parses and validates the declarations for a discovered smoke-file set. */
+export function parseSmokeCapabilityDeclarations(
+  discovered: readonly DiscoveredSmokeFile[],
+): readonly { file: string; capability: SmokeCapability }[] {
+  const files = discovered.map(({ file, source }) => ({
+    file,
+    capability: parseSmokeCapabilityDeclaration(file, source),
+  }));
+  assertSmokeDiscovery(files);
+  return files;
+}
+
 /** Runs each discovered smoke file according to its declared capability. */
 async function runSmoke({
   discover,
@@ -70,11 +82,7 @@ async function runSmoke({
   emit = console.info,
   selectedFile,
 }: SmokeRunDependencies): Promise<void> {
-  const files = (await discover()).map(({ file, source }) => ({
-    file,
-    capability: parseSmokeCapabilityDeclaration(file, source),
-  }));
-  assertSmokeDiscovery(files);
+  const files = parseSmokeCapabilityDeclarations(await discover());
   const selectedFiles = selectedFile === undefined
     ? files
     : files.filter(({ file }) => file === selectedFile);

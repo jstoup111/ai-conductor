@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { createVitest } from 'vitest/node';
+import { SMOKE_CAPABILITIES } from '../../src/engine/smoke-capability.js';
+import { discoverSmokeFiles, parseSmokeCapabilityDeclarations } from '../../src/engine/smoke-runner.js';
 
 const testRoot = dirname(fileURLToPath(import.meta.url)).replace(/\/structural$/, '');
 const conductorRoot = dirname(testRoot);
@@ -79,6 +81,13 @@ describe('structural: test execution policy', () => {
     } finally {
       await vitest.close();
     }
+  });
+
+  it('requires every smoke test discovered by the smoke configuration to declare a known capability', async () => {
+    const declarations = parseSmokeCapabilityDeclarations(await discoverSmokeFiles('vitest.smoke.config.ts'));
+
+    expect(declarations).not.toEqual([]);
+    expect(declarations.every(({ capability }) => SMOKE_CAPABILITIES.includes(capability))).toBe(true);
   });
 
   it('keeps real provider, network, and full-setup execution smoke-only', async () => {

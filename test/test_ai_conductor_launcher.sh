@@ -188,6 +188,16 @@ assert_no_stdout_warning "conduct alias never writes a warning to stdout" "$COND
 echo ""
 echo "=== ai-conductor launcher: installation ==="
 
+INSTALL_HARNESS="$TMPDIR_ROOT/install-harness"
+mkdir -p "$INSTALL_HARNESS/src/conductor/dist"
+cp -r "$HARNESS_DIR/bin" "$INSTALL_HARNESS/bin"
+cp -r "$HARNESS_DIR/skills" "$INSTALL_HARNESS/skills"
+cp -r "$HARNESS_DIR/hooks" "$INSTALL_HARNESS/hooks"
+cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/VERSION" "$INSTALL_HARNESS/"
+printf '{"name":"fixture-conductor"}\n' > "$INSTALL_HARNESS/src/conductor/package.json"
+: > "$INSTALL_HARNESS/src/conductor/dist/index.js"
+INSTALL_CANONICAL_LAUNCHER="$INSTALL_HARNESS/bin/ai-conductor"
+
 INSTALL_HOME="$TMPDIR_ROOT/install-home"
 INSTALL_PATH="$NODE_STUBS:$INSTALL_HOME/.local/bin:/usr/bin:/bin"
 
@@ -196,7 +206,7 @@ run_install() {
   local error_file="$TMPDIR_ROOT/install-error"
 
   set +e
-  HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" \
+  HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$INSTALL_HARNESS/bin/install" \
     --update --providers codex --allow-worktree-root > "$output_file" 2> "$error_file"
   INSTALL_STATUS=$?
   set -e
@@ -210,9 +220,9 @@ INSTALLED_CONDUCT="$INSTALL_HOME/.local/bin/conduct"
 assert "completed install creates the ai-conductor symlink" \
   "$([ "$INSTALL_STATUS" -eq 0 ] && [ -L "$INSTALLED_CANONICAL" ] && echo 0 || echo 1)"
 assert "installed ai-conductor resolves to the canonical launcher" \
-  "$([ "$(readlink -f "$INSTALLED_CANONICAL")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+  "$([ "$(readlink -f "$INSTALLED_CANONICAL")" = "$INSTALL_CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
 assert "installed conduct resolves to the canonical launcher" \
-  "$([ "$(readlink -f "$INSTALLED_CONDUCT")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+  "$([ "$(readlink -f "$INSTALLED_CONDUCT")" = "$INSTALL_CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
 
 CONDUCT_INODE=$(stat -c '%i' "$INSTALLED_CONDUCT")
 run_install
@@ -229,7 +239,7 @@ rm -f "$INSTALLED_CANONICAL"
 ln -s "$TMPDIR_ROOT/stale-ai-conductor" "$INSTALLED_CANONICAL"
 run_install
 assert "stale ai-conductor target updates in place" \
-  "$([ -L "$INSTALLED_CANONICAL" ] && [ "$(readlink -f "$INSTALLED_CANONICAL")" = "$CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
+  "$([ -L "$INSTALLED_CANONICAL" ] && [ "$(readlink -f "$INSTALLED_CANONICAL")" = "$INSTALL_CANONICAL_LAUNCHER" ] && echo 0 || echo 1)"
 if printf '%s\n' "$INSTALL_STDOUT" | grep -Fq 'Updated ai-conductor script symlink'; then
   assert "ai-conductor stale-target output matches conduct-ts update behavior" 0
 else
@@ -248,7 +258,7 @@ fi
 
 CHECK_OUTPUT="$TMPDIR_ROOT/check-output"
 set +e
-HOME="$INSTALL_HOME" PATH="$CHECK_STUBS:$INSTALL_PATH" "$HARNESS_DIR/bin/install" \
+HOME="$INSTALL_HOME" PATH="$CHECK_STUBS:$INSTALL_PATH" "$INSTALL_HARNESS/bin/install" \
   --check --providers codex > "$CHECK_OUTPUT" 2>&1
 CHECK_STATUS=$?
 set -e
@@ -280,7 +290,7 @@ assert "installed conduct-ts retains its one replacement warning" \
 rm "$INSTALLED_CANONICAL"
 MISSING_AI_CHECK_OUTPUT="$TMPDIR_ROOT/missing-ai-check-output"
 set +e
-HOME="$INSTALL_HOME" PATH="$CHECK_STUBS:$INSTALL_PATH" "$HARNESS_DIR/bin/install" \
+HOME="$INSTALL_HOME" PATH="$CHECK_STUBS:$INSTALL_PATH" "$INSTALL_HARNESS/bin/install" \
   --check --providers codex > "$MISSING_AI_CHECK_OUTPUT" 2>&1
 MISSING_AI_CHECK_STATUS=$?
 set -e
@@ -331,7 +341,7 @@ INSTALL_HOME="$TMPDIR_ROOT/uninstall-home"
 INSTALL_PATH="$NODE_STUBS:$INSTALL_HOME/.local/bin:/usr/bin:/bin"
 run_install
 set +e
-HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/uninstall-output" 2>&1
+HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$INSTALL_HARNESS/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/uninstall-output" 2>&1
 UNINSTALL_STATUS=$?
 set -e
 assert "uninstall removes all installer-owned entrypoint links" \
@@ -341,7 +351,7 @@ run_install
 rm "$INSTALL_HOME/.local/bin/conduct"
 printf 'foreign conduct\n' > "$INSTALL_HOME/.local/bin/conduct"
 set +e
-HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$HARNESS_DIR/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/foreign-uninstall-output" 2>&1
+HOME="$INSTALL_HOME" PATH="$INSTALL_PATH" "$INSTALL_HARNESS/bin/install" --uninstall --providers codex > "$TMPDIR_ROOT/foreign-uninstall-output" 2>&1
 UNINSTALL_STATUS=$?
 set -e
 assert "uninstall preserves a foreign conduct entry with a warning" \

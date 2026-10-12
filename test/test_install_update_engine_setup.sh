@@ -26,6 +26,8 @@ case "$*" in
     ;;
   'run build')
     printf '%s\n' "$*" >> "$NPM_CALLS"
+    mkdir -p dist
+    : > dist/index.js
     ;;
   list*)
     ;;
@@ -221,7 +223,7 @@ CONFIG_STUB_HOME="$TMP_ROOT/config-stub-home"
 CONFIG_WRITE_CALLS="$TMP_ROOT/config-write-calls"
 CONFIG_FRAGMENT="$CHECKOUT/bin/install-config-test"
 mkdir -p "$CONFIG_STUB_HOME"
-cat > "$STUBS_DIR/conduct-ts" <<'EOF'
+cat > "$CHECKOUT/bin/ai-conductor" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -231,7 +233,7 @@ mkdir -p "$HOME/.ai-conductor"
 printf '%s:\n  preset: %s\n  command: %s\n  args: [%s]\n  mode: %s\n' \
   "$section" "$4" "$5" "$6" "$7" >> "$HOME/.ai-conductor/config.yml"
 EOF
-chmod +x "$STUBS_DIR/conduct-ts"
+chmod +x "$CHECKOUT/bin/ai-conductor"
 
 awk '/# ─── Main ─────────────────────────────────────────────────────────────────────/{exit} {print}' \
   "$CHECKOUT/bin/install" > "$CONFIG_FRAGMENT"
