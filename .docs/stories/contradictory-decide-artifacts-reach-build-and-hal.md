@@ -159,9 +159,9 @@ so that the adjudication is recorded rather than merely requested.
   `adr-<filename-stem>`, with the implementing story or task ids as counterparts.
 - Given an ADR that a story implements faithfully, when the row is written, then its verdict is
   `covered`.
-- Given an ADR whose implementing story contradicts it, when the row is written, then its verdict
-  is `fail` and its Notes begin with `CONTRADICTS:` naming the counterpart and quoting the
-  opposing text.
+- Given an ADR whose implementing story contradicts it at Medium or Large tier, when plan review
+  runs, then it records a blocking contradiction finding citing `<adr-stem>#D<n>` and the story and
+  quoting both opposing passages, and the coherence `adr` row records only coverage.
 - Given an ADR that no story or task implements, when the row is written, then its verdict is
   `gap` and its Notes restate the gap id as `adr-<filename-stem>`.
 
@@ -181,7 +181,7 @@ so that the adjudication is recorded rather than merely requested.
       form and counterpart definition.
 - [ ] §4b's verdict vocabulary is unchanged in membership — no new verdict string is introduced.
 - [ ] §4c's gap-id scheme lists `adr-<filename-stem>`.
-- [ ] §4d's consistency pass names ADR-versus-story as a cross-layer pair to check.
+- [ ] `skills/plan-review/SKILL.md` names ADR-versus-story as a cross-layer pair to check.
 
 ---
 
