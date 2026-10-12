@@ -117,9 +117,9 @@ find one. Resolving it requires changing what is being asked for, not how it is 
 which usually means the root lives upstream (see 5c) in the PRD's FRs or in the design,
 not in story phrasing.
 
-**Layer ownership.** Story↔story pairs belong to `/conflict-check`. Cross-layer pairs and
-task↔task pairs belong to `/coherence-check`. `/conflict-check` runs before `/plan` and cannot
-see tasks, so `/coherence-check` owns the task↔task sweep once plan tasks exist.
+**Layer ownership.** Story↔story pairs belong to `/conflict-check`. Cross-layer and task versus task
+pairs belong to plan review at Medium and Large tier, and to the plan's §7b at Small tier.
+`/conflict-check` runs before `/plan` and cannot see tasks.
 
 ### 3. Generate Conflict Report
 
