@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-11
+## [1.7.0] - 2026-10-12
 
 ### Added
 
@@ -40,6 +40,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - ADR authors can cite decisions headed with ATX-numbered headings. ([implementation PR #3115](https://github.com/jstoup111/ai-conductor/pull/3115)).
 - Composer `land`, `handoff`, and `forget` now post their GitHub issue write-backs from an operator session without an assignment or terminal prompt; daemon sessions keep the stricter rule. ([implementation PR #3134](https://github.com/jstoup111/ai-conductor/pull/3134)).
 - Daemon scheduling now derives priority, size, and dependency ordering through a backend-neutral source. ([implementation PR #3172](https://github.com/jstoup111/ai-conductor/pull/3172)).
+- Operators can restack descendant branches after changing a closed stacked child. ([implementation PR #3169](https://github.com/jstoup111/ai-conductor/pull/3169)).
+- Plans of 30 or more tasks are now refused at spec land unless they carry a `**Scope-exception:**` declaration (previously 41). ([implementation PR #3201](https://github.com/jstoup111/ai-conductor/pull/3201)).
 
 ### Removed
 
@@ -107,6 +109,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ```bash migration
 bin/install --update
+```
+
+```bash migration
+ai-conductor kickback-budget raise --feature "$FEATURE_SLUG" --gate restack --child "$CHILD" --by 1 --rationale "Authorize one additional restack recovery"
 ```
 
 ## [1.6.0] - 2026-10-06
