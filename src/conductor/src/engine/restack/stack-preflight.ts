@@ -121,8 +121,9 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   }
 
   // A re-kick asks for a base refresh, but when the default is already inside
-  // child 1 there is nothing to carry: chaining one would only rewrite every
-  // child to new SHAs. The REKICK is then satisfied by the repair alone.
+  // the first sealed declared child position there is nothing to carry:
+  // chaining one would only rewrite every child to new SHAs. The REKICK is
+  // then satisfied by the repair alone.
   const baseRefreshDue = options.baseRefreshDue === true
     && !(await defaultAlreadyInStack(options.worktree, options.slug, options.git ?? makeGitRunner(options.worktree)));
   const repair = await runRestack({
