@@ -91,6 +91,9 @@ build_review:
       llm_provider: claude
       model: opus
       effort: low
+      # Raised from the 1 MiB default 2026-10-11: a large changed-test scope
+      # (130+ new test files) measured 1,091,894 bytes and halted needs-human.
+      max_projection_bytes: 1572864
     # Security judges the whole frozen feature diff for concrete, changed-hunk-
     # anchored defects (#2568). Judgement-heavy like testQuality, so it takes the
     # same Claude opus routing. Enabled 2026-09-18.
