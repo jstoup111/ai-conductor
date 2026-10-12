@@ -54,22 +54,22 @@ without any retrospective provider dispatch so that completions cost no narrativ
 
 **Requirement:** outcome-2
 
-As an operator, I want batch boundaries to satisfy the closeout gate with the surviving
-obligations only so that no micro-retro work, artifact, or event is required or accepted.
+As an operator, I want batch boundaries to advance on their surviving checks only so that no
+micro-retro work, artifact, or event is required or accepted.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a BUILD batch completes with all surviving closeout obligations recorded, when the batch-boundary gate evaluates, then the batch passes without any micro-retro event present.
-- Given a build-tail rollup renders, when its obligations are listed, then only surviving obligations appear and durations aggregate correctly.
+- Given a BUILD batch whose `/simplify`, linter, and `BATCH_AFFECTED_TESTS` checks are satisfied, when the batch-boundary gate evaluates, then the batch passes without any micro-retro event or closeout record present.
+- Given a build-tail rollup renders, when its windows are listed, then each shows its classification, task-execution segment, and post-resolution ticks and no micro-retro obligation appears.
 
 #### Negative Paths
-- Given `conduct-ts closeout-event micro-retro <start> <end>` is invoked, when the obligation is validated, then the command exits non-zero naming the unknown obligation (surviving allowlist validation).
-- Given a surviving obligation's event is missing, when the batch gate evaluates, then the batch still fails closed on that obligation (adr-2026-08-08 enforcement preserved).
+- Given `conduct-ts` is invoked with a closeout-recording subcommand naming `micro-retro`, when it dispatches, then it exits non-zero with an unknown-command error and appends nothing to `.pipeline/pipeline-events.jsonl`.
+- Given a batch whose `BATCH_AFFECTED_TESTS` result set contains a failing test that is not an expected RED test, when the batch gate evaluates, then the batch still fails closed on that test.
 
 ### Done When
-- [ ] `CLOSEOUT_OBLIGATIONS` and the `pipeline_closeout.obligation` union changed in lockstep (`satisfies` compiles) with micro-retro gone
-- [ ] Pipeline skill batch-boundary checklist carries no micro-retro instruction and the gate roster test matches the surviving set
+- [ ] The `ConductorEvent` union declares no closeout obligation event kind and no micro-retro event kind, and the TypeScript build passes
+- [ ] Pipeline skill batch-boundary checklist carries no micro-retro instruction and no closeout-record gate
 - [ ] Full conductor suite green
 
 ## Story 4: Delivery completes retro-free in every tier, mode, and provider, failing by name on stale retro references

@@ -6,11 +6,11 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the evaluator's model-routing criterion in the typed model-table metadata, the generated table row, its hand-synced reference mirror, and the shipped evaluator dispatch guidance. Evaluator fresh-context isolation, dispatch frequency, batch diff scope, and the domain-reviewer diff-size routing remain outside this slice.
+Approved by the operator on 2026-09-06 (delegated). Scope is the evaluator's model-routing criterion in the typed model-table metadata, the generated table row, its hand-synced reference mirror, and the shipped `/code-review` evaluator dispatch guidance, which is the only place the evaluator is dispatched. Evaluator fresh-context isolation and the domain-reviewer diff-size routing remain outside this slice.
 
 ## Story 1: One risk criterion decides the evaluator's model
 
-As a harness operator dispatching a batch evaluator, I want a single risk-domain question instead of a two-sided content taxonomy so that a misclassification cannot quietly seat a weaker reviewer on a dangerous batch.
+As a harness operator dispatching the `/code-review` evaluator, I want a single risk-domain question instead of a two-sided content taxonomy so that a misclassification cannot quietly seat a weaker reviewer on a dangerous diff.
 
 ### Acceptance Criteria
 
@@ -32,26 +32,27 @@ As a harness operator dispatching a batch evaluator, I want a single risk-domain
 
 ## Story 2: Shipped dispatch guidance states the same single criterion
 
-As an implementer following the shipped review guidance, I want the dispatch instructions to state the same one criterion the model table does so that guidance and table cannot disagree about which model reviews a risky batch.
+As an implementer following the shipped review guidance, I want the dispatch instructions to state the same one criterion the model table does so that guidance and table cannot disagree about which model reviews a risky diff.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
 - Given the code-review dispatch guidance, when its evaluator model selection is read, then it offers exactly two choices, a default and a risk-domain top tier, using the same five risk domains as the metadata row.
-- Given the pipeline batch-boundary guidance, when its evaluator scaling table is read, then a stated risk-domain override raises that batch's evaluator to the top tier while the table's intermediate and final frequency columns are unchanged.
+- Given the model table's evaluator row, when its rationale is read, then it attributes the evaluator's model to the `/code-review` dispatch alone.
 
 #### Negative Paths
 
 - Given a dispatch line names a Claude model parameter without naming Claude on that same line, when the provider skill contract audit runs, then it rejects the file as unscoped Claude model selection.
-- Given the dispatch guidance drops or reworks the fresh-context isolation statement or a frequency column of the pipeline scaling table, when the guidance specification runs, then it fails.
+- Given the code-review dispatch guidance drops or reworks the fresh-context isolation statement, when the guidance specification runs, then it fails.
+- Given the `/pipeline` batch-boundary guidance, when the evaluator routing specification reads it, then it requires no evaluator scaling table and no risk-domain evaluator override there.
 
 ### Done When
 
 - [ ] The code-review dispatch guidance names one default model choice and one risk-domain top-tier choice, and no retired content category.
-- [ ] The pipeline scaling table retains its Skipped, every-8-tasks, every-4-tasks, and Always cells, and carries a risk-domain override naming the same five domains.
-- [ ] The provider skill contract audit and the harness integrity suite both exit zero, and the evaluator fresh-context sentence is present and unchanged in both skills.
+- [ ] The evaluator routing specification asserts the code-review routing and its provider scoping and holds no `/pipeline` evaluator scaling assertion.
+- [ ] The provider skill contract audit and the harness integrity suite both exit zero, and the evaluator fresh-context sentence is present and unchanged in the code-review skill.
 
 ## Negative-category review
 
-Invalid input is covered by the retired-category and unscoped-model-parameter rejections, which are the two ways this routing text can be written wrong. Data integrity is covered by the generator drift check, which is the mechanism that keeps the generated region and its metadata source from diverging, and by the frequency-column and fresh-context regression criteria that pin the deliberately unchanged surface. Auth, permission, timeout, network, dependency-unavailability, concurrency, resource-exhaustion, partial-failure, deletion-cascade, and idempotency categories are inapplicable: the change adds no runtime code path, no external call, no persistence, and no deletion — it rewrites typed constant strings and shipped guidance prose that are read at authoring time, not executed. Model-availability degradation is not a new failure mode here; the already-approved provider fallback ladder owns it and is only referenced, not modified.
+Invalid input is covered by the retired-category and unscoped-model-parameter rejections, which are the two ways this routing text can be written wrong. Data integrity is covered by the generator drift check, which is the mechanism that keeps the generated region and its metadata source from diverging, and by the fresh-context regression criterion that pins the deliberately unchanged surface. Auth, permission, timeout, network, dependency-unavailability, concurrency, resource-exhaustion, partial-failure, deletion-cascade, and idempotency categories are inapplicable: the change adds no runtime code path, no external call, no persistence, and no deletion — it rewrites typed constant strings and shipped guidance prose that are read at authoring time, not executed. Model-availability degradation is not a new failure mode here; the already-approved provider fallback ladder owns it and is only referenced, not modified.
