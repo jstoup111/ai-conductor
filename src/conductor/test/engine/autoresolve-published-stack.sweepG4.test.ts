@@ -81,6 +81,7 @@ describe('published stacked leaf PR reached by the mergeable sweep (sweep G4)', 
           readPullRequestMergeState: async () => ({
             state: 'OPEN', mergeable: 'CONFLICTING', hasFailingOrPendingChecks: false,
             labels: [], checksOutcome: 'none' as const, isDraft: false,
+            mergeStateStatus: 'DIRTY', baseRefName: 'main',
           }),
         },
         autoresolve: {
