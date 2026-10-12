@@ -139,7 +139,7 @@ describe('land-gate rejection classification', () => {
     {
       name: 'receives a contradictory dependency decision',
       gate: 'dependency-decisions-invalid',
-      options: { acceptedDependencies: ['owner/repo#600'], declinedDependencies: ['owner/repo#600'] },
+      options: { acceptedDependencies: ['owner/repo#600'] as string[], declinedDependencies: ['owner/repo#600'] as string[] },
     },
   ] as const)('classifies the real dependency gate when it $name', async ({ gate, options }) => {
     const worktreePath = await seedLandableWorktree();
