@@ -656,7 +656,7 @@ Operator decisions (2026-10-10):
       only where it would overwrite remote work the engine never saw.
 
 > **Amended 2026-10-12 by #2944:** The cleanup list also deletes, by explicit name, each
-> `routes/<roundId>` with its `rejected/<n>` pins, `repairing`, `revalidate` and each `red/c<k>`
+> `routes/<roundId>`, each `rejected/<roundId>/<n>` pin, `repairing`, `revalidate` and each `red/c<k>`
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 6).
 
 12. **Events ride the existing spine and carry `child`.**
