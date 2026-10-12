@@ -594,22 +594,21 @@ describe('SpoolDrainer', () => {
 
   it('stops an in-flight request within the injected export timeout and keeps its spool file', async () => {
     let received = false;
-    let hangingResponse: import('node:http').ServerResponse | undefined;
-    const server = createServer((request, response) => {
-      received = true;
-      hangingResponse = response;
-      request.resume();
-    });
-    const endpoint = await listen(server);
     let now = 1_727_000_000_000;
     const store = new SpoolStore(await temporaryDirectory());
     await store.write('traces', Buffer.from('in-flight-batch'));
     const drainer = new SpoolDrainer(store, {
-      endpoint,
+      endpoint: 'http://collector.test',
       headers: () => ({}),
       exportTimeoutMs: 10,
       now: () => now,
       sleep: async (delay: number) => { now += delay; },
+      // Deliberately ignore cancellation so the drainer's own timeout race,
+      // rather than a real HTTP socket's shutdown timing, owns this boundary.
+      fetch: async () => {
+        received = true;
+        return new Promise<Response>(() => undefined);
+      },
     });
     const draining = drainer.drainUntilStopped();
 
@@ -624,7 +623,7 @@ describe('SpoolDrainer', () => {
       await expect(draining).resolves.toBeUndefined();
       expect(await store.list('traces')).toHaveLength(1);
     } finally {
-      hangingResponse?.destroy();
+      await drainer.stop();
       await draining.catch(() => undefined);
     }
   });

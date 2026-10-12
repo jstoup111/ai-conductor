@@ -309,7 +309,9 @@ function decisionGateState(tier: 'M' | 'S'): ConductState {
 function useRealGitExeca(): () => void {
   const execaMock = vi.mocked(execa);
   const originalImplementation = execaMock.getMockImplementation();
-  execaMock.mockImplementation(async (file, args, options) => {
+  // execa's overloaded callable type makes Vitest select its two-argument
+  // binding overload even though this runtime seam receives file, args, opts.
+  execaMock.mockImplementation((async (file: string | URL, args?: readonly string[], options?: { cwd?: string }) => {
     try {
       const result = await execFile(String(file), (args ?? []).map(String), { cwd: options?.cwd });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 } as never;
@@ -320,7 +322,7 @@ function useRealGitExeca(): () => void {
         exitCode: typeof result.code === 'number' ? result.code : 1,
       } as never;
     }
-  });
+  }) as never);
   return () => execaMock.mockImplementation(originalImplementation!);
 }
 
