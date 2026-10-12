@@ -112,6 +112,9 @@ class FakeGh implements TrackerClient {
   async getBlockedBy(): Promise<unknown> {
     throw new Error('not used in this test');
   }
+  async listOpenIssues(): ReturnType<TrackerClient['listOpenIssues']> {
+    throw new Error('not used in this test');
+  }
   async listAssignedIssues(): ReturnType<TrackerClient['listAssignedIssues']> {
     throw new Error('not used in this test');
   }

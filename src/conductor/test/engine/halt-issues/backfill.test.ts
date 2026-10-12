@@ -95,6 +95,9 @@ class MockGh implements TrackerClient {
   async getBlockedBy(): Promise<unknown> {
     throw new Error('gh should not be called during dry-run');
   }
+  async listOpenIssues(): ReturnType<TrackerClient['listOpenIssues']> {
+    throw new Error('gh should not be called during dry-run');
+  }
   async listAssignedIssues(): Promise<never[]> {
     throw new Error('gh should not be called during dry-run');
   }
