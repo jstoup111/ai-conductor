@@ -167,6 +167,13 @@ three-member group in a single wave; see
 [configuration](configuration.md)). Branches never write `conduct-state.json` or `.pipeline/gates/*` —
 only the loop thread does, after every branch settles.
 
+A member dispatch that succeeds but leaves no current, complete verdict for its own run — missing,
+stale from an earlier attempt, or a rejected structured result — counts as a failed attempt. The
+branch re-dispatches within the member's ordinary retry budget, and the `step_retry` event's
+`reason` carries the handshake failure (for example `prd_audit dispatch <run-id> produced no
+verdict; …`). A branch that exhausts its budget this way halts naming the branch, the attempt count,
+and the missing verdict; it is not routed to `remediate`.
+
 ## The build verification group
 
 `test_suite` is the sole BUILD verifier. It runs after `build` and before `build_review`. After a

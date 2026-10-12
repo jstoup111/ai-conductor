@@ -22,7 +22,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { ConductorOptions, StepRunner, StepRunResult } from '../../src/engine/conductor.js';
@@ -227,7 +227,11 @@ describe('acceptance: a build_review PASS does not clear convergence (#1694 Stor
       }),
     };
 
-    await new Conductor(options).run();
+    const conductor = new Conductor(options);
+    // This flow owns convergence-budget persistence. Validator write identity
+    // is covered by the dedicated handshake acceptance suite.
+    vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+    await conductor.run();
 
     expect(reviewRuns).toBe(2);
     expect(manualTestRuns).toBe(1);

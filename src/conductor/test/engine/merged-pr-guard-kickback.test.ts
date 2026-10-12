@@ -95,6 +95,22 @@ async function writePrdAuditFixable(dir: string, attemptId: string): Promise<voi
   }, { attemptId, codeStamp: null });
 }
 
+async function writePrdAuditPass(dir: string, attemptId: string): Promise<void> {
+  await persistPrdAuditVerdict(dir, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
+        evidence: 'fixture.ts:1', rationale: 'The fixture supplies a current passing audit.',
+        requirementAssociations: [], evidenceTaskIds: [],
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [], recordedDispositions: [],
+  }, { attemptId, codeStamp: null });
+}
+
 describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
   let dir: string;
   let statePath: string;
@@ -366,7 +382,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n',
             );
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
+            await writePrdAuditPass(dir, options?.runId ?? 'fixture-prd-audit-run');
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltApproval(dir, options?.runId ?? 'fixture-as-built-run');
           }
@@ -799,7 +815,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               );
             }
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
+            await writePrdAuditPass(dir, options?.runId ?? 'fixture-prd-audit-run');
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltApproval(dir, options?.runId ?? 'fixture-as-built-run');
           }
@@ -885,7 +901,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               );
             }
           } else if (step === 'prd_audit') {
-            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n');
+            await writePrdAuditPass(dir, options?.runId ?? 'fixture-prd-audit-run');
           } else if (step === 'architecture_review_as_built') {
             await writeAsBuiltApproval(dir, options?.runId ?? 'fixture-as-built-run');
           }

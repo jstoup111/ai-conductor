@@ -2364,7 +2364,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
     vi.resetModules();
   });
 
-  it('keeps a coverage-incomplete audit failed without routing it back through build', async () => {
+  it('rejects a stale legacy coverage report without routing it back through build', async () => {
     // This file normally mocks execa. Resetting before the dynamic import makes
     // the production tail use real git for protected-artifact sealing and PRD
     // resolution, rather than a hand-built artifact-resolution context.
@@ -2506,6 +2506,6 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
 
     expect(auditRuns).toBe(1);
     const finalState = await readRealState(realStatePath);
-    expect(finalState.ok && finalState.value.prd_audit).toBe('refused');
+    expect(finalState.ok && finalState.value.prd_audit).toBe('failed');
   });
 });

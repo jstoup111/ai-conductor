@@ -442,6 +442,12 @@ export interface GroupBranchLifecycleObserver {
 
 export interface BranchExecutorDeps {
   stepRunner: BranchStepRunner;
+  /**
+   * Optional post-success verification for a branch dispatch. Returning a
+   * reason, or throwing, makes the otherwise successful attempt retryable
+   * and consumes the branch's ordinary retry budget.
+   */
+  verifyDispatch?: (result: StepRunResult, attempt: number) => Promise<string | undefined>;
   /** Daemon-scoped admission state shared by every concurrent member. */
   providerAvailability?: ProviderAvailability;
   /** Daemon-origin durable projection of a newly opened suppression window. */
@@ -810,6 +816,24 @@ async function runGroupBranchInner(
     }
 
     if (result.success) {
+      let verificationFailure: string | undefined;
+      try {
+        verificationFailure = await deps.verifyDispatch?.(result, attempt);
+      } catch (err) {
+        verificationFailure = err instanceof Error ? err.message : String(err);
+      }
+      if (verificationFailure !== undefined) {
+        lastOutput = verificationFailure;
+        if (attempt < maxRetries) {
+          await deps.lifecycleObserver.onRetry({
+            member: member.name,
+            skill: member.skill,
+            ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
+            attempt: attempt + 1,
+          });
+        }
+        continue;
+      }
       return makeVerdictOutcome(
         "pass",
         result.authentication,

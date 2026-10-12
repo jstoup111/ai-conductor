@@ -2247,6 +2247,11 @@ describe('engine/conductor', () => {
             );
           } else if (step === 'manual_test') {
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            // The validation-group handshake now requires the typed verdict
+            // from this dispatch. Keep this sibling green so the fixture
+            // reaches its intended as-built/manual-test remediation path.
+            await writePrdAuditFixture(dir, opts?.runId);
           } else if (step === 'architecture_review_as_built') {
             // Perpetually BLOCKED — build's mock never actually fixes it.
             await writeAsBuiltFixture(dir, opts?.runId, asBuiltBlockedDesignFixture());
