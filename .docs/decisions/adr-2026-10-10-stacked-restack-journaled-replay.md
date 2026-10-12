@@ -545,9 +545,10 @@ Operator decisions (2026-10-10):
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 9 and 13).
 
 > **Amended 2026-10-12 by #2944:** The closed-child `rewind` refusal now names #3203, which owns
-> manual landing and closed-child rewind. While a routing marker exists, the automatic repair runs
-> for no closed child, and a due base refresh is deferred with `restack_refused` reason
-> `deferred-base-refresh` (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
+> manual landing and closed-child rewind. While a routing marker exists, the automatic repair runs for
+> no closed child. While any route record is not `closed` or the re-validation queue is non-empty, a
+> due base refresh is deferred with `restack_refused` reason `deferred-base-refresh`
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
 
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
