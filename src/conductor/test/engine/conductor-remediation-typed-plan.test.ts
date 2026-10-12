@@ -433,7 +433,7 @@ describe('Conductor typed remediation-plan admission', () => {
     const budgets = [{
       gate: 'prd_audit' as const,
       lapCap: 2,
-      growthCap: 2,
+      growthCap: 2, authoredSource: 'plan' as const,
       growth: { authored: 8, added: 0, byGate: {}, remaining: 2 },
     }];
     await expect(settlePendingRepair(result.root, budgets)).resolves.toEqual({ kind: 'settled' });

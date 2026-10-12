@@ -4,9 +4,11 @@ import {
   isUnreadableKickbackGate,
   isUnreadableKickbackGrowth,
   isUnreadableKickbackLedger,
-  readGrowth,
+  readGrowthAccounting,
   readKickbackLedger,
   type KickbackGateEntry,
+  type KickbackLedger,
+  type PendingRepairSettlementBudget,
   type PlanGrowth,
 } from './kickback-ledger.js';
 
@@ -71,6 +73,43 @@ export function prdAuditAppendCap(config: HarnessConfig, authoredTaskCount: numb
   return Math.min(maximum, Math.floor(authoredTaskCount * ratio));
 }
 
+export interface PlanGrowthBudget {
+  growth: PlanGrowth;
+  cap: number;
+  capSource: 'raised' | 'config-derived';
+  authoredSource: 'plan' | 'ledger' | 'unresolved';
+}
+
+/** Resolve the one plan-growth allowance shared by every remediation consumer. */
+export async function readPlanGrowthBudget(
+  projectRoot: string,
+  config: HarnessConfig,
+  options: { persist: boolean },
+): Promise<PlanGrowthBudget> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const unbounded = await readGrowthAccounting(projectRoot, Number.MAX_SAFE_INTEGER, options);
+  const capSource = ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised';
+  const cap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, unbounded.growth.authored);
+  const accounting = await readGrowthAccounting(projectRoot, cap, options);
+  return { growth: accounting.growth, cap, capSource, authoredSource: accounting.authoredSource };
+}
+
+/** Build the durable allowance snapshots required to settle a pending BUILD repair. */
+export async function pendingRepairSettlementBudgets(
+  projectRoot: string,
+  config: HarnessConfig,
+  ledger: KickbackLedger,
+): Promise<PendingRepairSettlementBudget[]> {
+  const { cap: growthCap, growth, authoredSource } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
+  return (['prd_audit', 'architecture_review_as_built'] as const).map((gate) => ({
+    gate,
+    lapCap: ledger.gates[gate]?.effectiveLapCap ?? remediationLapCapForGate(gate, config),
+    growthCap,
+    growth,
+    authoredSource,
+  }));
+}
+
 export type RemediationLedgerGate = 'prd_audit' | 'architecture_review_as_built';
 
 export interface RemediationGateAppendBudget {
@@ -93,10 +132,8 @@ export async function readRemediationGateAppendBudget(
   lapCap: number,
   taskCount: number,
   growthTaskCount: number,
-  authoredTaskCount: number,
 ): Promise<RemediationGateAppendBudget> {
   const ledger = await readKickbackLedger(projectRoot);
-  const growthCap = ledger.effectiveGrowthCap ?? prdAuditAppendCap(config, authoredTaskCount);
   // A corrupt ledger must not be mistaken for fresh remediation allowance:
   // budget recovery is an explicit operator decision, not a best-effort
   // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
@@ -109,6 +146,7 @@ export async function readRemediationGateAppendBudget(
     // gates and growth accounting. Preserve its exhausted-budget projection;
     // only an unreadable ledger envelope blocks append before mutation.
     if (isUnreadableKickbackGrowth(ledger)) {
+      const growthCap = ledger.effectiveGrowthCap ?? 0;
       return {
         gate,
         priorLaps: lapCap,
@@ -121,7 +159,7 @@ export async function readRemediationGateAppendBudget(
     }
     throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
-  const growth = await readGrowth(projectRoot, growthCap);
+  const { cap: growthCap, growth } = await readPlanGrowthBudget(projectRoot, config, { persist: true });
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
   )?.laps ?? 0;

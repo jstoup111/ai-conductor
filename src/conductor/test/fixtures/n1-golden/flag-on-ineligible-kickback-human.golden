@@ -3,18 +3,18 @@ Kickback budget (build_review): 1/5 consumed; 4 remaining
 Latest reason: fixture bump
 Adjustment history: none
 Resume authorization: none
-Plan growth: 0/0 added; 0 remaining (config-derived cap)
+Plan growth: plan unresolved; 0 added
 Mechanical faults: 0
 
 Kickback budget (prd_audit): 0/1 consumed; 1 remaining
 Latest reason: none
 Adjustment history: none
 Resume authorization: none
-Plan growth: 0/0 added; 0 remaining (config-derived cap)
+Plan growth: plan unresolved; 0 added
 
 Kickback budget (architecture_review_as_built): 0/1 consumed; 1 remaining
 Latest reason: none
 Adjustment history: none
 Resume authorization: none
-Plan growth: 0/0 added; 0 remaining (config-derived cap)
+Plan growth: plan unresolved; 0 added
 exit:0

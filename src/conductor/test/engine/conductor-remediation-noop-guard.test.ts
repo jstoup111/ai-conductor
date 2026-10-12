@@ -197,7 +197,7 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
       growth: { added: 0, byGate: {} },
     });
     await expect(settlePendingRepair(dir, [{
-      gate: 'prd_audit', lapCap: 1, growthCap: 10,
+      gate: 'prd_audit', lapCap: 1, growthCap: 10, authoredSource: 'plan' as const,
       growth: { authored: 1, added: 0, byGate: {}, remaining: 10 },
     }])).resolves.toEqual({ kind: 'none' });
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
