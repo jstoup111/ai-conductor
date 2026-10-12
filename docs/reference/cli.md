@@ -1156,8 +1156,9 @@ non-empty and at most 2000 bytes. They record an auditable authorization for the
 consume. The authorization is durably staged before its
 event is written, so an interrupted command is reconciled exactly once on the next command entry.
 The daemon consumes a matching authorization on its next loop iteration; it does not wait for an
-unrelated base-branch advance. Supported gates are `build_review`, `prd_audit`, and
-`architecture_review_as_built`. Inspect always lists all three gates; JSON renders an empty
+unrelated base-branch advance. Supported gates are `build_review`, `prd_audit`,
+`architecture_review_as_built`, and `restack`. Inspect always lists the first three gates, and adds
+`restack` when a child is selected; JSON renders an empty
 `adjustments` array for a valid gate with no adjustment history. Inspect also performs that
 reconciliation, so it is safe as the first command after an interrupted `raise` or `reset`.
 
@@ -1202,6 +1203,14 @@ feature when ready, otherwise the daemon leaves the authorization unconsumed.
 `Child: <k>`; JSON adds a `child` field. `raise --child <k>` and `reset --child <k>` check cap evidence
 in, and apply the authorization to, child `k`'s ledger. See
 [Per-child selection](#per-child-selection---child).
+
+`--gate restack` recovers a [restack cascade cap](configuration.md#restack) halt and requires
+`--child <k>`, where `k` is the originating child the halt names. The live halt must be
+`needs-human` and its cap evidence must name the same originating child; otherwise the command
+exits 1 and changes nothing. The cap evidence is read from the active child's ledger, and the
+originating child's count and limit (default 3) from `refs/conductor/<slug>/cascades`, so the
+originating child needs no child state directory. `raise` raises that child's cascade limit by
+`--by`; `reset` returns its count to zero.
 
 ## `ai-conductor decide-grant`
 
@@ -1314,7 +1323,8 @@ above `k` in ascending order, then every later whole-feature step in the flat st
 those verdicts and the halt markers, emits `operator_rewind` with a `child` field, and prints
 `Rewound child <k> to <step>.` A failure restores every changed store and leaves the halt in place.
 An explicit `--child <k>` naming a child before the active one exits 1 with `child <k> is closed and
-cannot be rewound (#2943)`; re-running a closed child needs a restack.
+cannot be rewound (#2944)`. To change a closed child, commit to its branch and let the next
+[restack](configuration.md#restack) carry the change upward.
 See [Per-child selection](#per-child-selection---child).
 
 ## `ai-conductor reseal`

@@ -967,6 +967,9 @@ The engine refuses, without mutating the branch, when:
 Both refusals block `finish` and issue no push. For recovery, see
 [a flattened rebase was refused](../runbooks/stalled-or-stuck-feature.md#a-flattened-rebase-was-refused).
 
+A stacked feature does not use this path: the re-kick and finish-time rebases run a whole-stack
+[restack](../reference/configuration.md#restack), and autoresolve escalates with `published-stack`.
+
 ## How a halted feature resumes
 
 When a feature halts, the daemon leaves `.pipeline/HALT` in its worktree and stops dispatching it.

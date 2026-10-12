@@ -907,7 +907,8 @@ stacked-delivery eligibility).
 `coverage_binding refused: sealed child positions are immutable after child state exists`. It fires
 when a stacked feature that has already started building children has a plan whose slice positions
 differ from `refs/conductor/<slug>/positions`. Restore the plan's `## Slices` positions to the sealed
-set, then clear the halt; changing the shape of a started stack needs a restack (#2943).
+set, then clear the halt. A [restack](../reference/configuration.md#restack) carries changes through
+the existing positions; it never changes them.
 
 **Verification:** The next `.pipeline/coverage-binding.json` has status `disabled` and no entries, and
 the step is marked done.
@@ -1219,6 +1220,51 @@ and unpark using [the resume procedure](#clear-a-halt-and-let-the-feature-resume
 A merge-bearing branch whose proof fails before a merge can be named parks with `rebase did not
 start` instead; recover it as in
 [a rebase never started](#a-rebase-never-started-after-an-untracked-file-collision).
+
+### A stacked restack halted
+
+**Symptom:** a stacked feature's `.pipeline/HALT` is `needs-human` and begins
+`restack refused (<reason>)` or `restack conflict child <k>`.
+
+**Diagnosis:** a [restack](../reference/configuration.md#restack) could not carry a change through
+the stack. Read the reason, the named child, and the detail lines in the HALT, then the matching
+`restack_refused` or `restack_conflict` event in `.pipeline/events.jsonl`. Inspect the journal with
+`git -C .worktrees/<slug> cat-file -p refs/conductor/<slug>/restack/journal`.
+
+| Reason | Meaning |
+| --- | --- |
+| `cascade-cap` | The named originating child already caused its allowed feature repairs (default 3). |
+| `closed-child-rewritten` | A closed child's branch no longer contains its closure tip. |
+| `range-not-ancestor` | A closure tip is not an ancestor of the named next child's branch. |
+| `dirty-overlap` | Uncommitted tracked changes overlap paths the restack would rewrite. |
+| `sync-collision` | An untracked file could not be quarantined, or the worktree sync dry run failed. |
+| `checked-out-elsewhere` | A child branch is checked out in another worktree. |
+| `lock-unavailable`, `stack-ref-changed` | Another Git operation held or moved a stack ref during the move. |
+| `replay-mismatch`, `verification-failed` | The replayed result failed path-ownership or post-move verification. |
+| `flatten_refused` | A content-bearing merge in the named child conflicts with its new parent. |
+
+A `restack conflict child <k>` HALT lists the conflicting commit and paths the resolver could not
+settle within the rebase resolution attempt budget.
+
+**Recovery:**
+
+- **`cascade-cap`:** if more repairs are justified, authorize them with the child the HALT names:
+
+  ```bash
+  ai-conductor kickback-budget raise --feature <slug> --gate restack --child <k> --by <n> --rationale "<why>"
+  ```
+
+  The daemon consumes the authorization on its next loop iteration. See the
+  [CLI reference](../reference/cli.md#ai-conductor-kickback-budget).
+- **Every other reason:** park the feature, remove the named condition (commit the overlapping
+  changes, move the colliding untracked file, release the other checkout, let the concurrent Git operation finish,
+  or settle the conflict on the named child's branch), then
+  [clear the halt](#clear-a-halt-and-let-the-feature-resume). Do not delete
+  `refs/conductor/<slug>/restack/*` refs by hand; the next stack preflight recovers or retries the
+  operation from its journal.
+
+**Verification:** the feature's next dispatch records `restack_recovered` or `restack_applied`
+events and no new restack HALT.
 
 ### The completed rebase halted for missing feature content
 
