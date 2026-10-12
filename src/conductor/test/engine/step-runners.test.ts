@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2, task:rem-prd-audit-9-R3
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -34,7 +34,8 @@ import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
-import { projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdict, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
@@ -91,6 +92,129 @@ function createMockProvider(): LLMProvider {
     }),
   };
 }
+
+describe('build_review declared replication suppressions', () => {
+  const sourcePath = 'src/source-widget.ts';
+  const targetPath = 'src/target-widget.ts';
+  const duplication = (path = targetPath, evidence = `${sourcePath}:8`) => ({
+    concernKind: 'duplication' as const, summary: 'The declared copy repeats the source implementation.',
+    evidenceLocations: [evidence],
+    anchor: { rubric: 'implementationQuality' as const, locus: { path, contentHash: `sha256:${'a'.repeat(64)}`, display: 'declared target copy' } },
+  });
+  const otherPath = 'src/other-widget.ts';
+  const declaredPlanBody = `# Plan\n\n**Pattern-source:** ${sourcePath}\n**Rename-map:** source-widget -> target-widget\n`;
+  const runDeclaredReplication = async (
+    makeFinding: (loci: { target: any; other: any }) => ReturnType<typeof duplication>,
+    planBody = declaredPlanBody,
+  ) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'declared-replication-runner-'));
+    const planPath = join(projectDir, '.docs/plans/feature.md');
+    let effective!: ReturnType<typeof deriveEffectiveBuildReviewVerdict>;
+    let finding: ReturnType<typeof duplication> | undefined;
+
+    try {
+      await mkdir(join(projectDir, '.docs/plans'), { recursive: true });
+      await mkdir(join(projectDir, 'src'), { recursive: true });
+      await writeFile(planPath, planBody, 'utf8');
+      await writeFile(join(projectDir, sourcePath), 'export const widget = true;\n', 'utf8');
+      await writeFile(join(projectDir, targetPath), 'export const widget = true;\n', 'utf8');
+      const gitRunner = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\0${targetPath}\0M\0${otherPath}\0`, stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: [
+          `diff --git a/${targetPath} b/${targetPath}\n@@ -1 +1 @@\n-export const widget = false;\n+export const widget = true;`,
+          `diff --git a/${otherPath} b/${otherPath}\n@@ -1 +1 @@\n-export const other = false;\n+export const other = true;`,
+        ].join('\n') + '\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === 'head:.docs/plans/feature.md') return { exitCode: 0, stdout: planBody, stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = false;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${otherPath}`) return { exitCode: 0, stdout: 'export const other = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${otherPath}`) return { exitCode: 0, stdout: 'export const other = false;\n', stderr: '' };
+        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      const runner = new DefaultStepRunner(createMockProvider(), 'replication', projectDir, {
+        gitRunner,
+        planPath,
+        config: {
+          build_review: {
+            enabled: true,
+            rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
+          },
+        } as HarnessConfig,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' } } as never),
+        },
+        buildReviewEffectiveResolver: async (_projectRoot, result) => {
+          const resolved = deriveEffectiveBuildReviewVerdict(result);
+          if (!resolved) throw new Error('expected build_review aggregate to yield an effective verdict');
+          effective = resolved;
+          return { ok: true, feature: { version: 'v1', repository: projectDir, feature: 'replication' }, effective };
+        },
+      });
+      vi.spyOn(runner as any, 'fileExists').mockImplementation(async (...args: any[]) => args[0] === join(projectDir, sourcePath));
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => {
+        const loci = Object.fromEntries(projection.changedFiles.map((file: any) => [file.path, {
+          path: file.path,
+          contentHash: file.hunks[0].contentHash,
+          display: `${file.path}:1`,
+        }]));
+        return {
+          kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v3', findings: [finding = makeFinding({ target: loci[targetPath], other: loci[otherPath] })], verdict: 'FAIL',
+        };
+      });
+
+      const runResult = await runner.run('build_review', emptyState);
+      expect(runResult).toMatchObject({ success: true });
+
+      const persisted = JSON.parse(await readFile(join(projectDir, '.pipeline/build-review.json'), 'utf8'));
+      const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding!.concernKind, anchor: finding!.anchor })!;
+      return { persisted, effective, identity };
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  };
+
+  it('persists a target-anchored source-only-evidence duplication from the active plan as a declaredReplicationSuppression', async () => {
+    const { persisted, effective, identity } = await runDeclaredReplication(({ target }) => ({
+      ...duplication(),
+      anchor: { rubric: 'implementationQuality', locus: target },
+    }));
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([{ findingId: identity.id, sourcePath, targetPath }]);
+    expect(effective).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id] });
+  });
+
+  it.each([
+    ['an off-target anchor', ({ other }: any) => ({
+      ...duplication(otherPath),
+      anchor: { rubric: 'implementationQuality' as const, locus: other },
+    })],
+    ['mixed source and foreign evidence', ({ target }: any) => ({
+      ...duplication(),
+      evidenceLocations: [`${sourcePath}:8`, `${otherPath}:8`],
+      anchor: { rubric: 'implementationQuality' as const, locus: target },
+    })],
+  ])('does not suppress declared replication with %s', async (_label, makeFinding) => {
+    const { persisted, effective, identity } = await runDeclaredReplication(makeFinding);
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([]);
+    expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
+  });
+
+  it('does not suppress a source-only duplication when the plan has no Pattern-source declaration', async () => {
+    const { persisted, effective, identity } = await runDeclaredReplication(({ target }) => ({
+      ...duplication(),
+      anchor: { rubric: 'implementationQuality', locus: target },
+    }), '# Plan\n\nThis plan declares no replication source.\n');
+
+    expect(persisted.declaredReplicationSuppressions).toEqual([]);
+    expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
+  });
+});
 
 function interactiveRuntime(
   key: 'claude' | 'codex',
@@ -158,7 +282,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Check the frozen input.', llm_provider: 'claude' },
           portableTwo: { enabled: true, skill: 'portable-two-policy', question: 'Check the frozen input again.', llm_provider: 'claude' },
@@ -228,7 +352,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: {
             enabled: true, skill: 'portable-policy', question: 'Check the frozen input.',
@@ -282,8 +406,8 @@ describe('DefaultStepRunner', () => {
 
     try {
       await (runner as unknown as {
-        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], context: undefined, capabilities: unknown): Promise<unknown>;
-      }).runRubricBuildReview(inputs, config, 'S', undefined, {
+        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], planPath: undefined, context: undefined, capabilities: unknown): Promise<unknown>;
+      }).runRubricBuildReview(inputs, config, 'S', undefined, undefined, {
         claude: { provider: 'claude', platform: process.platform, status: 'available' },
       });
 
@@ -4075,7 +4199,7 @@ TIER: M`,
         }),
         ...currentBuildReviewProof(),
         config: { llm_provider: providerKey, build_review: {
-          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey } },
+          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey }, implementationQuality: { enabled: false } },
         } } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
         sessionStore: new ProviderSessionStore(), configuredProviders: [providerKey],
@@ -4400,7 +4524,7 @@ TIER: M`,
           pipelineDir: join(featureRoot, '.pipeline'),
           config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true } },
+            rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } },
           } } as HarnessConfig,
           buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
         });
@@ -4503,7 +4627,7 @@ TIER: M`,
         gitRunner: scopedTestGit(), planPath, events,
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
           suppressedFindingId = projectBuildReviewAggregateSources(aggregate as never)![0]!.findingId;
@@ -4554,6 +4678,14 @@ TIER: M`,
         gitRunner: scriptedGit(),
         planPath,
         events,
+        config: {
+          build_review: {
+            rubrics: {
+              testQuality: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
+        } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
       const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric');
@@ -4674,7 +4806,7 @@ TIER: M`,
         name: 'test-quality is enabled explicitly',
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         expectedInvokeCalls: 1,
       },
@@ -4684,7 +4816,7 @@ TIER: M`,
           test_suite: { scoped_command: 'true' },
           build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true, model: 'opus' } },
+            rubrics: { testQuality: { enabled: true, model: 'opus' }, implementationQuality: { enabled: false } },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
@@ -4716,6 +4848,59 @@ TIER: M`,
       expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
     });
 
+    it('dispatches implementation quality as the only default rubric', async () => {
+      await scopedPlan();
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const result = {
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+        };
+        return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
+      });
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        providerKey: 'codex',
+        config: { llm_provider: 'codex', build_review: { enabled: true } } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['codex'],
+        buildReviewPolicyCatalog: async () => [{
+          semanticName: 'build-review-implementation-quality', source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review implementation quality\n') }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
+        ...currentBuildReviewProof(),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'feature' },
+          effective: {
+            rawVerdict: 'PASS' as const,
+            verdict: 'PASS' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            suppressedFindingIds: [],
+            skippedRubrics: ['testQuality', 'security'] as const,
+            infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
+          },
+        }),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result.success, result.output).toBe(true);
+
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke.mock.calls[0]![0].prompt).toContain('# Build review implementation quality');
+    });
+
     it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {
       await scopedPlan();
       const provider = createMockProvider();
@@ -4724,7 +4909,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
@@ -4909,7 +5094,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
@@ -4971,7 +5156,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }
@@ -5101,7 +5286,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }

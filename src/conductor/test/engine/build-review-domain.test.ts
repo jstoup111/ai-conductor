@@ -1,5 +1,5 @@
 // Covers: task:3
-// Covers: task:6, task:11
+// Covers: task:5, task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
@@ -24,14 +24,11 @@ import {
   renderBuildReviewUnresolvedSkillRemedy,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
-import { BUILD_REVIEW_CUSTOM_V1_CONTRACT } from '../../src/engine/build-review-policy-resolver.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import {
-  buildReviewEffectiveResultDescriptor,
   parseBuildReviewReviewerPayload,
   type BuildReviewRubricProjection,
 } from '../../src/engine/build-review-projections.js';
-import type { ResolvedBuildReviewCatalogEntry } from '../../src/engine/resolved-config.js';
 
 const HASH = `sha256:${'a'.repeat(64)}`;
 const locus = { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' };
@@ -46,16 +43,6 @@ function finding(overrides: Record<string, unknown> = {}): Record<string, unknow
     evidenceLocations: ['test/widget.test.ts:8'], anchor: { rubric: 'testQuality', locus }, ...overrides,
   };
 }
-
-const customCatalogEntry: ResolvedBuildReviewCatalogEntry = {
-  id: 'portablePolicy', kind: 'custom', skill: 'portable-policy',
-  question: 'Does this preserve the portable policy contract?', resources: [],
-  contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
-  policy: {
-    enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium',
-    model_fallback_ladder: [], max_retries: 1, escalate: false, min_confidence: 0,
-  },
-};
 
 function customPayload(
   findings: readonly unknown[],
@@ -78,6 +65,37 @@ function titleHash(text: string): string {
 }
 
 describe('build-review domain', () => {
+  it('keeps implementation-quality concern kinds closed and anchors them to changed content', () => {
+    expect(BUILD_REVIEW_FINDING_VOCABULARIES.implementationQuality.concernKinds).toEqual([
+      'duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession',
+      'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name',
+    ]);
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const anchor = { rubric: 'implementationQuality', locus: { path: 'src/domain.ts', contentHash: HASH, display: 'new state model' } };
+    const payload = { kind: 'judged', rubric: 'implementationQuality', ...expected, contractVersion: 'v3', findings: [{ concernKind: 'primitive-obsession', summary: 'Raw strings represent domain state.', evidenceLocations: ['src/domain.ts:8'], anchor }] };
+    const references = { changedTests: [], changedContentRegions: [anchor.locus], changedPaths: ['src/domain.ts'], planTasks: [] };
+    expect(parseBuildReviewJudgedResult(payload, references)).toMatchObject({ verdict: 'FAIL' });
+    expect(describeBuildReviewJudgedResultRejection({ ...payload, findings: [{ ...payload.findings[0], concernKind: 'unmet-acceptance-criterion' }] }, 'implementationQuality', expected, references)).toContain('one of');
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, line: 8 } }, references)).toBeUndefined();
+  });
+  it('accepts every implementation-quality kind only at a changed region, and rejects forbidden evidence', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const locus = { path: 'src/domain.ts', contentHash: HASH, display: 'introduced domain state' };
+    const references = { changedTests: [], changedContentRegions: [locus], changedPaths: [locus.path], planTasks: [] };
+    const base = { kind: 'judged', rubric: 'implementationQuality', ...expected, contractVersion: 'v3' };
+    const findings = BUILD_REVIEW_FINDING_VOCABULARIES.implementationQuality.concernKinds.map((concernKind) => ({ concernKind, summary: `${concernKind} in changed code`, evidenceLocations: ['src/domain.ts:8'], anchor: { rubric: 'implementationQuality', locus } }));
+    const parsed = parseBuildReviewJudgedResult({ ...base, findings }, references);
+    expect(parsed).toMatchObject({ verdict: 'FAIL' });
+    expect(parsed?.kind === 'judged' ? parsed.findings : []).toHaveLength(7);
+    expect(parseBuildReviewJudgedResult({ ...base, findings: [] }, references)).toMatchObject({ verdict: 'PASS', findings: [] });
+    for (const [field, value] of [['scopeResolutions', []], ['counterfactualSensitivity', 'supports'], ['relocationAudit', []]] as const) {
+      const invalid = { ...base, findings: [findings[0]], [field]: value };
+      expect(parseBuildReviewJudgedResult(invalid, references)).toBeUndefined();
+      expect(describeBuildReviewJudgedResultRejection(invalid, 'implementationQuality', expected, references)).toContain(field);
+    }
+    const unmatched = { ...base, findings: [{ ...findings[0], anchor: { rubric: 'implementationQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } }] };
+    expect(describeBuildReviewJudgedResultRejection(unmatched, 'implementationQuality', expected, references)).toContain('projected changed content region');
+  });
   it('keeps the security concern vocabulary closed to the approved ten kinds', () => {
     expect(BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds).toEqual([
       'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
@@ -142,7 +160,7 @@ describe('build-review domain', () => {
   });
 
   it('parses the bounded custom finding contract through an effective custom descriptor', () => {
-    const descriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
     const payload = customPayload([customFinding({ confidence: 72 })]);
 
     expect(descriptor).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
@@ -163,7 +181,7 @@ describe('build-review domain', () => {
   });
 
   it('ignores custom reviewer routing claims and rejects other identity claims and invalid bounded finding values', () => {
-    const descriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
     const valid = customPayload([customFinding()]);
     for (const field of ['rubric', 'lapId']) {
       expect(parseBuildReviewReviewerPayload({ ...valid, [field]: 'forged' }, descriptor), field).toEqual(valid);
@@ -189,8 +207,8 @@ describe('build-review domain', () => {
   });
 
   it('binds an enabled security built-in member to its own rubric and parser, leaving test-quality and custom members unchanged', () => {
-    const security = buildReviewEffectiveResultDescriptor({ id: 'security', kind: 'builtin', policy: customCatalogEntry.policy });
-    const testQuality = buildReviewEffectiveResultDescriptor({ id: 'testQuality', kind: 'builtin', policy: customCatalogEntry.policy });
+    const security = { kind: 'builtin', rubric: 'security', parser: 'security-v3' } as const;
+    const testQuality = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const securityFinding = {
       concernKind: 'injection', summary: 'Request input reaches a shell.', evidenceLocations: ['src/auth.ts:8'],
       anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } },
@@ -198,7 +216,6 @@ describe('build-review domain', () => {
 
     expect(security).toEqual({ kind: 'builtin', rubric: 'security', parser: 'security-v3' });
     expect(testQuality).toEqual({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
-    expect(buildReviewEffectiveResultDescriptor(customCatalogEntry)).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
     expect(parseBuildReviewReviewerPayload(judged([securityFinding], { rubric: 'security' }), security)).toMatchObject({
       kind: 'judged', rubric: 'security', verdict: 'FAIL', findings: [{ concernKind: 'injection' }],
     });
@@ -208,10 +225,8 @@ describe('build-review domain', () => {
   });
 
   it('keeps test-quality specialized and custom unsupported payloads distinct from empty findings', () => {
-    const customDescriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
-    const builtInDescriptor = buildReviewEffectiveResultDescriptor({
-      id: 'testQuality', kind: 'builtin', policy: customCatalogEntry.policy,
-    });
+    const customDescriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const builtInDescriptor = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const customEmpty = customPayload([]);
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires a deployment credential' };
 

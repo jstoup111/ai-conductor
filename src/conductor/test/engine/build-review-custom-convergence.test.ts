@@ -42,7 +42,7 @@ describe('custom build-review convergence', () => {
       lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke,
     };
     const config = { llm_provider: ['codex', 'claude'], build_review: {
-      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false } },
+      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
       custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: ['codex', 'claude'] } },
     } } as HarnessConfig;
     const resolved = resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY);
@@ -126,7 +126,7 @@ describe('custom build-review convergence', () => {
     const projectRoot = join(main, '.worktrees', slug);
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     const config = { llm_provider: 'claude', build_review: {
-      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false } },
+      enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
       custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Review.', source: 'project', llm_provider: 'claude' } },
     } } as HarnessConfig;
     let useStoredDisposition = false;

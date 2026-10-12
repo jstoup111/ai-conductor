@@ -2400,16 +2400,18 @@ export function validateBuildReviewVerdict(
     };
   }
   const rubricSrc = e.rubric as Record<string, unknown>;
-  // Scalar verdicts predate the aggregate envelope and the default-off
-  // security rubric. Keep those persisted legacy PASS/FAIL artifacts readable:
-  // an omitted security flag is its historical disabled state. Aggregates are
-  // emitted by the current engine and remain exhaustive through
-  // parseBuildReviewAggregate above; testQuality was required before either
-  // format and must remain required.
+  // Scalar verdicts predate the aggregate envelope and the later security and
+  // implementation-quality rubric additions. Keep those persisted legacy
+  // PASS/FAIL artifacts readable: an omitted later-added flag is its
+  // historical disabled state. Aggregates are emitted by the current engine
+  // and remain exhaustive through parseBuildReviewAggregate above;
+  // testQuality was required before either format and must remain required.
   const legacyScalarVerdict = e.aggregateVersion === undefined;
   const rubric = {} as BuildReviewRubric;
   for (const rubricName of BUILD_REVIEW_RUBRIC_NAMES) {
-    if (legacyScalarVerdict && rubricName === 'security' && rubricSrc[rubricName] === undefined) {
+    if (legacyScalarVerdict &&
+      (rubricName === 'security' || rubricName === 'implementationQuality') &&
+      rubricSrc[rubricName] === undefined) {
       rubric[rubricName] = false;
       continue;
     }

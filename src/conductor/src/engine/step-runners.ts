@@ -212,7 +212,7 @@ import { renderBuildReviewFrozenInputScope } from './build-review-materializatio
 import { probeReadOnlyReviewCapability, type ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES } from './build-review-input-integrity.js';
 import { BuildReviewLapGate } from './build-review-lap-gate.js';
-import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
   emitBuildReviewCacheDiscard,
@@ -2951,12 +2951,13 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
+    planPath: string,
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
     child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, executionContext, readOnlyReviewCapabilities, child);
+      return await this.runRubricBuildReviewInner(inputs, config, tier, planPath, executionContext, readOnlyReviewCapabilities, child);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
@@ -2974,6 +2975,7 @@ export class DefaultStepRunner implements StepRunner {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
+    planPath: string,
     executionContext?: ExecutionContext,
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
     child?: import('./child-context.js').ChildId,
@@ -3466,10 +3468,32 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
+    // Unit-level runner callers need only provide the frozen fields relevant
+    // to their asserted branch. An omitted plan carries no declaration, so it
+    // cannot suppress a finding.
+    const declaredPlanSource = await resolvePlanPatternSource(
+      planPath === undefined ? '' : relative(this.projectDir, planPath).replaceAll('\\', '/'),
+      inputs.planBody ?? '',
+      async (path) => this.fileExists(join(this.projectDir, path)),
+    );
+    const implementationQualityResult = validResults.implementationQuality;
+    const declaredReplicationSuppressions = declaredPlanSource.kind === 'resolved' && implementationQualityResult.kind === 'judged'
+      ? implementationQualityResult.findings.flatMap((finding) => {
+        if (finding.concernKind !== 'duplication' || finding.anchor.locus.path !== declaredPlanSource.renameMap.reduce(
+          (path, pair) => path.replaceAll(pair.source, pair.target), declaredPlanSource.sourcePath,
+        ) || finding.evidenceLocations.some((location) => location.split(':', 1)[0] !== declaredPlanSource.sourcePath)) return [];
+        const identity = canonicalizeBuildReviewFindingIdentity({
+          rubric: 'implementationQuality', contractVersion: implementationQualityResult.contractVersion,
+          concernKind: finding.concernKind, anchor: finding.anchor,
+        });
+        return identity ? [{ findingId: identity.id, sourcePath: declaredPlanSource.sourcePath, targetPath: finding.anchor.locus.path }] : [];
+      })
+      : [];
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
       results: validResults,
+      declaredReplicationSuppressions,
       ...(customResults === undefined ? {} : {
         customResults,
         currentCustomRubrics: customEntries.map((entry) => entry.id),
@@ -4345,6 +4369,7 @@ export class DefaultStepRunner implements StepRunner {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
       testQuality: 'Test Quality',
       security: 'Security',
+      implementationQuality: 'Implementation quality',
     };
     const contractShape = renderRubricContractShape(getBuildReviewRubricDescriptor(branch.rubric).contract);
     const rubricPrompt = [
@@ -5307,6 +5332,7 @@ export class DefaultStepRunner implements StepRunner {
         inputs,
         buildReviewConfig,
         tier,
+        planPath,
         executionContext,
         readOnlyReviewCapabilities,
         activeChild,

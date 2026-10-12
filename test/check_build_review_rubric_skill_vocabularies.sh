@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Covers: task:11, task:rem-prd-audit-11
 set -euo pipefail
 
 # Keep the provider-facing concern-kind definitions and anchor reference
@@ -60,6 +61,10 @@ const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string,
     fixed: {},
   },
   security: {
+    referenceFields: ['locus'],
+    fixed: {},
+  },
+  implementationQuality: {
     referenceFields: ['locus'],
     fixed: {},
   },
@@ -141,7 +146,7 @@ if (testOverride !== undefined) {
   }
 }
 
-for (const rubric of ['testQuality', 'security']) {
+for (const rubric of ['testQuality', 'security', 'implementationQuality']) {
   const descriptor = descriptorFor(rubric) as {
     contract?: { output?: { jsonSchema?: { properties?: { findings?: { items?: { properties?: { concernKind?: { enum?: unknown } } } } } } } };
   };
@@ -201,7 +206,7 @@ check_vocabulary_drift() {
     return 1
   fi
 
-  for rubric in testQuality security; do
+  for rubric in testQuality security implementationQuality; do
     skill_file="$harness_dir/skills/build-review-$(rubric_skill_name "$rubric")/SKILL.md"
     if [ ! -f "$skill_file" ]; then
       echo "missing vocabulary source for ${rubric}: ${skill_file}" >&2
@@ -246,7 +251,7 @@ check_reference_grammar_drift() {
     return 1
   fi
 
-  for rubric in testQuality security; do
+  for rubric in testQuality security implementationQuality; do
     if grep -qE "^${rubric} !baseline-rejected$" <<<"$probe_output"; then
       echo "build-review ${rubric} reference grammar drift !baseline-rejected: the parser rejected the fully-documented specimen anchor — update the anchor contract and the probe specimens together" >&2
       return 1
@@ -276,6 +281,7 @@ rubric_skill_name() {
   case "$1" in
     testQuality) printf '%s' test-quality ;;
     security) printf '%s' security ;;
+    implementationQuality) printf '%s' implementation-quality ;;
     *) return 1 ;;
   esac
 }
@@ -302,7 +308,7 @@ function parseContentRegionReference(value: unknown): unknown {
 }
 export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
   const source = value;
-  return source.rubric === 'testQuality' || source.rubric === 'security'
+  return source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality'
     ? parseContentRegionReference(source.locus)
     : undefined;
 }
@@ -313,6 +319,7 @@ const concernKinds = {
     'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
     'authentication-failure', 'integrity-failure', 'ssrf',
   ],
+  implementationQuality: ['duplication', 'excess-complexity', 'obscured-intent', 'primitive-obsession', 'representable-invalid-state', 'non-exhaustive-domain-match', 'non-semantic-name'],
 };
 export function getBuildReviewRubricDescriptor(rubric: keyof typeof concernKinds): unknown {
   return { contract: { output: { jsonSchema: { properties: { findings: { items: { properties: {
@@ -321,7 +328,7 @@ export function getBuildReviewRubricDescriptor(rubric: keyof typeof concernKinds
 }
 EOF
 
-for rubric in test-quality security; do
+for rubric in test-quality security implementation-quality; do
   mkdir -p "$fixture_harness/skills/build-review-$rubric"
 done
 
@@ -336,6 +343,12 @@ printf '%s\n' '## Judgement' \
   >"$fixture_harness/skills/build-review-security/SKILL.md"
 printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
   >>"$fixture_harness/skills/build-review-security/SKILL.md"
+printf '%s\n' '## Judgement' \
+  '- `duplication` — definition' '- `excess-complexity` — definition' '- `obscured-intent` — definition' '- `primitive-obsession` — definition' \
+  '- `representable-invalid-state` — definition' '- `non-exhaustive-domain-match` — definition' '- `non-semantic-name` — definition' \
+  >"$fixture_harness/skills/build-review-implementation-quality/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-implementation-quality/SKILL.md"
 
 # The aligned fixture must pass both checks before any drift scenario runs.
 if ! check_vocabulary_drift "$fixture_domain" "$fixture_harness" >/dev/null; then
@@ -411,6 +424,22 @@ cp "$HARNESS_DIR/test/fixtures/build-review-skill-vocab/extra-skill-kind.md" \
   "$fixture_skill_extra_harness/skills/build-review-security/SKILL.md"
 run_vocabulary_drift_fixture \
   'a skill-side extra security vocabulary member' "$fixture_domain" "$fixture_skill_extra_harness" security unknown-security-kind
+
+# The default-on implementation-quality rubric must be held to the same
+# bidirectional vocabulary contract as the optional security rubric.
+fixture_iq_skill_extra_harness="$fixture_dir/harness-iq-skill-extra"
+cp -R "$fixture_harness" "$fixture_iq_skill_extra_harness"
+cp "$HARNESS_DIR/test/fixtures/build-review-skill-vocab/extra-implementation-quality-kind.md" \
+  "$fixture_iq_skill_extra_harness/skills/build-review-implementation-quality/SKILL.md"
+run_vocabulary_drift_fixture \
+  'a skill-side extra implementationQuality vocabulary member' "$fixture_domain" "$fixture_iq_skill_extra_harness" implementationQuality unknown-implementation-quality-kind
+
+fixture_iq_skill_missing_harness="$fixture_dir/harness-iq-skill-missing"
+cp -R "$fixture_harness" "$fixture_iq_skill_missing_harness"
+cp "$HARNESS_DIR/test/fixtures/build-review-skill-vocab/missing-implementation-quality-kind.md" \
+  "$fixture_iq_skill_missing_harness/skills/build-review-implementation-quality/SKILL.md"
+run_vocabulary_drift_fixture \
+  'a skill-side missing implementationQuality vocabulary member' "$fixture_domain" "$fixture_iq_skill_missing_harness" implementationQuality primitive-obsession
 
 if fixture_output=$(BUILD_REVIEW_RUBRIC_VOCAB_TEST_MODE=1 BUILD_REVIEW_RUBRIC_VOCAB_TEST_OVERRIDE='security:unknown-security-kind' \
   check_vocabulary_drift "$fixture_domain" "$fixture_harness" 2>&1); then

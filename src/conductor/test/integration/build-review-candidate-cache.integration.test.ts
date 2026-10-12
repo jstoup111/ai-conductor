@@ -103,6 +103,7 @@ describe('build-review candidate cache runner ordering', () => {
       branches: [
         { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'cache-write-failed', detail: 'rename denied' },
         { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+        { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' },
       ],
     });
     expect(events).toEqual(['cache-write-failed']);
@@ -129,7 +130,7 @@ describe('build-review candidate cache runner ordering', () => {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: {
         llm_provider: 'codex',
-        build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
           portable: {
             enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', llm_provider: 'codex',
             model: 'gpt-5.6-sol', model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_retries: 1,
@@ -227,7 +228,7 @@ describe('build-review candidate cache runner ordering', () => {
       : fallbackSources.map((source) => installed(source)));
     const runner = new DefaultStepRunner(codex, 'candidate-fallback-coverage', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', llm_provider: ['codex', 'claude'] },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,
@@ -268,7 +269,7 @@ describe('build-review candidate cache runner ordering', () => {
     let digest = `sha256-v1:${'a'.repeat(64)}`;
     const runner = new DefaultStepRunner(provider, 'candidate-cache-discard', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
-      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', llm_provider: 'codex' },
       } } } as HarnessConfig,
       providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(), events,

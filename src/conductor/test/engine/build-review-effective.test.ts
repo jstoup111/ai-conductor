@@ -1,4 +1,4 @@
-// Covers: task:25, task:26, task:27
+// Covers: task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -18,6 +18,7 @@ const currentContractVersion: BuildReviewRubricContractVersion = 'v3';
 
 const testQualityFinding = { concernKind: 'test-insensitive', summary: 'Actionable finding summary', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
 const securityFinding = { concernKind: 'committed-secret', summary: 'Credential committed to source.', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security' as const, locus: { path: 'src/a.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'credential assignment' } } };
+const implementationQualityFinding = { concernKind: 'primitive-obsession', summary: 'Raw string state permits invalid domain values.', evidenceLocations: ['src/a.ts:8'], anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/a.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'changed state model' } } };
 
 function securityPass() {
   return { kind: 'judged' as const, rubric: 'security' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [], verdict: 'PASS' as const };
@@ -125,6 +126,18 @@ function scopeAggregate(resolution: 'indeterminate' | 'resolved', includeTestQua
 const identityDeps = { resolveMainRoot: async () => root, realpath: async (path: string) => path };
 
 describe('live build-review effective resolver', () => {
+  it('keeps an above-floor implementation-quality finding unresolved and suppresses a below-floor one', () => {
+    const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
+      testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+      implementationQuality: { kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [{ ...implementationQualityFinding, confidence: 80 }], verdict: 'FAIL' },
+    } });
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...implementationQualityFinding, rubric: 'implementationQuality', contractVersion: currentContractVersion })!;
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(raw, feature, [], [], { implementationQuality: 70 })).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id], suppressedFindingIds: [] });
+    if (raw.results.implementationQuality.kind !== 'judged') throw new Error('implementation-quality fixture must be judged');
+    const below = { ...raw, results: { ...raw.results, implementationQuality: { ...raw.results.implementationQuality, findings: [{ ...implementationQualityFinding, confidence: 60 }] } } };
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(below, feature, [], [], { implementationQuality: 70 })).toMatchObject({ verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [identity.id] });
+  });
+
   it('suppresses only scored security findings below the security confidence floor', () => {
     const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
       testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [], verdict: 'PASS' },

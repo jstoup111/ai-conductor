@@ -193,7 +193,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
-  return value === "testQuality" || value === "security";
+  return value === "testQuality" || value === "security" || value === "implementationQuality";
 }
 
 function isCacheRubric(value: unknown): value is string {

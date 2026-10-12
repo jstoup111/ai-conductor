@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type {
-  BuildReviewEffectiveResultDescriptor,
   BuildReviewInfrastructureFailure,
   BuildReviewLapId,
   BuildReviewScopeIncompleteFault,
@@ -10,7 +9,6 @@ import type {
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
-import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
 import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type {
   RevertedProductionFileReference,
@@ -118,8 +116,9 @@ export interface TestQualityProjection extends CommonProjection<'testQuality'> {
 
 /** Whole-diff, by-reference projection for the security review branch. */
 export interface SecurityProjection extends CommonProjection<'security'> {}
+export interface ImplementationQualityProjection extends CommonProjection<'implementationQuality'> {}
 
-export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection;
+export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection | ImplementationQualityProjection;
 
 /** Test-scope fields belong exclusively to the test-quality rubric. */
 export function isTestQualityProjection(
@@ -186,22 +185,8 @@ export function buildReviewRubricPromptView(projection: BuildReviewRubricProject
 export type BuildReviewRubricProjections = {
   readonly testQuality: TestQualityProjection;
   readonly security: SecurityProjection;
+  readonly implementationQuality: ImplementationQualityProjection;
 };
-
-/**
- * Bind parser choice to one already-resolved effective catalog member.  This
- * intentionally does not consult the built-in registry or an enabled map:
- * custom policy ids are dynamic while built-ins retain their bespoke parser.
- */
-export function buildReviewEffectiveResultDescriptor(
-  entry: ResolvedBuildReviewCatalogEntry,
-): BuildReviewEffectiveResultDescriptor {
-  if (entry.kind !== 'builtin') return Object.freeze({ kind: 'custom', rubric: entry.id, parser: 'custom-findings-v1' });
-  // Each built-in carries its own catalog id and parser tag; never relabel one as another.
-  return entry.id === 'security'
-    ? Object.freeze({ kind: 'builtin', rubric: 'security', parser: 'security-v3' })
-    : Object.freeze({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
-}
 
 /** Parse a reviewer response using the parser bound by the effective member. */
 export { parseBuildReviewReviewerPayload } from './build-review-domain.js';
@@ -498,5 +483,6 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     preflight: source.testQuality.preflight,
   }) as TestQualityProjection;
   const security = seal(common(source, 'security')) as SecurityProjection;
-  return Object.freeze({ testQuality, security });
+  const implementationQuality = seal(common(source, 'implementationQuality')) as ImplementationQualityProjection;
+  return Object.freeze({ testQuality, security, implementationQuality });
 }

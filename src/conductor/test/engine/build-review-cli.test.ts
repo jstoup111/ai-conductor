@@ -503,7 +503,7 @@ describe('build-review findings CLI', () => {
     expect(store.list).toHaveBeenCalledWith({ version: 'v1', repository: '/main', feature: 'review-rubrics' });
     expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
       feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'PASS',
-      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['security'], infrastructureFailureRubrics: [],
+      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['security', 'implementationQuality'], infrastructureFailureRubrics: [],
       acceptedDispositions: [{
         findingId: identity.id,
         disposition: expect.objectContaining({
@@ -616,13 +616,13 @@ describe('build-review findings CLI', () => {
 
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security'], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security', 'implementationQuality'], infrastructureFailureRubrics: [], acceptedDispositions: [],
       cases: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([
       'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
-      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: security', 'Infrastructure failures: none',
+      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: security, implementationQuality', 'Infrastructure failures: none',
     ].join('\n'));
   });
 

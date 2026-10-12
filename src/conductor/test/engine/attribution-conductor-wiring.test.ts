@@ -330,7 +330,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       {
         config: {
           llm_provider: ['claude', 'codex'],
-          build_review: { rubrics: { testQuality: { enabled: true } } },
+          build_review: { rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
           steps: {
             build_review: { llm_provider: 'codex' },
             attribution_verify: { llm_provider: 'codex' },

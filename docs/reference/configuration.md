@@ -1582,7 +1582,7 @@ Each originating child may cause at most 3 applied feature repairs. The next rep
 
 ## build_review
 
-An opt-in judgement gate at the `build` → downstream seam. It no longer judges plan conformance,
+A judgement gate at the `build` → downstream seam; only `implementationQuality` runs by default. It no longer judges plan conformance,
 outcome delivery, or mechanism soundness — those questions now belong to [`prd_audit`](#prd_audit) and
 the as-built architecture review ([`architecture_review_as_built`](#architecture_review_as_built)). The
 block is normalized in place; the resolved value is written back (`config.ts:1111-1177`).
@@ -1593,7 +1593,7 @@ block is normalized in place; the resolved value is written back (`config.ts:111
 | `build_review.adjudication.enabled` | boolean | `true` | Strict nested rollout switch for post-join remediation adjudication |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
-| `build_review.rubrics` | object | `testQuality`, `security` off | Closed canonical map: `testQuality` and `security`. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
+| `build_review.rubrics` | object | `implementationQuality` on; `testQuality`, `security` off | Closed canonical map: `testQuality`, `security`, and `implementationQuality`. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
 | `build_review.custom_rubrics` | object | disabled | Opt-in installed custom review policies (maximum 32 declarations) |
 
 Normalization contract:
@@ -1625,7 +1625,7 @@ catalog discovery, waiting for the lap, and judgment across provider fallback. D
 on expiry; an already-running provider may finish, but its late judgment is rejected as a timeout
 and its invocation usage is retained. This is an acceptance deadline, not a process kill timeout.
 
-`testQuality` and `security` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
+`testQuality`, `security`, and `implementationQuality` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
 `model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`. `max_projection_bytes` is a
 positive integer UTF-8 byte limit for the rubric's canonical projection; it defaults to `1048576` and the
 limit itself is admitted. An oversized projection is not dispatched: the gate records
@@ -1633,23 +1633,32 @@ limit itself is admitted. An oversized projection is not dispatched: the gate re
 consuming the shared mechanical-fault allowance. `min_confidence` is an integer from 0 through 100 and
 defaults to `0`; scored findings below it are reported as suppressed rather than failing the gate or
 remaining actionable through `build-review findings` / `build-review accept`. Unscored findings are
-never suppressed. Both rubrics are off by default. When enabled, `testQuality` derives a frozen,
+never suppressed. `testQuality` and `security` are off by default and default to `effort: high`; `implementationQuality` is
+on by default with `effort: medium` — opt out with `build_review.rubrics.implementationQuality.enabled: false`. When enabled, `testQuality` derives a frozen,
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
 rename with neither an established target nor a concrete candidate is a valid empty-scope PASS and
-dispatches neither the test-quality reviewer nor counterfactual execution. Enabled security review still
-runs and participates in the joined verdict. Missing markers, absent plan test paths, and
+dispatches neither the test-quality reviewer nor counterfactual execution. Enabled security and
+implementation-quality review still run and participates in the joined verdict. Missing markers, absent plan test paths, and
 an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
 Under `build_review.rubrics`: Every other id ever accepted is retired: `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring`.
 Any unknown rubric id is rejected as a configuration error. Each retired id above is accepted as a
 no-op with a one-time notice naming the retired setting; it never fails configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
 changed-hunk-anchored security defects and has no test scope or counterfactual preflight.
+`implementationQuality` judges the graded diff for code-quality and domain-modelling defects in a closed
+vocabulary (`duplication`, `excess-complexity`, `obscured-intent`, `primitive-obsession`,
+`representable-invalid-state`, `non-exhaustive-domain-match`, `non-semantic-name`), anchored the same way and
+with no test scope or preflight. Unlike `security`, it runs on every stacked child, not only the leaf. When
+the plan declares a resolvable [`**Pattern-source:**` / `**Rename-map:**`](../explanation/gates.md#declared-pattern-replication-check) replication,
+the engine suppresses each `duplication` finding anchored at the derived target path whose evidence cites only
+the declared source path, and records it in the aggregate's `declaredReplicationSuppressions`.
 Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 
 ### `build_review.custom_rubrics`
 
 Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an ASCII letter (upper- or
-lowercase), followed by letters, digits, `_`, or `-`. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
+lowercase), followed by letters, digits, `_`, or `-`. A built-in rubric id (`testQuality`, `security`,
+`implementationQuality`) is reserved and rejected as a custom id. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
 it may set `source` (`project`, `global`, or `plugin`), `resources`, and the normal provider/model/retry
 fields. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
 `build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.

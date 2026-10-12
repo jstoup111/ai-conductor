@@ -4,6 +4,8 @@ import {
   CLAUDE_DISPLAY_NAME,
   CLAUDE_PROVIDER,
   CODEX_DISPLAY_NAME,
+  CODEX_PROVIDER,
+  PI_PROVIDER,
 } from '../execution/provider-catalog.js';
 
 // These steps retain exhaustive provider-policy placeholders for StepName
@@ -50,7 +52,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
-    'Fresh-session grader for explicitly enabled, criterion-bound test-quality concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review.',
+    'Fresh-session grader for the default-on implementation-quality rubric and explicitly enabled peer concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review.',
   test_suite:
     'Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required.',
   manual_test: 'Structured validation against stories — pattern-following.',
@@ -186,6 +188,16 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     executionPath: 'engine-managed auxiliary rubric',
     providerCells: providerCellsForReview(RESOLVED_RUBRIC_POLICY, RESOLVED_RUBRIC_POLICY),
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored security defects in the closed security vocabulary.',
+  },
+  {
+    name: 'build-review-implementation-quality',
+    executionPath: 'engine-managed auxiliary rubric',
+    providerCells: {
+      [CLAUDE_PROVIDER]: { model: 'opus', effort: 'medium' },
+      [CODEX_PROVIDER]: { model: 'gpt-5.6-sol', effort: 'medium' },
+      [PI_PROVIDER]: { model: PI_NOT_APPLICABLE, effort: PI_NOT_APPLICABLE },
+    },
+    why: 'Judges the whole feature diff for concrete, changed-hunk-anchored code-quality and domain-modelling defects in the closed implementation-quality vocabulary.',
   },
   {
     name: 'rebase-regrade',

@@ -5222,7 +5222,7 @@ Task 1 → Task 2
     it('accepts security-only failures, requires their findings, and renders their details', () => {
       const securityOnly = {
         verdict: 'FAIL' as const,
-        rubric: { testQuality: false, security: true },
+        rubric: { testQuality: false, security: true, implementationQuality: false },
         findings: { security: ['SQL interpolation allows an injection path.'] },
       };
 
@@ -5258,7 +5258,7 @@ Task 1 → Task 2
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { testQuality: true, security: false },
+        rubric: { testQuality: true, security: false, implementationQuality: false },
       });
 
       expect(result).toEqual({
@@ -5271,7 +5271,7 @@ Task 1 → Task 2
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { testQuality: true, security: false },
+        rubric: { testQuality: true, security: false, implementationQuality: false },
       });
     });
 
@@ -5302,12 +5302,12 @@ Task 1 → Task 2
     it('accepts a valid PASS verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { testQuality: false, security: false },
+        rubric: { testQuality: false, security: false, implementationQuality: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { testQuality: false, security: false },
+        rubric: { testQuality: false, security: false, implementationQuality: false },
       });
     });
 
@@ -5353,25 +5353,25 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         reasons: ['test assertion does not observe changed behavior'],
-        rubric: { testQuality: true, security: false },
+        rubric: { testQuality: true, security: false, implementationQuality: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
         reasons: ['test assertion does not observe changed behavior'],
-        rubric: { testQuality: true, security: false },
+        rubric: { testQuality: true, security: false, implementationQuality: false },
       });
     });
 
     it('accepts and round-trips a PASS test-quality verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { testQuality: false, security: false },
+        rubric: { testQuality: false, security: false, implementationQuality: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { testQuality: false, security: false },
+        rubric: { testQuality: false, security: false, implementationQuality: false },
       });
     });
 
@@ -5379,20 +5379,20 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         reasons: ['changed test remains insensitive to the claimed behavior'],
-        rubric: { testQuality: true, security: false },
+        rubric: { testQuality: true, security: false, implementationQuality: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
         reasons: ['changed test remains insensitive to the claimed behavior'],
-        rubric: { testQuality: true, security: false },
+        rubric: { testQuality: true, security: false, implementationQuality: false },
       });
     });
 
     it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'pass',
-        rubric: { testQuality: false, security: false },
+        rubric: { testQuality: false, security: false, implementationQuality: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -5400,7 +5400,7 @@ Task 1 → Task 2
     it('rejects unrecognized string "APPROVED" as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'APPROVED',
-        rubric: { testQuality: false, security: false },
+        rubric: { testQuality: false, security: false, implementationQuality: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -5422,7 +5422,7 @@ Task 1 → Task 2
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { testQuality: false, security: false },
+        rubric: { testQuality: false, security: false, implementationQuality: false },
         codeStamp: 'abc123def456',
       });
     });
@@ -5657,7 +5657,7 @@ Task 1 → Task 2
         verdictFreshness: { outcome: 'preserved_surface_miss' },
       });
       expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), {
-        minConfidence: { testQuality: 70, security: 0 },
+        minConfidence: { testQuality: 70, security: 0, implementationQuality: 0 },
       });
       expect(result.staleLap).toBeUndefined();
     });

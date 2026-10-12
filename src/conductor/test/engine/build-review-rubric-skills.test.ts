@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:rem-prd-audit-10-2
 import { createHash } from 'node:crypto';
 import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
+  parseBuildReviewJudgedResult,
   parseBuildReviewFindingAnchor,
   parseBuildReviewFindingConcernKind,
 } from '../../src/engine/build-review-domain.js';
@@ -18,6 +19,7 @@ import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 const skill = fileURLToPath(new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url));
 const securitySkill = fileURLToPath(new URL('../../../../skills/build-review-security/SKILL.md', import.meta.url));
+const implementationQualitySkill = fileURLToPath(new URL('../../../../skills/build-review-implementation-quality/SKILL.md', import.meta.url));
 const retired = ['build-review-scope', 'build-review-root-cause', 'build-review-completeness'];
 const hash = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
 
@@ -56,6 +58,33 @@ function judgedSecurityFixture(path: string, concernKind?: string, evidenceLocat
 }
 
 describe('build-review rubric skill catalog', () => {
+  it('pins implementation-quality defect and non-finding payload fixtures at changed hunks', () => {
+    const kinds = ['duplication', 'excess-complexity', 'primitive-obsession', 'representable-invalid-state', 'non-exhaustive-domain-match'] as const;
+    const failFixtures = kinds.map((concernKind, index) => {
+      const locus = { path: `src/fixture-${index}.ts`, contentHash: hash(`implementation-${concernKind}`), display: 'introducing changed hunk' };
+      const findings = [{ concernKind, summary: `Introduces ${concernKind}.`, evidenceLocations: concernKind === 'duplication' ? ['src/existing-block.ts:8'] : [`${locus.path}:8`], anchor: { rubric: 'implementationQuality', locus } }];
+      return parseBuildReviewJudgedResult({ kind: 'judged', rubric: 'implementationQuality', lapId: 'lap-fixtures', snapshotDigest: 'sha256:fixtures', contractVersion: 'v3', findings }, { changedTests: [], changedContentRegions: [locus], changedPaths: [locus.path], planTasks: [] });
+    });
+    expect(failFixtures).toEqual(kinds.map((concernKind) => expect.objectContaining({ verdict: 'FAIL', findings: [expect.objectContaining({ concernKind })] })));
+    for (const name of ['rename-reformat', 'partial-acceptance-criteria', 'adr-violation', 'style-only', 'unchanged-files-duplication']) {
+      expect(parseBuildReviewJudgedResult({ kind: 'judged', rubric: 'implementationQuality', lapId: `lap-${name}`, snapshotDigest: 'sha256:fixtures', contractVersion: 'v3', findings: [] })).toMatchObject({ verdict: 'PASS', findings: [] });
+    }
+  });
+  it('ships the implementation-quality skill with its complete vocabulary and non-findings', async () => {
+    const content = await readFile(implementationQualitySkill, 'utf8');
+    expect(content).toMatch(/^name: build-review-implementation-quality$/m);
+    expect(content).toMatch(/^enforcement: gating$/m);
+    expect(content).toMatch(/^phase: build$/m);
+    const judgement = judgementSection(content);
+    for (const kind of BUILD_REVIEW_FINDING_VOCABULARIES.implementationQuality.concernKinds) {
+      expect(judgement).toContain(`\`${kind}\``);
+    }
+    const excessComplexity = judgement.match(/^- `excess-complexity`[\s\S]*?(?=\n- `|\nDo not|(?![\s\S]))/m)?.[0];
+    expect(excessComplexity).toMatch(/four or more levels of nesting that can be flattened without changing correctness/i);
+    expect(excessComplexity).not.toMatch(/correctness cost/i);
+    expect(content).toMatch(/hunk that introduces/i);
+    expect(content).toMatch(/style preferences/i);
+  });
   it('contains only the test-quality judgement skill', async () => {
     await expect(readFile(skill, 'utf8')).resolves.toContain('name: build-review-test-quality');
     const [testInsensitive] = BUILD_REVIEW_FINDING_VOCABULARIES.testQuality.concernKinds;

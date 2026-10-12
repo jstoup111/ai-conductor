@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:3, task:10
 import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
@@ -80,7 +80,9 @@ function source(overrides: Partial<Source> = {}): Source {
       },
       sourceSnapshot: {
         digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
-        diff: FIXTURE_DIFF, planBody: '# Approved plan\n',
+        diff: FIXTURE_DIFF, planBody: '# Approved plan\n', planPath: '.docs/plans/private-plan.md',
+        storiesPath: 'stories/private-story.md', storiesContent: 'private stories body',
+        adrPath: 'decisions/private-adr.md', adrContent: 'private ADR body',
         changedTestTitles: [{ selector: 'test/a.test.ts', titleText: 'a > persists', staticExtractionFallback: false }],
       },
     } as unknown as Source['inputs'],
@@ -308,7 +310,7 @@ describe('build-review rubric projections', () => {
     const projections = deriveBuildReviewRubricProjections(source());
     const projection: TestQualityProjection = projections.testQuality;
 
-    expect(Object.keys(projections)).toEqual(['testQuality', 'security']);
+    expect(Object.keys(projections)).toEqual(['testQuality', 'security', 'implementationQuality']);
     expect(Object.keys(projection).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'rubric', 'runnerSelectors', 'snapshotDigest', 'testScope', 'testSuiteProof', 'unresolvedMarkers',
@@ -329,6 +331,15 @@ describe('build-review rubric projections', () => {
     expect(projection).not.toHaveProperty('diff');
     expect(projection.preflight).not.toHaveProperty('counterfactualSensitivity');
     expect(Object.isFrozen(projection)).toBe(true);
+    expect(Object.keys(projections.implementationQuality).sort()).toEqual([
+      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase',
+      'projectionVersion', 'rubric', 'snapshotDigest',
+    ]);
+    const serializedImplementationQuality = JSON.stringify(projections.implementationQuality);
+    for (const privateInput of ['# Approved plan', 'stories/private-story.md', 'private stories body', 'decisions/private-adr.md', 'private ADR body']) {
+      expect(serializedImplementationQuality).not.toContain(privateInput);
+    }
+    expect(projections.implementationQuality.snapshotDigest).toBe(projections.security.snapshotDigest);
   });
 
   it('canonically serializes unordered evidence so member order never perturbs the projection or digest', () => {

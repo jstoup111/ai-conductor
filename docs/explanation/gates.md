@@ -115,6 +115,11 @@ grader verdict — no RED evidence is derived from it, and it never runs at `acc
 rename-map pair) fails `build_review` before either the equivalence check or the grader runs, so a
 half-declaration can never be read as no declaration at all.
 
+A resolved declaration also licenses the copy it describes. After the `implementationQuality` rubric judges,
+the engine suppresses each of its `duplication` findings anchored at the derived target path whose evidence
+cites only the declared source path; the suppressed ids are recorded in the aggregate's
+`declaredReplicationSuppressions`.
+
 ### Per-step completion gates
 
 These are the twelve gates that decide whether a step's work is real. Ten replace the default
@@ -127,7 +132,7 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `plan` | a plan that does not cover the feature's stories, scoped to this feature's plan and stories |
 | `build` | tasks reported complete without work — task rows are re-seeded and re-derived from the plan each evaluation, so a forged row fails; a task carrying `Done when:` checks additionally must show each check true before it closes, and a check the approved plan cannot make true is reported as a plan gap rather than repaired off-plan |
 | `acceptance_specs` | acceptance specs that never ran — proof is required that this feature's specs executed *and failed*, so a collection error or a skipped spec cannot pass for RED |
-| `build_review` | an incomplete build — built-in opt-in rubrics (`testQuality` and `security`, both off by default) plus opt-in installed custom review policies, judged from frozen review input rather than self-reports and through the shared decision/repair path; an empty rubric set is a PASS with nothing dispatched. See [`build_review.custom_rubrics`](../reference/configuration.md#build_reviewcustom_rubrics). |
+| `build_review` | an incomplete build — the default-on built-in `implementationQuality` rubric, opt-in built-in `testQuality` and `security`, plus opt-in installed custom review policies, judged from frozen review input rather than self-reports and through the shared decision/repair path; an empty rubric set is a PASS with nothing dispatched. See [`build_review.custom_rubrics`](../reference/configuration.md#build_reviewcustom_rubrics). |
 | `test_suite` | a stale green — the fingerprint is re-inspected every time, so the evidence file's existence can never satisfy it |
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
 | `prd_audit` | a partial, malformed, or stale audit passing as complete — the reviewer returns a schema-constrained judgment over a bounded engine projection, and only the engine-validated `.pipeline/prd-audit.json` counts. Exactly one graded judgment (`PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE`) is required per active story criterion; a cited criterion, task, or requirement the projection does not carry is rejected by name, a `FIXABLE` must name exactly one active owner task, and a duplicate or missing criterion judgment makes the evidence incomplete. Rejected judgments are persisted with their diagnostics, but incomplete evidence blocks. A finding without an owning criterion is a no-owner `OVER_SCOPE` observation; its visible-scope authority binds immutable original evidence and can apply to later wording only through a fresh durable relation. The verdict must carry the current dispatch's attempt id and the reviewed `HEAD`; a `HEAD` that moves during review fails the attempt. A provider without native output-schema support, a projection overflow, malformed/unsupported history, write failure, and invalid provider output fail with a named reason. The rendered `.pipeline/prd-audit.md` is never parsed back into a verdict |
@@ -427,8 +432,8 @@ exhausted-mechanical-allowance HALT when the current lap has no readable diagnos
 ### Where a `build_review` FAIL goes
 
 `build_review` no longer judges plan conformance, outcome delivery, or mechanism soundness (FR-1): the
-`scope`, `completeness`, and `rootCause` rubrics are retired. The container ships built-in `testQuality` and
-`security` (both off by default) and opt-in installed custom review policies; their findings remain subject to the
+`scope`, `completeness`, and `rootCause` rubrics are retired. The container ships built-in `implementationQuality` (on by default), `testQuality`, and
+`security` (both off by default), and opt-in installed custom review policies; their findings remain subject to the
 same aggregate decision and repair contract. See [`build_review.custom_rubrics`](../reference/configuration.md#build_reviewcustom_rubrics). A `testQuality` finding — a test that could pass against a stub of the behavior it claims
 to cover — is a local diff defect the builder can fix in place, so a `build_review` FAIL routes straight
 to `build`; there is no remediation-planner branch for a `build_review` FAIL. The questions the retired
@@ -587,7 +592,9 @@ different engine build or edited rubric skill text is discarded (miss reasons
 `build_review_cache_discarded` event in `events.jsonl`, the daemon log, and the audit trail.
 
 Each rubric has a closed engine-owned finding vocabulary, repeated in its provider-facing skill contract:
-`testQuality` uses `test-insensitive`; `security` uses its ten security concern kinds. The parser normalizes harmless casing and underscore variation
+`testQuality` uses `test-insensitive`; `security` uses its ten security concern kinds; `implementationQuality` uses
+`duplication`, `excess-complexity`, `obscured-intent`, `primitive-obsession`, `representable-invalid-state`,
+`non-exhaustive-domain-match`, and `non-semantic-name`. The parser normalizes harmless casing and underscore variation
 before validation. A value outside the rubric's vocabulary is rejected and receives the bounded
 repair/rerun path below; it cannot become a new finding identity or burn a kickback.
 

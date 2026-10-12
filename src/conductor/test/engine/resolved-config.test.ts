@@ -272,9 +272,17 @@ describe('engine/resolved-config', () => {
       expect(resolved.enabled).toBe(true);
     });
 
-    it('defaults the test-quality rubric off with no overrides', () => {
+    it('defaults implementation quality on at medium effort while the existing rubrics remain off', () => {
       const resolved = resolveBuildReviewConfig(undefined);
-      expect(resolved.rubrics.testQuality.enabled).toBe(false);
+      expect({
+        testQuality: resolved.rubrics.testQuality.enabled,
+        security: resolved.rubrics.security.enabled,
+        implementationQuality: resolved.rubrics.implementationQuality,
+      }).toEqual({
+        testQuality: false,
+        security: false,
+        implementationQuality: expect.objectContaining({ enabled: true, effort: 'medium' }),
+      });
     });
 
     it('materializes the default-off security policy with its high effort and no confidence floor', () => {
@@ -388,7 +396,7 @@ describe('engine/resolved-config', () => {
         maxParallel: resolved.maxParallel,
         rubrics: resolved.rubrics,
       }).toEqual({
-        maxParallel: 0,
+        maxParallel: 1,
         rubrics: {
           testQuality: {
             enabled: false,
@@ -412,7 +420,47 @@ describe('engine/resolved-config', () => {
             escalate: true,
             min_confidence: 0,
           },
+          implementationQuality: {
+            enabled: true,
+            max_projection_bytes: 1_048_576,
+            llm_provider: ['claude', 'codex'],
+            model: 'opus',
+            effort: 'high',
+            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+            max_retries: 4,
+            escalate: true,
+            min_confidence: 0,
+          },
         },
+      });
+    });
+
+    it('resolves an explicit implementation-quality policy verbatim', () => {
+      const resolved = resolveBuildReviewConfig({
+        build_review: {
+          rubrics: {
+            implementationQuality: {
+              llm_provider: 'codex',
+              model: 'gpt-5.6-terra',
+              effort: 'high',
+              model_fallback_ladder: ['gpt-5.6-terra', 'gpt-5.6-luna'],
+              max_retries: 2,
+              escalate: true,
+              min_confidence: 65,
+            },
+          },
+        },
+      } as HarnessConfig);
+
+      expect(resolved.rubrics.implementationQuality).toMatchObject({
+        enabled: true,
+        llm_provider: 'codex',
+        model: 'gpt-5.6-terra',
+        effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-terra', 'gpt-5.6-luna'],
+        max_retries: 2,
+        escalate: true,
+        min_confidence: 65,
       });
     });
 
@@ -476,7 +524,7 @@ describe('engine/resolved-config', () => {
       const kotlinPolicy = resolved.catalog.find(({ id }) => id === 'kotlinPolicy');
       const testQuality = resolved.catalog.find(({ id }) => id === 'testQuality');
 
-      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'kotlinPolicy']);
+      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'implementationQuality', 'kotlinPolicy']);
       expect(testQuality).toMatchObject({
         id: 'testQuality',
         kind: 'builtin',
@@ -552,7 +600,7 @@ describe('engine/resolved-config', () => {
         catalog: readonly { id: string }[];
       };
 
-      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['testQuality']);
+      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['testQuality', 'implementationQuality']);
       expect(disabledGate.catalog).toEqual([]);
     });
 
@@ -585,7 +633,7 @@ describe('engine/resolved-config', () => {
         catalog: readonly EffectiveReviewCatalogMember[];
       };
 
-      expect(disabledCustom.catalog).toEqual([]);
+      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['implementationQuality']);
       expect(disabledGate.catalog).toEqual([]);
 
       const preflight = vi.fn(async () => { throw new Error('preflight must not run'); });

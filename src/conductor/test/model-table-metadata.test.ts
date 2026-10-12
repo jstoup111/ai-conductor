@@ -1,4 +1,4 @@
-// Covers: task:1, task:16, task:17
+// Covers: task:1, task:12, task:16, task:17, task:rem-prd-audit-12
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -296,6 +296,7 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
     expect(names).toEqual([
       'build-review-test-quality',
       'build-review-security',
+      'build-review-implementation-quality',
       'rebase-regrade',
     ]);
     expect(Object.keys(STEP_RATIONALE)).not.toEqual(expect.arrayContaining(names));
@@ -304,6 +305,16 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
       name: 'rebase-regrade',
       executionPath: 'engine-managed auxiliary judge',
     });
+
+    expect(AUXILIARY_MODEL_TABLE_ROWS.find((row) => row.name === 'build-review-implementation-quality')).toMatchObject({
+      executionPath: 'engine-managed auxiliary rubric',
+      providerCells: {
+        claude: { model: 'opus', effort: 'medium' },
+        codex: { model: 'gpt-5.6-sol', effort: 'medium' },
+      },
+    });
+    expect(STEP_RATIONALE.build_review).toMatch(/default-on implementation-quality rubric/i);
+    expect(STEP_RATIONALE.build_review).not.toMatch(/only explicitly enabled test-quality/i);
   });
 });
 

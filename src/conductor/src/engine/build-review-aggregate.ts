@@ -55,6 +55,8 @@ export interface BuildReviewAggregate {
   readonly rubric: Readonly<RubricFlags>;
   readonly findings: Readonly<LegacyFindings>;
   readonly reasons: readonly string[];
+  /** Engine-stamped duplication findings permitted by a declared exact replication. */
+  readonly declaredReplicationSuppressions?: readonly { readonly findingId: string; readonly sourcePath: string; readonly targetPath: string }[];
   /** Engine-stamped current-lap reduced-coverage evidence, when an allowance was used. */
   readonly reducedCoverageEvidence?: string;
   readonly codeStamp?: string | null;
@@ -77,6 +79,7 @@ export interface BuildReviewAggregateInput {
   readonly codeStamp?: string | null;
   readonly customResults?: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
   readonly currentCustomRubrics?: readonly string[];
+  readonly declaredReplicationSuppressions?: readonly { readonly findingId: string; readonly sourcePath: string; readonly targetPath: string }[];
 }
 
 /** Raw and accepted-risk state remain independently inspectable after join. */
@@ -311,6 +314,7 @@ function normalizeBuildReviewAggregateResults(
   return Object.freeze({
     testQuality: results.testQuality,
     security: results.security ?? { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+    implementationQuality: results.implementationQuality ?? { kind: 'skipped', rubric: 'implementationQuality', reason: 'disabled' },
   });
 }
 
@@ -328,7 +332,12 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
     coverage[name] = coverageFor(result);
     rubric[name] = legacyFailure(result);
     findings[name] = legacyFindingDetails(result);
-    reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    // The default-on rubric's disabled compatibility placeholder is coverage,
+    // not a reader-facing reason. This preserves old aggregate rendering while
+    // still retaining the exhaustive result in the typed map.
+    if (!(name === 'implementationQuality' && results[name].kind === 'skipped')) {
+      reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    }
     if (scopeFault) {
       scopeIncomplete.push(scopeFault);
       reasons.push(`[${name}] scope incomplete: ${scopeFault.detail}`);
@@ -342,6 +351,7 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
     results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(results, custom),
     rubric, findings, reasons,
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
+    ...(input.declaredReplicationSuppressions === undefined ? {} : { declaredReplicationSuppressions: Object.freeze([...input.declaredReplicationSuppressions]) }),
     ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
   const validated = parseBuildReviewAggregate(aggregate);
@@ -382,10 +392,15 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'scopeIncomplete', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
     ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
+    ...(source.declaredReplicationSuppressions === undefined ? [] : ['declaredReplicationSuppressions']),
     ...(isV2 ? ['customResults', 'currentCustomRubrics'] : []),
   ]) || (!isV1 && !isV2) || !isNonEmptyString(source.snapshotDigest) ||
     (source.reducedCoverageEvidence !== undefined && !isNonEmptyString(source.reducedCoverageEvidence)) ||
-    (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp))) return undefined;
+    (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp)) ||
+    (source.declaredReplicationSuppressions !== undefined && (!Array.isArray(source.declaredReplicationSuppressions) || source.declaredReplicationSuppressions.some((entry) => {
+      const item = record(entry);
+      return !item || !exactKeys(item, ['findingId', 'sourcePath', 'targetPath']) || !isNonEmptyString(item.findingId) || !isNonEmptyString(item.sourcePath) || !isNonEmptyString(item.targetPath);
+    })))) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   if (!lapId) return undefined;
   const results = parseResults(source.results, lapId, source.snapshotDigest);
@@ -406,7 +421,9 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     expectedCoverage[name] = coverageFor(results[name]);
     expectedRubric[name] = legacyFailure(results[name]);
     expectedFindings[name] = legacyFindingDetails(results[name]);
-    expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    if (!(name === 'implementationQuality' && results[name].kind === 'skipped')) {
+      expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    }
     const scopeFault = scopeFaultFor(results[name]);
     if (scopeFault) {
       expectedScopeIncomplete.push(scopeFault);
@@ -424,6 +441,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
     ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
+    ...(source.declaredReplicationSuppressions === undefined ? {} : { declaredReplicationSuppressions: Object.freeze(source.declaredReplicationSuppressions as { readonly findingId: string; readonly sourcePath: string; readonly targetPath: string }[]) }),
     ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
 }
@@ -487,6 +505,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const settled: string[] = [];
   const unresolved: string[] = [];
   const suppressed: string[] = [];
+  const declaredReplicationIds = new Set(aggregate.declaredReplicationSuppressions?.map((entry) => entry.findingId) ?? []);
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
   const uncoveredInfrastructure: BuildReviewRubricId[] = [];
@@ -523,6 +542,7 @@ export function deriveEffectiveBuildReviewVerdict(
       if (!identity) return undefined;
       if (acceptedFindingIds.has(identity.id)) accepted.push(identity.id);
       else if (settledSourceIds.has(`${rubric}:${identity.id}`)) settled.push(identity.id);
+      else if (declaredReplicationIds.has(identity.id)) suppressed.push(identity.id);
       else if (finding.confidence !== undefined && finding.confidence < (minConfidence[rubric] ?? 0)) suppressed.push(identity.id);
       else unresolved.push(identity.id);
     }
