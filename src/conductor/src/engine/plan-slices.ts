@@ -4,6 +4,7 @@ import {
   resolvePlanTaskReference,
   TASK_HEADER_PATTERN,
 } from './plan-task-parse.js';
+import { parsePlanDependencyGraph } from './plan-dependencies.js';
 import { MAX_CHILD_ID } from './child-context.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import { ALL_STEPS } from './steps.js';
@@ -127,7 +128,6 @@ const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 const SLICES_HEADING = /^##\s+Slices\s*$/i;
 const REQUIRED_HEADER = ['Slice', 'Title', 'Tasks'];
 const TABLE_DELIMITER_CELL = /^:?-{3,}:?$/;
-const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
 const STORY_LINE = /^\s*\*\*Story:\*\*\s*(.*?)\s*$/i;
 const TYPE_LINE = /^\s*\*\*Type:\*\*\s*(.*?)\s*$/i;
 
@@ -446,53 +446,14 @@ export function validatePlanSlices(planText: string): PlanSlicesValidation {
     }
   }
 
-  const taskBodies = parsePlanTaskBodies(planText);
-  const parsedTaskIds = new Set(taskBodies.keys());
-  for (const [taskId, body] of taskBodies) {
+  const dependencyGraph = parsePlanDependencyGraph(planText);
+  for (const violation of dependencyGraph.violations) {
+    if (!isEngineAppendedRemediationTaskId(violation.taskId)) violations.push(violation);
+  }
+  for (const [taskId, dependencyIds] of dependencyGraph.dependenciesByTaskId) {
     if (isEngineAppendedRemediationTaskId(taskId)) continue;
-    const bodyLines = body.split('\n');
-    const bodyFenced = fencedLineStates(bodyLines);
-    const dependencyLines = bodyLines
-      .map((line, index) => (bodyFenced[index] ? null : line.match(DEPENDENCIES_LINE)))
-      .filter((match): match is RegExpMatchArray => match !== null);
-    if (dependencyLines.length !== 1) {
-      violations.push({
-        code: 'dependencies-line',
-        taskId,
-        message: `Task ${taskId} must declare exactly one Dependencies line`,
-      });
-      continue;
-    }
-
-    const rawDependencies = dependencyLines[0][1].trim();
-    if (rawDependencies.toLowerCase() === 'none') continue;
-    const resolved = resolvePlanTaskReference(
-      rawDependencies
-        .split(',')
-        .map((segment) => segment.trim().replace(/^Tasks?\s+/i, ''))
-        .join(','),
-      parsedTaskIds,
-    );
-    if (resolved.kind === 'malformed') {
-      violations.push({
-        code: 'malformed-dependencies',
-        taskId,
-        message: `Task ${taskId} has malformed Dependencies "${rawDependencies}"; expected "none" or comma-separated task references (for example "Task 1, Tasks 2")`,
-      });
-      continue;
-    }
-    if (resolved.kind === 'unresolvable') {
-      for (const dependencyId of resolved.ids) {
-        violations.push({
-          code: 'unknown-dependency',
-          taskId,
-          message: `Task ${dependencyId} cited by Task ${taskId}'s Dependencies is an unknown task id`,
-        });
-      }
-      continue;
-    }
     const sourceSlice = sliceByTaskId.get(taskId);
-    for (const dependencyId of resolved.ids) {
+    for (const dependencyId of dependencyIds) {
       const dependencySlice = sliceByTaskId.get(dependencyId);
       if (sourceSlice !== undefined && dependencySlice !== undefined && dependencySlice > sourceSlice) {
         violations.push({
