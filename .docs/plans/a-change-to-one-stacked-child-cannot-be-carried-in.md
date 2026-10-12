@@ -1885,3 +1885,11 @@ outcomes as one feature (track scope boundary).
 **Done when:**
 - [test] S14.7 is satisfied by this task.
 - The repair for task rem-prd-audit-rem-prd-audit-R32 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R14: In stack-preflight.ts, change defaultAlreadyInStack to test the default against the branch of the first sealed declared child position, using the same sealed-position source as rem-as-built-R4, instead of the hardcoded childBranchFor(slug, 1). Add a real-git test in stack-preflight.realgit.test.ts with positions [2,4,7] where the default is already inside child 2. With baseRefreshDue, the preflight must run only the feature-repair, run no base-refresh restack, and still consume REKICK. Keep the existing child-1 tests.
+**Gate:** as-built
+**Rationale:** Verified from source (95%): defaultAlreadyInStack in src/conductor/src/engine/restack/stack-preflight.ts calls childBranchFor(slug, 1), so it hardcodes child 1. runStackPreflight uses that result to decide baseRefreshDue. With sealed positions such as [2,4,7] there is no child 1: childBranchFor fails or names the wrong branch, the function returns false, and a needless chained base refresh runs. The approved architecture (ADR adr-2026-10-07-per-child-build-region, decision 1: sealed declared positions are authoritative) is not in question. This is conforming implementation drift introduced by eb2e894687. Plan Task 30, which owns runStackPreflight and its chained base refresh, admits the fix, consistent with rem-as-built-R4's sealed-position derivation. Sibling sites in restack-executor.ts are already covered by rem-as-built-R4 and are excluded. Completed coverage survives: the existing Task 30 tests that use child 1 as the first position stay, and a non-1 case is added.
+**Governing clause:** adr-2026-10-07-per-child-build-region decision 1
+**Done when:**
+- adr-2026-10-07-per-child-build-region decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R14 is committed and its targeted tests pass.
