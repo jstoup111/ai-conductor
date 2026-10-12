@@ -168,10 +168,17 @@ Operator decisions (2026-10-10):
      dropped a child's own re-applied commit in testing.
 
 3. **Replay is off the worktree, and acceptance is a path-ownership check.**
+
+   > **Amended 2026-10-11 by #3197:** Message preservation covers the subject and body. Replay may
+   > normalize trailing whitespace and append the daemon co-author trailer when it is absent; the
+   > operator does not treat trailer attribution on replayed commits as preserved content.
+
    - **Ordinary commits.** For each ordinary commit c in a child's first-parent range, the new tree
      is `git merge-tree --write-tree --merge-base c^1 <acc> c`. The commit is made with
      `commit-tree`.
-     - Kept from c: author name, email and date, and the message.
+     - Kept from c: author name, email and date, and the message. The message's subject and body
+       are preserved. Replay may normalize trailing whitespace and append the daemon co-author
+       trailer when it is absent; trailer attribution is not part of the preserved content.
      - Committer identity and date are fixed per operation and recorded in the journal.
      - Commits are signed with `-S` when the repository's `commit.gpgSign` is set.
    - **Empty commits.**
