@@ -32,6 +32,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators see remediation-gate budget consumption before a halt. ([implementation PR #3148](https://github.com/jstoup111/ai-conductor/pull/3148)).
 - Contributors gain CI coverage that runs every classified shell test in an isolated environment. ([implementation PR #3174](https://github.com/jstoup111/ai-conductor/pull/3174)).
 - Build reviews now enforce implementation-quality checks by default. ([implementation PR #3086](https://github.com/jstoup111/ai-conductor/pull/3086)).
+- Engineers can reconcile and validate intake dependency edges across active work. ([implementation PR #3133](https://github.com/jstoup111/ai-conductor/pull/3133)).
 
 ### Changed
 
