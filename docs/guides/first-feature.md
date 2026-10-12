@@ -82,7 +82,7 @@ Four content gates decide whether the merged spec is buildable at all, so check 
 | Stories approved | the stories artifact | must contain `Status: Accepted` and must **not** contain a `Status: DRAFT` |
 | Plan declares task dependencies | `.docs/plans/<slug>.md` | a `## Task Dependency Graph` section, or per-task `**Dependencies:**` lines |
 | Plan task completion checks | `.docs/plans/<slug>.md` | every `### Task …` has a `**Done when:**` block with 2–5 nonblank list checks; fenced-code examples do not count |
-| Plan task count | `.docs/plans/<slug>.md` | 1–20 tasks proceed normally; 21–40 require a planning warning; 41 or more are refused at land unless the plan contains exactly one `**Scope-exception:** <non-empty rationale>` declaration |
+| Plan task count | `.docs/plans/<slug>.md` | 1–20 tasks proceed normally; 21–29 require a planning warning; 30 or more are refused at land unless the plan contains exactly one `**Scope-exception:** <non-empty rationale>` declaration |
 
 Merge it:
 
