@@ -1773,7 +1773,7 @@ Normalization contract:
 | Unknown or invalid inner key | That key is omitted and warned by name; valid sibling keys are preserved |
 
 Eligibility failures return `{ eligible: false, reason }` and skip — they never halt
-(`src/conductor/src/engine/ci-fix.ts:230-264`).
+(`src/conductor/src/engine/ci-fix.ts#evaluateEligibilityGates`).
 
 Remediation waits for terminal CI. A rollup counts as `failed` as soon as one check fails, even
 while sibling checks are still queued or running, so the eligibility gate defers any PR that still
@@ -1788,8 +1788,12 @@ gate does not block.
 
 CI repair uses the same selected check rollup that made the PR eligible. It supplies failed check
 names or status contexts and available detail links, then optionally adds failed-job excerpts from at
-most three distinct workflow runs. The complete repair context is capped at 24,576 UTF-8 bytes;
-omitted metadata or logs are marked. An unavailable optional log degrades the context without
+most three distinct workflow runs. Each run's failed-job log is read up to 8 MiB and reduced to a
+12,288-byte excerpt (`src/conductor/src/engine/ci-fix.ts#buildCiLogExcerpt`): a `[failure lines]`
+section of matched failure lines (`##[error]`, `FAIL`, `Error:`, `✗`, `×`, and failing
+`[ci-progress]` markers), capped at half the budget, followed by the log tail under
+`[log tail: earlier lines omitted]`. A log within budget is passed through unchanged. The complete
+repair context is capped at 24,576 UTF-8 bytes; omitted metadata or logs are marked. An unavailable optional log degrades the context without
 blocking repair, but an unreadable, malformed, or empty required check context defers repair and
 does not consume an attempt.
 
@@ -1813,7 +1817,7 @@ draft PR belongs to an in-flight build, and fixing its CI would fight the runnin
 native checks remain the CI-status authority; the sweep never applies the redundant `ci-failed`
 label and removes it when observed. Attempt counters are not burned for skipped drafts.
 
-`cooldownMinutes` reaches the CI-fix cooldown calculation (`src/conductor/src/engine/ci-fix.ts:250`);
+`cooldownMinutes` reaches the CI-fix cooldown calculation (`src/conductor/src/engine/ci-fix.ts#evaluateEligibilityGates`);
 `0` is valid and disables the delay.
 
 ## kickback_escalation
