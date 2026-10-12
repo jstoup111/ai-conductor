@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-12T01:40:20.327Z
 Slug: a-change-to-one-stacked-child-cannot-be-carried-in
 Class: needs-human
 Halting step: unknown
