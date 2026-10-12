@@ -189,6 +189,11 @@ If halt clearing or presentation repair fails, the feature stays halted. If the 
 changed before consumption, the authorization is refused as stale and no unrelated halt is cleared.
 The command never dispatches, builds, merges, or bypasses another gate.
 
+> **Amended 2026-10-12 by #2944:** For a stacked feature, the daemon consumes resume authorisations
+> for whole-feature gates from the flat feature ledger and, for region gates, from the execution
+> child's ledger (`adr-2026-10-12-routed-whole-feature-repair` decisions 8 and 10).
+
+
 ### D7 — Adjustment authorization rides the existing event spine
 
 Add a typed `kickback_budget_adjustment_authorized` `ConductorEvent` carrying adjustment id, feature,

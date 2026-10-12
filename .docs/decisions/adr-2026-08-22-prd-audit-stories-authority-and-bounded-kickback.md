@@ -67,6 +67,11 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > gaps remain explicit and blocking; no fabricated criterion or new repair authority
    > is introduced. A malformed/absent result envelope is a mechanical no-verdict fault.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature, refusal rework admitted under the #2931
+> amendment is placed in a host child by the engine's residue routing call, and appended there
+> through the same seam and caps (`adr-2026-10-12-routed-whole-feature-repair` decisions 3 and 9).
+
+
 4. **Scope-as-intent.** `OVER_SCOPE` judges shipped behavior against the plan and intent (PRD
    Goals/Non-Goals and In/Out Scope, else stories + plan outcome). Within intent → self-accepted and
    recorded as a widening; outside intent, not user-visible → recorded, ships; outside intent,
@@ -81,6 +86,11 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > longer flags the criterion. See adr-2026-08-24-over-scope-decision-block-and-durable-refusals.
 > **Amended 2026-09-07 by #2429:** Explicit refusal revision and NC relationship authority now follow adr-2026-09-07-durable-prd-widening-decision-reconciliation D1-D4/D8. An old cleared acceptance cannot override a newer refusal; an explicit revision names the prior decision. The report-local NC key remains presentation, and valid original decisions are captured before current-report reconciliation. No NC case becomes a BUILD task, and the existing FIXABLE/PLAN_GAP routing and allowances below remain unchanged.
 > **Amended 2026-10-03 by #2931:** An operator-*refused* finding, NC or story-criterion, may now become bounded removal/rework through the existing remediation append seam, sharing decision 5's `gates.prd_audit` lap and growth caps. A finding that is not refused still never becomes work. See adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework.
+
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the bounded rework a refused finding
+> becomes is routed to a host child as residue and charged once through the round receipt
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 3 and 10).
+
 
 5. **Bounded kickback.** `FIXABLE` findings route to BUILD through the existing remediation append
    seam — the only plan appender — under engine-enforced caps: **one lap per feature**, at most

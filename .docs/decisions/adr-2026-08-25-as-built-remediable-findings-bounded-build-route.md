@@ -120,6 +120,12 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
    > appender. This also qualifies adr-2026-08-22-one-owner-per-review-question's "only under its
    > cap" as restated here.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the seam also writes the frozen blocks on
+> the host child's branch. It is the same appender, writes only ids in the route record's frozen
+> allocation produced by `planRemediation`, and refuses any other id
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
+
 6. **Observability and lifecycle.** Per-finding classification and each remediation outcome
    are projected into the verdict artifact and the shipped record through the existing
    recorded-findings renderer, so a reader can tell afterward why a finding remediated or
