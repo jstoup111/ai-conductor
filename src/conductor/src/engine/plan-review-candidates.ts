@@ -5,6 +5,11 @@ import {
   parsePlanTaskDoneWhen,
   parsePlanTaskPaths,
 } from './plan-task-parse.js';
+import {
+  parsePlanDependencyGraph,
+  transitiveDependencies,
+  type PlanDependencyViolation,
+} from './plan-dependencies.js';
 import { isTestFilePath } from './test-path.js';
 
 export interface TestImpactCandidate {
@@ -37,6 +42,22 @@ export interface ReachabilityCandidatesInput {
   readonly worktreePath: string;
   readonly planText: string;
   readonly architectureReviewText: string;
+}
+
+export interface DependencyOrderCandidate {
+  readonly lens: 'dependency-order';
+  readonly taskId: string;
+  readonly relatedTaskId: string;
+  readonly identifier: string;
+  readonly dependencyClosure: readonly string[];
+}
+
+/** Refuses candidate construction when plan dependency metadata is not trustworthy. */
+export class PlanReviewInputError extends Error {
+  constructor(readonly violations: readonly PlanDependencyViolation[]) {
+    super(violations.map((violation) => violation.message).join('; '));
+    this.name = 'PlanReviewInputError';
+  }
 }
 
 const IGNORED_DIRECTORIES = new Set(['.git', 'node_modules']);
@@ -73,6 +94,27 @@ const TASK_HEADING = /^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)/i;
 
 function identifierTokens(text: string): string[] {
   return [...new Set(backtickedIdentifiers(text).filter((token) => IDENTIFIER.test(token)))];
+}
+
+function stepAndFileIdentifiers(taskBody: string): string[] {
+  let section: 'steps' | 'files' | undefined;
+  const identifiers: string[] = [];
+  for (const line of taskBody.split(/\r?\n/)) {
+    if (/^\s*\*\*Steps:\*\*\s*$/i.test(line)) {
+      section = 'steps';
+      continue;
+    }
+    if (/^\s*\*\*Files likely touched:\*\*\s*$/i.test(line)) {
+      section = 'files';
+      continue;
+    }
+    if (/^\s*\*\*[^*]+:\*\*\s*$/.test(line)) {
+      section = undefined;
+      continue;
+    }
+    if (section) identifiers.push(...identifierTokens(line));
+  }
+  return identifiers;
 }
 
 function taskIdentifierEvidence(planText: string): Map<string, Map<string, string>> {
@@ -227,5 +269,39 @@ export async function testImpactCandidates({
     }
   }
 
+  return candidates;
+}
+
+/**
+ * Finds Done-when citations whose introducing task is not a direct or
+ * transitive prerequisite. Candidates are review inputs, never findings.
+ */
+export function dependencyOrderCandidates(planText: string): readonly DependencyOrderCandidate[] {
+  const graph = parsePlanDependencyGraph(planText);
+  if (graph.violations.length > 0) throw new PlanReviewInputError(graph.violations);
+
+  const taskBodies = parsePlanTaskBodies(planText);
+  const introducedBy = new Map<string, string>();
+  for (const [taskId, body] of taskBodies) {
+    for (const identifier of stepAndFileIdentifiers(body)) {
+      if (!introducedBy.has(identifier)) introducedBy.set(identifier, taskId);
+    }
+  }
+
+  const candidates: DependencyOrderCandidate[] = [];
+  for (const [taskId, checks] of parsePlanTaskDoneWhen(planText)) {
+    const closure = transitiveDependencies(graph.dependenciesByTaskId, taskId);
+    for (const identifier of identifierTokens(checks.join('\n'))) {
+      const relatedTaskId = introducedBy.get(identifier);
+      if (!relatedTaskId || relatedTaskId === taskId || closure.has(relatedTaskId)) continue;
+      candidates.push({
+        lens: 'dependency-order',
+        taskId,
+        relatedTaskId,
+        identifier,
+        dependencyClosure: [...closure].sort(),
+      });
+    }
+  }
   return candidates;
 }
