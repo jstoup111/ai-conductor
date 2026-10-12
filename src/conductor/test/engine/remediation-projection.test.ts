@@ -1,19 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import {
   buildRemediationProjection,
-  REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES,
-  REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
   REMEDIATION_PROJECTION_LIMITS,
-  REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-  REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
   REMEDIATION_PROJECTION_VERSION,
-  type RemediationProjectionLimits,
 } from '../../src/engine/remediation-projection.js';
 import { readPendingAsBuiltRemediationFindings } from '../../src/engine/kickback-ledger.js';
 import {
@@ -24,7 +18,6 @@ import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { AS_BUILT_VERDICT_CONTRACT_VERSION, stampAsBuiltFindingIds } from '../../src/engine/as-built-contract.js';
-import { parsePlanTaskDoneWhen, parsePlanTaskTitles } from '../../src/engine/plan-task-parse.js';
 
 const roots: string[] = [];
 
@@ -158,31 +151,12 @@ async function writeCorpusScaleAsBuiltVerdict(root: string): Promise<void> {
   }, 'as-built-attempt'), { attemptId: 'as-built-attempt', codeStamp: null, policy });
 }
 
-async function largestPlanTasksBytes(directory: string): Promise<number> {
-  const names = await readdir(directory);
-  const sizes = await Promise.all(names.filter((name) => name.endsWith('.md')).map(async (name) => {
-    const text = await readFile(join(directory, name), 'utf8');
-    const titles = parsePlanTaskTitles(text);
-    const doneWhen = parsePlanTaskDoneWhen(text);
-    return Buffer.byteLength(JSON.stringify([...titles].map(([id, title]) => ({
-      id, title, doneWhen: doneWhen.get(id) ?? [],
-    }))), 'utf8');
-  }));
-  return Math.max(...sizes);
-}
-
 async function expectPreparationFault(
   result: Awaited<ReturnType<typeof buildRemediationProjection>>,
   expected: Record<string, unknown>,
 ): Promise<void> {
   expect(result).toMatchObject({ ok: false, kind: 'preparation-fault', fault: expected });
   expect(result).not.toHaveProperty('projection');
-}
-
-function roundUpPowerOfTwo(bytes: number): number {
-  let rounded = 1;
-  while (rounded < bytes) rounded *= 2;
-  return rounded;
 }
 
 describe('remediation projection', () => {
@@ -711,45 +685,4 @@ describe('remediation projection', () => {
     });
   });
 
-  // Covers: task:10
-  it('ships finite corpus-sized structured limits and a total envelope', async () => {
-    const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-    const limits: RemediationProjectionLimits = REMEDIATION_PROJECTION_LIMITS;
-    expect(limits).toEqual({
-      requiredReferencesBytes: expect.any(Number),
-      tasksBytes: expect.any(Number),
-      pendingAsBuiltFindingsBytes: expect.any(Number),
-      priorLapsBytes: expect.any(Number),
-      refusalsBytes: expect.any(Number),
-      totalBytes: expect.any(Number),
-      perFileHunksBytes: expect.any(Number),
-      totalDiffBytes: expect.any(Number),
-    });
-    expect(Object.values(limits).every((limit) => Number.isFinite(limit) && limit > 0)).toBe(true);
-    expect(REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes).toBe(
-      await largestPlanTasksBytes(join(repositoryRoot, '.docs', 'plans')),
-    );
-    expect(limits.requiredReferencesBytes).toBe(roundUpPowerOfTwo(Math.max(
-      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
-    )));
-    expect(limits.tasksBytes).toBe(roundUpPowerOfTwo(Math.max(
-      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
-    )));
-    expect(limits.pendingAsBuiltFindingsBytes).toBe(roundUpPowerOfTwo(Math.max(
-      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
-    )));
-    for (const [limit, measured] of [
-      [limits.priorLapsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes],
-      [limits.refusalsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes],
-    ] as const) {
-      expect(limit).toBe(roundUpPowerOfTwo(Math.max(REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES, measured)));
-    }
-    expect(limits.totalBytes).toBe(roundUpPowerOfTwo(
-      limits.requiredReferencesBytes + limits.tasksBytes + limits.pendingAsBuiltFindingsBytes +
-      limits.priorLapsBytes + limits.refusalsBytes + REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
-    ));
-  });
 });

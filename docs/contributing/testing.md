@@ -211,6 +211,7 @@ so a bare `npm test` discovers 1328 files and excludes the 18 opt-in smoke files
 | `test/execution/` | 25 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npm test -- test/execution` |
 | `test/smoke/` | 4 | Real binaries and real third parties. Excluded by default; seven additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
 | `test/cli/` | 6 | CLI entry-point and argument behavior. | `npm test -- test/cli` |
+| `test/corpus/` | 6 | Checks whose verdict depends on the live `.docs/` corpus: ADR corpus conformance, shipped records, and projection limits that must admit the largest corpus inputs. The only tier docs-only pull requests run. | `npm test -- test/corpus/` |
 | `test/structural/` | 13 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
 | `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
@@ -576,15 +577,23 @@ For where `test_suite` sits in the flow and what happens when it fails, see
    `--reporter=./test/reporters/ci-progress-reporter.ts`; see
    [Reading a conductor shard log](#reading-a-conductor-shard-log).
 8. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
-9. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
+9. `docs-corpus` — runs **only** when `docs_only` is true; `npm ci`, `npm run build`, then
+   `npm test -- test/corpus/` in `src/conductor`. A spec landing that grows the `.docs/` corpus past a
+   shipped projection limit fails here instead of on the next code pull request.
+10. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
    required-status aggregator.
 
 `links` is deliberately the one job with no `docs_only` gate. `docs_only` is true only when every
 changed path is under `.docs/` (the internal spec-artifact tree) — see
-`.github/scripts/ci-detect-docs-only.sh` — and such a pull request skips every other job here. A link
+`.github/scripts/ci-detect-docs-only.sh` — and such a pull request skips every other job here except `docs-corpus`. A link
 checker carrying the same gate would inherit that hole. Leaving it ungated also means the guarantee
 survives any future widening of the predicate, and it costs about six seconds with no npm install and
 no network.
+
+`docs-corpus` is the inverse: the `conductor` job already runs `test/corpus/` on every other pull
+request, so this job covers only the docs-only case. Put any test whose verdict depends on the live
+`.docs/` corpus in `src/conductor/test/corpus/`, and have projection-limit checks assert that the
+limits admit the corpus, never equality with recorded maxima.
 
 ### Reading a conductor shard log
 

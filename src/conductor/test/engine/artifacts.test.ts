@@ -1,7 +1,7 @@
 // Covers: task:1
 // Covers: S1.1, S1.2, S1.3, task:2, task:3, task:6, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -4261,21 +4261,6 @@ describe('engine/artifacts', () => {
       });
     });
 
-    it('accepts every ADR in the repository corpus', async () => {
-      const decisionsDir = join(REPOSITORY_ROOT, '.docs', 'decisions');
-      const adrPaths = (await readdir(decisionsDir))
-        .filter((entry) => /^adr-.*\.md$/.test(entry))
-        .map((entry) => join(decisionsDir, entry));
-      const statuses = await Promise.all(
-        adrPaths.map(async (path) => ({ path, ...(adrApprovalStatus(await readFile(path, 'utf-8'))) })),
-      );
-
-      expect(adrPaths).not.toHaveLength(0);
-      expect({
-        rejected: statuses.filter((status) => !status.approved && status.found !== null),
-        unparseable: statuses.filter((status) => status.found === null),
-      }).toEqual({ rejected: [], unparseable: [] });
-    });
   });
 
   describe('isCanonicalAdrFilename', () => {
