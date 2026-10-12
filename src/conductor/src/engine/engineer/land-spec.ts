@@ -126,6 +126,7 @@ export type LandGateIdentifier =
   | 'worktree-missing'
   | 'worktree-dirty'
   | 'owner-identity-unresolved'
+  | 'draft-amendment-note'
   | 'required-artifacts-missing'
   | 'plan-protected-targets'
   | 'plan-done-when'
@@ -312,6 +313,26 @@ export async function landSpec(
   // and have no PRD. Track is read from `.docs/track/<slug>.md` (written by
   // /explore); a missing marker defaults to `product` (back-compat).
   const ideaFiles = await resolveIdeaFiles(worktreePath, canonical);
+  const baseDocsPaths = await listDocsPathsAtMergeBase(worktreePath, canonical);
+  const draftAmendmentPaths: string[] = [];
+  for (const path of ideaFiles) {
+    const normalizedPath = path.replaceAll('\\', '/');
+    if (baseDocsPaths.has(normalizedPath) || !normalizedPath.endsWith('.md')) continue;
+    try {
+      if (findDraftAmendmentNoteLines(await readFile(join(worktreePath, normalizedPath), 'utf-8')).length > 0) {
+        draftAmendmentPaths.push(normalizedPath);
+      }
+    } catch (error) {
+      // A deleted path may appear in the branch diff but cannot contain a note.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  if (draftAmendmentPaths.length > 0) {
+    throw landGateError('draft-amendment-note',
+      `landSpec: draft artifacts contain dated amendment notes: ${draftAmendmentPaths.sort().join(', ')}. ` +
+      'Fold the correction into the artifact text, removing the obsolete text, before landing.',
+    );
+  }
   const featureSlug = slugify(idea);
   const featureFiles = await resolveFeatureFiles(worktreePath, canonical, ideaFiles, featureSlug);
   const trackDir = join(worktreePath, '.docs', 'track');
@@ -779,13 +800,7 @@ async function resolveFeatureFiles(
   ideaFiles: Set<string>,
   featureSlug: string,
 ): Promise<Set<string>> {
-  const defaultBranch = await deriveDefaultBranch(canonicalPath);
-  const { stdout: base } = await execFile('git', ['merge-base', 'HEAD', defaultBranch], { cwd: worktreePath });
-  const { stdout: tree } = await execFile('git', ['ls-tree', '-r', '-z', base.trim(), '--', '.docs'], { cwd: worktreePath });
-  const existing = new Set(tree.split('\0').flatMap((entry) => {
-    const match = entry.match(/^100(?:644|755) blob [a-f0-9]+\t([\s\S]+)$/);
-    return match ? [match[1]] : [];
-  }));
+  const existing = await listDocsPathsAtMergeBase(worktreePath, canonicalPath);
   const families: Array<{ step: StepName; directory: string }> = [
     { step: 'prd', directory: 'specs' },
     { step: 'stories', directory: 'stories' },
@@ -800,6 +815,27 @@ async function resolveFeatureFiles(
   const featureFiles = new Set(ideaFiles);
   for (const amendment of amendments) featureFiles.delete(amendment.path);
   return featureFiles;
+}
+
+/** Return the `.docs` paths present at this worktree's merge base. Shared by
+ * feature attribution and draft-artifact gates so both use the same lifecycle
+ * boundary rather than independently deriving it. */
+async function listDocsPathsAtMergeBase(worktreePath: string, canonicalPath: string): Promise<Set<string>> {
+  const defaultBranch = await deriveDefaultBranch(canonicalPath);
+  const { stdout: base } = await execFile('git', ['merge-base', 'HEAD', defaultBranch], { cwd: worktreePath });
+  const { stdout: tree } = await execFile('git', ['ls-tree', '-r', '-z', base.trim(), '--', '.docs'], { cwd: worktreePath });
+  return new Set(tree.split('\0').flatMap((entry) => {
+    const match = entry.match(/^100(?:644|755) blob [a-f0-9]+\t([\s\S]+)$/);
+    return match ? [match[1].replaceAll('\\', '/')] : [];
+  }));
+}
+
+/** Locate the dated amendment-note form. Templates retain YYYY-MM-DD and do
+ * not match; a real date makes the note an obsolete draft correction. */
+export function findDraftAmendmentNoteLines(content: string): string[] {
+  return content.split(/\r?\n/).filter((line) =>
+    /^\s*(?:>\s*)*\*\*Amended \d{4}-\d{2}-\d{2}\b/.test(line),
+  );
 }
 
 // ── Idea-scoped attribution (foundational helper; wired in later tasks) ───────
