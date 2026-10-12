@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:18
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -53,7 +53,7 @@ describe('plan skill non-interference contract', () => {
     );
 
     expect(taskPairReferences.map(([name]) => name).sort())
-      .toEqual(['coherence-check', 'conflict-check']);
+      .toEqual(['coherence-check', 'conflict-check', 'plan-review']);
 
     const coherenceCheck = taskPairReferences.find(([name]) => name === 'coherence-check')?.[1] ?? '';
     const conflictCheck = taskPairReferences.find(([name]) => name === 'conflict-check')?.[1] ?? '';
