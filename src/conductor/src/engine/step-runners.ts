@@ -69,6 +69,7 @@ import {
   selectFeaturePlan,
 } from './artifacts.js';
 import { pipelinePathFor } from './child-context.js';
+import { runPlanReview } from './plan-review-runner.js';
 import {
   customStepsInPerChildRegion,
   deriveStoryOwnership,
@@ -1218,6 +1219,29 @@ export class DefaultStepRunner implements StepRunner {
     }
     if (step === 'coverage_binding') {
       return this.runCoverageBinding();
+    }
+    if (step === 'plan_review' && this.providerRuntimes && this.sessionStore && this.config) {
+      try {
+        const planPath = this.planPathOverride ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
+        // A direct runner unit invocation has no feature-plan context. Keep the
+        // normal skill-dispatch contract observable there; conductor-managed
+        // DECIDE always resolves the plan and takes the engine-owned runner.
+        if (!planPath) {
+          // fall through to the ordinary provider-aware skill dispatch below
+        } else {
+        const planStem = basename(planPath, '.md');
+        await runPlanReview({
+          worktreePath: this.projectDir, planStem, config: this.config,
+          runtimes: this.providerRuntimes, sessions: this.sessionStore,
+          configuredProviders: this.configuredProviders, providerExecutor: this.providerExecutor,
+          emit: async (event) => { await this.events?.emit(event); },
+        });
+        this.callCount++;
+        return { success: true };
+        }
+      } catch (error) {
+        return { success: false, output: error instanceof Error ? error.message : String(error) };
+      }
     }
 
     // Lazy-init: check marker file on first run

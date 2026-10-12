@@ -4647,6 +4647,7 @@ export class Conductor {
         daemon: this.daemon,
         tier: state.complexity_tier,
         hasContract,
+        artifactPresent: satisfied !== false,
         satisfied,
         grant: null,
         sourceGate: 'remediate',
@@ -6217,7 +6218,7 @@ export class Conductor {
           expected: undefined,
           intent: 'complete interrupted rebase operation',
           next: 'pending' as const,
-        })));
+        } as StateMutation<ConductState>)));
         rebaseClassification = await classifyRebaseOperation(this.projectRoot);
       }
       if (rebaseClassification.kind === 'integrity-fault') {
@@ -6333,6 +6334,7 @@ export class Conductor {
           daemon: this.daemon,
           tier: state.complexity_tier,
           hasContract: hasCompletionContract(resolvedStep.name, this.config),
+          artifactPresent: gateSatisfied(resolvedStep.name, state, verdicts) !== false,
           satisfied: gateSatisfied(resolvedStep.name, state, verdicts),
           grant: null,
           sourceGate: 'resume-clamp',
@@ -7293,6 +7295,7 @@ export class Conductor {
             daemon: this.daemon,
             tier: state.complexity_tier,
             hasContract,
+            artifactPresent: satisfied !== false,
             satisfied,
             grant: null,
             sourceGate: 'forward-walk',
@@ -14573,6 +14576,7 @@ export class Conductor {
           daemon: this.daemon,
           tier: state.complexity_tier,
           hasContract,
+          artifactPresent: false,
           satisfied: false,
           grant: null,
           sourceGate: stepName,
@@ -15617,7 +15621,7 @@ export class Conductor {
         expected: undefined,
         intent: 'apply rebase transition',
         next: 'pending' as const,
-      })));
+      } as StateMutation<ConductState>)));
       // Events describe the durable operation, not the pre-application
       // classification.  The transition is the only authority that knows
       // which effects actually became the completed rebase operation.

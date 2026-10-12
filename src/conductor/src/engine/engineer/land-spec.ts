@@ -62,6 +62,7 @@ import {
   readCommittedIntakeOutcomes,
 } from './outcome-staging.js';
 import { runCoherenceGate } from './coherence-validator.js';
+import { runPlanReviewGate } from './plan-review-gate.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import {
   checkDiagramsForFile,
@@ -165,6 +166,7 @@ export type LandGateIdentifier =
   | 'adr-assumption-ledger'
   | 'adr-filename'
   | 'coherence'
+  | 'plan-review'
   | 'mermaid-render'
   | 'mermaid-tool-missing'
   | 'artifact-empty'
@@ -631,6 +633,10 @@ export async function landSpec(
         step: 'coherence_check',
         paths: await familyPaths('coherence_check', join(worktreePath, '.docs', 'coherence')),
       },
+      {
+        step: 'plan_review',
+        paths: await familyPaths('plan_review', join(worktreePath, '.docs', 'plan-review')),
+      },
     ],
     featureSlug,
   );
@@ -767,6 +773,11 @@ export async function landSpec(
     });
   } catch (error) {
     throw landGateError('coherence', error instanceof Error ? error.message : String(error));
+  }
+  try {
+    await runPlanReviewGate({ worktreePath, planStem: markerSlug!, tier: tier!, planText: planContent, storiesText: storiesContent });
+  } catch (error) {
+    throw landGateError('plan-review', error instanceof Error ? error.message : String(error));
   }
 
   // D6: intake land is the sole blocking dependency-read path.  Markerless
@@ -907,6 +918,7 @@ async function resolveFeatureFiles(
     { step: 'plan', directory: 'plans' },
     { step: 'conflict_check', directory: 'conflicts' },
     { step: 'coherence_check', directory: 'coherence' },
+    { step: 'plan_review', directory: 'plan-review' },
   ];
   const amendments = validateFeatureArtifactStems(families.map(({ step, directory }) => ({
     step,

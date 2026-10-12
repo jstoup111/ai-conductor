@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp } from 'node:fs/promises';
+// Covers: task:8
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { StepName } from '../../src/types/index.js';
 import { readState } from '../../src/engine/state.js';
+import { renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import {
   cleanupDecideEntryFixture,
   conductorFor,
@@ -67,7 +69,42 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.explore).toBe('skipped');
     expect(state.ok && state.value.complexity).toBe('skipped');
+    expect(state.ok && state.value.plan_review).toBe('skipped');
     expect(haltedBeforeFirstDispatch).toBe(false);
+  });
+
+  it('fast-forwards a valid plan review artifact and halts for its standing blocking finding', async () => {
+    const artifactPath = join(fixture.root, '.docs', 'plan-review', 'decide-entry-fixture.md');
+    await mkdir(join(fixture.root, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(artifactPath, renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest: { digest: 'digest', planTaskDigests: {}, storyDigests: {}, adrDecisionDigests: {}, artifactDigests: {} },
+    }), 'utf8');
+    await writeFixtureState(fixture, {
+      feature_desc: 'decide-entry-fixture', track: 'technical', complexity_tier: 'M', worktree: 'done', memory: 'done',
+    });
+    await conductorFor(fixture, { run: async () => ({ success: false, output: 'acceptance sentinel' }) }).run();
+    let state = await readState(fixture.statePath);
+    expect(state.ok && state.value.plan_review).toBe('done');
+
+    await writeFile(artifactPath, renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [{ id: 'blocked-1', severity: 'blocking', lens: 'feasibility', artifact: '.docs/plans/decide-entry-fixture.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, evidence: ['src/file.ts:1'], summary: 'blocked' }],
+      dispositions: [],
+      reviewedDigest: { digest: 'digest', planTaskDigests: {}, storyDigests: {}, adrDecisionDigests: {}, artifactDigests: {} },
+    } as any), 'utf8');
+    await writeFixtureState(fixture, {
+      feature_desc: 'decide-entry-fixture', track: 'technical', complexity_tier: 'M', worktree: 'done', memory: 'done',
+    });
+    await conductorFor(fixture, { run: async () => ({ success: false, output: 'acceptance sentinel' }) }).run();
+    state = await readState(fixture.statePath);
+    expect(state.ok && state.value.plan_review).not.toBe('done');
+    expect(await pathExists(fixture.root, '.pipeline/HALT')).toBe(true);
   });
 
   it('Small tier skips its optional DECIDE artifacts and first dispatches BUILD', async () => {

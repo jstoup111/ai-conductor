@@ -22,7 +22,7 @@
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
@@ -98,6 +98,11 @@ import {
   resolveProviderExecutable,
 } from '../execution/provider-catalog.js';
 import { resolveComposeLaunchHost } from './compose-launch-host.js';
+import { PluginRegistry } from './plugin-registry.js';
+import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
+import { createProviderRuntimeSet } from './provider-runtime.js';
+import { ProviderSessionStore } from './provider-session.js';
+import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview } from './plan-review-runner.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -113,6 +118,7 @@ type EngineerDispatchDescriptor =
     dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
   }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
+  | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string; resolvedBy?: string }
@@ -133,7 +139,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -254,6 +260,20 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, ['--project', '--branch', '--worktree', '--source-ref']);
     if (unk) return { kind: 'reject', sub: 'handoff', flag: unk };
     return { kind: 'handoff', project, branch, worktree, sourceRef };
+  }
+
+  if (subCmd === 'plan-review') {
+    const project = parseFlag(argv, '--project');
+    const worktree = parseFlag(argv, '--worktree');
+    if (!project || !worktree) return { kind: 'guide' };
+    const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    const accept = parseFlag(argv, '--accept') ?? undefined;
+    const acknowledge = argv.includes('--acknowledge') || undefined;
+    const reason = parseFlag(argv, '--reason') ?? undefined;
+    if (accept && acknowledge) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--project', '--worktree', '--source-ref', '--accept', '--acknowledge', '--reason']);
+    if (unk) return { kind: 'reject', sub: 'plan-review', flag: unk };
+    return { kind: 'plan-review', project, worktree, sourceRef, ...(accept ? { accept } : {}), ...(acknowledge ? { acknowledge } : {}), ...(reason ? { reason } : {}) };
   }
 
   if (subCmd === 'poll') {
@@ -569,7 +589,7 @@ export interface DispatchEngineerOpts {
   /** Load the merged configuration for the directory from which launch was requested. */
   loadLaunchConfig?: (launchingDirectory: string) => Promise<ConfigResult>;
   /** Spawn the selected interactive host; injectable so tests never launch a real host. */
-  spawnHost?: (executable: string, argv: string[], cwd: string) => Promise<number>;
+  spawnHost?: (executable: string, argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
   /** Whether stdin and stdout are attached to an operator terminal. */
   isAttachedTerminal?: () => boolean;
   /** Interactive approval boundary for guarded intake writes. */
@@ -645,9 +665,14 @@ function forgetAuthorizationRefusalExplanation(error: unknown, attached: boolean
 /**
  * Spawn an interactive host with the operator's terminal attached.
  */
-function spawnInteractiveHost(executable: string, argv: string[], cwd: string): Promise<number> {
+function spawnInteractiveHost(
+  executable: string,
+  argv: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, argv, { stdio: 'inherit', cwd });
+    const child = spawn(executable, argv, { stdio: 'inherit', cwd, env });
     child.on('error', reject);
     child.on('exit', (code) => resolve(code ?? 0));
   });
@@ -831,6 +856,11 @@ export const SUBCOMMAND_HELP = {
     'Flags: --project <name> (required), --branch <branch> (required), --worktree <path> (required), --source-ref <ref> (optional — intake write-back anchor).\n' +
     'Mutates: notifies/nudges the daemon for the target project; updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
+  'plan-review':
+    'compose plan-review --project <name> --worktree <path> [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
+    'Flags: --project <name> and --worktree <path> are required; --source-ref is optional.\n' +
+    'Mutates: writes only .docs/plan-review/<plan-stem>.md and composer events.\n' +
+    'Loop fit: DECIDE gate after coherence-check and before land.',
   poll:
     'compose poll — poll configured intake sources (e.g. github-issues) and enqueue new ideas into the durable inbox.\n' +
     'Flags: none.\n' +
@@ -886,6 +916,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose dep-audit --project <name>         — read-only dependency drift report\n' +
       '  ai-conductor compose claim                               — dequeue the oldest pending intake idea (JSON)\n' +
       '  ai-conductor compose worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
+      '  ai-conductor compose plan-review --project <n> --worktree <p> [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
       '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  ai-conductor compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  ai-conductor compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
@@ -1119,6 +1150,7 @@ export async function dispatchEngineer(
               : launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
           }),
           launchingDirectory,
+          { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id },
         );
       });
 
@@ -1341,6 +1373,40 @@ export async function dispatchEngineer(
         printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
         return 1;
       }
+    }
+
+    case 'plan-review': {
+      const { project: projectName, worktree, accept, acknowledge, reason } = dispatch;
+      const reader = createRegistryReader(registryPath ? { registryPath } : {});
+      const record = (await reader.listProjects()).find((project) => project.name === projectName);
+      if (!record) { printErr(`engineer plan-review: project "${projectName}" not found in registry.`); return 1; }
+      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+      try { target = await resolveTargetRepo(record.path, reader); }
+      catch (error) { printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`); return 1; }
+      const configResult = await loadMergedConfig(worktree);
+      if (!configResult.ok) { printErr(`engineer plan-review: ${configResult.error.message}`); return 1; }
+      const plans = await readdir(join(worktree, '.docs', 'plans')).catch(() => [] as string[]);
+      if (plans.length !== 1 || !plans[0]!.endsWith('.md')) { printErr('engineer plan-review: exactly one feature plan is required in the worktree.'); return 1; }
+      const planStem = plans[0]!.slice(0, -3);
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+      persister.start();
+      try {
+        if (accept) await acceptPlanReviewFinding({ worktreePath: worktree, planStem, findingId: accept, reason: reason ?? '', emit: async (event) => events.emitOrThrow(event) });
+        else if (acknowledge) await acknowledgePlanReviewChanges({ worktreePath: worktree, planStem, reason: reason ?? '' });
+        else {
+          const registry = new PluginRegistry();
+          registerBuiltInLlmProviders(registry, { codexDoctorTimeoutMs: (configResult.config.codex_doctor_timeout_seconds ?? 10) * 1_000 });
+          registry.markInitialized();
+          const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
+          const artifact = await runPlanReview({ worktreePath: worktree, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, emit: async (event) => events.emitOrThrow(event) });
+          if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
+        }
+        return 0;
+      } catch (error) {
+        printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      } finally { persister.stop(); }
     }
 
     // ── land ──────────────────────────────────────────────────────────────────

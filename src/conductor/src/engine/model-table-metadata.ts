@@ -43,6 +43,8 @@ export const STEP_RATIONALE: Record<StepName, string> = {
     `Task breakdown and dependency sequencing use a stronger ${CLAUDE_DISPLAY_NAME} reasoning model at S/M; Large tier uses each provider policy's high-capability model and XHIGH effort for planning at scale.`,
   coherence_check:
     'Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable).',
+  plan_review:
+    'Adversarially judges the final plan against the target worktree source. M/L tier only (S is skippable), with a fresh reviewer session to preserve independence from plan authoring.',
   architecture_diagram: 'Structured output generation from codebase scan — pattern-following.',
   architecture_review:
     'Pre-implementation design feasibility and alignment requires a high-capability model from the selected provider policy.',

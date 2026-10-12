@@ -51,6 +51,7 @@ Step 8:  /stories               → DECIDE (from PRD FRs on product; technical s
 Step 9:  /conflict-check        → DECIDE (skipped for Small; root-routes kickback → prd|architecture|stories)
 Step 10: /plan                  → DECIDE (technical implementation plan, grounded in the architecture + stories)
 Step 10b: /coherence-check       → DECIDE (Medium/Large traceability gate after plan)
+Step 10c: /plan-review           → DECIDE (Medium/Large source-grounded gate after coherence-check)
 Step 11: /writing-system-tests  → BUILD (skipped for Small)
 Step 12: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
 Step 13: Engine-native configured-verifier gate → BUILD (repository-configured aggregate verification)

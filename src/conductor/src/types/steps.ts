@@ -9,6 +9,7 @@ export type StepName =
   | 'conflict_check'
   | 'plan'
   | 'coherence_check'
+  | 'plan_review'
   | 'coverage_binding'
   | 'architecture_diagram'
   | 'architecture_review'

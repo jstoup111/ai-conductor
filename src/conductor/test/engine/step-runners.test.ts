@@ -2558,6 +2558,7 @@ describe('DefaultStepRunner', () => {
       { step: 'conflict_check', prompt: '$conflict-check' },
       { step: 'plan', prompt: '$plan' },
       { step: 'coherence_check', prompt: '$coherence-check' },
+      { step: 'plan_review', prompt: '$plan-review' },
       { step: 'architecture_diagram', prompt: '$architecture-diagram' },
       { step: 'architecture_review', prompt: '$architecture-review' },
       { step: 'worktree', prompt: '$conduct worktree' },

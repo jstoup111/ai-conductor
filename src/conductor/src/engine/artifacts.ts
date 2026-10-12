@@ -63,6 +63,7 @@ import { createEngineStateStore } from './engine-state-store.js';
 import {
   parsePlanTaskStoryIds,
 } from './plan-task-parse.js';
+import { parsePlanReviewArtifact } from './plan-review-artifact.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import {
   deriveEffectiveBuildReviewVerdict,
@@ -305,6 +306,13 @@ export const STEP_ARTIFACT_CONTRACTS = {
   coherence_check: [
     {
       pattern: '.docs/coherence/*.md',
+      scope: 'feature',
+      identity: { strategy: 'plan-stem' },
+    },
+  ],
+  plan_review: [
+    {
+      pattern: '.docs/plan-review/*.md',
       scope: 'feature',
       identity: { strategy: 'plan-stem' },
     },
@@ -2897,6 +2905,25 @@ function unverifiedDoneWhenNudgeCompletion(
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
+  plan_review: async (dir, ctx): Promise<CompletionResult> => {
+    const stem = ctx.featureDesc;
+    if (!stem) return { done: false, reason: 'plan review requires feature identity' };
+    let text: string;
+    try {
+      text = await readFile(join(dir, '.docs', 'plan-review', `${stem}.md`), 'utf8');
+    } catch {
+      return { done: false, reason: 'plan review artifact is missing' };
+    }
+    const artifact = parsePlanReviewArtifact(text);
+    if ('kind' in artifact) return { done: false, reason: `plan review artifact is ${artifact.kind}` };
+    const settled = new Set(artifact.dispositions.map(({ findingId }) => findingId));
+    const unresolved = artifact.findings.filter((finding) =>
+      finding.severity === 'blocking' && !settled.has(finding.id),
+    );
+    return unresolved.length === 0
+      ? { done: true }
+      : { done: false, reason: `plan review has unresolved blocking finding(s): ${unresolved.map(({ id }) => id).join(', ')}` };
+  },
   coverage_binding: async (dir): Promise<CompletionResult> => {
     const path = coverageBindingEnvelopePath(dir);
     let envelope;

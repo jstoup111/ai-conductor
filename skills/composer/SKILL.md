@@ -103,6 +103,7 @@ and writing the complete build-ready `.docs/` set only inside the worktree:
 7. `/conflict-check` for Medium/Large only.
 8. `/plan` in `.docs/plans/`.
 9. `/coherence-check` for Medium/Large only in `.docs/coherence/`.
+10. For Medium/Large, run `ai-conductor compose plan-review --project <name> --worktree <worktreePath> [--source-ref <ref>]`; resolve blocking findings, or after the bounded second round use `--accept <finding-id> --reason <reason>` and `--acknowledge --reason <reason>` for post-bound edits.
 
 Do not hand-write stub or DRAFT artifacts and do not shell out to `claude -p`. If the operator
 rejects a step, stay within that skill until accepted or abandon the idea.
