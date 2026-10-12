@@ -1,4 +1,4 @@
-// Covers: task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
+// Covers: task:4, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -369,6 +369,82 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
+  it('halts a rejected transition with trusted-history recovery guidance before BUILD dispatch', async () => {
+    let persisted = '';
+    const run = await fixture({
+      seedPipeline: async (root) => {
+        persisted = JSON.stringify({
+          version: 'v1',
+          feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+          cases: [{
+            id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The earlier repair was applied.', resolution: 'resolved',
+            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
+            effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+          }],
+        });
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), persisted, 'utf8');
+      },
+    });
+    const rejection = run.lifecycle.find((event) => event.type === 'remediation_adjudication_failed');
+    if (!rejection || rejection.type !== 'remediation_adjudication_failed') throw new Error('expected a rejected-transition event');
+    const halt = await run.haltMarker();
+
+    expect({
+      halt,
+      haltClass: await readFile(join(run.projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
+      store: await readFile(join(run.projectRoot, '.pipeline', 'remediation-cases.json'), 'utf8'),
+      dispatchedBuild: run.dispatched.includes('build'),
+      rejectedTransition: rejection.rejectedTransition,
+    }).toMatchObject({
+      halt: expect.stringContaining('build_review adjudication halted: case transition rejected: source-linked-by-multiple-cases'),
+      haltClass: 'needs-human',
+      store: persisted,
+      dispatchedBuild: false,
+      rejectedTransition: expect.objectContaining({ caseIds: expect.arrayContaining(['case-R']), sourceIds: [SOURCE_ID] }),
+    });
+    expect(halt).toContain(rejection.rejectedTransition?.caseIds[1] ?? 'missing-new-case-id');
+    expect(halt).toContain('persisted case history is valid and unchanged');
+    expect(halt).toContain('ai-conductor build-review findings --feature adjudicated-feature');
+    expect(halt).toContain('ai-conductor halt clear --feature adjudicated-feature');
+    expect(halt).not.toMatch(/build-review accept|delete|remove.*remediation-cases\.json/i);
+  });
+
+  it('keeps a corrupt persisted case store malformed without trusted-history recovery guidance', async () => {
+    const run = await fixture({
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1', repository: root, feature: 'adjudicated-feature' };
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature,
+          cases: [{
+            id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The earlier repair was applied.', resolution: 'resolved',
+            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
+            effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+          }, {
+            id: 'case-N', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The duplicate source is persisted corruption.', resolution: 'open',
+            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
+            effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
+          }],
+        }), 'utf8');
+      },
+    });
+    const halt = await run.haltMarker();
+
+    expect({
+      halt,
+      haltClass: await readFile(join(run.projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
+      dispatchedBuild: run.dispatched.includes('build'),
+    }).toMatchObject({
+      halt: expect.stringContaining('build_review adjudication halted: suppression store malformed-state'),
+      haltClass: 'needs-human',
+      dispatchedBuild: false,
+    });
+    expect(halt).not.toContain('case transition rejected');
+    expect(halt).not.toContain('persisted case history is valid');
+  });
+
   it('passes a fully suppressed lap without adjudication or a kickback', async () => {
     const run = await fixture({ suppressedFindingIds: [FINDING_ID] });
 

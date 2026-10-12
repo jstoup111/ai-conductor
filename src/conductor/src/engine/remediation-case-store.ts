@@ -197,7 +197,15 @@ export type RemediationCaseStoreFailureReason =
   | 'lock-timeout'
   | 'lock-failed'
   | 'atomic-replace-failed'
-  | 'lease-operation-failed';
+  | 'lease-operation-failed'
+  | 'rejected-transition';
+
+/** The invariant that refused a proposed next case-store state. */
+export interface RemediationCaseTransitionViolation {
+  readonly invariant: 'source-linked-by-multiple-cases' | 'duplicate-case-id' | 'duplicate-effect-id' | 'invalid-next-state';
+  readonly caseIds: readonly string[];
+  readonly sourceIds: readonly string[];
+}
 
 export type RemediationCaseStoreReadResult =
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
@@ -221,7 +229,8 @@ export interface RemediationCaseStoreMutation<Value> {
 
 export type RemediationCaseStoreMutationResult<Value> =
   | { readonly ok: true; readonly value: Value }
-  | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason };
+  | { readonly ok: false; readonly reason: Exclude<RemediationCaseStoreFailureReason, 'rejected-transition'> }
+  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly violation?: RemediationCaseTransitionViolation };
 
 const defaultFilesystem: RemediationCaseStoreFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -469,7 +478,11 @@ function parseSuppression(value: unknown): RemediationCaseSuppressionEntry | und
 
 type ParsedState =
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
-  | { readonly ok: false; readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state' };
+  | {
+    readonly ok: false;
+    readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state';
+    readonly violation?: RemediationCaseTransitionViolation;
+  };
 
 function parseSuppressions(value: unknown): RemediationCaseSuppressionEntry[] | undefined {
   const suppressions = value === undefined ? [] : Array.isArray(value) ? value.map(parseSuppression) : undefined;
@@ -481,7 +494,7 @@ function parseSuppressions(value: unknown): RemediationCaseSuppressionEntry[] | 
 
 function parseBuildReviewCases(value: unknown):
   | { readonly ok: true; readonly cases: RemediationCaseRecord[] }
-  | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
+  | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state'; readonly violation?: RemediationCaseTransitionViolation } {
   if (!Array.isArray(value) || value.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
   // Canonical identity: one row per case id, one case per durable effect id,
   // one link per source within a case. Downstream readers index by these ids
@@ -489,26 +502,52 @@ function parseBuildReviewCases(value: unknown):
   // while the array kept both rows — so duplicates are rejected here, before
   // any caller can consume or mutate the state.
   const caseIds = new Set<string>();
-  const effectIds = new Set<string>();
-  const sourceIds = new Set<string>();
+  const effectOwners = new Map<string, string>();
+  const sourceOwners = new Map<string, string>();
   const cases: RemediationCaseRecord[] = [];
   for (const caseValue of value) {
     const parsed = parseRemediationCaseDomainRecord(caseValue);
     if (!parsed.ok) return parsed;
     const record = parsed.record;
     if (record.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
-    if (caseIds.has(record.id)) return { ok: false, reason: 'malformed-state' };
+    if (caseIds.has(record.id)) {
+      return {
+        ok: false,
+        reason: 'malformed-state',
+        violation: { invariant: 'duplicate-case-id', caseIds: [record.id], sourceIds: [] },
+      };
+    }
     caseIds.add(record.id);
     if (record.effect.kind !== 'none') {
-      if (effectIds.has(record.effect.id)) return { ok: false, reason: 'malformed-state' };
-      effectIds.add(record.effect.id);
+      const owner = effectOwners.get(record.effect.id);
+      if (owner !== undefined) {
+        return {
+          ok: false,
+          reason: 'malformed-state',
+          violation: { invariant: 'duplicate-effect-id', caseIds: [owner, record.id], sourceIds: [] },
+        };
+      }
+      effectOwners.set(record.effect.id, record.id);
     }
     for (const source of record.sources) {
       // Global, not per-case: a source id repeated across two canonical cases
       // is ambiguous durable history in exactly the way a repeat within one
       // case is, and both readers index sources back to a single case.
-      if (sourceIds.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
-      sourceIds.add(source.sourceId);
+      const owner = sourceOwners.get(source.sourceId);
+      if (owner !== undefined) {
+        return owner === record.id
+          ? { ok: false, reason: 'malformed-state' }
+          : {
+            ok: false,
+            reason: 'malformed-state',
+            violation: {
+              invariant: 'source-linked-by-multiple-cases',
+              caseIds: [owner, record.id],
+              sourceIds: [source.sourceId],
+            },
+          };
+      }
+      sourceOwners.set(source.sourceId, record.id);
     }
     cases.push(record);
   }
@@ -635,7 +674,7 @@ export class RemediationCaseStore {
       return { ok: false, reason: 'malformed-json' };
     }
     const parsed = parseState(raw);
-    if (!parsed.ok) return parsed;
+    if (!parsed.ok) return { ok: false, reason: parsed.reason };
     return sameFeature(parsed.state.feature, this.feature)
       ? parsed
       : { ok: false, reason: 'foreign-feature' };
@@ -688,7 +727,13 @@ export class RemediationCaseStore {
       if (!mutation.nextState) return { ok: true, value: mutation.value };
 
       const parsed = parseState(mutation.nextState);
-      if (!parsed.ok) return parsed;
+      if (!parsed.ok) {
+        return {
+          ok: false,
+          reason: 'rejected-transition',
+          violation: parsed.violation ?? { invariant: 'invalid-next-state', caseIds: [], sourceIds: [] },
+        };
+      }
       if (!sameFeature(parsed.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
       const replaced = await this.atomicReplace(parsed.state);
       return replaced.ok
@@ -732,5 +777,5 @@ export async function readRemediationCaseStoreFeature(
   const parsed = parseState(raw);
   return parsed.ok
     ? { ok: true, feature: parsed.state.feature }
-    : parsed;
+    : { ok: false, reason: parsed.reason };
 }

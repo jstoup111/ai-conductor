@@ -22,7 +22,7 @@ import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
-import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry } from './remediation-case-store.js';
+import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
@@ -167,9 +167,35 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     sources.every((source) => accepted.has(source.findingId) || input.suppressedFindingIds?.has(source.findingId));
   /** Settlement is per rubric-namespaced SOURCE; see `finalizedBuildReviewSourceIds`. */
   const finalizedSourceIds = finalizedBuildReviewSourceIds;
-  const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
-    await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
+  const fail = async (
+    detail: string,
+    rejectedTransition?: RemediationCaseTransitionViolation,
+  ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
+    await input.emit?.({
+      type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail,
+      ...(rejectedTransition === undefined ? {} : { rejectedTransition }),
+    });
     return { ok: false, detail };
+  };
+  const failStore = async (
+    prefix: string,
+    failure: { readonly reason: string; readonly violation?: RemediationCaseTransitionViolation },
+  ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
+    if (failure.reason === 'rejected-transition' && failure.violation !== undefined) {
+      const { invariant, caseIds, sourceIds } = failure.violation;
+      const feature = input.feature.feature;
+      // ai-conductor:session-command-context=operator-only
+      return fail(
+        `case transition rejected: ${invariant} (cases ${caseIds.join(', ')}; sources ${sourceIds.join(', ')})\n` +
+        'persisted case history is valid and unchanged\n' +
+        `Inspect with ai-conductor build-review findings --feature ${feature}, then clear with ` +
+        `ai-conductor halt clear --feature ${feature} --rationale "<why>" once the proposed transition is admissible ` +
+        '(an engine admits it or a judgement no longer proposes it).',
+        failure.violation,
+      );
+      // /ai-conductor:session-command-context
+    }
+    return fail(`${prefix} ${failure.reason}`);
   };
   const store = new RemediationCaseStore(input.projectRoot, input.feature, {
     ...(input.child === undefined ? {} : { child: input.child }),
@@ -184,9 +210,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     suppressions: input.suppressions ?? [],
     store: suppressionStore,
   });
-  if (!persisted.ok) return fail(`case store ${persisted.reason}`);
+  if (!persisted.ok) return failStore('suppression store', persisted);
   const suppressionHistory = await suppressionStore.read();
-  if (!suppressionHistory.ok) return fail(`suppression store ${suppressionHistory.reason}`);
+  if (!suppressionHistory.ok) return failStore('suppression store', suppressionHistory);
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
@@ -247,7 +273,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         resolveAbsentOpenNonActionCases: true,
       });
       if (!absentSettled.ok) {
-        return fail(absentSettled.reason === 'store-failure' ? `case store ${absentSettled.storeReason}` : `case reconciliation ${absentSettled.reason}`);
+        return absentSettled.reason === 'store-failure'
+          ? failStore('case store', { reason: absentSettled.storeReason, violation: absentSettled.violation })
+          : fail(`case reconciliation ${absentSettled.reason}`);
       }
       for (const caseId of absentSettled.resolvedAbsentCaseIds) {
         await input.emit?.({
@@ -257,7 +285,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       }
     }
     const settled = await store.read();
-    if (!settled.ok) return fail(`case store ${settled.reason}`);
+    if (!settled.ok) return failStore('case store', settled);
     // The settlement above awaited durable work, so even an entry snapshot
     // taken moments ago can be stale. Every terminal decision below derives
     // from an authority read that FOLLOWS the last awaited operation: settle
@@ -336,7 +364,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
       return { value: { ok: true as const, cases, retirementTransitions }, nextState: { ...state, cases } };
     });
-    if (!neutralized.ok) return fail(`case store ${neutralized.reason}`);
+    if (!neutralized.ok) return failStore('case store', neutralized);
     if (!neutralized.value.ok) return fail(neutralized.value.reason);
     settledCases.splice(0, settledCases.length, ...neutralized.value.cases);
     for (const retirement of neutralized.value.retirementTransitions) {
@@ -470,7 +498,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   }
   let currentSources = sources.filter((source) => !resolved.has(source.findingId));
   const prior = await store.read();
-  if (!prior.ok) return fail(`case store ${prior.reason}`);
+  if (!prior.ok) return failStore('case store', prior);
   // An exact source bound to a refutation with unfinished durable follow-up
   // is not new content for the judge. The reducer names that effect and
   // blocks PASS below.
@@ -598,7 +626,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific
     // and, like every failure above, may be obsolete under a late acceptance.
-    if (reconciled.reason === 'store-failure') return fail(`case store ${reconciled.storeReason}`);
+    if (reconciled.reason === 'store-failure') {
+      return failStore('case store', { reason: reconciled.storeReason, violation: reconciled.violation });
+    }
     if (reconciled.reason === 'refutation-repeat') {
       const repeatedCaseId = admitted.find((proposed) => proposed.case.disposition === 'refute')?.case.existingCaseId;
       return failUnlessAccepted(`refutation repeat ${repeatedCaseId ?? 'unknown'}`, { settleAbsentAttempted: false });
@@ -625,7 +655,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         ...(ownsBlockedConsistency ? { consistencyStop: blockedConsistency } : {}),
       },
     });
-    if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`);
+    if (!persistedStop.ok) return failStore('decision stop', persistedStop);
     persistedConsistencyStop ||= ownsBlockedConsistency;
     caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
   }
@@ -641,10 +671,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         effect: { kind: 'none' }, consistencyStop: blockedConsistency,
       },
     });
-    if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`);
+    if (!persistedStop.ok) return failStore('blocked consistency stop', persistedStop);
   }
   const durableState = await store.read();
-  if (!durableState.ok) return fail(`case store ${durableState.reason}`);
+  if (!durableState.ok) return failStore('case store', durableState);
   const reconciledCasesById = new Map(durableState.state.cases.map((record) => [record.id, record]));
   const priorCasesById = new Map(prior.state.cases.map((record) => [record.id, record]));
   const emittedCaseIds = new Set<string>();

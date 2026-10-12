@@ -1590,6 +1590,50 @@ the mechanical-fault allowance to be exhausted. After the resume procedure, the 
 uses the changed limit or records the reduced-coverage decision; any independent semantic finding still
 blocks normally.
 
+### build_review halted on a rejected case transition
+
+**Symptom:** `.pipeline/HALT` (class `needs-human`) reads:
+
+```text
+build_review adjudication halted: case transition rejected: <invariant> (cases <ids>; sources <ids>)
+persisted case history is valid and unchanged
+Inspect with ai-conductor build-review findings --feature <slug>, then clear with ai-conductor halt clear ...
+```
+
+The matching `remediation_adjudication_failed` event carries `rejectedTransition` with the same
+`invariant`, `caseIds`, and `sourceIds`.
+
+**Diagnosis:** the remediation judgement proposed a next case-store state that breaks a case-store
+invariant: `source-linked-by-multiple-cases`, `duplicate-case-id`, `duplicate-effect-id`, or
+`invalid-next-state`. The store refused the transition and wrote nothing, so
+`.pipeline/remediation-cases.json` is still the last valid history. Most often the judgement linked a
+source that an existing case — usually a resolved one — already owns to a new case. A halt that
+instead reads `case store malformed-state` or `suppression store malformed-state`, without the
+`persisted case history is valid` line, means the persisted file itself is corrupt. This section does
+not cover that case.
+
+**Recovery:**
+
+1. Inspect the named cases and sources:
+
+   ```bash
+   ai-conductor build-review findings --feature <slug>
+   ```
+
+2. Leave `.pipeline/remediation-cases.json` unchanged. Do not delete case history. Do not accept the
+   finding to bypass the halt.
+3. Clear the halt only after the proposed transition is admissible, meaning the engine now admits it or
+   the judgement no longer proposes it. Use an [audited clear](#audited-clear):
+
+   ```bash
+   ai-conductor halt clear --feature <slug> --rationale "<why the transition is now admissible>"
+   ```
+
+**Verification:** the next `build_review` adjudication either completes, with
+`remediation_adjudication_completed` and the earlier cases still byte-identical in the case store, or
+repeats the same rejection. A repeat means the transition is still inadmissible. Leave the feature
+halted.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:
