@@ -289,16 +289,16 @@ describe('runStackPreflight (real local Git)', () => {
     await commit('base', 'base.txt', 'base\n');
     await git(['checkout', '-qb', 'feat/c2/demo']);
     await git(['update-ref', 'refs/conductor/demo/closed/c2', await commit('closed two', 'two.txt', 'two\n')]);
-    await git(['checkout', '-qb', 'feat/c3/demo']);
-    await git(['update-ref', 'refs/conductor/demo/closed/c3', await commit('closed three', 'three.txt', 'three\n')]);
+    await git(['checkout', '-qb', 'feat/c4/demo']);
+    await git(['update-ref', 'refs/conductor/demo/closed/c4', await commit('closed four', 'four.txt', 'four\n')]);
     await git(['checkout', '-qb', 'feat/daemon-demo']);
     await commit('leaf', 'leaf.txt', 'leaf\n');
     await mkdir(join(repo, '.ai-conductor'), { recursive: true });
     await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
     await writeCoverageBindingEnvelope(repo, {
       version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-      sliceMembership: { taskSlices: { a: 2, b: 3, c: 4 }, titles: ['two', 'three', 'leaf'] },
-      storyOwnership: { S1: 2, S2: 3, S3: 4 },
+      sliceMembership: { taskSlices: { a: 2, b: 4, c: 7 }, titles: ['two', 'four', 'leaf'] },
+      storyOwnership: { S1: 2, S2: 4, S3: 7 },
     }, envelopeFilesystem);
     await git(['checkout', '-q', 'feat/c2/demo']);
     await commit('operator change', 'operator.txt', 'X\n');
