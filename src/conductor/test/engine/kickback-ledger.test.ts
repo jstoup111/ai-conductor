@@ -193,8 +193,8 @@ describe('kickback-ledger', () => {
     });
     const emitted: unknown[] = [];
     const budgets = [
-      { gate: 'prd_audit' as const, lapCap: 3, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
-      { gate: 'architecture_review_as_built' as const, lapCap: 3, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+      { gate: 'prd_audit' as const, lapCap: 3, growthCap: 5, authoredSource: 'plan' as const, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+      { gate: 'architecture_review_as_built' as const, lapCap: 3, growthCap: 5, authoredSource: 'plan' as const, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
     ];
 
     const settled = await settlePendingRepair(dir, budgets, { events: { emit: async (event) => { emitted.push(event); } } });
@@ -222,8 +222,8 @@ describe('kickback-ledger', () => {
       gates: { prd_audit: { laps: 0 }, architecture_review_as_built: { laps: 2 } },
       growth: { authored: 8, added: 1, byGate: { prd_audit: 1 } },
       budgets: [
-        { gate: 'prd_audit' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
-        { gate: 'architecture_review_as_built' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+        { gate: 'prd_audit' as const, lapCap: 2, growthCap: 5, authoredSource: 'plan' as const, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
+        { gate: 'architecture_review_as_built' as const, lapCap: 2, growthCap: 5, authoredSource: 'plan' as const, growth: { authored: 8, added: 1, byGate: { prd_audit: 1 }, remaining: 4 } },
       ],
       expected: { gate: 'architecture_review_as_built', allowance: 'laps' },
     }],
@@ -231,8 +231,8 @@ describe('kickback-ledger', () => {
       gates: { prd_audit: { laps: 0 }, architecture_review_as_built: { laps: 0 } },
       growth: { authored: 8, added: 4, byGate: { prd_audit: 4 } },
       budgets: [
-        { gate: 'prd_audit' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 4, byGate: { prd_audit: 4 }, remaining: 1 } },
-        { gate: 'architecture_review_as_built' as const, lapCap: 2, growthCap: 5, growth: { authored: 8, added: 4, byGate: { prd_audit: 4 }, remaining: 1 } },
+        { gate: 'prd_audit' as const, lapCap: 2, growthCap: 5, authoredSource: 'plan' as const, growth: { authored: 8, added: 4, byGate: { prd_audit: 4 }, remaining: 1 } },
+        { gate: 'architecture_review_as_built' as const, lapCap: 2, growthCap: 5, authoredSource: 'plan' as const, growth: { authored: 8, added: 4, byGate: { prd_audit: 4 }, remaining: 1 } },
       ],
       expected: { gate: 'architecture_review_as_built', allowance: 'growth' },
     }],
@@ -277,7 +277,7 @@ describe('kickback-ledger', () => {
     });
 
     await settlePendingRepair(dir, [{
-      gate: 'prd_audit', lapCap: 3, growthCap: 5, growth: { authored: 8, added: 2, byGate: { prd_audit: 2 }, remaining: 3 },
+      gate: 'prd_audit', lapCap: 3, growthCap: 5, authoredSource: 'plan' as const, growth: { authored: 8, added: 2, byGate: { prd_audit: 2 }, remaining: 3 },
     }]);
     const ledger = await readKickbackLedger(dir);
 
