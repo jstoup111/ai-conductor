@@ -8,6 +8,7 @@ import { readVerdict, writeVerdict } from './gate-verdicts.js';
 import { readState } from './state.js';
 import { creditKickbackGateLaps, updateKickbackLedger } from './kickback-ledger.js';
 import { reverifyOrInvalidateRebaseGate, type RebasePreVerifier } from './rebase.js';
+import type { RestackCause } from './restack/restack-types.js';
 
 function verdictDigest(verdict: unknown): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(verdict)).digest('hex')}`;
@@ -54,7 +55,9 @@ async function creditBuildReviewConvergence(
   operationId: string,
   invalidated: readonly StepName[],
   child?: ChildId,
+  cause?: RestackCause,
 ): Promise<{ gate: 'build_review' } | undefined> {
+  if (cause === 'feature-repair') return undefined;
   if (!invalidated.includes('build_review')) return undefined;
   return updateKickbackLedger(projectRoot, (ledger) => {
     // A receipt means the refund already happened. Claiming it again would
@@ -102,6 +105,7 @@ export interface ApplyRebaseTransitionOptions {
   operationId?: string;
   /** Active stacked BUILD region; only region gate records use it. */
   child?: ChildId;
+  cause?: RestackCause;
 }
 
 export interface CompleteInterruptedRebaseOperationOptions {
@@ -151,6 +155,7 @@ export async function completeInterruptedRebaseOperation(
           : 'persisted rebase transition has no preservation evidence',
         true,
         options.child,
+        options.operation.cause,
       );
     }
     return applyRebaseTransition({
@@ -164,6 +169,7 @@ export async function completeInterruptedRebaseOperation(
       reverified: [],
       operationId: options.operation.id,
       child: options.child,
+      ...(options.operation.cause === undefined ? {} : { cause: options.operation.cause }),
     });
   }
   const candidates = options.operation.preservationEvidence ?? [];
@@ -188,6 +194,7 @@ export async function completeInterruptedRebaseOperation(
       'persisted rebase preservation candidate no longer matches its original verdict',
       true,
       options.child,
+      options.operation.cause,
     );
     if (result.kind === 'reverified') reverified.push(candidate.gate);
     else invalidated.push(candidate.gate);
@@ -204,6 +211,7 @@ export async function completeInterruptedRebaseOperation(
     reverified: [...new Set(reverified)],
     operationId: options.operation.id,
     child: options.child,
+    ...(options.operation.cause === undefined ? {} : { cause: options.operation.cause }),
   });
 }
 
@@ -236,6 +244,7 @@ export async function applyRebaseTransition(
       reverified: [...(options.reverified ?? [])],
     },
     replay: options.replay,
+    ...(options.cause === undefined ? {} : { cause: options.cause }),
     preservationEvidence: options.preserved.flatMap((gate) => {
       const candidate = preservationCandidates.get(gate);
       return candidate === undefined ? [] : [candidate];
@@ -246,7 +255,7 @@ export async function applyRebaseTransition(
     const complete = await Promise.all(options.preserved.map(async (gate) =>
       (await readVerdict(options.projectRoot, gate, childForGate(gate, options.child)))?.preservation?.operationId === operation.id));
     if (complete.every(Boolean)) {
-      const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated, options.child);
+      const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated, options.child, options.cause);
       return { operation: priorRebase.rebaseOperation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'already-applied', ...(convergenceCredit ? { convergenceCredit } : {}) };
     }
     // A prior process exposed an applied descriptor before writing every
@@ -359,7 +368,7 @@ export async function applyRebaseTransition(
   // restart can safely distinguish a completed operation from an interrupted
   // one without publishing a half-written pair.
   const applied: RebaseOperationRecord = { ...operation, status: 'applied', appliedAt: Date.now() };
-  const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated, options.child);
+  const convergenceCredit = await creditBuildReviewConvergence(options.projectRoot, operation.id, options.invalidated, options.child, options.cause);
   await writeVerdict(options.projectRoot, 'rebase', {
     satisfied: true,
     checkedAt: Date.now(),

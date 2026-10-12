@@ -40,10 +40,34 @@ import {
   type GithubOperationRunner,
 } from './github-operations.js';
 import { executeRemoteGit } from './remote-git-operations.js';
+import {
+  forcePushWithExpectedLease,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { runTrackerUrlRead } from './tracker-client.js';
+import { daemonOwnedSlugOfBranch } from './feature-branch-identity.js';
+
+function leaseSlug(branch: string): string {
+  // All production callers use daemon feature branches. Retain a stable,
+  // ref-safe fallback for historical/custom branch names rather than letting a
+  // post-rebase refresh bypass the lease decision entirely.
+  const normalized = branch.replace(/^refs\/heads\//, '');
+  return daemonOwnedSlugOfBranch(normalized) ?? normalized.replaceAll('/', '-');
+}
+
+function leaseGit(git: GitRunner, cwd: string): PushLeaseGitRunner {
+  return async (args) => {
+    try {
+      const result = await git([...args], { cwd });
+      return { stdout: result.stdout, exitCode: 0 };
+    } catch (error) {
+      return { stdout: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
+  };
+}
 
 /**
  * Human-readable note stamped into the placeholder body so a reader who lands
@@ -393,16 +417,23 @@ export async function openShipDraftPr(
     // `pushMode: 'lease'`) publishes with a lease — and a lease, never a bare
     // force, so an actually-moved remote is still refused.
     const lease = deps.pushMode === 'lease';
-    const pushArgs = lease
-      ? ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`, '--force-with-lease']
-      : ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`];
-    const pushed = await (deps.remoteGit ?? executeRemoteGit)(pushArgs, {
+    const runRemote = (args: readonly string[]) => (deps.remoteGit ?? executeRemoteGit)(args, {
       cwd,
       config: (args) => git(args, { cwd }),
       runRemoteGit: git,
       mutation: deps.remoteMutation,
       events: deps.events,
     });
+    const pushed = lease
+      ? await forcePushWithExpectedLease({
+        cwd,
+        slug: leaseSlug(branch),
+        branch,
+        git: leaseGit(git, cwd),
+        remoteGit: runRemote,
+        events: deps.events === undefined ? undefined : { emit: (event) => deps.events!.emit(event as never) },
+      })
+      : await runRemote(['push', '-u', 'origin', `HEAD:refs/heads/${branch}`]);
     if (pushed.kind !== 'executed') {
       const reason = pushed.kind === 'failed'
         ? pushed.error

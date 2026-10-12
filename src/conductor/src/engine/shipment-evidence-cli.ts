@@ -29,6 +29,7 @@ import {
   type GitRunner,
 } from './pr-labels.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import { runTrackerRead } from './tracker-client.js';
 import { GhRunnerError } from './tracker-client.js';
 import { specHash } from './shipped-record.js';
@@ -545,7 +546,17 @@ export function makeProductionRepairPublisher(input: {
           throw new Error(`repair commit is not record-only: ${changed.join(', ')}`);
         }
         if (changed.length > 0) {
-          await input.runGit(['commit', '-m', withDaemonCoAuthorTrailer(`docs: repair shipped record for ${branch}`)], { cwd: worktree });
+          const guarded = await commitEngineChangeWhenStacked({
+            worktree,
+            slug: input.slug,
+            pathspec: [write.path],
+            message: `docs: repair shipped record for ${branch}`,
+          });
+          if (guarded === undefined) {
+            await input.runGit(['commit', '-m', withDaemonCoAuthorTrailer(`docs: repair shipped record for ${branch}`)], { cwd: worktree });
+          } else if (guarded.kind === 'failed' || guarded.kind === 'refused') {
+            throw new Error(`could not commit shipped record repair: ${guarded.reason}`);
+          }
           const pushed = await (input.remoteGit ?? executeRemoteGit)(
             ['push', 'origin', `HEAD:refs/heads/${branch}`],
             {

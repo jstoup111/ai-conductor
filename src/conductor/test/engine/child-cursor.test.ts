@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
+// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -96,7 +96,7 @@ describe('resolveActiveChild', () => {
     await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
 
     expect(await resolveActiveChild(repository, 'demo')).toEqual({
-      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo',
+      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo', nextChild: 2,
     });
   });
 
@@ -108,7 +108,7 @@ describe('resolveActiveChild', () => {
     await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
-      kind: 'active', child: 2, position: 2, isLeaf: false, branch: 'feat/c2/demo',
+      kind: 'active', child: 2, position: 2, isLeaf: false, branch: 'feat/c2/demo', nextChild: 3,
     });
   });
 
@@ -144,7 +144,7 @@ describe('resolveActiveChild', () => {
     await git(['update-ref', 'refs/conductor/demo/closed/c01', tip]);
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
-      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo',
+      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo', nextChild: 2,
     });
   });
 
@@ -163,7 +163,7 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(recreated, 'demo')).resolves.toEqual(before);
   });
 
-  it('fails closed as divergent when a closed child has a non-halt commit after its closure', async () => {
+  it('reports repair-pending when a closed child has a non-halt commit after its closure', async () => {
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);
     const closure = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
@@ -174,7 +174,26 @@ describe('resolveActiveChild', () => {
     await git(['add', 'child-change.txt']);
     await git(['commit', '-qm', 'child drift']);
 
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'divergent', child: 1 });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'repair-pending', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [1],
+    });
+  });
+
+  it('reports closed-child-rewritten when a closed child is reset behind its closure', async () => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2]);
+    await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
+    await git(['checkout', '-q', 'feat/c1/demo']);
+    await writeFile(join(repository, 'closed-change.txt'), 'closed\n');
+    await git(['add', 'closed-change.txt']);
+    await git(['commit', '-qm', 'closed child change']);
+    const closure = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
+    await git(['reset', '--hard', 'HEAD^']);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'divergent', child: 1, check: 'closed-child-rewritten',
+    });
   });
 
   it('fails closed as divergent when a closure is not an ancestor of the next non-leaf child', async () => {
@@ -186,7 +205,9 @@ describe('resolveActiveChild', () => {
     const unrelatedTip = (await git(['commit-tree', `${closure}^{tree}`, '-m', 'unrelated child base'])).trim();
     await git(['branch', 'feat/c2/demo', unrelatedTip]);
 
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'divergent', child: 1 });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'divergent', child: 2, check: 'range-not-ancestor',
+    });
   });
 
   it('fails closed for child state without a sealed envelope, detached HEAD, and git errors', async () => {
@@ -222,7 +243,7 @@ describe('resolveActiveChild', () => {
     await mkdir(join(repository, '.pipeline', 'children', '1'), { recursive: true });
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
-      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo',
+      kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo', nextChild: 2,
     });
   });
 
@@ -235,7 +256,16 @@ describe('resolveActiveChild', () => {
     await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
   });
 
-  it('allows a halt-record-only commit after closure and clears leafMovePending after a leaf rewrite map', async () => {
+  it('keeps a non-Git N=1 fixture on the flat path when no child state exists', async () => {
+    const nonGitRoot = await mkdtemp(join(tmpdir(), 'child-cursor-non-git-'));
+    try {
+      await expect(hasDurableChildState(nonGitRoot, 'demo')).resolves.toBe(false);
+    } finally {
+      await rm(nonGitRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('writes the in-flight leaf marker when the leaf already contains the last closure rewrite image', async () => {
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);
     const closure = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
@@ -256,6 +286,28 @@ describe('resolveActiveChild', () => {
 
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
       kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', leafMovePending: false,
+    });
+    await expect(git(['rev-parse', '--verify', 'refs/conductor/demo/leaf-moved']))
+      .resolves.toBe(`${translatedClosure}\n`);
+  });
+
+  it('keeps the leaf move pending when a rewrite map exists but the leaf was left in place', async () => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2]);
+    const closure = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', closure]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
+    await git(['checkout', '-q', 'main']);
+    await writeFile(join(repository, 'base-refresh.txt'), 'new base\n');
+    await git(['add', 'base-refresh.txt']);
+    await git(['commit', '-qm', 'base refresh image']);
+    const translatedClosure = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['checkout', '-q', 'feat/c1/demo']);
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'rebase-rewrites.json'), JSON.stringify({ [closure]: translatedClosure }));
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', leafMovePending: true,
     });
   });
 });

@@ -5,7 +5,7 @@ import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
-import { access, mkdir, readFile, readlink } from 'node:fs/promises';
+import { access, mkdir, readFile, readlink, unlink as unlinkFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
@@ -198,6 +198,7 @@ import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js'
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
+import { runStackPreflight } from './engine/restack/stack-preflight.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -240,7 +241,7 @@ import {
   resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { enrollWatch, sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
@@ -1755,6 +1756,44 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         boundary: { kind: 'pre-first-unit' },
       };
       return termination;
+    }
+
+    // A stacked feature's closure refs are durable state, not a conductor
+    // concern.  Recover/repair them before the ordinary re-kick path consumes
+    // REKICK or judges the active child.  In particular, a repair which has a
+    // chained base refresh owns consumption of REKICK through its journal;
+    // otherwise resumeRebaseFirst retains its historical one-shot behavior.
+    const rekickPath = join(pipelineDir, 'REKICK');
+    const stackPreflight = await runStackPreflight({
+      worktree: wt.path,
+      slug: item.slug,
+      baseRefreshDue: existsSync(rekickPath),
+      consumeRekick: async () => {
+        await unlinkFile(rekickPath).catch((error: unknown) => {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT') throw error;
+        });
+      },
+      events: featureEvents,
+      resolver: stepRunner.resolveRebaseConflict
+        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
+        : undefined,
+      resolverCap: resolveRebaseResolutionAttempts(config),
+      // Authorizations are consumed by the daemon's pre-dispatch maintenance
+      // boundary. A record left by an already-cleared halt can be resolved
+      // here, after recovery; never supersede a still-live halt record.
+      prepareResume: async () => {
+        if (await access(join(wt.path, HALT_MARKER)).then(() => true).catch(() => false)) return;
+        try {
+          await supersedeHaltRecord(wt.path, item.slug, 'stack-preflight');
+        } catch (error) {
+          featureLog(`stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      },
+    });
+    if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') {
+      featureLog(`stack preflight ${item.slug}: ${stackPreflight.kind}`);
+      return;
     }
     const resume = await resumeRebaseFirst({
       worktreePath: wt.path,

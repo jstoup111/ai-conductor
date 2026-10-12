@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:5, task:6, task:11, task:15
+// Covers: task:1, task:2, task:4, task:5, task:6, task:11, task:15
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -29,6 +29,7 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState, ConductorEvent } from '../../src/types/index.js';
 import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { writeState } from '../../src/engine/state.js';
 
 /**
@@ -88,6 +89,12 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   child_closed: 'not-audited-by-design',
   child_switched: 'not-audited-by-design',
   rebase_skipped_for_stack: 'not-audited-by-design',
+  restack_planned: 'not-audited-by-design',
+  restack_applied: 'not-audited-by-design',
+  restack_conflict: 'not-audited-by-design',
+  restack_refused: 'not-audited-by-design',
+  restack_recovered: 'not-audited-by-design',
+  push_lease_refused: 'not-audited-by-design',
   story_reowned: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   build_review_read_only_capability: 'not-audited-by-design',
@@ -372,6 +379,24 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   child_switched: { type: 'child_switched', from: 1, to: 2, position: 2, branch: 'feat/c2/feature' },
   rebase_skipped_for_stack: { type: 'rebase_skipped_for_stack', child: parseChildId(1)!, reason: 'intermediate child' },
+  restack_planned: {
+    type: 'restack_planned', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', children: [parseChildId(1)!],
+  },
+  restack_applied: {
+    type: 'restack_applied', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', child: parseChildId(1)!,
+    oldTip: parseCommitSha('a'.repeat(40))!, newTip: parseCommitSha('b'.repeat(40))!,
+    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'],
+  },
+  restack_conflict: {
+    type: 'restack_conflict', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
+    commit: parseCommitSha('c'.repeat(40))!, paths: ['src/feature.ts'],
+  },
+  restack_refused: { type: 'restack_refused', reason: 'dirty-overlap', child: parseChildId(1)!, detail: 'src/feature.ts' },
+  restack_recovered: { type: 'restack_recovered', opId: 'restack-1' as RestackOpId, fromState: 'ready' },
+  push_lease_refused: {
+    type: 'push_lease_refused', ref: parseRefName('refs/heads/feat/daemon-feature')!,
+    expected: parseCommitSha('d'.repeat(40))!, actual: parseCommitSha('e'.repeat(40))!,
+  },
   story_reowned: { type: 'story_reowned', story: '1', from: 1, to: 2 },
   config_deprecated_key: {
     type: 'config_deprecated_key',

@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:37
 /**
  * Tests for ci-fix.ts (Task 15–16: RETRY hint builder).
  *

@@ -34,7 +34,7 @@ export interface KickbackBudgetAdjustment {
   rationale: string;
   timestamp: string;
   haltGeneration: string;
-  allowance?: 'laps' | 'growth';
+  allowance?: 'laps' | 'growth' | 'restacks';
 }
 
 export interface KickbackCapEvidence {
@@ -43,7 +43,7 @@ export interface KickbackCapEvidence {
   limit: number;
   latestReason: string;
   haltGeneration: string;
-  allowance?: 'laps' | 'growth';
+  allowance?: 'laps' | 'growth' | 'restacks';
 }
 
 export interface KickbackResumeAuthorization {
@@ -383,7 +383,7 @@ function isBudgetAdjustment(value: unknown): value is KickbackBudgetAdjustment {
     isNonEmptyString(adjustment.rationale) &&
     isNonEmptyString(adjustment.timestamp) &&
     isNonEmptyString(adjustment.haltGeneration) &&
-    (adjustment.allowance === undefined || adjustment.allowance === 'laps' || adjustment.allowance === 'growth');
+    (adjustment.allowance === undefined || adjustment.allowance === 'laps' || adjustment.allowance === 'growth' || adjustment.allowance === 'restacks');
 }
 
 function isCapEvidence(value: unknown): value is KickbackCapEvidence {
@@ -394,7 +394,7 @@ function isCapEvidence(value: unknown): value is KickbackCapEvidence {
     isNonNegativeInteger(evidence.limit) &&
     isNonEmptyString(evidence.latestReason) &&
     isNonEmptyString(evidence.haltGeneration) &&
-    (evidence.allowance === undefined || evidence.allowance === 'laps' || evidence.allowance === 'growth');
+    (evidence.allowance === undefined || evidence.allowance === 'laps' || evidence.allowance === 'growth' || evidence.allowance === 'restacks');
 }
 
 function isResumeAuthorization(value: unknown): value is KickbackResumeAuthorization {
@@ -1552,10 +1552,15 @@ export async function applyKickbackBudgetAdjustment(
     const allowance = entry.capEvidence?.allowance ?? 'laps';
     const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
     const growth = allowance === 'growth';
+    const restack = allowance === 'restacks';
     const beforeLimit = growth
       ? (ledger.effectiveGrowthCap ?? entry.capEvidence!.limit)
       : remediation ? (entry.effectiveLapCap ?? entry.capEvidence!.limit) : (entry.effectiveLimit ?? defaultLimit);
-    const beforeConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
+    const beforeConsumed = growth
+      ? (ledger.growth?.added ?? 0)
+      : restack
+        ? entry.capEvidence!.consumed
+        : remediation ? (entry.laps ?? 0) : entry.cumulative;
     const raised = adjustment.kind === 'raise' ? adjustment.afterLimit : beforeLimit;
     const next: KickbackGateEntry = {
       ...entry,
@@ -1597,7 +1602,12 @@ function capEvidenceAgreesWithAdjustment(
   const allowance = evidence.allowance ?? 'laps';
   const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
   const growth = allowance === 'growth';
-  const currentConsumed = growth ? (ledger.growth?.added ?? 0) : remediation ? (entry.laps ?? 0) : entry.cumulative;
+  const restack = allowance === 'restacks';
+  const currentConsumed = growth
+    ? (ledger.growth?.added ?? 0)
+    : restack
+      ? evidence.consumed
+      : remediation ? (entry.laps ?? 0) : entry.cumulative;
   const currentLimit = growth
     ? (ledger.effectiveGrowthCap ?? evidence.limit)
     : remediation

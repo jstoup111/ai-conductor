@@ -142,6 +142,15 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     let suiteCalls = 0;
     let resolverCalls = 0;
     let verifiedTip: string | undefined;
+    let concurrentTip: string | undefined;
+    const outsider = join(dir, '.outsider');
+    if (concurrentPush) {
+      await execFile('git', ['clone', '-q', origin, outsider]);
+      await execFile('git', ['checkout', '-q', 'feat/widget'], { cwd: outsider });
+      await execFile('git', ['config', 'user.email', 'operator@example.com'], { cwd: outsider });
+      await execFile('git', ['config', 'user.name', 'Operator'], { cwd: outsider });
+      await execFile('git', ['config', 'commit.gpgsign', 'false'], { cwd: outsider });
+    }
     const remoteTip = async () => (await execFile('git', ['rev-parse', 'refs/heads/feat/widget'], { cwd: origin })).stdout.trim();
 
     const gh = fakeGhFor([], []);
@@ -159,8 +168,13 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
           await execFile('git', ['merge-base', '--is-ancestor', baseTip, 'HEAD'], { cwd });
           expect((await execFile('git', ['show', 'HEAD:feature.txt'], { cwd })).stdout).toBe('feature\n');
           if (concurrentPush) {
-            // Simulate another writer without refreshing this checkout's lease.
-            await execFile('git', ['update-ref', 'refs/heads/feat/widget', baseTip, before], { cwd: origin });
+            // A separate clone leaves the resolver worktree's tracking ref
+            // stale, as a genuine concurrent writer would.
+            await writeFile(join(outsider, 'operator.txt'), 'concurrent update\n');
+            await execFile('git', ['add', 'operator.txt'], { cwd: outsider });
+            await execFile('git', ['commit', '-q', '-m', 'operator pushed a fix'], { cwd: outsider });
+            await execFile('git', ['push', 'origin', 'feat/widget'], { cwd: outsider });
+            concurrentTip = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: outsider })).stdout.trim();
           }
           return { exitCode, configured, durationMs: 1 };
         },
@@ -172,7 +186,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     expect(suiteCalls).toBe(1);
     expect(resolverCalls).toBe(0);
     expect(outcome.kind).toBe(expected);
-    expect(await remoteTip()).toBe(expected === 'refreshed' ? verifiedTip : concurrentPush ? baseTip : before);
+    expect(await remoteTip()).toBe(expected === 'refreshed' ? verifiedTip : concurrentPush ? concurrentTip : before);
     expect(logs.some(line => line.includes('stage=lease-push result=refreshed'))).toBe(expected === 'refreshed');
   });
 

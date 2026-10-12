@@ -186,6 +186,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
   advanceChildRegion,
   enterChildRegion,
@@ -412,6 +413,8 @@ import {
   resolveTaskIds,
 } from './task-progress.js';
 import { supersedeHaltRecord } from './halt-record.js';
+import { runStackPreflight } from './restack/stack-preflight.js';
+import { runRestack } from './restack/restack-executor.js';
 import {
   makeGitRunner,
   performRebase,
@@ -426,6 +429,10 @@ import {
   assertNeverRebaseOutcome,
   ProtectedArtifactSealRejection,
   originDefaultBranch,
+  resolveBase,
+  filterCodeOrTestPaths,
+  classifyMergeableSkip,
+  classifyProspectiveMerge,
   type RebaseOutcome,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
@@ -729,7 +736,9 @@ export class Conductor {
   private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {
     switch (cursor.kind) {
       case 'divergent':
-        return `child ${cursor.child} diverged from its declared successor; restack required (#2943)`;
+        return `child ${cursor.child} failed active-child check ${cursor.check}`;
+      case 'repair-pending':
+        return `child stack repair is pending for closed child ${cursor.repairChildren.join(', ')}`;
       case 'envelope-missing':
         return 'coverage-binding envelope is missing while child state exists';
       case 'detached-head':
@@ -4414,25 +4423,36 @@ export class Conductor {
           // matching the append-plumbing policy above (routing must not
           // block on bookkeeping).
           try {
-            const git = makeGitRunner(this.projectRoot);
-            await git(['add', '--', planPath]);
-            const staged = await git(['diff', '--cached', '--quiet', '--', planPath]);
-            if (staged.exitCode !== 0) {
+            const guarded = await commitEngineChangeWhenStacked({
+              worktree: this.projectRoot,
+              slug: this.featureSlug ?? this.featureDesc ?? '',
+              pathspec: [planPath],
+              message: 'chore(plan): record appended remediation tasks',
+              noVerify: true,
+            });
+            if (guarded === undefined) {
+              const git = makeGitRunner(this.projectRoot);
+              await git(['add', '--', planPath]);
+              const staged = await git(['diff', '--cached', '--quiet', '--', planPath]);
+              if (staged.exitCode !== 0) {
               // Pathspec-scoped: commits only the plan file even if other
               // paths happen to be staged.
-              const commit = await git([
-                'commit',
-                '-m',
-                withDaemonCoAuthorTrailer('chore(plan): record appended remediation tasks'),
-                '--no-verify',
-                '--',
-                planPath,
-              ]);
-              if (commit.exitCode !== 0) {
-                this.log?.(
-                  `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${commit.stderr || commit.stdout}`,
-                );
+                const commit = await git([
+                  'commit',
+                  '-m',
+                  withDaemonCoAuthorTrailer('chore(plan): record appended remediation tasks'),
+                  '--no-verify',
+                  '--',
+                  planPath,
+                ]);
+                if (commit.exitCode !== 0) {
+                  this.log?.(
+                    `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${commit.stderr || commit.stdout}`,
+                  );
+                }
               }
+            } else if (guarded.kind === 'failed' || guarded.kind === 'refused') {
+              this.log?.(`WARNING: remediation plan amendment commit failed — plan left uncommitted: ${guarded.reason}`);
             }
           } catch (err) {
             this.log?.(
@@ -6091,6 +6111,33 @@ export class Conductor {
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
+      // A stacked resume must repair durable closure state before either the
+      // cursor or the rebase-operation fence interprets it.  A journal owns
+      // any in-progress record it wrote, so classifying it first would turn a
+      // recoverable restack into an unrelated rebase HALT.
+      const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      if (resumeSlug) {
+        const preflight = await runStackPreflight({
+          worktree: this.projectRoot,
+          slug: resumeSlug,
+          events: this.events,
+          resolver: this.stepRunner.resolveRebaseConflict
+            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          resolverCap: resolveRebaseResolutionAttempts(this.config),
+          prepareResume: async () => {
+            if (await haltMarkerExists(this.projectRoot)) return;
+            try {
+              await supersedeHaltRecord(this.projectRoot, resumeSlug, 'stack-preflight');
+            } catch {
+              // The existing resume path remains the authority for a
+              // best-effort record supersession failure; never classify a
+              // journal while trying to report that secondary failure.
+            }
+          },
+        });
+        if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
+      }
       if (!await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
@@ -14547,7 +14594,9 @@ export class Conductor {
           if (!verdict || verdict.satisfied || verdict.kickback?.from !== 'rebase') continue;
 
           let convergenceCredit: { gate: 'build_review' } | undefined;
-          if (target === 'build_review') {
+          // Only a base refresh (or an N=1 rebase, which has no cause) earns a
+          // refund; a feature repair's invalidation is the repair's own cost.
+          if (target === 'build_review' && verdict.kickback.cause !== 'feature-repair') {
             const credited = await updateKickbackLedger(this.projectRoot, (ledger) => {
               const entry = ledger.gates.build_review;
               if (!entry) return { result: false };
@@ -15192,6 +15241,112 @@ export class Conductor {
 
     const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
+
+    // A stacked feature is one history, not a collection of independently
+    // rebased branches.  Repair any durable stack state before judging the
+    // leaf, then replay the complete stack onto the resolved default tip.
+    // `applyRestackTransition` owns the resulting verdict/operation write;
+    // this boundary records the FINISH completion and emits the ordinary
+    // rebase observation for that whole-stack operation.
+    const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
+      const preflight = await runStackPreflight({
+        worktree: this.projectRoot,
+        slug: stackSlug,
+        events: this.events,
+        resolver: this.stepRunner.resolveRebaseConflict
+          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+          : undefined,
+        resolverCap: resolveRebaseResolutionAttempts(this.config),
+      });
+      if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
+        const reason = preflight.kind === 'unavailable'
+          ? `stack preflight unavailable: ${preflight.detail}`
+          : 'stack preflight halted';
+        return { success: false, output: reason };
+      }
+
+      const base = await resolveBase(git, localBase);
+      const defaultTip = await git(['rev-parse', '--verify', base.ref]);
+      const oldLeaf = await git(['rev-parse', '--verify', 'HEAD']);
+      const mergeBase = await git(['merge-base', 'HEAD', base.ref]);
+      if (defaultTip.exitCode !== 0 || oldLeaf.exitCode !== 0 || mergeBase.exitCode !== 0) {
+        return { success: false, output: 'cannot resolve the stacked rebase tuple' };
+      }
+      const previous = oldLeaf.stdout.trim();
+      const target = defaultTip.stdout.trim();
+      const oldBase = mergeBase.stdout.trim();
+
+      // The executor deliberately avoids a no-op transaction: replaying an
+      // already-contained default would manufacture new commit identities.
+      const current = await git(['merge-base', '--is-ancestor', target, previous]);
+      let outcome: RebaseOutcome;
+      if (current.exitCode === 0) {
+        outcome = { kind: 'noop', baseSha: target, allChangedPaths: [] };
+      } else {
+        // Preserve FINISH's existing mergeable-skip policy, but evaluate it
+        // only after durable stack repair.  A base change that touches either
+        // code or review inputs remains non-skippable and reaches restack.
+        const prospective = await classifyProspectiveMerge(git, base.ref);
+        const skip = prospective === 'clean'
+          ? await classifyMergeableSkip(git, base, this.projectRoot)
+          : undefined;
+        if (skip?.skippable) {
+          outcome = { kind: 'mergeable_skip', baseRef: base.ref, baseSha: skip.baseSha, baseKind: base.kind };
+          this.lastRebaseOutcome = outcome;
+          await emitRebaseEvent(this.events, outcome);
+          await recordRebaseStepCompletion(this.stateFilePath, outcome);
+          return { success: true };
+        }
+        const restacked = await runRestack({
+          worktree: this.projectRoot,
+          slug: stackSlug,
+          cause: 'base-refresh',
+          newDefault: target,
+          events: this.events,
+          git,
+          resolver: this.stepRunner.resolveRebaseConflict
+            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          resolverCap: resolveRebaseResolutionAttempts(this.config),
+        });
+        if (restacked.kind !== 'applied') {
+          const reason = restacked.kind === 'unavailable'
+            ? `stack base refresh unavailable: ${restacked.detail}`
+            : restacked.kind === 'refused'
+              ? 'stack base refresh deferred: another live restack owns the journal'
+              : 'stack base refresh halted';
+          return { success: false, output: reason };
+        }
+        const head = await git(['rev-parse', '--verify', 'HEAD']);
+        const delta = await git(['diff', '--name-only', oldBase, target]);
+        const featureSurface = await git(['diff', '--name-only', oldBase, previous]);
+        if (head.exitCode !== 0 || delta.exitCode !== 0 || featureSurface.exitCode !== 0) {
+          return { success: false, output: 'cannot inspect completed stacked rebase' };
+        }
+        const allChangedPaths = delta.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+        outcome = {
+          kind: 'changed',
+          baseSha: target,
+          changedCodePaths: filterCodeOrTestPaths(allChangedPaths),
+          allChangedPaths,
+          featureSurface: featureSurface.stdout.split('\n').map((path) => path.trim()).filter(Boolean),
+          documentInputs: [],
+          replay: {
+            preRebaseHead: previous,
+            mergeBase: oldBase,
+            target,
+            completedHead: head.stdout.trim(),
+          },
+        };
+      }
+      this.lastRebaseOutcome = outcome;
+      state.rebase_base_sha = target;
+      await this.persistPendingStateChanges(state, 'persist stacked rebase base provenance');
+      await emitRebaseEvent(this.events, outcome);
+      await recordRebaseStepCompletion(this.stateFilePath, outcome);
+      return { success: true };
+    }
 
     // ── Merged-PR guard: rebase backstop ────────────────────────────────────
     // A merged PR is only eligible to skip rebase when strict durable evidence

@@ -64,18 +64,19 @@ async function patchIdFor(git: GitRunnerWithInput, sha: string): Promise<string>
  * 7-char short form, both pointing at the same post-image full sha, plus a
  * residue list of pre-image shas with no patch-id match.
  */
-export async function buildRewriteMap(
+async function buildRewriteMapBetweenRanges(
   git: GitRunner,
-  onto: string,
+  preImageBase: string,
   origHead: string,
+  postImageBase: string,
   head: string,
   flatten?: FlattenedReplayPlan,
 ): Promise<RewriteMapResult> {
   const gitAny = git as unknown as GitRunnerWithInput;
 
   const [preResult, postResult] = await Promise.all([
-    gitAny(['rev-list', `${onto}..${origHead}`]),
-    gitAny(['rev-list', `${onto}..${head}`]),
+    gitAny(['rev-list', `${preImageBase}..${origHead}`]),
+    gitAny(['rev-list', `${postImageBase}..${head}`]),
   ]);
 
   const preShas = parseShaList(preResult.stdout);
@@ -134,6 +135,56 @@ export async function buildRewriteMap(
     }
   }
 
+  return { map, residue };
+}
+
+export async function buildRewriteMap(
+  git: GitRunner,
+  onto: string,
+  origHead: string,
+  head: string,
+  flatten?: FlattenedReplayPlan,
+): Promise<RewriteMapResult> {
+  return buildRewriteMapBetweenRanges(git, onto, origHead, onto, head, flatten);
+}
+
+/**
+ * Builds a correspondence for a replay whose pre- and post-image ranges have
+ * different parents. Stacked restacks need this shape: an old child is based
+ * on its old parent while its replay is based on that parent's new image.
+ */
+export async function buildRewriteMapForRanges(
+  git: GitRunner,
+  preImageBase: string,
+  origHead: string,
+  postImageBase: string,
+  head: string,
+  flatten?: FlattenedReplayPlan,
+): Promise<RewriteMapResult> {
+  return buildRewriteMapBetweenRanges(git, preImageBase, origHead, postImageBase, head, flatten);
+}
+
+/**
+ * Adapts a replay's authoritative correspondence to the flat store format.
+ * Unlike patch-id reconstruction, an empty commit and a resolver-modified
+ * patch retain their identity. Residue remains every old-range commit that
+ * the replay deliberately did not carry.
+ */
+async function buildExactRewriteMap(
+  git: GitRunner,
+  preImageBase: string,
+  origHead: string,
+  exactRewrites: ReadonlyMap<string, string>,
+): Promise<RewriteMapResult> {
+  const map: Record<string, string> = {};
+  for (const [from, to] of exactRewrites) {
+    map[from] = to;
+    map[from.slice(0, SHORT_SHA_LEN)] = to;
+  }
+  const preImage = await git(['rev-list', `${preImageBase}..${origHead}`]);
+  const residue = preImage.exitCode === 0
+    ? parseShaList(preImage.stdout).filter((sha) => map[sha] === undefined)
+    : [];
   return { map, residue };
 }
 
@@ -254,11 +305,10 @@ async function atomicWriteJson(
  * Reuses the atomic temp+rename discipline from `task-evidence.ts`'s
  * `write()`.
  */
-export async function applyMapToStores(
-  projectRoot: string,
+async function applyMapToPipelineStore(
+  pipelineDir: string,
   map: Record<string, string>,
 ): Promise<void> {
-  const pipelineDir = join(projectRoot, '.pipeline');
   const evidencePath = join(pipelineDir, 'task-evidence.json');
   const statusPath = join(pipelineDir, 'task-status.json');
 
@@ -308,6 +358,50 @@ export async function applyMapToStores(
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
       throw err;
+    }
+  }
+
+  // A retained test-suite proof is still bound to the commit at which it was
+  // observed. Keep that provenance usable after a replay, including its drift
+  // ledger; do not attempt a broad JSON-wide replacement, which could rewrite
+  // ordinary diagnostics that merely look like object ids.
+  const suiteEvidencePath = join(pipelineDir, 'test-suite-evidence.json');
+  try {
+    const raw = await readFile(suiteEvidencePath, 'utf-8');
+    const parsed = JSON.parse(raw) as {
+      provenanceHeadSha?: unknown;
+      driftLedger?: Array<{ headSha?: unknown }>;
+    };
+    if (parsed && typeof parsed === 'object') {
+      if (typeof parsed.provenanceHeadSha === 'string') {
+        parsed.provenanceHeadSha = resolveThroughMap(parsed.provenanceHeadSha, map);
+      }
+      if (Array.isArray(parsed.driftLedger)) {
+        for (const entry of parsed.driftLedger) {
+          if (entry && typeof entry.headSha === 'string') {
+            entry.headSha = resolveThroughMap(entry.headSha, map);
+          }
+        }
+      }
+      await atomicWriteJson(pipelineDir, suiteEvidencePath, 'test-suite-evidence', parsed);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
+export async function applyMapToStores(
+  projectRoot: string,
+  map: Record<string, string>,
+  additionalPipelineDirs: readonly string[] = [],
+): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await applyMapToPipelineStore(pipelineDir, map);
+  for (const additionalPipelineDir of additionalPipelineDirs) {
+    if (additionalPipelineDir !== pipelineDir) {
+      await applyMapToPipelineStore(additionalPipelineDir, map);
     }
   }
 }
@@ -476,6 +570,18 @@ export async function derivePendingTaskIds(projectRoot: string): Promise<string[
 }
 
 /**
+ * An asymmetric replay range. Ordinary rebase has the same base on both
+ * sides; a stacked child is replayed from its old parent onto that parent's
+ * new image. Additional stores are deliberately pipeline directories, so the
+ * caller can name only the active child's region store.
+ */
+export interface RebaseTranslationRange {
+  readonly preImageBase: string;
+  readonly postImageBase: string;
+  readonly additionalPipelineDirs?: readonly string[];
+}
+
+/**
  * Orchestrates post-rebase evidence-citation translation
  * (adr-2026-07-12-rebase-evidence-stamp-translation.md), called by
  * `performRebase` on any clean rebase that moved HEAD — including a
@@ -504,11 +610,18 @@ export async function translateAfterRebase(
   events?: ConductorEventEmitter,
   onRebaseline?: ProtectedArtifactSealRebaselineObserver,
   flatten?: FlattenedReplayPlan,
+  range?: RebaseTranslationRange,
+  /** Exact map captured by a stacked replay; avoids patch-id reconstruction. */
+  exactRewrites?: ReadonlyMap<string, string>,
 ): Promise<void> {
-  const { map, residue } = await buildRewriteMap(git, onto, origHead, head, flatten);
+  const preImageBase = range?.preImageBase ?? onto;
+  const postImageBase = range?.postImageBase ?? onto;
+  const { map, residue } = exactRewrites === undefined
+    ? await buildRewriteMapForRanges(git, preImageBase, origHead, postImageBase, head, flatten)
+    : await buildExactRewriteMap(git, preImageBase, origHead, exactRewrites);
 
   await persistRewriteMap(projectRoot, map);
-  await applyMapToStores(projectRoot, map);
+  await applyMapToStores(projectRoot, map, range?.additionalPipelineDirs);
 
   // Repair obligations keep a boundary into the feature's old first-parent
   // history. Translate it through the same rewrite map as the file-backed
@@ -527,7 +640,7 @@ export async function translateAfterRebase(
   if (repairState.ok) {
     const preImageFirstParentOldestFirst = await listFirstParentPreImageOldestFirst(
       git,
-      onto,
+      preImageBase,
       origHead,
     );
     const reachablePostImages = new Set(Object.values(map));

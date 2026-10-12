@@ -78,7 +78,7 @@ describe('writeHaltMarker', () => {
     expect(emitted).toEqual([expect.objectContaining({
       type: 'halt_record_push_failed',
       path: '.docs/halted/operator-decision.md',
-      reason: 'invalid-target',
+      reason: 'could not fetch refs/heads/feat/operator-decision before force push',
     })]);
   });
 
@@ -88,6 +88,7 @@ describe('writeHaltMarker', () => {
     const emitted: unknown[] = [];
     emitter.on('github_write_credential_fallback', (event) => { emitted.push(event); });
     const pushes: Array<string | undefined> = [];
+    const remoteTip = 'a'.repeat(40);
 
     await expect(writeHaltMarker(root, 'operator decision required\n', 'needs-human', emitter, {
       mutation: {
@@ -100,6 +101,10 @@ describe('writeHaltMarker', () => {
           provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/operator-decision.md', content: 'Owner: operator\n' }] },
         },
       },
+      git: async (args) => ({
+        stdout: args[0] === 'rev-parse' ? `${remoteTip}\n` : '',
+        exitCode: 0,
+      }),
       remoteGit: (args, options) => executeRemoteGit(args, {
         ...options,
         config: async () => ({ stdout: 'https://github.com/acme/repo.git\n' }),

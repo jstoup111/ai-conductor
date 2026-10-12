@@ -22,6 +22,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import type { SetupFailureAttempt } from './rebase.js';
 import type { SetupRepairRejectionReason } from '../types/events.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
@@ -319,6 +320,7 @@ export async function quarantine(
   git: GitRunner,
   slug: string,
   logger?: Logger,
+  worktreePath?: string,
 ): Promise<QuarantineResult | (TriageOutcome & { kind: 'park' })> {
   const quarantineRef = `wip/setup-quarantine-${slug}`;
 
@@ -334,24 +336,34 @@ export async function quarantine(
   const statusResult = await git(['status', '--porcelain']);
   const preservedPaths = parsePortcelainPaths(statusResult.stdout);
 
-  // Stage all changes
-  const addResult = await git(['add', '-A']);
-  if (addResult.exitCode !== 0) {
-    return {
-      kind: 'park',
-      outputTail: addResult.stderr || `git add -A failed with code ${addResult.exitCode}`,
-    };
-  }
+  const guarded = worktreePath === undefined ? undefined : await commitEngineChangeWhenStacked({
+    worktree: worktreePath,
+    slug,
+    pathspec: preservedPaths,
+    message: 'Quarantine before reset',
+  });
+  if (guarded === undefined) {
+    // Stage all changes
+    const addResult = await git(['add', '-A']);
+    if (addResult.exitCode !== 0) {
+      return {
+        kind: 'park',
+        outputTail: addResult.stderr || `git add -A failed with code ${addResult.exitCode}`,
+      };
+    }
 
-  // Commit the staged changes
-  const commitResult = await git(['commit', '-m', withDaemonCoAuthorTrailer('Quarantine before reset')]);
-  if (commitResult.exitCode !== 0) {
-    // Commit failed — roll back the index
-    await git(['reset', '--mixed', 'HEAD']);
-    return {
-      kind: 'park',
-      outputTail: commitResult.stderr || `quarantine commit failed with code ${commitResult.exitCode}`,
-    };
+    // Commit the staged changes
+    const commitResult = await git(['commit', '-m', withDaemonCoAuthorTrailer('Quarantine before reset')]);
+    if (commitResult.exitCode !== 0) {
+      // Commit failed — roll back the index
+      await git(['reset', '--mixed', 'HEAD']);
+      return {
+        kind: 'park',
+        outputTail: commitResult.stderr || `quarantine commit failed with code ${commitResult.exitCode}`,
+      };
+    }
+  } else if (guarded.kind !== 'written') {
+    return { kind: 'park', outputTail: guarded.kind === 'noop' ? 'quarantine had no changes to commit' : guarded.reason };
   }
 
   // Get the SHA of the new commit
@@ -438,7 +450,7 @@ export async function retryPrepareAfterQuarantine(
   logger?: Logger,
 ): Promise<TriageOutcome> {
   // Preserve dirty state and reset working tree to clean
-  const quarantineAttempt = await quarantine(git, slug, logger);
+  const quarantineAttempt = await quarantine(git, slug, logger, worktreePath);
 
   // If quarantine failed, return park immediately
   if ('kind' in quarantineAttempt) {
@@ -618,7 +630,12 @@ async function repairSnapshot(git: GitRunner): Promise<{ ok: true; value: Repair
   return { ok: true, value: { head: head.stdout.trim(), tree: tree.stdout.trim(), paths, dirty: true } };
 }
 
-async function preserveRepairAttempt(git: GitRunner, slug: string, originalHead: string): Promise<PreservationResult> {
+async function preserveRepairAttempt(
+  git: GitRunner,
+  slug: string,
+  originalHead: string,
+  worktreePath?: string,
+): Promise<PreservationResult> {
   const status = await git(['status', '--porcelain']);
   if (status.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(status, 'could not inspect attempted repair') };
   const residue = parsePortcelainPaths(status.stdout);
@@ -626,10 +643,20 @@ async function preserveRepairAttempt(git: GitRunner, slug: string, originalHead:
   if (changed.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(changed, 'could not inspect attempted commits') };
   const paths = [...new Set([...changed.stdout.split('\n').filter(Boolean), ...residue])];
   if (residue.length > 0) {
-    const add = await git(['add', '-A']);
-    if (add.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(add, 'could not stage rejected repair') };
-    const commit = await git(['commit', '-m', withDaemonCoAuthorTrailer('wip(setup): preserve rejected repair')]);
-    if (commit.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(commit, 'could not preserve rejected repair') };
+    const guarded = worktreePath === undefined ? undefined : await commitEngineChangeWhenStacked({
+      worktree: worktreePath,
+      slug,
+      pathspec: residue,
+      message: 'wip(setup): preserve rejected repair',
+    });
+    if (guarded === undefined) {
+      const add = await git(['add', '-A']);
+      if (add.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(add, 'could not stage rejected repair') };
+      const commit = await git(['commit', '-m', withDaemonCoAuthorTrailer('wip(setup): preserve rejected repair')]);
+      if (commit.exitCode !== 0) return { ok: false, restored: false, outputTail: gitFailure(commit, 'could not preserve rejected repair') };
+    } else if (guarded.kind !== 'written') {
+      return { ok: false, restored: false, outputTail: guarded.kind === 'noop' ? 'could not preserve rejected repair: no changes' : guarded.reason };
+    }
   }
   const attempted = await git(['rev-parse', 'HEAD']);
   if (attempted.exitCode !== 0 || !attempted.stdout.trim()) return { ok: false, restored: false, outputTail: gitFailure(attempted, 'could not resolve attempted repair') };
@@ -674,7 +701,7 @@ export async function fixSession(
     let finalReason = reason;
     let finalTail = outputTail;
     if (preserve) {
-      const result = await preserveRepairAttempt(git, slug, original.head);
+      const result = await preserveRepairAttempt(git, slug, original.head, worktreePath);
       if (result.ok) { ref = result.ref; paths = result.paths; }
       else if (result.restored) { ref = result.ref; paths = result.paths; finalReason = 'restoration-failed'; finalTail = result.outputTail; }
       else { finalReason = 'preservation-failed'; finalTail = result.outputTail; }
@@ -725,9 +752,19 @@ export async function fixSession(
   if (!afterPrepare.ok) return reject('snapshot-failed', afterPrepare.outputTail, true);
   if (afterPrepare.value.head !== candidate.value.head || afterPrepare.value.tree !== candidate.value.tree) return reject('setup-drift', 'forced setup changed the repair candidate', true);
   if (!candidate.value.dirty) return candidate.value.head === original.head ? success('verified-no-tree-change') : success('accepted-existing-commit');
-  const add = await git(['add', '-A']);
-  const commit = add.exitCode === 0 ? await git(['commit', '-m', withDaemonCoAuthorTrailer('fix(setup): retain verified repair')]) : add;
-  if (commit.exitCode !== 0) return reject('repair-commit-failed', gitFailure(commit, 'could not commit verified repair'), true);
+  const guarded = await commitEngineChangeWhenStacked({
+    worktree: worktreePath,
+    slug,
+    pathspec: candidate.value.paths,
+    message: 'fix(setup): retain verified repair',
+  });
+  if (guarded === undefined) {
+    const add = await git(['add', '-A']);
+    const commit = add.exitCode === 0 ? await git(['commit', '-m', withDaemonCoAuthorTrailer('fix(setup): retain verified repair')]) : add;
+    if (commit.exitCode !== 0) return reject('repair-commit-failed', gitFailure(commit, 'could not commit verified repair'), true);
+  } else if (guarded.kind !== 'written') {
+    return reject('repair-commit-failed', guarded.kind === 'noop' ? 'could not commit verified repair: no changes' : guarded.reason, true);
+  }
   const verified = await repairSnapshot(git);
   if (!verified.ok) return reject('repair-postcondition-failed', verified.outputTail, true);
   if (verified.value.head === original.head) {

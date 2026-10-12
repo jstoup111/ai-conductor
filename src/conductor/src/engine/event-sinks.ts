@@ -61,6 +61,14 @@ export const EVENT_SINKS = {
   child_closed: { render: false, persist: true, audit: false, otel: false },
   child_switched: { render: false, persist: true, audit: false, otel: false },
   rebase_skipped_for_stack: { render: false, persist: true, audit: false, otel: false },
+  // Restack and expected-lease outcomes remain durable on the existing event
+  // spine; later tasks own any renderer, audit, or metric projections.
+  restack_planned: { render: false, persist: true, audit: false, otel: false },
+  restack_applied: { render: false, persist: true, audit: false, otel: false },
+  restack_conflict: { render: false, persist: true, audit: false, otel: false },
+  restack_refused: { render: false, persist: true, audit: false, otel: false },
+  restack_recovered: { render: false, persist: true, audit: false, otel: false },
+  push_lease_refused: { render: false, persist: true, audit: false, otel: false },
   story_reowned: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },

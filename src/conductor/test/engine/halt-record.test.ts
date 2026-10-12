@@ -249,6 +249,9 @@ async function commitCount(cwd: string): Promise<number> {
 
 function successfulRemote(): HaltRecordRemoteOptions {
   return {
+    git: async (args: string[]) => ({
+      stdout: args[0] === 'rev-parse' ? `${'a'.repeat(40)}\n` : '',
+    }),
     remoteGit: async (): Promise<RemoteGitExecutionResult> => ({ kind: 'executed', targets: [] }),
   };
 }

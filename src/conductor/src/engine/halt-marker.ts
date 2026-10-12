@@ -18,6 +18,8 @@ import {
   type HaltRecordRemoteOptions,
 } from './halt-record.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { readRestackJournal, isJournalOwnerAlive } from './restack/restack-journal.js';
+import { recoverRestackJournal } from './restack/restack-recovery.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
@@ -74,6 +76,32 @@ export type HaltMarkerWriteResult =
   | { status: 'partial'; writtenPath: string; path: string; reason: string }
   | { status: 'failed'; path: string; reason: string };
 
+// Recovery can itself need to report an error.  The marker it writes must not
+// recurse into the same journal and produce a second halt record.
+const haltRecoveryInProgress = new Set<string>();
+
+async function recoverRestackBeforeHalt(
+  projectRoot: string,
+  events: ConductorEventEmitter | undefined,
+): Promise<void> {
+  const slug = basename(projectRoot);
+  const key = `${projectRoot}\0${slug}`;
+  if (haltRecoveryInProgress.has(key)) return;
+
+  haltRecoveryInProgress.add(key);
+  try {
+    const read = await readRestackJournal(projectRoot, slug);
+    if (read.kind !== 'journal' || await isJournalOwnerAlive(read.journal.owner)) return;
+    if (read.journal.state !== 'ready' && read.journal.state !== 'moved' && read.journal.state !== 'rolling-back') return;
+    await recoverRestackJournal({ worktree: projectRoot, slug, events, target: 'synced' });
+  } catch {
+    // The outer marker is the one durable failure signal.  Targeted recovery
+    // already attempts to leave any recoverable journal aborted.
+  } finally {
+    haltRecoveryInProgress.delete(key);
+  }
+}
+
 /**
  * Write `.pipeline/HALT` under `projectRoot` with `body` as its contents,
  * creating `.pipeline/` if needed. Best-effort: mkdir/write failures are
@@ -97,6 +125,7 @@ export async function writeHaltMarker(
   const haltClassTempPath = `${haltClassPath}.tmp`;
 
   try {
+    await recoverRestackBeforeHalt(projectRoot, events);
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     await unlink(haltClassPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error;

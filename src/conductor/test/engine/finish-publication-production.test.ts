@@ -1781,6 +1781,7 @@ describe('production FINISH publication composition', () => {
         architecture_review_as_built: 'done',
       } as ConductState;
       const prUrl = 'https://github.com/acme/widget/pull/1275';
+      const remoteTip = 'a'.repeat(40);
       let created = false;
       const pushes: string[][] = [];
       const git = vi.fn(async (args: string[]) => {
@@ -1788,10 +1789,10 @@ describe('production FINISH publication composition', () => {
         if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
         if (args[0] === 'remote') return { stdout: 'origin\n' };
         if (args[0] === 'rev-list') return { stdout: '31\n' };
-        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+        if (args[0] === 'rev-parse') return { stdout: `${remoteTip}\n` };
         if (args[0] === 'push') {
           pushes.push([...args]);
-          if (!args.includes('--force-with-lease')) {
+          if (!args.some((arg) => arg.startsWith('--force-with-lease='))) {
             throw new Error(
               '! [rejected] feat/feature -> feat/feature (non-fast-forward)',
             );
@@ -1842,7 +1843,7 @@ describe('production FINISH publication composition', () => {
       // Exactly one push, lease-protected — never a bare force.
       expect(pushes).toEqual([]);
       expect(remoteGit).toHaveBeenCalledWith(
-        ['push', '-u', 'origin', 'HEAD:refs/heads/feat/feature', '--force-with-lease'],
+        ['push', 'origin', 'HEAD:refs/heads/feat/feature', `--force-with-lease=refs/heads/feat/feature:${remoteTip}`],
         expect.anything(),
       );
       await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(

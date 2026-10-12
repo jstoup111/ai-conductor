@@ -134,3 +134,26 @@ export function featureSlugOf(identity: FeatureBranchIdentity): string | undefin
   }
   return identity.slug;
 }
+/**
+ * The feature slug of a daemon-owned (leaf `feat/daemon-<slug>` or child
+ * `feat/c<k>/<slug>`) ref, local or remote-tracking; undefined for any other ref.
+ */
+export function daemonOwnedSlugOfRef(ref: string): string | undefined {
+  const identity = parseFeatureRef(ref);
+  return identity.kind === 'leaf' || identity.kind === 'child' ? identity.slug : undefined;
+}
+
+/**
+ * The feature slug of a daemon-owned local branch, given either its short
+ * name or its full `refs/heads/` ref; undefined for any other branch.
+ */
+export function daemonOwnedSlugOfBranch(branch: string): string | undefined {
+  const name = branch.startsWith(LOCAL_REF_PREFIX) ? branch.slice(LOCAL_REF_PREFIX.length) : branch;
+  return daemonOwnedSlugOfRef(`${LOCAL_REF_PREFIX}${name}`);
+}
+
+/** Whether `ref` is a child branch ref (`feat/c<k>/<slug>`) of feature `slug`. */
+export function isChildRefOf(ref: string, slug: string): boolean {
+  const identity = parseFeatureRef(ref);
+  return identity.kind === 'child' && identity.slug === slug;
+}

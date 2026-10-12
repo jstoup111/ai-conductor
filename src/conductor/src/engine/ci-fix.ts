@@ -663,6 +663,8 @@ export async function runCiFix(
         remoteGit: deps.remoteGit,
         mutation: remoteMutation,
         events: deps.events,
+        cwd: worktreePath,
+        slug,
       });
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);

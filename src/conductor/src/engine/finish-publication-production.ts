@@ -17,6 +17,7 @@ import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOp
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
 import { readState, replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import { readAllVerdicts, readVerdict } from './gate-verdicts.js';
@@ -351,10 +352,21 @@ export function createProductionFinishPublicationCoordinator(
     const next = appendRecordedShipmentFindings(record, findings);
     if (next === record) return;
     await writeFile(recordPath, next, 'utf8');
-    await deps.git(['add', relativeRecordPath], { cwd: deps.projectRoot });
-    await deps.git([
-      'commit', '-m', withDaemonCoAuthorTrailer(`shipped record findings: ${slug}`), '--no-verify',
-    ], { cwd: deps.projectRoot });
+    const guarded = await commitEngineChangeWhenStacked({
+      worktree: deps.projectRoot,
+      slug,
+      pathspec: [relativeRecordPath],
+      message: `shipped record findings: ${slug}`,
+      noVerify: true,
+    });
+    if (guarded === undefined) {
+      await deps.git(['add', relativeRecordPath], { cwd: deps.projectRoot });
+      await deps.git([
+        'commit', '-m', withDaemonCoAuthorTrailer(`shipped record findings: ${slug}`), '--no-verify',
+      ], { cwd: deps.projectRoot });
+    } else if (guarded.kind === 'failed' || guarded.kind === 'refused') {
+      throw new Error(`could not commit shipped record findings: ${guarded.reason}`);
+    }
   };
   // A real provider session is expensive. Retain terminal prose verdicts for
   // the exact observed title/body revision; a changed revision earns one new

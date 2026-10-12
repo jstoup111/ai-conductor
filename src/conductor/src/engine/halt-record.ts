@@ -4,10 +4,17 @@ import { basename, dirname, join } from 'node:path';
 import type { HaltClass } from './halt-marker.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
+import {
+  forcePushWithExpectedLease,
+  type ForcePushWithExpectedLeaseResult,
+  type PushLeaseEventEmitter,
+  type PushLeaseGitRunner,
+} from './push-lease.js';
 import type { ChildId } from './child-context.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
@@ -47,10 +54,10 @@ export interface HaltRecordRemoteOptions {
   readonly mutation?: GithubMutationExecutionContext;
   readonly git?: GitRunner;
   readonly gh?: GhRunner;
-  readonly events?: GithubOperationEventEmitter;
+  readonly events?: GithubOperationEventEmitter & PushLeaseEventEmitter;
 }
 
-type HaltRecordPublicationResult = Awaited<ReturnType<typeof executeRemoteGit>> | {
+type HaltRecordPublicationResult = ForcePushWithExpectedLeaseResult | {
   readonly kind: 'refused';
   readonly reason: string;
 };
@@ -137,7 +144,7 @@ export async function recordHalt(
     await mkdir(join(root, dirname(relPath)), { recursive: true });
     await writeFile(join(root, relPath), renderHaltRecord(input));
 
-    const commitResult = await commitHaltRecordChange(root, relPath, `halt record: ${input.slug}`);
+    const commitResult = await commitHaltRecordChange(root, input.slug, relPath, `halt record: ${input.slug}`);
     if (commitResult.kind !== 'written') return commitResult;
 
     if (!isChildBranch(input.branch)) {
@@ -176,7 +183,7 @@ export async function supersedeHaltRecord(
     if (superseded === current) return { kind: 'noop' };
 
     await writeFile(path, superseded);
-    const commitResult = await commitHaltRecordChange(root, relPath, `halt record resolved: ${slug}`);
+    const commitResult = await commitHaltRecordChange(root, slug, relPath, `halt record resolved: ${slug}`);
     if (commitResult.kind !== 'written') return commitResult;
 
     try {
@@ -212,16 +219,28 @@ export async function publishHaltRecord(
     git: (args) => git(args, { cwd: root }),
     gh: remote.gh ?? makeProductionGh(),
   });
-  return (remote.remoteGit ?? executeRemoteGit)(
-    ['push', 'origin', `HEAD:refs/heads/${branch}`, '--force-with-lease'],
-    {
+  const localGit: PushLeaseGitRunner = async (args) => {
+    try {
+      const result = await git([...args], { cwd: root });
+      return { stdout: result.stdout, exitCode: 0 };
+    } catch (error) {
+      return { stdout: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    }
+  };
+  return forcePushWithExpectedLease({
+    cwd: root,
+    slug,
+    branch,
+    git: localGit,
+    remoteGit: (args) => (remote.remoteGit ?? executeRemoteGit)(args, {
       cwd: root,
       config: (args) => git(args, { cwd: root }),
       runRemoteGit: git,
       mutation,
       events: remote.events,
-    },
-  );
+    }),
+    events: remote.events,
+  });
 }
 
 function haltRecordRemoteFailure(result: HaltRecordPublicationResult): string {
@@ -236,9 +255,22 @@ function isChildBranch(branch: string): boolean {
 
 async function commitHaltRecordChange(
   root: string,
+  slug: string,
   relPath: string,
   message: string,
 ): Promise<HaltRecordResult> {
+  const guarded = await commitEngineChangeWhenStacked({
+    worktree: root,
+    slug,
+    pathspec: [relPath],
+    message,
+    noVerify: true,
+  });
+  if (guarded !== undefined) {
+    if (guarded.kind === 'written') return { kind: 'written' };
+    if (guarded.kind === 'noop') return { kind: 'noop' };
+    return { kind: 'failed', reason: guarded.reason };
+  }
   await execa('git', ['add', '--', relPath], { cwd: root });
   const staged = await execa('git', ['diff', '--cached', '--quiet', '--', relPath], {
     cwd: root,

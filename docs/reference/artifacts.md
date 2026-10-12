@@ -647,7 +647,15 @@ slug. The build loop creates each child branch at its region entry and never pus
 [child-by-child build](configuration.md#child-by-child-build). Closure and sealed positions live
 outside `refs/heads` in the shared `.git`, so they survive worktree recreation:
 `refs/conductor/<slug>/closed/c<k>` points at a closed child's tip, and
-`refs/conductor/<slug>/positions` holds the sealed slice positions. Every branch consumer resolves names through
+`refs/conductor/<slug>/positions` holds the sealed slice positions. A
+[restack](configuration.md#restack) adds `refs/conductor/<slug>/restack/journal` (the in-flight
+operation's journal), `refs/conductor/<slug>/restack/staging/c<k>` (replayed tips before the move),
+`refs/conductor/<slug>/cascades` (per-originating-child repair counts and raised limits), and
+`refs/conductor/<slug>/leaf-moved` (the leaf has been moved onto the last closure). For every
+feature, `refs/conductor/<slug>/pushed/<branch>` records the tip the engine last force-pushed and
+`refs/conductor/<slug>/push-intent/<branch>` an in-flight push; the next engine force push uses the
+recorded tip as its expected-SHA lease. None of these refs is pushed. Feature teardown deletes them
+by explicit name. Every branch consumer resolves names through
 `feature-branch-identity.ts` and recognizes them. A child branch is daemon-owned and is attributed to
 its parent feature in intake overlap. Attribution is not authority: halt-PR and GitHub writes from a
 child also require its `feat/daemon-<slug>` leaf to exist. `shipped-record` refuses a child branch,
@@ -773,9 +781,14 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `ConductorEvent` is a discriminated union. Any member may carry an optional integer `child` (1–9)
 naming a stacked feature's child; it is omitted when no child applies, and cost and time rollups ignore
 it. Stacked builds also persist `child_started`, `child_closed` (with the closure `tip`), and
-`child_switched`, each carrying the position and branch; `rebase_skipped_for_stack`; and
-`story_reowned` (`story`, `from`, `to`) when a reseal changes a story's owner without moving a task.
-None appears for a feature without children. `EventPersister` writes the event types marked
+`child_switched`, each carrying the position and branch; `story_reowned` (`story`, `from`, `to`)
+when a reseal changes a story's owner without moving a task; and the restack events
+`restack_planned` (`opId`, `cause`, `children`), `restack_applied` (per child: `oldTip`, `newTip`,
+`wouldInvalidate`, `parentOverlapPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
+(`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). None appears for a
+feature without children; `rebase_skipped_for_stack` remains in the union for older logs but is no
+longer emitted. Any feature may persist `push_lease_refused` (`ref`, `expected`, `actual`) when an
+engine force push finds the remote tip differs from the recorded pushed tip. `EventPersister` writes the event types marked
 `persist: true` in `event-sinks.ts`; common persisted types include:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,

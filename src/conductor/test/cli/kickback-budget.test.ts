@@ -1,4 +1,5 @@
-// Covers: task:11, task:27, task:28, task:33
+// Covers: task:rem-prd-audit-R20
+// Covers: task:11, task:27, task:28, task:31.2, task:33
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,6 +12,9 @@ import { resolveMachineOperatorIdentity } from '../../src/engine/cli-operator-au
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { createConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import { cascadeUpdateLines, readCascadeCounts, updateCascadeLimit } from '../../src/engine/restack/cascade-cap.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 
 const execFileP = promisify(execFile);
@@ -449,6 +453,108 @@ describe('kickback-budget inspect reconciles an interrupted adjustment at comman
       await acquired.handle.release();
       await rm(fixture.root, { recursive: true, force: true });
     }
+  });
+});
+
+// Covers: task:31.2, task:rem-prd-audit-R20
+// A restack authorization event is durable intent, but recovery must restore
+// the cascade before granting the child a resume.
+describe('kickback-budget restack recovery', () => {
+  async function crashAfterAuthorizationEvent() {
+    const fixture = await makeFeature({ version: 1, gates: {} });
+    const child = parseChildId(2);
+    if (child === undefined) throw new Error('invalid child fixture');
+    const childPipeline = join(fixture.worktree, '.pipeline', 'children', '2');
+    const pending = {
+      id: 'restack-adjustment-1', kind: 'raise' as const,
+      beforeConsumed: 1, afterConsumed: 1, beforeLimit: 1, afterLimit: 3,
+      operator: 'operator', rationale: 'repair the stopped cascade',
+      timestamp: '2026-10-11T00:00:00.000Z', haltGeneration: 'restack-halt',
+    };
+    await execFileP('git', ['init', '-q'], { cwd: fixture.root });
+    const cascade = await cascadeUpdateLines(fixture.root, 'feature', [child], { git: makeGitRunner(fixture.root) });
+    if (cascade.kind !== 'lines') throw new Error(cascade.detail);
+    await makeGitRunner(fixture.root)(
+      ['update-ref', '--stdin'],
+      { input: ['start', ...cascade.lines, 'prepare', 'commit', ''].join('\n') },
+    );
+    const initialCascade = await readCascadeCounts(fixture.root, 'feature');
+    if (initialCascade.kind !== 'counts') throw new Error('unreadable cascade fixture');
+    await expect(updateCascadeLimit(fixture.root, 'feature', child, initialCascade.blob, (state) => ({
+      version: 1,
+      counts: state.counts,
+      limits: { ...(state.limits ?? {}), 2: 1 },
+    }))).resolves.toMatchObject({ kind: 'updated' });
+    await mkdir(childPipeline, { recursive: true });
+    await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        restack: {
+          ...baseEntry,
+          capEvidence: {
+            gate: 'restack', consumed: 1, limit: 1,
+            latestReason: 'restack cascade cap for originating child 2',
+            haltGeneration: 'restack-halt', allowance: 'restacks',
+          },
+          pendingAdjustment: pending,
+        },
+      },
+    }));
+    await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: restack-halt');
+    await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
+    await writeFile(
+      join(fixture.worktree, '.pipeline', 'pipeline-events.jsonl'),
+      `${JSON.stringify({ type: 'kickback_budget_adjustment_authorized', adjustmentId: pending.id })}\n`,
+    );
+    return { fixture, child, childPipeline, pending };
+  }
+
+  const inspect = (fixture: { root: string }) => dispatchKickbackBudgetCommand(
+    { kind: 'kickback-budget', action: 'inspect', feature: 'feature', child: '2', format: 'json' },
+    { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: () => {} },
+  );
+
+  it('refuses a stale authorized cascade before installing its resume authorization', async () => {
+    const { fixture, child, childPipeline, pending } = await crashAfterAuthorizationEvent();
+    try {
+      const currentCascade = await readCascadeCounts(fixture.root, 'feature');
+      if (currentCascade.kind !== 'counts') throw new Error('unreadable cascade fixture');
+      await expect(updateCascadeLimit(fixture.root, 'feature', child, currentCascade.blob, (state) => ({
+        version: 1,
+        counts: state.counts,
+        limits: { ...(state.limits ?? {}), 2: 2 },
+      }))).resolves.toMatchObject({ kind: 'updated' });
+
+      expect(await inspect(fixture)).toBe(1);
+
+      await expect(readCascadeCounts(fixture.root, 'feature')).resolves.toMatchObject({
+        kind: 'counts', counts: { counts: { 2: 1 }, limits: { 2: 2 } },
+      });
+      const entry = JSON.parse(await readFile(join(childPipeline, 'kickback-ledger.json'), 'utf8')).gates.restack;
+      expect(entry.pendingAdjustment).toMatchObject({ id: pending.id });
+      expect(entry.resumeAuthorization).toBeUndefined();
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('applies an unchanged authorized cascade exactly once before authorizing resume', async () => {
+    const { fixture, childPipeline, pending } = await crashAfterAuthorizationEvent();
+    try {
+      expect(await inspect(fixture)).toBe(0);
+      await expect(readCascadeCounts(fixture.root, 'feature')).resolves.toMatchObject({
+        kind: 'counts', counts: { counts: { 2: 1 }, limits: { 2: 3 } },
+      });
+      let entry = JSON.parse(await readFile(join(childPipeline, 'kickback-ledger.json'), 'utf8')).gates.restack;
+      expect(entry.pendingAdjustment).toBeUndefined();
+      expect(entry.adjustments).toMatchObject([{ id: pending.id }]);
+      expect(entry.resumeAuthorization).toMatchObject({ adjustmentId: pending.id, haltGeneration: 'restack-halt', consumed: false });
+
+      expect(await inspect(fixture)).toBe(0);
+      entry = JSON.parse(await readFile(join(childPipeline, 'kickback-ledger.json'), 'utf8')).gates.restack;
+      expect(entry.adjustments).toHaveLength(1);
+      await expect(readCascadeCounts(fixture.root, 'feature')).resolves.toMatchObject({
+        kind: 'counts', counts: { counts: { 2: 1 }, limits: { 2: 3 } },
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 });
 

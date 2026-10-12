@@ -1478,8 +1478,8 @@ removal attempts; other `needs-remediation` causes remain sticky.
 Opts a project into stacked delivery of a sliced plan. Plan-slice grammar validation (the
 `plan-slices` land gate) runs regardless of this block; the checks below run only when `enabled` is
 `true`. An admitted plan builds
-[child by child](#child-by-child-build). Restack, fix routing to the owning child, and child
-publication remain reserved for the stacked child-plans chain (#2943–#2945).
+[child by child](#child-by-child-build). Fix routing to the owning child and child publication
+remain reserved for the stacked child-plans chain (#2944–#2945).
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
@@ -1523,9 +1523,11 @@ child, in declared order:
   intermediate child's closure tip; if the leaf has commits of its own it halts `needs-human`. Child
   branches are never pushed. See [branch naming](artifacts.md#worktree-and-branch-names).
 - **Closure.** A closed child's tip is recorded at `refs/conductor/<slug>/closed/c<k>`; only an
-  explicit operator recovery removes it. A closed child whose branch gains non-halt-record commits,
-  or whose tip is not an ancestor of the next child's branch, halts `needs-human` with
-  `restack required (#2943)`.
+  explicit operator recovery removes it. To change a closed child, commit to its branch; the next
+  [restack](#restack) carries the change into every existing child above it. A closed child's branch
+  that no longer contains its closure tip, or a closure tip that is not an ancestor of the next
+  child's branch, halts `needs-human` with `restack refused (closed-child-rewritten)` or
+  `restack refused (range-not-ancestor)`.
 - **Scope.** Each child's acceptance specs cover only the stories it owns, `build` completes on its
   own slice tasks plus remediation tasks recorded to it, and `build_review` grades its diff against
   the parent child's closure tip. A spec an earlier child already turned green records the
@@ -1535,8 +1537,9 @@ child, in declared order:
   and grades the whole feature diff at the leaf. Under `test_suite.verification.full_suite: once`,
   the aggregate suite runs once, at the leaf.
 - **Caps.** Kickback caps and the stuck-gate guard count per child; plan growth stays feature-wide.
-- **Rebase.** While a non-leaf child is active, the re-kick rebase is skipped and a
-  `rebase_skipped_for_stack` event is recorded. At the leaf, the normal rebase applies.
+- **Rebase.** The re-kick rebase and the finish-time `rebase` step refresh the whole stack from the
+  default branch with a `base-refresh` [restack](#restack), whichever child is active. Open-PR
+  autoresolve never rewrites a stacked feature; it escalates with `published-stack` (#2945).
 - **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions`. Once child state
   exists, a `coverage_binding` run that moves, adds, or removes a position refuses `needs-human`.
   This is the step's only remaining refusal.
@@ -1545,6 +1548,36 @@ child, in declared order:
 
 Per-child state is described in [per-child state](artifacts.md#per-child-state); operator commands
 select a child with [`--child`](cli.md#per-child-selection---child).
+
+### Restack
+
+A restack replays every existing child above a changed position onto its new parent. It has two
+causes:
+
+- **`feature-repair`.** A closed child's branch has commits after its closure tip that change more
+  than its halt record. Each such child is an originating child.
+- **`base-refresh`.** The default branch moved and a rebase is due. When a re-kick is due while a
+  feature repair is pending, the refresh runs after the repair unless the default tip is already in
+  the first child's branch.
+
+A stack preflight runs before the daemon dispatches a stacked feature, on conductor resume, and in
+the finish-time `rebase` step. It recovers an interrupted restack from its journal, then applies any
+pending feature repair, then any chained base refresh. A live HALT stops it after journal recovery.
+Features without child state keep the ordinary rebase.
+
+The replay runs off the worktree. The engine then moves every child branch and closure ref in one
+compare-and-swap transaction and syncs the checked-out worktree without stashing; colliding
+untracked files move to the rebase untracked quarantine. A replay conflict goes to the configured
+rebase resolver within the rebase resolution attempt budget; an unresolved conflict halts
+`needs-human` with `restack conflict child <k>`. Every other refusal halts `needs-human` with
+`restack refused (<reason>)`. Gate verdicts invalidated by the moved history are re-judged; a
+feature repair's invalidation earns no `build_review` refund.
+
+Each originating child may cause at most 3 applied feature repairs. The next repair halts
+`needs-human` with `restack refused (cascade-cap)`; recover with
+[`kickback-budget --gate restack`](cli.md#ai-conductor-kickback-budget). Restack refs are listed in
+[branch naming](artifacts.md#worktree-and-branch-names); recovery is in
+[a stacked restack halted](../runbooks/stalled-or-stuck-feature.md#a-stacked-restack-halted).
 
 
 ## build_review

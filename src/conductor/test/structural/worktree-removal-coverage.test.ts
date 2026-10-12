@@ -1,3 +1,4 @@
+// Covers: task:14
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +26,10 @@ const WORKTREE_REMOVAL_EXEMPTIONS = [
   {
     module: 'engine/engineer/worktree-authoring.ts',
     reason: 'Does not call prepareWorktree, so it provisions nothing.',
+  },
+  {
+    module: 'engine/restack/restack-resolver.ts',
+    reason: 'Removes only its resolver-owned detached worktree; it never provisions a feature worktree.',
   },
   {
     module: 'engine/shipment-evidence-cli.ts',
@@ -215,6 +220,7 @@ describe('structural: worktree-removal coverage', () => {
       'engine/daemon-park-cli.ts',
       'engine/engineer/worktree-authoring.ts',
       'engine/park-reconciliation.ts',
+      'engine/restack/restack-resolver.ts',
       'engine/shipment-evidence-cli.ts',
       'engine/worktree-shared.ts',
       'engine/worktree.ts',
@@ -309,6 +315,10 @@ describe('structural: worktree-removal coverage', () => {
       {
         module: 'engine/engineer/worktree-authoring.ts',
         reason: 'Does not call prepareWorktree, so it provisions nothing.',
+      },
+      {
+        module: 'engine/restack/restack-resolver.ts',
+        reason: 'Removes only its resolver-owned detached worktree; it never provisions a feature worktree.',
       },
       {
         module: 'engine/shipment-evidence-cli.ts',
