@@ -459,6 +459,13 @@ state unknown rather than implying an all-clear. This is a read-only local-file 
 invoke Git, GitHub, or the network. The daemon startup dashboard does not yet render this section;
 that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
+A `SHIPPED PRS:` section follows `BLOCKED`. It reads the newest `shipped_pr_readiness` event per PR
+from `.daemon/events.jsonl` and lists each PR still in `.daemon/mergeable-watch.jsonl` whose verdict
+is not `ready`, as `• <pr-url> — <verdict> (<slug>)`. With none it prints `SHIPPED PRS: no shipped
+PRs need attention`; a missing or unreadable ledger prints `SHIPPED PRS: shipped-PR readiness
+unknown`. It reads local files only. Verdicts are defined in
+[shipped-PR readiness](../guides/running-the-daemon.md#shipped-pr-readiness).
+
 For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line reading the feature's
 kickback ledger and resolved `prd_audit` cap. For a stacked feature the line reads
 `PLAN GROWTH [<slug> child <k>/<N>]:`, and its per-gate budgets come from the active child's ledger. It shows the plan's authored task count, the number of tasks added
