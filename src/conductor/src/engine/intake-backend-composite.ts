@@ -18,7 +18,7 @@ export type IntakeBackend = IntakeSource & IntakePort;
 /** The portion of the canonical event spine used by intake backends. */
 export interface IntakeEventEmitter {
   emit(event: Extract<ConductorEvent, {
-    type: 'github_operation_refused' | 'github_write_credential_fallback' | 'tracker_backend_unavailable';
+    type: 'github_operation_refused' | 'github_write_credential_fallback' | 'tracker_backend_unavailable' | 'dependency_drift_swept';
   }>): Promise<void>;
   /** Optional subscription surface used by CLI composition roots that render intake events. */
   on?(type: 'tracker_backend_unavailable', handler: EventHandler): void;

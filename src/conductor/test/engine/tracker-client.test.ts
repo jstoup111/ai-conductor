@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:3, task:rem-as-built-rem-asb-10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 
@@ -199,6 +199,33 @@ describe('createGithubTrackerClient.readPullRequestMergeState', () => {
       '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body',
     ]]);
     expect(state).toMatchObject({ state: 'UNKNOWN', readFailure: { kind: 'runner' } });
+  });
+});
+
+describe('createGithubTrackerClient.listOpenIssues', () => {
+  it('keeps issues from every paginated page while excluding pull-request entries', async () => {
+    const { runner, calls } = fakeRunner(JSON.stringify([
+      [
+        { number: 10, body: 'Blocked by #9.' },
+        { number: 11, body: 'This is a pull request.', pull_request: { url: 'https://api.github.com/repos/acme/app/pulls/11' } },
+      ],
+      [
+        { number: 12, body: null },
+        { number: 13, body: 'Another pull request.', pull_request: { url: 'https://api.github.com/repos/acme/app/pulls/13' } },
+      ],
+    ]));
+
+    await expect(createGithubTrackerClient(runner).listOpenIssues('acme/app', '/worktree')).resolves.toEqual({
+      complete: true,
+      issues: [
+        { number: 10, body: 'Blocked by #9.' },
+        { number: 12, body: '' },
+      ],
+    });
+    expect(calls).toEqual([{
+      args: ['api', 'repos/acme/app/issues?state=open&per_page=100', '--paginate', '--slurp'],
+      opts: { cwd: '/worktree' },
+    }]);
   });
 });
 

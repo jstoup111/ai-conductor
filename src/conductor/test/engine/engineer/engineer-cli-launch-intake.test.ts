@@ -65,6 +65,9 @@ function makeGh(
       };
     }
     if (args[0] === 'pr' && args[1] === 'create') return { stdout: prUrl };
+    if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+      return { stdout: JSON.stringify({ body: '' }) };
+    }
     if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
       return { stdout: JSON.stringify({ assignees: [{ login: 'test-owner' }] }) };
     }
@@ -491,7 +494,10 @@ describe('write-back via --source-ref', () => {
 
     const { gh, calls } = makeGh();
     const code = await dispatchEngineer(
-      { kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath, sourceRef: 'owner/target-repo#7' },
+      {
+        kind: 'land', project: 'target-repo', idea, worktree: wt.worktreePath,
+        sourceRef: 'owner/target-repo#7', skipDependencyCheck: 'legacy write-back coverage',
+      },
       baseOpts({ gh }),
     );
     expect(code).toBe(0);

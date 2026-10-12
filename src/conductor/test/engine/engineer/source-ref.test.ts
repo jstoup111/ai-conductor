@@ -85,8 +85,8 @@ describe('splitOwnerRepo — split an owner/repo slug', () => {
   });
 });
 
-describe('grammar sweep — no competing owner/repo#N or #N regex outside source-ref.ts', () => {
-  it('finds the ref-splitting grammar only in source-ref.ts', async () => {
+describe('grammar sweep — owner/repo#N parsing stays in designated modules', () => {
+  it('finds ref-splitting grammar only in source-ref.ts and the dependency reconciler', async () => {
     // pr-labels.ts owns an independent URL-based parser (github.com/.../pull/N),
     // never delegated to source-ref.ts by design (different input shape: a PR
     // URL, not a bare sourceRef).
@@ -102,6 +102,9 @@ describe('grammar sweep — no competing owner/repo#N or #N regex outside source
       .map((f) => f.replace(`${CONDUCTOR_SRC}/`, ''))
       .sort();
 
-    expect(files).toEqual(['engine/engineer/source-ref.ts']);
+    expect(files).toEqual([
+      'engine/engineer/dependency-reconciler.ts',
+      'engine/engineer/source-ref.ts',
+    ]);
   });
 });

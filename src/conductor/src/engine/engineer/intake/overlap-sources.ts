@@ -34,6 +34,13 @@ interface OpenIssue {
 type OpenIssueLister = (limit: number) => Promise<readonly OpenIssue[]>;
 export type IssueStateReader = (issue: string) => Promise<'OPEN' | 'CLOSED' | string | null>;
 
+export class BranchIssueStateReadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BranchIssueStateReadError';
+  }
+}
+
 export interface OpenIssueOverlapResult {
   overlaps: IssueOverlap[];
   skipNotes: string[];
@@ -147,11 +154,13 @@ export async function traceBranchIssue({
   branch,
   repository,
   readIssueState,
+  strictIssueState = false,
 }: {
   git: GitRunner;
   branch: string;
   repository: string;
   readIssueState: IssueStateReader;
+  strictIssueState?: boolean;
 }): Promise<string | null> {
   const slug = inFlightSlug(branch);
   if (!slug) return null;
@@ -161,10 +170,18 @@ export async function traceBranchIssue({
     if (marker.exitCode !== 0) return null;
     const parsed = parseSourceRef(parseIntakeSourceRef(marker.stdout));
     if (!parsed || parsed.repo !== repository) return null;
-    return await readIssueState(parsed.number) === 'OPEN'
-      ? `${parsed.repo}#${parsed.number}`
-      : null;
-  } catch {
+    try {
+      return await readIssueState(parsed.number) === 'OPEN'
+        ? `${parsed.repo}#${parsed.number}`
+        : null;
+    } catch (error) {
+      if (strictIssueState) {
+        throw new BranchIssueStateReadError(error instanceof Error ? error.message : String(error));
+      }
+      return null;
+    }
+  } catch (error) {
+    if (error instanceof BranchIssueStateReadError) throw error;
     return null;
   }
 }
@@ -240,6 +257,7 @@ export async function collectInFlightOverlaps({
   gh,
   cwd,
   selectedBranches,
+  strictIssueState = false,
 }: {
   git: GitRunner;
   baseRef: string;
@@ -250,6 +268,7 @@ export async function collectInFlightOverlaps({
   gh?: GhRunner;
   cwd?: string;
   selectedBranches?: InFlightBranchSelection;
+  strictIssueState?: boolean;
 }): Promise<{ overlaps: BranchOverlap[]; skipNotes: string[] }> {
   const selection = selectedBranches ?? await selectInFlightBranches({ git, baseRef, maxBranches });
   // A caller that supplied the selection has already reported its selection
@@ -269,11 +288,12 @@ export async function collectInFlightOverlaps({
       const sharedPaths = intersectFiles([...citedPaths], changedPaths);
       if (sharedPaths.length > 0) {
         const issue = repository && issueStateReader
-          ? await traceBranchIssue({ git, branch, repository, readIssueState: issueStateReader })
+          ? await traceBranchIssue({ git, branch, repository, readIssueState: issueStateReader, strictIssueState })
           : null;
         overlaps.push({ branch, sharedPaths, issue });
       }
     } catch (error) {
+      if (error instanceof BranchIssueStateReadError) throw error;
       skipNotes.push(`skipped in-flight diff for branch ${branch}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
