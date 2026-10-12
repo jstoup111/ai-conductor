@@ -113,6 +113,13 @@ With a correct concurrent core available, the SHIP tail's three validators —
    - Per-gate self-heal budgets (`MAX_KICKBACKS_PER_GATE`, `manualTestSelfHeals`,
      `remediationRounds`) keep their existing per-gate accounting — parallelism must not
      multiply retry budgets.
+
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the consolidated work order is routed by
+> item. Task-bound gaps go to their owning children, and the FAIL obligation goes to the earliest
+> task-owned host. The FAIL rows ride every host's retry hint as evidence. Hosts are processed
+> lowest first, and the leaf is processed last (`adr-2026-10-12-routed-whole-feature-repair`
+> decisions 3 and 6).
+
 4. **All-green join** → group `done`, loop continues to `retro`/`rebase`/`finish`
    unchanged.
 5. **Concurrency safety notes (binding on implementation):**

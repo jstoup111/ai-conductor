@@ -70,6 +70,16 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 >
 > 12. Every task seed restores a plan task that has **no** task-status row as `completed`, with `restored_from: task-trailer`, when a branch-scoped `Task:` trailer proves it, using the same fail-closed merge-base range as wholesale reconstruction. The trailer scan runs only when at least one plan task lacks a row. Restore is additive: an existing row of any status is never upgraded from a trailer, so a deliberately restaged or reopened `pending` row stays pending. The open-repair override still runs after restore, so an open obligation is never restored as completed from a pre-reopen trailer. Only the pre-BUILD dispatch seed, where no live session holds a task, resets an `in_progress` row to `pending`, and only when no branch-scoped `Task:` trailer exists for that task; every other seed preserves `in_progress` rows unchanged. Like wholesale reconstruction, this restore is the recovery exception to `adr-2026-07-23-trailer-union-build-step-routing` constraint 3 ("No machinery writes `completed` rows"): it restores a row lost from disk, never derives a new completion, and `build_review` remains the sole completion authority.
 
+> **Amended 2026-10-12 by #2944:** For stacked features (`adr-2026-10-12-routed-whole-feature-repair` decision 11):
+> - **Decision 1.** An obligation's boundary is `{branch, head}` plus the tree-hash baseline, taken at host region entry.
+> - **Decision 2.** The admission key is `(roundId, findingId, taskIds)`. A verified reroute re-targets the open obligation's branch and boundary in the same transaction that records the fallback, so no second obligation is minted.
+> - **Decision 6.** The shared reader resolves trailers in `head..tip(branch)`.
+> - **Decision 8.** A routed repair returns to its governing review only after the host's region, the exit restack and the re-validation queue have finished.
+> - **Decision 9.** Budgets are charged through the round receipt.
+> - **Decision 12.** The per-row trailer restore applies on the host branch.
+>
+> N=1 obligations omit `branch` and are unchanged.
+
 ## Architectural Alignment
 
 This is a durable state-transition decision, so an ADR is warranted even at Medium tier. No existing ADR covers a current repair obligation spanning resolver, reconstruction, task close, and restart. The July 23 trailer-union ADR continues to own the shared resolution/authority split; its bounded freshness exception and the July 13 no-op guard qualification are amended beside their original clauses in this same DECIDE change.

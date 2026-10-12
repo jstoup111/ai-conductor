@@ -42,6 +42,10 @@ decision; audit-logged via the existing `kickback` event plus a new distinguishi
 
 > **Amended 2026-09-06 by #1831:** D1 retains its no-dispatchable-work halt but distinguishes truly empty output from emitted work that is refused or already resolved. Its diagnostic names the applicable ownership, authority, persistence/restaging, or evidence cause and retains finding/task context. Historical completion alone does not make an admitted current repair non-dispatchable.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature, the route-into-no-op guard evaluates the
+> host child's checked-out tree at region entry, not the leaf's
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 9 and 11).
+
 ### D2 — Zero-progress + unchanged-verdict escalation (post-build re-entry)
 
 Track, per gate, that the current build entry was reached via a kickback and record the prior gate
@@ -70,6 +74,11 @@ build entered via a kickback ends, classify it:
 
 An optional config toggle (`kickback_escalation.enabled`, default `true`, mirroring
 `build_progress_halt.enabled`) lets an operator revert to the prior re-kick-until-cap behaviour.
+
+> **Amended 2026-10-12 by #2944:** In a stacked feature, post-build re-entry escalation applies to
+> the host child's region pass. A host that ends with no commits takes the no-commit exit, and the
+> unchanged-verdict escalation then applies when the leaf gates re-run
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 13 and 15).
 
 ### D3 — Audit distinction (Outcome 2/3 telemetry)
 

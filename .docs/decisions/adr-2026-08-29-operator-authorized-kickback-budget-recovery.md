@@ -86,6 +86,12 @@ owner fails closed.
 
 > **Amended 2026-10-10 by #2943:** The `restack` pseudo-gate's count and raised limit live in one ref-backed store, `refs/conductor/<slug>/cascades`, a deliberate second store justified by durability across worktree recreation; its cap evidence and resume authorization stay in the active child's ledger (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
 
+> **Amended 2026-10-12 by #2944:** For whole-feature gates (`prd_audit`,
+> `architecture_review_as_built`, `manual_test`, custom steps), adjustments stay in the flat feature
+> ledger's gate entry, and `--child` defaults are ignored for those gates. A raise resumes an
+> unsettled stacked round on its frozen allocation (`adr-2026-10-12-routed-whole-feature-repair`
+> decision 10).
+
 ### D2 — Reset changes consumption; raise changes only the effective limit
 
 - `reset` sets `cumulative` to zero and preserves the feature's effective limit.
@@ -165,6 +171,11 @@ If append fails, active fields remain unchanged and the pending record is remove
 crash, command-entry reconciliation checks the explicit adjustment id: a matching external event
 finishes the apply; an absent event discards the pending record; unreadable or ambiguous event state
 keeps the feature parked/halted. Normal engine control never derives counts from events.
+
+> **Amended 2026-10-12 by #2944:** A stacked round's settlement reconciles the route record's
+> receipts before validating effective caps, under the same budget mutation lock. Staged adjustments
+> are never rebuilt from the route record (`adr-2026-10-12-routed-whole-feature-repair` decision
+> 10).
 
 ### D6 — The daemon, not the CLI, clears the halt
 

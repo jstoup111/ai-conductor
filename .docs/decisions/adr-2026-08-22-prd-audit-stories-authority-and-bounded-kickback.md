@@ -103,6 +103,13 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > and 25% bounds are unchanged; only their enforcement point moves. A halt with no appended or
    > bound repair keeps the prior behavior.
 
+> **Amended 2026-10-12 by #2944:** In a stacked feature (the cursor reports durable children),
+> FIXABLE work is routed after admission to the child that owns its task. Every host's rem-* blocks
+> are allocated and frozen at admission. Each block is appended on its host child at region entry,
+> not on the leaf. The lap and the declared growth are charged once, at the first host's BUILD
+> dispatch, by the route record's settlement compare-and-swap after the cap check
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 2, 9 and 10). N=1 is unchanged.
+
 6. **Growth ledger.** The kickback ledger gains a per-feature `growth` record:
    `{authored, added, byGate, remaining}`; pre-existing `rem-*` tasks found in a plan at first read
    count toward `authored`. Surfaced by `conduct-ts` status output and emitted on the spine.
@@ -120,6 +127,12 @@ halt (adr-2026-07-27-daemon-decide-kickback-halt, adr-2026-08-03-fail-closed-dec
    > `pendingRepair` fails closed (adr-2026-08-31-kickback-ledger-read-fails-closed D1): the
    > `prd_audit` and `architecture_review_as_built` allowances and the growth allowance read as
    > exhausted, and that invalidity is scoped to those gates and the growth record.
+
+> **Amended 2026-10-12 by #2944:** For a stacked feature, the round receipt in the route record is
+> the charge authority. The ledger is written after that commit point and reconciled by receipt id.
+> `authored` is stored on first record and never re-derived. The pending-task exclusion reads the
+> frozen allocation rather than the active plan (`adr-2026-10-12-routed-whole-feature-repair`
+> decision 10). N=1 is unchanged.
 
 7. **PLAN_GAP.** Happy-path criterion unmet with no owning task → HALT (class `plan-gap`); negative/
    edge criterion → recorded in the verdict and the shipped record, ships, unless configuration

@@ -118,6 +118,9 @@ into one stack-eligibility verdict. Land and `coverage_binding` both evaluate it
 
    The verdict lists every reason, not the first.
 
+> **Amended 2026-10-12 by #2944:** Kickbacks from whole-feature gates are routed to the owning child
+> by #2944 (`adr-2026-10-12-routed-whole-feature-repair`).
+
 4. **The sign-off is a line in the complexity artifact.** `.docs/complexity/<stem>.md` gains an
    optional `Stacked-Delivery: approved` line. A parser beside `parseComplexityTier` reads it:
    - it is line-anchored (multiline) and case-insensitive;

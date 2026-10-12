@@ -127,6 +127,11 @@ The decisions below incorporate the fixes.
 
 > **Amended 2026-10-10 by #2943:** Closure refs move by compare-and-swap inside a journaled restack transaction (decisions 4–5). A shared stack preflight recovers the restack journal and repairs commits appended past a closure (new cursor kind `repair-pending`) before the cursor is judged (decisions 7, 9); a rewritten closed child still halts. The cursor's leaf-rewrite-map-presence test is replaced by the `refs/conductor/<slug>/leaf-moved` ref (`adr-2026-10-10-stacked-restack-journaled-replay` decision 8).
 
+> **Amended 2026-10-12 by #2944:** The active child stays the cursor child for restack ranges. While
+> a routed repair or re-validation is open, the execution child is the host or re-validating child,
+> and that child's region is entered while its closure is kept
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 8).
+
 2. **When there are children, and what happens when the envelope is missing.**
    - A feature has children only when all of these hold:
      - `stacked_prs.enabled` is true;
@@ -179,6 +184,10 @@ The decisions below incorporate the fixes.
      - Targets at or before `coverage_binding` keep today's behavior.
      - Routing a fix to its owning child is #2944.
 
+> **Amended 2026-10-12 by #2944:** A whole-feature kickback in a stacked feature is routed to its
+> host child, and region keys are written to the execution child
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 2–4 and 8).
+
 5. **Acceptance specs are per child.**
    - The `writing-system-tests` skill receives the child's owned stories, projected from envelope
      `storyOwnership`.
@@ -192,6 +201,11 @@ The decisions below incorporate the fixes.
      skill records `remediation`. This amends
      `adr-2026-08-09-recorded-red-exception-for-remediation` D1. Per-spec RED attribution is not
      added.
+
+> **Amended 2026-10-12 by #2944:** In a routed or re-validation pass, acceptance runs in
+> verify-green mode. A retained RED marker is checked when present, and its absence is not a
+> refusal. `closeChild` records the RED proof's digest under `refs/conductor/<slug>/red/c<k>`
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
 
 6. **`build`, stall detection and the commit hook are per child.**
    - **`build`** completes when child k's slice tasks are resolved, plus the remediation tasks
@@ -212,6 +226,11 @@ The decisions below incorporate the fixes.
        plus recorded remediation tasks). It fails closed when membership cannot be read.
 
      Non-child branches abstain, so N=1 is unchanged. No marker file is consulted.
+
+> **Amended 2026-10-12 by #2944:** A routed rem-* task's child is its committed `**Child:**` line,
+> which defaults to its host. `appendedRemediationTaskChildren` becomes a cache derived from the
+> plan. While a marker is set, the hook stamps `Round: <roundId>` and honours the route record's
+> execution projection (`adr-2026-10-12-routed-whole-feature-repair` decisions 4, 5 and 9).
 
 7. **`test_suite` is per child; the aggregate runs at the leaf.**
    - Evidence is written under the child, and `FullSuiteVerifier` takes a child-parameterized
@@ -235,6 +254,10 @@ The decisions below incorporate the fixes.
      amendment claims, and (new) acceptance spec attribution.
    - Each site keeps its fail-closed policy. Acceptance attribution refuses disposition-only.
 
+> **Amended 2026-10-12 by #2944:** A `routed-repair` base kind is added, produced from the route
+> record. The base producer remains the single producer
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 12).
+
 9. **`build_review` is child-local, and security runs once at the leaf.**
    - Each child's review grades the diff against its parent's tip (`baseKind: child-parent`).
    - The plan body stays whole, so a child-k test's `Covers:` can resolve to any task.
@@ -244,6 +267,10 @@ The decisions below incorporate the fixes.
      frozen whole-feature snapshot, based on the default branch: each rubric projection takes its
      own snapshot (umbrella D15).
    - No line is graded twice by the same rubric.
+
+> **Amended 2026-10-12 by #2944:** A routed repair grades only the repair diff against the host's
+> pinned closure. A re-validation pass grades the replayed contribution against its new parent
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 12).
 
 10. **Caps are per child.**
     - The in-memory stuck-gate guard and recovery retries are keyed by `(step, child)`.
@@ -259,6 +286,10 @@ The decisions below incorporate the fixes.
     - **Recovery:** `kickback-budget raise|reset --child` are offered, and re-kick's resume
       authorization reads the child's ledger.
 
+> **Amended 2026-10-12 by #2944:** Each routed or re-validation pass gets one `routedRepairCredit`
+> in that child's ledger. Whole-feature gate lap and growth caps, and their raises, stay in the flat
+> ledger (`adr-2026-10-12-routed-whole-feature-repair` decisions 10 and 12).
+
 11. **Operator surfaces.**
     - `rewind`, `task` and `kickback-budget` default `--child` to the active child.
     - `rewind --child k` for a closed child is refused, naming #2943, because re-running a closed
@@ -272,6 +303,10 @@ The decisions below incorporate the fixes.
         leaf would give it commits of its own and block decision 3's leaf move.
 
 > **Amended 2026-10-10 by #2943:** `rewind --child k` for a closed child stays refused; the refusal now names #2944, which owns closed-child re-validation (`adr-2026-10-10-stacked-restack-journaled-replay` decision 9).
+
+> **Amended 2026-10-12 by #2944:** `rewind`, `task` and `kickback-budget` default `--child` to the
+> execution child. The closed-child `rewind` refusal now names #3203, which owns manual landing and
+> closed-child rewind (`adr-2026-10-12-routed-whole-feature-repair` decision 8).
 
 12. **Rebase guards until #2943.**
     - While the active child is not the leaf, `resumeRebaseFirst` and the base-advance re-kick
