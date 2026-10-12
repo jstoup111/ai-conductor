@@ -101,6 +101,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host builds no longer halt when Claude rewrites an empty remote-settings.json as {}. ([implementation PR #3178](https://github.com/jstoup111/ai-conductor/pull/3178)).
 - Closeout timing now records real elapsed milliseconds and excludes untrusted durations from reports and telemetry. ([implementation PR #3176](https://github.com/jstoup111/ai-conductor/pull/3176)).
 - Operators receive clear recovery guidance when build review rejects a case transition while valid history remains preserved. ([implementation PR #3171](https://github.com/jstoup111/ai-conductor/pull/3171)).
+- The destructive-git PreToolUse hook parses under macOS's system bash 3.2 again, so Bash tool calls work on a Mac. ([implementation PR #3035](https://github.com/jstoup111/ai-conductor/pull/3035)).
+- Spec authors receive a clear land-gate error when draft artifacts retain dated amendment notes. ([implementation PR #3137](https://github.com/jstoup111/ai-conductor/pull/3137)).
 
 ## Migration
 
