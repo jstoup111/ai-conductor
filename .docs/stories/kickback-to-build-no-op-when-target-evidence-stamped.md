@@ -61,7 +61,7 @@ a silent no-op.
 
 ### Happy Path
 
-- **Given** a `/remediate` route whose earliest target is `build` and, after append + `seedTaskStatus`,
+- **Given** a `/remediate` route for an N=1 feature (in a stacked round the guard runs at the host's region entry) whose earliest target is `build` and, after append + `seedTaskStatus`,
   build completion recomputed via `checkGateCompletion(dir, 'build', ctx)` reports satisfied
   (empty `tasks`, or all appended `rem-*` ids already complete),
 - **When** the route is resolved,

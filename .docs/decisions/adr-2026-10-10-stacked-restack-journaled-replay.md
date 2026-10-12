@@ -544,6 +544,11 @@ Operator decisions (2026-10-10):
 > repaired child is now re-validated in its own region before exit
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 9 and 13).
 
+> **Amended 2026-10-12 by #2944:** The closed-child `rewind` refusal now names #3203, which owns
+> manual landing and closed-child rewind. While a routing marker exists, the automatic repair runs
+> for no closed child, and a due base refresh is deferred with `restack_refused` reason
+> `deferred-base-refresh` (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
+
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
       `cause: 'feature-repair' | 'base-refresh'`. N=1 records omit the field, and an absent cause
@@ -649,6 +654,10 @@ Operator decisions (2026-10-10):
     - **Unchanged.** Child branches are still never pushed until #2945, which reuses this helper.
     - **N=1 change.** This deliberately changes N=1 push behaviour: a force push is now refused
       only where it would overwrite remote work the engine never saw.
+
+> **Amended 2026-10-12 by #2944:** The cleanup list also deletes, by explicit name, each
+> `routes/<roundId>` with its `rejected/<n>` pins, `repairing`, `revalidate` and each `red/c<k>`
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 6).
 
 12. **Events ride the existing spine and carry `child`.**
     - **New `ConductorEvent` variants,** declared `persist: true` in `event-sinks.ts`:
