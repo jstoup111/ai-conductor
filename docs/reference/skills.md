@@ -104,7 +104,7 @@ policy across both catalogs and both host metadata formats.
 | `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
-| `architecture-review` | gating | decide | — | `architecture_review` (6), `architecture_review_as_built` (18) | Advisory at 6, blocking at 18 |
+| `architecture-review` | gating | decide | — | `architecture_review` (6), `architecture_review_as_built` (18) | Blocking |
 | `stories` | gating | decide | — | `stories` (7) | Blocking |
 | `conflict-check` | gating | decide | — | `conflict_check` (8) | Blocking |
 | `plan` | gating | decide | — | `plan` (9) | Blocking |
@@ -302,7 +302,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
-- **Engine step** — two: `architecture_review` (index 6, DECIDE, engine enforcement `advisory`) and
+- **Engine step** — two: `architecture_review` (index 6, DECIDE, engine enforcement `gating`) and
   `architecture_review_as_built` (index 18, SHIP, engine enforcement `gating`), the latter invoked as
   `/architecture-review --as-built`. The DECIDE-time step skips at tier S; the as-built step runs at
   every tier.
@@ -958,7 +958,7 @@ The frontmatter is not always the truth. Where a skill's declared `enforcement` 
 engine step definition, **the engine wins** — `isGatingStep` and `canSkipStep` read the step
 definition, never the SKILL.md.
 
-> **Known limitation.** Six skills' `enforcement:` frontmatter disagrees with the engine's step
+> **Known limitation.** Five skills' `enforcement:` frontmatter disagrees with the engine's step
 > definition. A reader who trusts the frontmatter will predict the wrong skippability.
 >
 > | Skill | SKILL.md `enforcement` | Engine step enforcement |
@@ -966,16 +966,10 @@ definition, never the SKILL.md.
 > | `memory` | `gating` | `advisory` |
 > | `assess` | `gating` | `advisory` |
 > | `architecture-diagram` | `gating` | `advisory` |
-> | `architecture-review` | `gating` | `advisory` (the DECIDE step) |
 > | `remediate` | `gating` | `advisory` |
 > | `rebase` | `advisory` | `structural` |
 >
-> The sharpest case is `architecture-review`: the SKILL.md declares a HARD GATE — no feature proceeds
-> past it with DRAFT ADRs — but the DECIDE-phase step is `advisory`, so `canSkipStep('architecture_review')`
-> returns `true`. The real enforcement for that half lives in the land-time spec gate and in `conduct`'s
-> DRAFT-ADR block, not in the step's enforcement level. The as-built half at index 18 is genuinely
-> `gating` and fail-closed. Tracked in
-> [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
+> Tracked in [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
 
 > **Known limitation.** `manual-test/SKILL.md` declares `requires: [finish, verify-claims]` and its
 > description says "Use after /finish". The engine runs `manual_test` at index 16 with prerequisite

@@ -93,6 +93,7 @@ import {
 } from './land-dependency-gate.js';
 import type { LandDependencyDecision, LandDependencyProposalResult } from './land-dependency-gate.js';
 import { parseSourceRef } from './issue-ref.js';
+import { evaluateAdrAssumptionLedgers } from '../adr-assumption-ledger-scope.js';
 
 const execFile = promisify(execFileCb);
 
@@ -161,6 +162,7 @@ export type LandGateIdentifier =
   | 'applicability-invalid'
   | 'adr-not-approved'
   | 'adr-uncitable-decision'
+  | 'adr-assumption-ledger'
   | 'adr-filename'
   | 'coherence'
   | 'mermaid-render'
@@ -706,7 +708,28 @@ export async function landSpec(
   if (nonCanonicalNewAdrs.length > 0) {
     throw landGateError('adr-filename',
       `landSpec: newly added ADRs must use canonical filenames: ${nonCanonicalNewAdrs.join('; ')}. ` +
-        'Required format: adr-YYYY-MM-DD-lowercase-hyphenated-slug.md.',
+      'Required format: adr-YYYY-MM-DD-lowercase-hyphenated-slug.md.',
+    );
+  }
+  const ledgerEvaluation = await evaluateAdrAssumptionLedgers({
+    worktreePath,
+    baseRef: defaultBranch,
+    mergeBase,
+  });
+  if (ledgerEvaluation.kind === 'merge-base-unresolved') {
+    throw landGateError('adr-assumption-ledger',
+      `landSpec: ADR assumption-ledger evaluation could not resolve the merge base: ${ledgerEvaluation.detail}. ` +
+      'Ensure the feature branch has a resolvable merge base before landing.',
+    );
+  }
+  if (ledgerEvaluation.failures.length > 0) {
+    const offenders = ledgerEvaluation.failures
+      .flatMap(({ path, diagnostics }) => diagnostics.map((diagnostic) =>
+        `${path}: ${diagnostic.rule}${diagnostic.entryId ? ` (${diagnostic.entryId})` : ''}`))
+      .join('; ');
+    throw landGateError('adr-assumption-ledger',
+      `landSpec: ADR assumption ledgers are invalid: ${offenders}. ` +
+      'Repair each ADR using the template\'s ## Assumptions section before landing.',
     );
   }
   // 4e2. Coherence gate (DECIDE artifact coherence check): the traceability

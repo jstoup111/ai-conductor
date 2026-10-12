@@ -23,8 +23,8 @@ whether the step can be skipped and whether it can be disabled by config.
 
 | Level | Can be skipped | Can be config-disabled | Used by |
 | --- | --- | --- | --- |
-| `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, `architecture_review`, and all four out-of-band steps |
-| `gating` | No | Only with `configDisableAllowed` | `prd`, `stories`, `conflict_check`, `plan`, `coherence_check`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
+| `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, and all four out-of-band steps |
+| `gating` | No | Only with `configDisableAllowed` | `prd`, `architecture_review`, `stories`, `conflict_check`, `plan`, `coherence_check`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
 | `structural` | No | Never — the flag is ignored entirely | `worktree`, `build`, `rebase` |
 | `mechanical` | — | — | Nothing. The level is declared in the type union but no step definition uses it. |
 
@@ -45,7 +45,7 @@ The 20 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 | 3 | `complexity` | DECIDE | advisory | `explore` | — | `/conduct complexity` |
 | 4 | `prd` | DECIDE | gating | `explore` | track `technical` | `/prd` |
 | 5 | `architecture_diagram` | DECIDE | advisory | `complexity` | tier S | `/architecture-diagram` |
-| 6 | `architecture_review` | DECIDE | advisory | `architecture_diagram` | tier S | `/architecture-review` |
+| 6 | `architecture_review` | DECIDE | gating | `architecture_diagram` | tier S | `/architecture-review` |
 | 7 | `stories` | DECIDE | gating | `architecture_review` | — | `/stories` |
 | 8 | `conflict_check` | DECIDE | gating | `stories` | tier S | `/conflict-check` |
 | 9 | `plan` | DECIDE | gating | `conflict_check` | — | `/plan` |

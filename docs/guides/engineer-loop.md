@@ -170,7 +170,8 @@ worktree, never the primary checkout.
 5. `/architecture-review` — skipped at tier S. Every ADR must be APPROVED before landing. Each ADR
    added or changed by the spec must also declare at least one citable decision: use a numbered item
    in its `## Decision` section (preferred), an ATX numbered heading (`### 4. Termination`), a bold
-   `D<number>` heading, or an ATX `D<number>` heading.
+   `D<number>` heading, or an ATX `D<number>` heading. Each added ADR also needs a valid
+   [assumptions ledger](#adr-assumptions-ledger).
 6. `/stories` — must end `Status: Accepted`.
 7. `/conflict-check` — skipped at tier S.
 8. `/plan`.
@@ -202,10 +203,39 @@ Before committing, `land` refuses on any of:
 - any artifact carrying `Status: DRAFT`,
 - an ADR under `.docs/decisions/` whose first declared status is not `APPROVED` or `SUPERSEDED`, or that declares no status at all,
 - an added or changed approved ADR with no citable decision in its `## Decision` section,
+- an invalid assumptions ledger (`adr-assumption-ledger`) in an added ADR, or in a changed ADR that
+  has an `## Assumptions` section,
 - an empty or stub artifact,
 - uncommitted changes to tracked files at any path, including tracked artifacts under `.docs/`,
 - untracked files outside `.docs/`,
 - an unresolved identity (no `spec_owner` configured and no `gh` login).
+
+### ADR assumptions ledger
+
+Copy the `## Assumptions` section from `templates/adr.md.template`. Keep exactly one of:
+
+- the ledger table, with this exact header row:
+
+  ```markdown
+  | # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |
+  |---|---|---|---|---|---|---|
+  | A1 | Upstream API is idempotent | inferred | 70% | yes | Duplicate writes | APPROVED by operator 2026-10-10 |
+  ```
+
+- the single line `No load-bearing assumptions.`
+
+| Column | Constraint |
+| --- | --- |
+| `#` | `A<number>`, unique within the ADR |
+| Assumption, Impact if wrong | Non-empty |
+| Basis | `verified`, `inferred`, or `unverified` |
+| Confidence | Integer percentage, `0%`–`100%` |
+| Load-bearing | `yes` or `no` |
+| Approval | `APPROVED by operator YYYY-MM-DD` (a real date) when Load-bearing is `yes` and Basis is not `verified` |
+
+`No load-bearing assumptions.` alongside a `yes` row fails, and fenced code blocks are ignored. ADRs
+already on the default branch are exempt unless a change gives them an `## Assumptions` section. The
+same check runs as the `architecture_review` gate during a conducted run.
 
 `--worktree` is required. `land` never falls back to the primary checkout. On failure the worktree
 is kept for inspection and its path is printed.

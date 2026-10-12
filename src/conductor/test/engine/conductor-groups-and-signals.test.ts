@@ -6504,7 +6504,12 @@ describe('engine/conductor', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'pending' }] }),
       );
-      await writeState(statePath, { coverage_binding: 'done' } as ConductState);
+      await writeState(statePath, {
+        // This fixture targets the BUILD completion predicate. Its temporary
+        // directory has no merge base for the architecture-review ledger gate.
+        architecture_review: 'done',
+        coverage_binding: 'done',
+      } as ConductState);
 
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
