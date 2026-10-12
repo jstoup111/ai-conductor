@@ -10,10 +10,8 @@ import {
   type VisualizerFactoryContext,
   type VisualizerPlugin,
 } from '../types/plugin.js';
-import {
-  BUILT_IN_PROVIDERS,
-  type BuiltInProviderId,
-} from '../execution/provider-catalog.js';
+import type { BuiltInProviderId } from '../execution/provider-catalog.js';
+import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { LocalMemoryProvider } from './local-memory-provider.js';
@@ -225,17 +223,7 @@ export function registerBuiltins(
     throw new Error('codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds');
   }
 
-  const installedBuiltIns = installed ?? new Set<BuiltInProviderId>(
-    BUILT_IN_PROVIDERS.map((provider) => provider.id),
-  );
-  for (const provider of BUILT_IN_PROVIDERS) {
-    if (!installedBuiltIns.has(provider.id)) continue;
-    registry.register(
-      'llm_provider',
-      provider.id,
-      provider.createAdapter({ codexDoctorTimeoutMs }),
-    );
-  }
+  registerBuiltInLlmProviders(registry, { installed, codexDoctorTimeoutMs });
 
   if (rendererOpts) registry.register('ui_renderer', 'terminal', new TerminalRenderer(rendererOpts));
   const subscriber = new TerminalSubscriber(events);
