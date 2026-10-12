@@ -4,6 +4,43 @@ spec_hash: 9f7e131d925074a7436d011a5f6818c89ad8417b377504b414f138c7205878d9
 pr: https://github.com/jstoup111/ai-conductor/pull/3169
 shipped: 2026-10-12
 engine_version: 20261011T230829Z-d677b3f7832c
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "Display-only fallback outside the restack gate; no budget, routing or authorization change."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "Story 14 requires the expected-SHA lease, not removal of upstream tracking; lease mode refreshes an already-published branch, so losing -u is unlikely to matter."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-3
+    summary: "Repository-wide gate configuration change not in any task; it loosens a review bound for all later features to unblock this one."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-4
+    summary: "Bookkeeping bound refreshes driven by plan growth; not planned, no behaviour change beyond projection limits."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-5
+    summary: "S11.4 needs this for restacks, but the change also alters N=1 rebase evidence handling, which the plan outcome says should behave exactly as today. Golden fixtures are unchanged, so the effect is likely benign but is not planned for N=1."
+    accepted: false
+    authority: engine
+  - gate: architecture_review_as_built
+    finding: "as-built:11299a4d-ca2d-448c-b6f1-adb10018bb51:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-10-07-per-child-build-region decision 1"
+    outcome: remediated
+    summary: "Verified from source, 95% confidence: stack-preflight.ts:178–182 hardcodes numeric child 1 instead of the first sealed declared position. Its caller at stack-preflight.ts:126–133 therefore schedules an unnecessary chained base refresh for valid positions such as [2,4,7] when the default is already contained in child 2. This violates the sealed-position authority and defeats the already-current no-op. Introduced by eb2e894687 after the prior approved review. Resolve the first child from the sealed positions and test this non-1 starting position."
 ---
 
 ## Cost
