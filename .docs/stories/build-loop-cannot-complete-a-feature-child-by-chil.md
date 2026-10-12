@@ -341,7 +341,7 @@ findings and laps belong to the increment that introduced them.
 - Given a three-child baseline at child 2's `build_review` outside a routed repair or re-validation pass, when inputs are assembled, then the
   review base is `feat/c1/demo`'s tip, `baseKind` is `child-parent`, and the changed files are only
   those changed since that tip.
-- Given a three-child baseline at child 1's `build_review`, when inputs are assembled, then the base is
+- Given a three-child baseline at child 1's `build_review` outside a routed repair or re-validation pass, when inputs are assembled, then the base is
   resolved exactly as today (merge-base with the default branch).
 - Given a three-child baseline at child 2's `build_review`, when a changed child-2 test's `Covers:`
   names task `T1` (child 1), then it resolves against the whole plan.
