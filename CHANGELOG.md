@@ -106,6 +106,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Spec authors receive a clear land-gate error when draft artifacts retain dated amendment notes. ([implementation PR #3137](https://github.com/jstoup111/ai-conductor/pull/3137)).
 - Validation groups reliably retry members that report stale verdicts. ([implementation PR #3179](https://github.com/jstoup111/ai-conductor/pull/3179)).
 - Docs-only pull requests now catch live documentation-corpus failures before merge. ([implementation PR #3168](https://github.com/jstoup111/ai-conductor/pull/3168)).
+- CI repair agents receive focused failed-log excerpts. ([implementation PR #3175](https://github.com/jstoup111/ai-conductor/pull/3175)).
 
 ## Migration
 
