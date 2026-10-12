@@ -57,6 +57,11 @@ export const EVENT_SINKS = {
   coverage_binding_invalidated: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_task_reopened: { render: false, persist: true, audit: false, otel: false },
   plan_slices_changed: { render: false, persist: true, audit: false, otel: false },
+  // Plan-review lifecycle observations stay durable on the shared spine; a
+  // later task owns any renderer, audit, or OTel projection.
+  plan_review_dispatched: { render: false, persist: true, audit: false, otel: false },
+  plan_review_completed: { render: false, persist: true, audit: false, otel: false },
+  plan_review_finding_accepted: { render: false, persist: true, audit: false, otel: false },
   // Per-child transitions are durable spine occurrences. They intentionally do
   // not widen the renderer, audit, or OTel surfaces until a later task owns one.
   child_started: { render: false, persist: true, audit: false, otel: false },

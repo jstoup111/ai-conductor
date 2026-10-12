@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:8, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:8, task:9, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -267,6 +267,9 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'coverage_binding_invalidated',
   'coverage_binding_task_reopened',
   'plan_slices_changed',
+  'plan_review_dispatched',
+  'plan_review_completed',
+  'plan_review_finding_accepted',
   'config_deprecated_key',
   'contained_live_checkout_drift',
   'provider_suppressed',
