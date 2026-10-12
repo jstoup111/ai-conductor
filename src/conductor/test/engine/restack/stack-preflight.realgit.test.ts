@@ -268,4 +268,51 @@ describe('runStackPreflight (real local Git)', () => {
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(operatorCommit);
     expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim()).toBe(operatorCommit);
   });
+
+  // Covers: S10.3, task:33
+  it('finds the default inside the first sealed position when the stack starts at child 2, chaining no base refresh', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'stack-preflight-gap-'));
+    repositories.push(repo);
+    const git = (args: string[]) => execFile('git', args, { cwd: repo });
+    const commit = async (message: string, path: string, value: string) => {
+      await writeFile(join(repo, path), value);
+      await git(['add', path]);
+      await git(['commit', '-qm', message]);
+      return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    };
+    await git(['init', '-q', '-b', 'main']);
+    await git(['config', 'user.email', 'preflight@example.test']);
+    await git(['config', 'user.name', 'Stack preflight']);
+    await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+    await git(['add', '.gitignore']);
+    await git(['commit', '-qm', 'ignore pipeline']);
+    await commit('base', 'base.txt', 'base\n');
+    await git(['checkout', '-qb', 'feat/c2/demo']);
+    await git(['update-ref', 'refs/conductor/demo/closed/c2', await commit('closed two', 'two.txt', 'two\n')]);
+    await git(['checkout', '-qb', 'feat/c3/demo']);
+    await git(['update-ref', 'refs/conductor/demo/closed/c3', await commit('closed three', 'three.txt', 'three\n')]);
+    await git(['checkout', '-qb', 'feat/daemon-demo']);
+    await commit('leaf', 'leaf.txt', 'leaf\n');
+    await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
+    await writeCoverageBindingEnvelope(repo, {
+      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { a: 2, b: 3, c: 4 }, titles: ['two', 'three', 'leaf'] },
+      storyOwnership: { S1: 2, S2: 3, S3: 4 },
+    }, envelopeFilesystem);
+    await git(['checkout', '-q', 'feat/c2/demo']);
+    await commit('operator change', 'operator.txt', 'X\n');
+    await git(['checkout', '-q', 'feat/daemon-demo']);
+    const consumed: string[] = [];
+
+    const { result, records } = await withPersistedEvents(repo, (events) => runStackPreflight({
+      worktree: repo, slug: 'demo', baseRefreshDue: true,
+      consumeRekick: async () => { consumed.push('consume'); }, events, git: makeGitRunner(repo),
+    }));
+
+    expect(result).toEqual({ kind: 'repaired' });
+    expect(records.filter((record) => record.type === 'restack_planned').map((record) => record.cause))
+      .toEqual(['feature-repair']);
+    expect(consumed).toEqual(['consume']);
+  });
 });

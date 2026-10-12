@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { hasDurableChildState, resolveActiveChild } from '../child-cursor.js';
+import { hasDurableChildState, resolveActiveChild, resolveSealedFirst } from '../child-cursor.js';
 import { childBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { HALT_MARKER } from '../halt-marker.js';
@@ -124,7 +124,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // child 1 there is nothing to carry: chaining one would only rewrite every
   // child to new SHAs. The REKICK is then satisfied by the repair alone.
   const baseRefreshDue = options.baseRefreshDue === true
-    && !(await defaultAlreadyInStack(options.slug, options.git ?? makeGitRunner(options.worktree)));
+    && !(await defaultAlreadyInStack(options.worktree, options.slug, options.git ?? makeGitRunner(options.worktree)));
   const repair = await runRestack({
     worktree: options.worktree,
     slug: options.slug,
@@ -174,8 +174,12 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   return { kind: 'repaired' };
 }
 
-async function defaultAlreadyInStack(slug: string, git: GitRunner): Promise<boolean> {
-  const first = childBranchFor(slug, 1);
+async function defaultAlreadyInStack(worktree: string, slug: string, git: GitRunner): Promise<boolean> {
+  // The stack's first child is the first sealed declared position, not a
+  // literal 1 (adr-2026-10-07-per-child-build-region D1).
+  const position = await resolveSealedFirst(worktree);
+  if (position === undefined) return false;
+  const first = childBranchFor(slug, position);
   if (!first.ok) return false;
   try {
     const tip = await defaultTip(git);

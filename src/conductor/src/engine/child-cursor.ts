@@ -84,6 +84,17 @@ export async function resolveSealedLeaf(worktree: string): Promise<ChildId | und
   return positionsFromEnvelope(envelope).at(-1);
 }
 
+/** Returns the first position declared by the completed sealed envelope. */
+export async function resolveSealedFirst(worktree: string): Promise<ChildId | undefined> {
+  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
+  try {
+    envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
+  } catch {
+    return undefined;
+  }
+  return positionsFromEnvelope(envelope).at(0);
+}
+
 type ClosedChild = { child: ChildId; tip: string };
 
 async function runGit(git: GitRunner, args: string[]) {
