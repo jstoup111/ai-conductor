@@ -44,6 +44,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon scheduling now derives priority, size, and dependency ordering through a backend-neutral source. ([implementation PR #3172](https://github.com/jstoup111/ai-conductor/pull/3172)).
 - Operators can restack descendant branches after changing a closed stacked child. ([implementation PR #3169](https://github.com/jstoup111/ai-conductor/pull/3169)).
 - Plans of 30 or more tasks are now refused at spec land unless they carry a `**Scope-exception:**` declaration (previously 41). ([implementation PR #3201](https://github.com/jstoup111/ai-conductor/pull/3201)).
+- Daemon operators see plan-growth budgets based on the resolved plan and clear unresolved-plan state. ([implementation PR #3143](https://github.com/jstoup111/ai-conductor/pull/3143)).
 
 ### Removed
 
