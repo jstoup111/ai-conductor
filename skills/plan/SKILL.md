@@ -469,7 +469,7 @@ decisions. Use the exact table contract from Section 7.]
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left
       without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
-- [ ] Tasks do not invalidate each other's fixtures or assertions; `/coherence-check` sweeps this
+- [ ] Tasks do not invalidate each other's fixtures or assertions; plan review sweeps this
       at Medium and Large tier, and Small tier gains no required step for it
 ```
 
@@ -526,15 +526,16 @@ After generating the plan, cross-reference:
 - If any criterion is uncovered, add a task
 - For each row, list the criterion's Then outcomes and confirm the cited task's checks explicitly
   require every one (§3c); widen a check or add one for any outcome that is only implied
-- **Contradiction pass (mandatory):** check every task's Done-when bullets and required behavior
+- **Contradiction pass (mandatory at Small tier):** check every task's Done-when bullets and required behavior
   against *every* criterion, not only those it cites — negative paths and "only"/"never"/"no"
   constraints first. If satisfying a task would violate a criterion, or the task's design cannot
   represent state a criterion depends on, fix the plan before landing or surface it to the operator.
   Example: Story 6 negative "the only assertion changes are the added credential option" vs a task
   whose Done-when requires new endpoint assertions — covered, yet contradictory. The pass is run by
   an independent judge, never the plan's author (§7b).
-- Run the independent coverage judgement (§7a) and the independent contradiction judgement (§7b),
-  and resolve every refusal and conflict before landing
+- Run the independent coverage judgement (§7a) at every tier. At Medium and Large tier, plan review
+  owns the independent contradiction judgement; at Small tier, run §7b. Resolve every refusal and
+  conflict before landing.
 - Present the coverage mapping to the user
 
 Record the mapping in a `## Coverage Check` table. At every tier, use one four-cell
@@ -571,11 +572,9 @@ is a no-op and does not re-judge before BUILD.
 5. Never overrule a refusal by argument, and never edit a criterion to fit a check. Criteria change
    only through the stories step.
 
-For M and L plans, `coherence-check` repeats this judgement on its own criterion rows.
-
 #### 7b. Independent Contradiction Judgement
 
-**GATE: before the plan lands, at every tier, a fresh subagent checks the whole plan against every
+**GATE: before the plan lands, only at tier S, a fresh subagent checks the whole plan against every
 criterion and every approved ADR decision the plan is subject to. The plan's author never judges its
 own plan for contradictions.** The author wrote the tasks to fit the criteria it read; a pass in the
 same context re-reads them the same way. A contradiction that reaches BUILD costs a full build and
@@ -600,9 +599,6 @@ its review laps before it surfaces, and then an amendment and an operator reseal
    and the criterion or decision. Never land it.
 5. Never overrule a conflict by argument. If you believe the judge misread, show the operator both
    passages and let them decide.
-
-For M and L plans, `coherence-check` repeats this judgement over the final plan (its §4d sweep),
-because amendments made after this pass can introduce a new conflict.
 
 **GATE: Every citable decision in each non-deleted land-accepted ADR (`APPROVED` or `SUPERSEDED`) in
 the current spec change set must have exactly one row in `## Architecture Obligation Coverage`.** Use
@@ -688,12 +684,12 @@ any code is written. The full flow from here is:
 - [ ] Each task has specific test and implementation descriptions
 - [ ] Every `Done when:` check names a mechanism and its observable assertion, rather than merely
       restating the mapped criterion; each bullet occupies one physical line
-- [ ] A fresh subagent found no contradiction between any task and any criterion or subject ADR
-      decision (§7b)
+- [ ] At Small tier, a fresh subagent found no contradiction between any task and any criterion or
+      subject ADR decision (§7b); at Medium and Large tier, plan review owns that contradiction check
 - [ ] Every outcome in each mapped criterion's Then-clause, including absence/no-op outcomes, is
       explicitly required by a cited task's `Done when:` check at the criterion's precision (§3c)
 - [ ] Dependencies are declared and acyclic
-- [ ] Tasks do not invalidate each other's fixtures or assertions; `/coherence-check` sweeps this
+- [ ] Tasks do not invalidate each other's fixtures or assertions; plan review sweeps this
       at Medium and Large tier, and Small tier gains no required step for it
 - [ ] `ai-conductor plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
       violations; no task targets another feature's sealed artifact

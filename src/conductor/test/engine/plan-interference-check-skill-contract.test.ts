@@ -1,4 +1,4 @@
-// Covers: task:4, task:18, task:19
+// Covers: task:4, task:18, task:19, task:20
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -10,7 +10,7 @@ const planSkillPath = fileURLToPath(
 );
 
 const nonInterferenceItem =
-  /tasks do not invalidate each other's fixtures or assertions[\s\S]*?\/coherence-check[\s\S]*?Medium and Large[\s\S]*?Small[\s\S]*?no required step/i;
+  /tasks do not invalidate each other's fixtures or assertions[\s\S]*?plan review[\s\S]*?Medium and Large[\s\S]*?Small[\s\S]*?no required step/i;
 
 function verificationSections(skill: string): string[] {
   const starts = [...skill.matchAll(/^## Verification$/gm)]
@@ -61,6 +61,6 @@ describe('plan skill non-interference contract', () => {
     expect(planReview).toMatch(/task-versus-task[\s\S]*?other direction/i);
     expect(planReview).toMatch(/Cross-layer and task versus task[\s\S]*?plan review at Medium and Large/i);
     expect(planSkill).toMatch(nonInterferenceItem);
-    expect(planSkill).toMatch(/\/coherence-check[\s\S]*?Medium and Large/i);
+    expect(planSkill).toMatch(/plan review[\s\S]*?Medium and Large/i);
   });
 });
