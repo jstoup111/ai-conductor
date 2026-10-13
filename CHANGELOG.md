@@ -115,6 +115,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A stalled build now applies the repair its remediation planner proposes, instead of halting with the fix named but never run. ([implementation PR #3218](https://github.com/jstoup111/ai-conductor/pull/3218)).
 - Skill metadata now matches the engine's execution rules. ([implementation PR #3217](https://github.com/jstoup111/ai-conductor/pull/3217)).
 - build_review no longer halts a feature whose plan lists files with a glob pattern; glob hints are treated as task scope like directory hints. ([implementation PR #3221](https://github.com/jstoup111/ai-conductor/pull/3221)).
+- A failed test_suite run now saves its complete output to .pipeline/test-suite-output.log and the failure message points to it, so BUILD fixes every failure in one round instead of one truncated batch per retry. ([implementation PR #3220](https://github.com/jstoup111/ai-conductor/pull/3220)).
 
 ## Migration
 
