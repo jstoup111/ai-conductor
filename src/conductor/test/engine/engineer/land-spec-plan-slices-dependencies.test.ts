@@ -5,9 +5,10 @@ import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { LandGateError, landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { validatePlanSlices } from '../../../src/engine/plan-slices.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 import type { OwnerConfig } from '../../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
@@ -47,6 +48,21 @@ async function seed(planContent: string): Promise<string> {
   await writeFile(join(worktreePath, '.docs', 'specs', 'plan-slices-dependencies.md'), '# PRD: dependencies\n\nApproved.\n');
   await writeFile(join(worktreePath, '.docs', 'stories', 'plan-slices-dependencies.md'), STORIES);
   await writeFile(join(worktreePath, '.docs', 'plans', 'plan-slices-dependencies.md'), planContent);
+  const reviewedDigest = computeReviewedDigest({
+    planText: planContent,
+    storiesText: STORIES,
+    adrTexts: {},
+    artifactTexts: { '.docs/coherence/plan-slices-dependencies.md': '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', 'plan-slices-dependencies.md'),
+    renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [], dispositions: [], reviewedDigest,
+    }),
+  );
   return worktreePath;
 }
 function options(): { ownerConfig: OwnerConfig } { return { ownerConfig: { spec_owner: 'test-owner' } as OwnerConfig }; }

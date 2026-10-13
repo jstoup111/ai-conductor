@@ -1,7 +1,7 @@
 // Covers: task:1
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -9,9 +9,11 @@ import {
   classifyLandGateRejection,
   landGateError,
   landSpec,
+  resolveIdeaFiles,
 } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { EVENT_SINKS } from '../../../src/engine/event-sinks.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
 import type { GitRunner } from '../../../src/engine/rebase.js';
 
@@ -54,6 +56,23 @@ async function seedLandableWorktree(): Promise<string> {
     '```',
     '',
   ].join('\n'));
+  const planText = await readFile(join(worktreePath, '.docs', 'plans', 'dependency-gate.md'), 'utf8');
+  const storiesText = await readFile(join(worktreePath, '.docs', 'stories', 'dependency-gate.md'), 'utf8');
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText,
+    adrTexts: {},
+    artifactTexts: { '.docs/coherence/dependency-gate.md': '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', 'dependency-gate.md'),
+    renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [], dispositions: [], reviewedDigest,
+    }),
+  );
   return worktreePath;
 }
 
