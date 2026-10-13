@@ -22,6 +22,8 @@ import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-au
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 import { TargetPathMissingError } from '../../../src/engine/engineer/target.js';
 import * as landSpecModule from '../../../src/engine/engineer/land-spec.js';
+import { resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 
@@ -90,6 +92,22 @@ async function seedWorktree(idea = 'dep bump'): Promise<string> {
   await writeFile(
     join(dir, '.docs', 'plans', `${stem}.md`),
     PLAN_WITH_DEPS.replaceAll('dep bump', idea).replaceAll('dep-bump', stem),
+  );
+  const planText = await readFile(join(dir, '.docs', 'plans', `${stem}.md`), 'utf8');
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText: ACCEPTED_STORIES,
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${stem}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(dir, repoPath)],
+  });
+  await mkdir(join(dir, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(dir, '.docs', 'plan-review', `${stem}.md`),
+    renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [], dispositions: [], reviewedDigest,
+    }),
   );
   return dir;
 }
