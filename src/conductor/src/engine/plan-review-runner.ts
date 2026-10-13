@@ -9,6 +9,7 @@ import { classifyIndependence, orderReviewerCandidates, resolveAuthoringHost } f
 import type { ProviderRuntimeSet } from './provider-runtime.js';
 import type { ProviderSessionStore } from './provider-session.js';
 import { executeProviderCandidates, type ExecuteProviderCandidatesInput } from './provider-execution.js';
+import { resolveIdeaFiles } from './engineer/spec-change-set.js';
 
 async function files(root: string, at = root): Promise<string[]> {
   const entries = await readdir(at, { withFileTypes: true });
@@ -16,7 +17,7 @@ async function files(root: string, at = root): Promise<string[]> {
     ? (entry.name === '.git' || entry.name === 'node_modules' ? [] : files(root, join(at, entry.name)))
     : entry.isFile() ? [relative(root, join(at, entry.name)).replaceAll('\\', '/')] : []))).flat();
 }
-async function reviewInputs(worktreePath: string, planStem: string) {
+async function reviewInputs(worktreePath: string, planStem: string, canonicalPath?: string) {
   const planText = await readFile(join(worktreePath, '.docs', 'plans', `${planStem}.md`), 'utf8');
   const storiesText = await readFile(join(worktreePath, '.docs', 'stories', `${planStem}.md`), 'utf8').catch(() => '');
   const coherenceText = await readFile(join(worktreePath, '.docs', 'coherence', `${planStem}.md`), 'utf8').catch(() => '');
@@ -34,7 +35,8 @@ async function reviewInputs(worktreePath: string, planStem: string) {
   try { for (const file of await readdir(join(worktreePath, '.docs', 'decisions'))) if (file.endsWith('.md')) adrTexts[file.slice(0, -3)] = await readFile(join(worktreePath, '.docs', 'decisions', file), 'utf8'); } catch { /* optional */ }
   const sourceFiles: Record<string, string> = {};
   for (const path of await files(worktreePath)) if (!path.startsWith('.docs/') && !path.startsWith('.pipeline/')) sourceFiles[path] = await readFile(join(worktreePath, path), 'utf8').catch(() => '');
-  const digest = computeReviewedDigest({ planText, storiesText, adrTexts, artifactTexts: { [` .docs/coherence/${planStem}.md`.trim()]: coherenceText }, changedPaths: [] });
+  const changedPaths = canonicalPath ? await resolveIdeaFiles(worktreePath, canonicalPath) : new Set<string>();
+  const digest = computeReviewedDigest({ planText, storiesText, adrTexts, artifactTexts: { [` .docs/coherence/${planStem}.md`.trim()]: coherenceText }, changedPaths: [...changedPaths] });
   return { planText, storiesText, coherenceText, architectureReviewText, adrTexts, sourceFiles, digest };
 }
 
@@ -65,7 +67,7 @@ function selectedDecisions(adrTexts: Readonly<Record<string, string>>, ids: read
   return selected;
 }
 export interface RunPlanReviewInput {
-  worktreePath: string; planStem: string; config: HarnessConfig; runtimes: ProviderRuntimeSet; sessions: ProviderSessionStore;
+  worktreePath: string; canonicalPath?: string; planStem: string; config: HarnessConfig; runtimes: ProviderRuntimeSet; sessions: ProviderSessionStore;
   env?: NodeJS.ProcessEnv; configuredProviders?: readonly string[]; emit?: (event: Extract<ConductorEvent, { type: 'plan_review_dispatched' | 'plan_review_completed' | 'plan_review_finding_accepted' }>) => Promise<void>; providerExecutor?: typeof executeProviderCandidates;
 }
 export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanReviewArtifact> {
@@ -73,7 +75,7 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const previousText = await readFile(previousPath, 'utf8').catch(() => '');
   const previous = previousText ? parsePlanReviewArtifact(previousText) : undefined;
   if (previous && !('kind' in previous) && previous.round >= 2) throw new Error(`plan review bound reached: ${previous.findings.filter((f) => f.severity === 'blocking').map((f) => `${f.id} ${f.summary}`).join('; ')}`);
-  const source = await reviewInputs(input.worktreePath, input.planStem);
+  const source = await reviewInputs(input.worktreePath, input.planStem, input.canonicalPath);
   const host = resolveAuthoringHost(input.env);
   const candidates = orderReviewerCandidates({ config: input.config, host, configuredProviders: input.configuredProviders });
   if (!candidates.length) throw new Error('plan review has no configured reviewer provider');
@@ -125,12 +127,12 @@ export async function acceptPlanReviewFinding(input: Pick<RunPlanReviewInput, 'w
 }
 
 /** Records an operator's acknowledgement after bounded review, without a model call. */
-export async function acknowledgePlanReviewChanges(input: { worktreePath: string; planStem: string; reason: string }): Promise<void> {
+export async function acknowledgePlanReviewChanges(input: { worktreePath: string; canonicalPath?: string; planStem: string; reason: string }): Promise<void> {
   if (!input.reason.trim()) throw new Error('plan review acknowledgement reason is required');
   const path = join(input.worktreePath, '.docs', 'plan-review', `${input.planStem}.md`);
   const parsed = parsePlanReviewArtifact(await readFile(path, 'utf8'));
   if ('kind' in parsed) throw new Error('plan review artifact is invalid');
   if (parsed.round < 2) throw new Error('plan review requires remaining round before acknowledgement');
-  const current = await reviewInputs(input.worktreePath, input.planStem);
+  const current = await reviewInputs(input.worktreePath, input.planStem, input.canonicalPath);
   await writeFile(path, renderPlanReviewArtifact({ ...parsed, reviewedDigest: current.digest }), 'utf8');
 }

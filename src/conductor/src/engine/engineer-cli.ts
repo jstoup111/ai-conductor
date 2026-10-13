@@ -1393,13 +1393,13 @@ export async function dispatchEngineer(
       persister.start();
       try {
         if (accept) await acceptPlanReviewFinding({ worktreePath: worktree, planStem, findingId: accept, reason: reason ?? '', emit: async (event) => events.emitOrThrow(event) });
-        else if (acknowledge) await acknowledgePlanReviewChanges({ worktreePath: worktree, planStem, reason: reason ?? '' });
+        else if (acknowledge) await acknowledgePlanReviewChanges({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, reason: reason ?? '' });
         else {
           const registry = new PluginRegistry();
           registerBuiltInLlmProviders(registry, { codexDoctorTimeoutMs: (configResult.config.codex_doctor_timeout_seconds ?? 10) * 1_000 });
           registry.markInitialized();
           const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
-          const artifact = await runPlanReview({ worktreePath: worktree, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, emit: async (event) => events.emitOrThrow(event) });
+          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, emit: async (event) => events.emitOrThrow(event) });
           if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
         }
         return 0;
