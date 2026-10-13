@@ -21,6 +21,11 @@ export type RoundPhase = 'prepared' | 'open' | 'closed';
 
 export type RouteKind = 'audit' | 'revalidate';
 
+/** Makes routing-union consumers fail closed when their union gains a member. */
+export function assertNever(value: never): never {
+  throw new Error(`Unhandled routing value: ${JSON.stringify(value)}`);
+}
+
 export interface RoutedItem {
   readonly findingId: string;
   readonly kind: RouteKind;
