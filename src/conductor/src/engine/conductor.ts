@@ -3874,6 +3874,23 @@ export class Conductor {
     for (const [gapId, target] of sealedArtifactsByGapId) {
       await this.events.emit({ type: 'remediation_sealed_artifact_redirect', gapId, ...target });
     }
+    // Build-stall answers are not requests to expand the approved plan. The
+    // established sources, carrying their matching build provenance, retain
+    // their raw retry hint: their tasks reach the builder through that hint,
+    // never through a plan append. A zero-work stall writes the same question
+    // evidence as a halt-marker stall, so it is the same answer shape;
+    // refusing it as unadmitted plan growth left the planner's repair named
+    // but never applied while the build burned its last retry.
+    const buildStallEvidenceFile =
+      hintSource.source === 'build_stall' || hintSource.source === 'build_stall_zero_work'
+        ? '.pipeline/build-stall-question.md'
+        : hintSource.source === 'build-stall'
+          ? '.pipeline/halt-user-input-required'
+          : undefined;
+    const buildStallSource = buildStallEvidenceFile !== undefined && remediationEvidenceSources.some(
+      (provenance) =>
+        provenance.gate === 'build' && provenance.evidenceFile === buildStallEvidenceFile,
+    );
     const gaps = plan.gaps.map((gap) =>
       sealedArtifactGapIds.has(gap.id) &&
       (gap.disposition === 'build' || gap.disposition === 'acceptance_specs')
@@ -4113,6 +4130,9 @@ export class Conductor {
       // id; the criterion-id ladder below would re-admit them with the wrong
       // gate source, so leave them to the refusal admission only.
       if (refusalReferenceIds.has(gap.id)) continue;
+      // A build-stall answer routes as a hint (see buildStallSource); its
+      // tasks never enter plan growth admission.
+      if (buildStallSource) continue;
       if (gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) {
         const { prdAuditAdmits, asBuiltAdmits } = gateAdmissions(gap.id);
         // Unlike appended work's compatibility guard below, existing-task is
@@ -4520,18 +4540,6 @@ export class Conductor {
       };
     }
     const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
-    // Build-stall answers are not requests to expand the approved plan. Only
-    // the two established sources, carrying their matching build provenance,
-    // retain their raw retry hint.
-    const buildStallEvidenceFile = hintSource.source === 'build_stall'
-      ? '.pipeline/build-stall-question.md'
-      : hintSource.source === 'build-stall'
-        ? '.pipeline/halt-user-input-required'
-        : undefined;
-    const buildStallSource = buildStallEvidenceFile !== undefined && remediationEvidenceSources.some(
-      (provenance) =>
-        provenance.gate === 'build' && provenance.evidenceFile === buildStallEvidenceFile,
-    );
     const routedFixes = buildStallSource ? fixes : admittedFixes;
     if (fixes.length > 0 && routedFixes.length === 0) {
       const rejectedAppendGapIds = fixes
