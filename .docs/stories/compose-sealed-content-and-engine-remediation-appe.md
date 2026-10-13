@@ -16,7 +16,7 @@ As the engine, I want my own recorded remediation-task append accepted even afte
 
 #### Happy Path
 
-- Given a sealed artifact whose content at the seal's baseline commit matches the seal's recorded fingerprint for that path, and a committed HEAD that extends exactly that content with only the engine's recorded remediation-task blocks, when seal rotation is evaluated, then the path is accepted as an engine append and rotation is permitted.
+- Given a sealed artifact whose content at the seal's baseline commit matches the seal's recorded fingerprint for that path, and a committed HEAD that extends exactly that content with only the engine's recorded remediation-task blocks (recorded in engine state or in a route record's frozen allocation), when seal rotation is evaluated, then the path is accepted as an engine append and rotation is permitted.
 - Given a sealed artifact whose base-branch-tip content is still a byte prefix of the committed HEAD content, when seal rotation is evaluated, then the engine append is accepted exactly as it is accepted today.
 
 #### Negative Paths
@@ -43,7 +43,7 @@ As the operator, I want a human edit to a sealed DECIDE artifact to keep halting
 #### Negative Paths
 
 - Given one commit that carries both recorded remediation-task blocks and an in-place edit to content preceding them, when seal rotation is evaluated, then rotation refuses.
-- Given an appended suffix carrying a task heading whose id the engine never recorded, or any other markdown heading, when seal rotation is evaluated, then rotation refuses.
+- Given an appended suffix carrying a task heading whose id the engine never recorded (in engine state or in a route record's frozen allocation), or any other markdown heading, when seal rotation is evaluated, then rotation refuses.
 
 ### Done When
 

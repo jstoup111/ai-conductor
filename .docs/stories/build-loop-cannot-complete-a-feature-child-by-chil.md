@@ -46,7 +46,7 @@ unfinished one.
   no closure ref, when the daemon restarts, then child 1 is still the active child, even though the
   leaf branch contains child 1's tip.
 - Given a three-child baseline with child 1 closed, when an operator commits directly onto
-  `feat/c1/demo` past its closure tip, then the next dispatch runs a `feature-repair` restack that
+  `feat/c1/demo` past its closure tip, then the next dispatch with no routing round open runs a `feature-repair` restack that
   moves `refs/conductor/demo/closed/c1` to the new tip and replays the children above it, and no
   needs-human halt is written.
 - Given a three-child baseline with child 1 closed, when an operator amends or resets
@@ -65,7 +65,7 @@ unfinished one.
       lowest position with no closure ref.
 - [ ] Closure refs are created, and moved inside a restack transaction, only by compare-and-swap,
       and are never pushed to `origin`.
-- [ ] Commits appended past a closed child's closure are repaired automatically. A rewritten or reset
+- [ ] Commits appended past a closed child's closure are repaired automatically when no routing round is open. A rewritten or reset
       closed child, a missing envelope with child state, and a detached HEAD each halt needs-human
       with the cause named, and none of them writes a flat region file.
 
@@ -164,7 +164,7 @@ overwrites another's and flat readers never see a mix.
   status` and the dashboard read step state, then they report child 2's region status and the
   feature's flat whole-feature status together.
 - Given a two-child baseline with child 2 active, when `manual_test` kicks back to `build`, then the
-  `build` demotion is written to child 2's (the leaf's) state, and child 1's state is unchanged.
+  `build` demotion is written to the execution child's state, which is the leaf (child 2) unless a routed repair or re-validation is open, and child 1's state is unchanged.
 
 #### Negative Paths
 - Given a two-child baseline with child state present, when the flat verdict lister or flat
@@ -182,7 +182,7 @@ overwrites another's and flat readers never see a mix.
 - [ ] Every region read goes through one overlay and every region write through the routed state
       port, proven by a test that fails if any flat region key changes while children exist.
 - [ ] Whole-feature kickbacks, stale cascades and rebase invalidations into a region step land in the
-      active (leaf) child's state.
+      execution child's state, which is the leaf unless a routed repair or re-validation is open.
 
 ## Story 5: Acceptance specs cover only the stories the child owns
 
@@ -244,7 +244,7 @@ children's pending tasks never block or falsely stall an earlier child.
   pending, then child 1's `build` completes.
 - Given a two-child baseline in which a remediation task `rem-1` is appended while child 2 is active,
   when child 2's `build` completion is evaluated, then `rem-1` is part of child 2's task set, and its
-  child is recorded beside the appended-id record.
+  child is carried by the authoritative committed `**Child:**` line and cached beside the appended-id record.
 
 #### Negative Paths
 - Given a two-child baseline at child 1's `build`, when `T2` is unresolved, then completion fails
@@ -253,13 +253,13 @@ children's pending tasks never block or falsely stall an earlier child.
   did not move, then it is recorded as `no_task_progress` even though child 1's tasks are all resolved.
 - Given a two-child baseline at child 2's `build`, when a dispatch resolves no child-2 task but HEAD
   moved, then it is not recorded as `no_task_progress`, as today.
-- Given a two-child baseline in which a remediation task's recorded child is missing, when child 2's
+- Given a two-child baseline in which both a remediation task's committed `**Child:**` line and its recorded (cached) child are missing, when child 2's
   `build` completion is evaluated, then completion fails closed naming the task.
 
 ### Done When
 - [ ] The build predicate and the stall breaker fold over the active child's slice tasks plus the
       remediation tasks recorded to that child.
-- [ ] Each remediation task appended during a stacked build records its child.
+- [ ] Each remediation task appended during a stacked build carries its child in a committed `**Child:**` line, and the recorded child is a cache.
 
 ## Story 7: Commits stay in the child that owns the task
 
@@ -338,10 +338,10 @@ findings and laps belong to the increment that introduced them.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a three-child baseline at child 2's `build_review`, when inputs are assembled, then the
+- Given a three-child baseline at child 2's `build_review` outside a routed repair or re-validation pass, when inputs are assembled, then the
   review base is `feat/c1/demo`'s tip, `baseKind` is `child-parent`, and the changed files are only
   those changed since that tip.
-- Given a three-child baseline at child 1's `build_review`, when inputs are assembled, then the base is
+- Given a three-child baseline at child 1's `build_review` outside a routed repair or re-validation pass, when inputs are assembled, then the base is
   resolved exactly as today (merge-base with the default branch).
 - Given a three-child baseline at child 2's `build_review`, when a changed child-2 test's `Covers:`
   names task `T1` (child 1), then it resolves against the whole plan.
@@ -417,8 +417,8 @@ child cannot exhaust the budget of the next, and a halt tells me where to look.
 - Given a two-child baseline with child 2 active, when child 2's `build` is selected a seventh time,
   then the run halts needs-human, naming `build` and child 2.
 - Given a two-child baseline, when any code path tries to write `growth`, `pendingRepair` or
-  `effectiveGrowthCap` into a child ledger, then the write is refused, and plan growth stays recorded
-  only in the flat ledger.
+  `effectiveGrowthCap` into a child ledger, then the write is refused, and plan growth is never recorded in a child ledger: it stays in
+  the flat ledger, which for a routed round is the cache of the route record's receipt, the authority.
 - Given a two-child baseline with child 2 active, when `ai-conductor daemon status` shows the kickback
   budget, then it reports child 2's counts, labeled with the child.
 
@@ -451,15 +451,15 @@ feature.
 
 #### Negative Paths
 - Given a two-child baseline with child 1 closed, when `ai-conductor rewind --to build --child 1` runs,
-  then it is refused, naming child 1 as closed and #2944, and no state changes.
-- Given a two-child baseline with child 2 active, when `ai-conductor task start T1` runs without `--child`,
-  then it is refused, naming `T1` as owned by child 1.
+  then it is refused, naming child 1 as closed and #3203, and no state changes.
+- Given a two-child baseline with child 2 active, when `ai-conductor task start T1` runs without `--child`
+  with no open routing round granting the execution projection, then it is refused, naming `T1` as owned by child 1.
 - Given a feature with no children, when each of the three commands runs without `--child`, then its
   output and exit status are exactly today's.
 
 ### Done When
 - [ ] The three CLIs default `--child` to the active child, and `raise`/`reset` accept `--child`.
-- [ ] `rewind` for a closed child is refused, naming #2944.
+- [ ] `rewind` for a closed child is refused, naming #3203.
 
 ## Story 13: Halt records stay on the active child and no child branch is pushed
 
@@ -502,12 +502,12 @@ inside a later child.
 
 #### Happy Path
 - Given a three-child baseline with child 2 active and the default branch advanced, when a halt is
-  cleared and the re-kick runs, then a `base-refresh` restack moves child 1 onto the new default tip
+  cleared and the re-kick runs with no routing round open, then a `base-refresh` restack moves child 1 onto the new default tip
   and restacks child 2, no `rebase_skipped_for_stack` event is emitted, and the run resumes at child
   2's next step.
 - Given a three-child baseline with child 2 active, when the default branch advances and the
-  base-advance sweep re-kicks the feature, then the whole stack is refreshed the same way.
-- Given a two-child baseline with the leaf active, when a re-kick runs, then a `base-refresh` restack
+  base-advance sweep re-kicks the feature with no routing round open, then the whole stack is refreshed the same way.
+- Given a two-child baseline with the leaf active, when a re-kick runs with no routing round open, then a `base-refresh` restack
   moves child 1 and the leaf.
 
 #### Negative Paths

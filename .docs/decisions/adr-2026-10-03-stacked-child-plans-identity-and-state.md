@@ -219,6 +219,12 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 
 > **Amended 2026-10-07 by #2942:** The region stores also hold acceptance evidence (RED marker, run contract, disposition record), and a child gate's convergence-credit receipt is written in that child's ledger atomically with the credit; growth, `pendingRepair` and `effectiveGrowthCap` stay flat and child ledgers refuse them (`adr-2026-10-07-per-child-build-region` decisions 4 and 10).
 
+> **Amended 2026-10-12 by #2944:** Routing authority for whole-feature repairs is ref-backed under
+> `refs/conductor/<slug>/`, so it survives worktree recreation. That covers the route records with
+> their round receipts, the repairing marker, the re-validation queue and `red/c<k>`. The flat
+> ledger becomes a reconciled cache of the receipts (`adr-2026-10-12-routed-whole-feature-repair`
+> decisions 6, 9 and 10).
+
 9. **Region caps apply per child.**
    - Because region gate entries, including `build_review`'s cumulative count, live in the child's
      ledger, every region cap applies per child. That is the operator's decision log ("caps are per
@@ -242,6 +248,11 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 
 > **Amended 2026-10-07 by #2942:** The active child is derived independently of the checkout: positions from the sealed envelope, closure from monotone compare-and-swap refs `refs/conductor/<slug>/closed/c<k>`, active = lowest unclosed position; ancestry is only a divergence detector. Ancestry-based or checkout-based derivation was falsified by adversarial review (child 1 closed on creation; closed children reopened by rebase). The engine switches the worktree to the active child before any region dispatch (`adr-2026-10-07-per-child-build-region` decisions 1–2).
 
+> **Amended 2026-10-12 by #2944:** The cursor reports `routedRepair` and `revalidating` fields on
+> the existing kinds. One execution-child resolver (the routed host, else the re-validating child,
+> else the cursor child) is what region consumers read (`adr-2026-10-12-routed-whole-feature-repair`
+> decision 8).
+
 11. **The base-override contract is implemented by #2942.**
     - One producer, `resolveChildBase(worktree, child)`, returns one of three results:
       - nothing, for no child or the first declared position, so today's per-site ladder runs;
@@ -260,6 +271,10 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
     - `BuildReviewInputs.baseKind` gains `child-parent`, which suppresses the degraded-fetch warning.
 
 > **Amended 2026-10-07 by #2942:** `resolveChildBase` gains a typed `parent-not-ancestor` result (and translates the leaf's parent tip through the persisted rewrite map after its FINISH rebase), and acceptance spec attribution is a seventh consuming site that refuses disposition-only when the parent is unresolvable (`adr-2026-10-07-per-child-build-region` decision 8). The follow-up "write halt records to the leaf" is re-decided: halt records commit to the active child's branch with a `Child:` field and reach the leaf by ancestry; no child branch is pushed (decision 11).
+
+> **Amended 2026-10-12 by #2944:** Two bases are added. `routed-repair` is the host's closure at
+> region entry, pinned in the route record. A re-validation pass grades the replayed contribution
+> against its new parent (`adr-2026-10-12-routed-whole-feature-repair` decision 12).
 
 12. **Events carry an optional `child`.**
     - `ConductorEvent` becomes `(existing union) & { child?: ChildId }`.
@@ -289,6 +304,10 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > **Amended 2026-10-07 by #2942:** Without `--child`, `rewind`, `task` and `kickback-budget` now default to the active child of a feature with children; byte-identity without the flag holds for features with no children. `kickback-budget raise|reset --child` are offered. `rewind --child k` for a closed child is refused naming #2943, and the downstream cascade over children above k applies only to children that are not closed (`adr-2026-10-07-per-child-build-region` decisions 10–11).
 
 > **Amended 2026-10-10 by #2943:** `kickback-budget raise|reset --gate restack --child <k>` is the one exception: it validates `<k>` against `refs/conductor/<slug>/cascades`, not `.pipeline/children/<k>/`, so cascade-cap recovery survives worktree recreation (`adr-2026-10-10-stacked-restack-journaled-replay` decision 10).
+
+> **Amended 2026-10-12 by #2944:** The recovery CLIs default `--child` to the execution child. The
+> exception is whole-feature gate budgets, which stay flat
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 8 and 10).
 
 14. **The N=1 contract is structural and proven by golden tests.**
     - With no child there is no `children/` directory, no new key, and no event field.

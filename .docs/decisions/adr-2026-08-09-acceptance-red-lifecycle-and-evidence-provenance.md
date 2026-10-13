@@ -88,6 +88,10 @@ answers "what is true about this run", and every occurrence is emitted separatel
 
 > **Amended 2026-10-07 by #2942:** In a stacked feature the RED marker and run contract are per child, under `.pipeline/children/<k>/`, and cover only that child's owned stories; with no child they stay at today's root path (`adr-2026-10-07-per-child-build-region` decision 5).
 
+> **Amended 2026-10-12 by #2944:** `closeChild` records the RED proof's digest under
+> `refs/conductor/<slug>/red/c<k>`, so a closed child's proof survives worktree recreation
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
 **3. Report state, and the exact unmet condition, on the live surface.** The per-step line in
 `daemon-dashboard.ts` distinguishes `working` — the heartbeat belongs to the current dispatch
 (`heartbeatBelongsToDispatch`) and is fresh (`classifyHeartbeatAge`) — from `waiting`, where the
@@ -129,6 +133,10 @@ The two rejected alternatives are recorded because both are locally cheaper:
   recover this case.
 
 > **Amended 2026-10-07 by #2942:** The self-heal re-run writes the fresh marker at the active child's path when a child exists (`adr-2026-10-07-per-child-build-region` decision 5).
+
+> **Amended 2026-10-12 by #2944:** A routed or re-validation pass on a closed stacked child verifies
+> green against its existing specs. A missing RED marker there is not re-run as RED, because RED was
+> proven before closure (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
 
 ## Consequences
 

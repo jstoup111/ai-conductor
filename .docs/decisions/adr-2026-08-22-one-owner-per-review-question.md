@@ -78,6 +78,12 @@ does not authorize.**
 > may direct BUILD to a mechanism the approved plan (or the governing approved clause a
 > remediation task cites) does not authorize. The ownership map and all other decisions stand.
 
+> **Amended 2026-10-12 by #2944:** The ownership map gains one routing question for stacked
+> features: which child hosts admitted repair work. Task-bound placement is mechanical. The residue
+> is answered by an engine-owned routing call that places already-admitted work and never re-grades
+> findings or supplies operator decisions. The admitted appender sources are unchanged
+> (`adr-2026-10-12-routed-whole-feature-repair` decisions 2 and 3).
+
 ## Consequences
 
 ### Positive
