@@ -201,7 +201,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const hosts = parseHosts(value.hosts);
   const outbox = parseOutbox(value.outbox);
   const currentHostIndex = value.currentHostIndex;
-  if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || !Number.isInteger(currentHostIndex)
+  if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !isRecord(value.receipt) || !outbox) return undefined;
   const items = value.items.map(parseRoutedItem);
   if (items.some((item) => item === undefined)) return undefined;
@@ -230,7 +230,7 @@ export function parseRepairMarker(blob: string): RepairMarker | undefined {
 /** Parses the durable revalidation queue and its at-least-once event outbox. */
 export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRecord | undefined {
   const value = parseBlob(blob);
-  if (!value || !Number.isInteger(value.generation) || value.generation < 0 || !Array.isArray(value.entries)) return undefined;
+  if (!value || typeof value.generation !== 'number' || !Number.isInteger(value.generation) || value.generation < 0 || !Array.isArray(value.entries)) return undefined;
   const entries = value.entries.map((entry): RevalidationQueueEntry | undefined => {
     if (!isRecord(entry)) return undefined;
     const child = parseChild(entry.child);
