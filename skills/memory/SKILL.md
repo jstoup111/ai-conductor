@@ -2,7 +2,7 @@
 name: memory
 disable-model-invocation: true
 description: "Use when the operator requests project recall, when the harness dispatches its memory step, or when an active harness workflow requires a memory checkpoint. Recall-before-act protocol with categorized persistence and staleness detection."
-enforcement: gating
+enforcement: advisory
 phase: understand
 standalone: true
 requires: []

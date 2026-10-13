@@ -361,14 +361,10 @@ engine code; `test_suite` is a deterministic aggregate verifier.
 Two steps dispatch the `conduct` skill with an argument rather than a skill of their own name:
 `worktree` runs `/conduct worktree` and `complexity` runs `/conduct complexity`.
 
-> **Known limitation.** Two step definitions carry a `skillName` naming a skill directory that does not
-> exist: `worktree` declares `skillName: 'worktree'` and `attribution_verify` declares
-> `skillName: 'attribution-verify'`. Neither `skills/worktree/` nor `skills/attribution-verify/` is on
-> disk. Nothing breaks, because dispatch uses the invocation map and the model table uses its own
-> skill-to-step map, but the field misleads anyone reading the step definition. The repository's
-> integrity suite validates `/skill-name` references inside SKILL.md files, not `skillName` fields in
-> TypeScript, so these are unguarded. Tracked in
-> [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
+Every `skillName` on a built-in step must name an existing `skills/<name>/` directory, and that
+skill's `enforcement:` frontmatter must match the strictest step mapped to it.
+`src/conductor/test/skill-frontmatter-engine-drift.test.ts` fails on either drift. Neither `worktree`
+nor `attribution_verify` carries a `skillName`.
 
 ## Related pages
 

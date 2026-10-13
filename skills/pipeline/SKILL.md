@@ -707,7 +707,7 @@ Persist decisions, patterns, gotchas, or context learned during the batch. Updat
 
 ### Progress Log
 
-Append to `.pipeline/progress.log` at every batch boundary — a chronological narrative for cross-session continuity. The `session-start-context.sh` hook reads the last 30 lines at session start.
+Append to `.pipeline/progress.log` at every batch boundary — a chronological narrative for cross-session continuity.
 
 ```
 ## Batch 1 — 2026-03-28 14:30
