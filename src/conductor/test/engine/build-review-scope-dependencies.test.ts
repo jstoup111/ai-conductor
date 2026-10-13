@@ -22,11 +22,11 @@ describe('build-review local dependency scope', () => {
     ]);
     const dependencies = await discoverBuildReviewScopeDependencies({
       reader: { read: async (side, path) => {
-        if (path.endsWith('/')) throw new Error('Directory hints are not source blobs');
+        if (path.endsWith('/') || path.includes('*')) throw new Error('Directory and glob hints are not source blobs');
         return (side === 'base' ? base : head).get(path);
       } },
       changedTestPaths: [],
-      planText: '### Task 7: dependencies\n**Files:**\n- test/orders.test.ts\n- test/fixtures/\n',
+      planText: '### Task 7: dependencies\n**Files:**\n- test/orders.test.ts\n- test/fixtures/\n- `test/fixtures/*-events.golden`\n',
     });
     const result = analyzeBuildReviewTestScope({
       base: {
