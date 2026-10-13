@@ -44,6 +44,7 @@ export {
 import { discoverBuildReviewScopeDependencies } from './build-review-scope-dependencies.js';
 import {
   BuildReviewScopeSource,
+  isPlanFileHint,
   safeRepoRelativePath,
   type BuildReviewPathChange,
 } from './build-review-scope-source.js';
@@ -660,10 +661,10 @@ async function snapshotTypedTestScope(
   const changeByPath = new Map(changes.filter((change) => change.kind !== 'D').map((change) => [change.path, change]));
   const conventionalPaths = new Set([
     ...changedPaths,
-    // Directory hints describe task scope, not a blob to parse. Changed files
-    // beneath them remain included independently through the Git inventory.
+    // Directory and glob hints describe task scope, not a blob to parse.
+    // Changed files beneath them remain included through the Git inventory.
     ...[...parsePlanTaskPaths(planBody).values()].flatMap((taskPaths) =>
-      [...taskPaths].filter((path) => !path.endsWith('/'))),
+      [...taskPaths].filter(isPlanFileHint)),
   ].filter(isTestPath));
   const admittedMarkerPaths = new Set<string>();
   for (const path of changedPaths) {
