@@ -1,6 +1,5 @@
 import type { ActiveChildResolution } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
-import type { ChildId } from '../child-context.js';
 import type { ActiveChildLifecycleTarget } from '../child-lifecycle.js';
 import { assertNever, type RoundId } from './route-types.js';
 

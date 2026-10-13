@@ -500,7 +500,7 @@ export function startDaemonEventPersistence(
   let loggedMemorySampleFailure = false;
   const handler: EventHandler = (event) => {
     if (isForwardedFromFeature(event)) return;
-    return persister.persistDurably(event).catch((error: unknown) => {
+    return persister.persistDurably(event).then(() => undefined).catch((error: unknown) => {
       if (event.type === 'daemon_memory_sample' && loggedMemorySampleFailure) return;
       if (event.type === 'daemon_memory_sample') loggedMemorySampleFailure = true;
       log(`[daemon] event persistence failed: ${error instanceof Error ? error.message : String(error)}`);

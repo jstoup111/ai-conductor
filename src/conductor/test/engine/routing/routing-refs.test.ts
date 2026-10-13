@@ -1,7 +1,7 @@
 // Covers: task:4
 import { describe, expect, it } from 'vitest';
 
-import { MAX_CHILD_ID } from '../../../src/engine/child-context.js';
+import { MAX_CHILD_ID, parseChildId } from '../../../src/engine/child-context.js';
 import {
   MAX_REJECTED_PINS_PER_ROUND,
   redRefFor,
@@ -22,7 +22,7 @@ describe('routing ref names', () => {
     expect(rejectedPinRefFor('demo', round, 1)).toBe('refs/conductor/demo/rejected/r1/1');
     expect(repairMarkerRefFor('demo')).toBe('refs/conductor/demo/repairing');
     expect(revalidationQueueRefFor('demo')).toBe('refs/conductor/demo/revalidate');
-    expect(redRefFor('demo', MAX_CHILD_ID)).toBe(`refs/conductor/demo/red/c${MAX_CHILD_ID}`);
+    expect(redRefFor('demo', parseChildId(MAX_CHILD_ID)!)).toBe(`refs/conductor/demo/red/c${MAX_CHILD_ID}`);
   });
 
   it('enumerates only finite, explicit routing teardown names', () => {

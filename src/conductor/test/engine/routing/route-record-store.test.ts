@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import {
   readRepairMarker,
@@ -18,14 +19,16 @@ import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/e
 
 const roundId = parseRoundId('r1');
 if (!roundId) throw new Error('r1 must be a valid route round');
+const c1 = parseChildId(1);
+if (!c1) throw new Error('1 must be a valid child id');
 
 const routeRecord: RouteRecord = {
   roundId,
   kind: 'audit',
   phase: 'open',
-  items: [{ findingId: 'finding-1', kind: 'audit', owner: 1, host: 1, reason: 'task ownership', fallback: [] }],
-  allocation: { 1: { remTaskIds: ['rem-4'], blockBodies: ['### Task rem-4\n'] } },
-  hosts: { 1: 'repairing' },
+  items: [{ findingId: 'finding-1', kind: 'audit', owner: c1, host: c1, reason: 'task ownership', fallback: [] }],
+  allocation: { [c1]: { remTaskIds: ['rem-4'], blockBodies: ['### Task rem-4\n'] } },
+  hosts: { [c1]: 'repairing' },
   currentHostIndex: 0,
   receipt: {},
   outbox: [],
