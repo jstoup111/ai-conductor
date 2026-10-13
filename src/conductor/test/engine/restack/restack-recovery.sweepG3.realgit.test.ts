@@ -566,7 +566,7 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
   });
 
   // Covers: task:24
-  it('removes leftover applied and halt-cleared aborted journals silently, keeps a committed outstanding halt’s journal, and ignores .pipeline throughout', async () => {
+  it('removes no journal or a leftover applied journal silently, ignoring .pipeline throughout', async () => {
     // No journal: nothing to report.
     const empty = await stackFixture();
     await expect(recoverPersisted(empty.repo)).resolves.toEqual({ kind: 'none' });
@@ -592,46 +592,51 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
     await expect(runRestack({ worktree: applied.repo, slug: 'demo', cause: 'base-refresh', newDefault: applied.advanced, git: makeGitRunner(applied.repo) }))
       .resolves.not.toMatchObject({ kind: 'refused' });
 
-    // Aborted journals: the committed halt record at the active branch tip decides, never .pipeline.
-    for (const record of ['halted', 'superseded'] as const) {
-      for (const pipeline of ['present', 'deleted'] as const) {
-        const subject = await stackFixture();
-        await crashRestackAt(subject, (journal) => journal.state === 'ready');
-        const read = await readRestackJournal(subject.repo, 'demo');
-        if (read.kind !== 'journal') throw new Error('expected journal');
-        const aborted: RestackJournal = { ...read.journal, owner: DEAD_OWNER, state: 'aborted' };
-        const abortedBlob = await writeRestackJournalBlob(subject.repo, aborted);
-        await subject.git(['update-ref', journalRefFor('demo'), abortedBlob, read.blob]);
-        await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
-        await writeFile(join(subject.repo, '.docs', 'halted', 'demo.md'), `# Halt: demo\n\nStatus: ${record}\n`);
-        await subject.git(['add', '.docs/halted/demo.md']);
-        await subject.git(['commit', '-qm', 'halt record: demo']);
-        await mkdir(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'), { recursive: true });
-        if (pipeline === 'present') {
-          // A contradictory live marker: recovery must not consult it.
-          if (record === 'superseded') await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'live halt\n');
-        } else {
-          await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
-        }
-        const staging = await stagingRefs(subject.git);
-        expect(staging).not.toBe('');
-        const refs = await stackValues(subject.git);
+  });
 
-        const result = await recoverPersisted(subject.repo);
+  // The committed halt record at the active branch tip decides an aborted
+  // journal's recovery, never the presence or absence of .pipeline.
+  it.each([
+    ['halted', 'present'],
+    ['halted', 'deleted'],
+    ['superseded', 'present'],
+    ['superseded', 'deleted'],
+  ] as const)('keeps or cleans an aborted journal from a %s halt with a %s pipeline', async (record, pipeline) => {
+    const subject = await stackFixture();
+    await crashRestackAt(subject, (journal) => journal.state === 'ready');
+    const read = await readRestackJournal(subject.repo, 'demo');
+    if (read.kind !== 'journal') throw new Error('expected journal');
+    const aborted: RestackJournal = { ...read.journal, owner: DEAD_OWNER, state: 'aborted' };
+    const abortedBlob = await writeRestackJournalBlob(subject.repo, aborted);
+    await subject.git(['update-ref', journalRefFor('demo'), abortedBlob, read.blob]);
+    await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'halted', 'demo.md'), `# Halt: demo\n\nStatus: ${record}\n`);
+    await subject.git(['add', '.docs/halted/demo.md']);
+    await subject.git(['commit', '-qm', 'halt record: demo']);
+    await mkdir(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'), { recursive: true });
+    if (pipeline === 'present') {
+      // A contradictory live marker: recovery must not consult it.
+      if (record === 'superseded') await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'live halt\n');
+    } else {
+      await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
+    }
+    const staging = await stagingRefs(subject.git);
+    expect(staging).not.toBe('');
+    const refs = await stackValues(subject.git);
 
-        expect(await stackValues(subject.git)).toEqual(refs);
-        expect(await restackedEvents(subject.repo)).toEqual([]);
-        if (record === 'halted') {
-          expect(result).toEqual({ kind: 'none' });
-          expect(await readJournal(subject.repo)).toMatchObject({ state: 'aborted' });
-          expect(await stagingRefs(subject.git)).toBe(staging);
-        } else {
-          expect(result).toEqual({ kind: 'cleaned' });
-          expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
-          expect(await stagingRefs(subject.git)).toBe('');
-          await expect(readFile(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'))).rejects.toThrow();
-        }
-      }
+    const result = await recoverPersisted(subject.repo);
+
+    expect(await stackValues(subject.git)).toEqual(refs);
+    expect(await restackedEvents(subject.repo)).toEqual([]);
+    if (record === 'halted') {
+      expect(result).toEqual({ kind: 'none' });
+      expect(await readJournal(subject.repo)).toMatchObject({ state: 'aborted' });
+      expect(await stagingRefs(subject.git)).toBe(staging);
+    } else {
+      expect(result).toEqual({ kind: 'cleaned' });
+      expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+      expect(await stagingRefs(subject.git)).toBe('');
+      await expect(readFile(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'))).rejects.toThrow();
     }
   });
 
