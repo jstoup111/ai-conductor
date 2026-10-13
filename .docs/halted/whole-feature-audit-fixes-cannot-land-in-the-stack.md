@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-13T23:26:49.189Z
 Slug: whole-feature-audit-fixes-cannot-land-in-the-stack
 Class: needs-human
 Halting step: unknown
