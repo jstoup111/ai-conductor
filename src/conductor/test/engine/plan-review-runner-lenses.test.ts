@@ -12,7 +12,7 @@ describe('plan-review runner lens boundary', () => {
     const root = await mkdtemp(join(tmpdir(), 'plan-review-lenses-')); roots.push(root); await mkdir(join(root, '.docs/plans'), { recursive: true }); await mkdir(join(root, '.docs/stories'), { recursive: true });
     await writeFile(join(root, '.docs/plans/idea.md'), '# Plan\n\n### Task 1: Broken\n**Steps:**\n1. Add `value`.\n\n**Dependencies:** Task 99\n'); await writeFile(join(root, '.docs/stories/idea.md'), '# Stories\n');
     let dispatches = 0;
-    await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any, providerExecutor: async () => { dispatches++; return { success: true, finalStructuredResult: { findings: [] } }; } })).rejects.toThrow(/Task 1.*Dependencies/i);
+    await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any, providerExecutor: (async () => { dispatches++; return { success: true, finalStructuredResult: { findings: [] } }; }) as any })).rejects.toThrow(/Task 1.*Dependencies/i);
     expect(dispatches).toBe(0);
   });
 });

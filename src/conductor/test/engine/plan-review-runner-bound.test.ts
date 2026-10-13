@@ -15,7 +15,7 @@ async function seed() {
   await writeFile(join(root, '.docs/stories/idea.md'), '# Stories\n\n## Story 1: First\nInitial.\n', 'utf8'); await writeFile(join(root, 'source.ts'), 'export const thing = true;\n');
   return root;
 }
-const executor = (prompts: string[]) => async (input: any) => { prompts.push(input.options.prompt); return { success: true, finalStructuredResult: { findings: [] } }; };
+const executor = (prompts: string[]) => (async (input: any) => { prompts.push(input.options.prompt); return { success: true, finalStructuredResult: { findings: [] } }; }) as any;
 
 describe('runPlanReview bounded rounds', () => {
   it('rechecks changed review inputs in round two, then refuses a third dispatch', async () => {

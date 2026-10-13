@@ -36,7 +36,7 @@ describe('runPlanReview', () => {
     const artifact = await runPlanReview({
       worktreePath: root, planStem: 'idea', config: { llm_provider: ['claude', 'pi'], steps: { plan_review: { llm_provider: 'pi' } } } as any,
       configuredProviders: ['claude', 'pi'], env: { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }, runtimes: {} as any, sessions: {} as any,
-      providerExecutor: async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; },
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
       emit: async (event) => { events.push(event); },
     });
     expect(calls).toHaveLength(1);
@@ -58,7 +58,7 @@ describe('runPlanReview', () => {
     const artifact = await runPlanReview({
       worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
       runtimes: {} as any, sessions: {} as any,
-      providerExecutor: async () => ({ success: true, finalStructuredResult: { findings: [] } }),
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
     });
 
     expect(artifact.reviewedDigest.adrDecisionDigests).toHaveProperty('adr-uncited#D1');
@@ -67,7 +67,7 @@ describe('runPlanReview', () => {
   it('falls through a failed candidate while preserving round one and recording same-provider independence', async () => {
     const root = await fixture(); const calls: any[] = [];
     const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: ['codex', 'claude'] } as any, configuredProviders: ['codex', 'claude'], env: { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }, runtimes: {} as any, sessions: {} as any,
-      providerExecutor: async (input: any) => { calls.push(input); return calls.length === 1 ? { success: false } : { success: true, finalStructuredResult: { findings: [] } }; },
+      providerExecutor: (async (input: any) => { calls.push(input); return calls.length === 1 ? { success: false } : { success: true, finalStructuredResult: { findings: [] } }; }) as any,
     });
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex', 'claude']);
     expect(artifact).toMatchObject({ round: 1, reviewerProvider: 'claude', independence: 'same-provider' });
@@ -96,7 +96,7 @@ describe('runPlanReview', () => {
 `, 'utf8');
 
     await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
-      providerExecutor: async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; },
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
     });
 
     expect(calls[0].options.prompt).toContain('"lens":"reachability"');

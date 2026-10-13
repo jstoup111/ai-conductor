@@ -20,6 +20,7 @@ import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 
@@ -69,16 +70,26 @@ async function writeDocsArtifacts(dir: string, idea: string): Promise<void> {
   await mkdir(plansDir, { recursive: true });
 
   await writeFile(join(specsDir, `${slug}.md`), `# PRD: ${idea}\n\nApproved spec content.\n`, 'utf-8');
-  await writeFile(
-    join(storiesDir, `${slug}.md`),
-    `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1 — main\n\n### Acceptance Criteria\n#### Happy Path\n- Given x, when y, then z.\n\n#### Negative Paths\n- Given invalid input, when land runs, then it refuses.\n`,
-    'utf-8',
-  );
-  await writeFile(
-    join(plansDir, `${slug}.md`),
-    `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n**Done when:**\n- Given x, when y, then z.\n- Given invalid input, when land runs, then it refuses.\n- The scoped tests pass.\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n\n## Coverage Check\n\n| Criterion | Task | Done when quote | Disposition |\n|---|---|---|---|\n| Story 1 happy: Given x, when y, then z. | 1 | Given x, when y, then z. | diff-local |\n| Story 1 negative: Given invalid input, when land runs, then it refuses. | 1 | Given invalid input, when land runs, then it refuses. | diff-local |\n`,
-    'utf-8',
-  );
+  const storiesText = `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1 — main\n\n### Acceptance Criteria\n#### Happy Path\n- Given x, when y, then z.\n\n#### Negative Paths\n- Given invalid input, when land runs, then it refuses.\n`;
+  const planText = `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n**Done when:**\n- Given x, when y, then z.\n- Given invalid input, when land runs, then it refuses.\n- The scoped tests pass.\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n\n## Coverage Check\n\n| Criterion | Task | Done when quote | Disposition |\n|---|---|---|---|\n| Story 1 happy: Given x, when y, then z. | 1 | Given x, when y, then z. | diff-local |\n| Story 1 negative: Given invalid input, when land runs, then it refuses. | 1 | Given invalid input, when land runs, then it refuses. | diff-local |\n`;
+  await writeFile(join(storiesDir, `${slug}.md`), storiesText, 'utf-8');
+  await writeFile(join(plansDir, `${slug}.md`), planText, 'utf-8');
+  await mkdir(join(dir, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(join(dir, '.docs', 'plan-review', `${slug}.md`), renderPlanReviewArtifact({
+    round: 1,
+    authoringHost: 'claude',
+    reviewerProvider: 'codex',
+    independence: 'cross-provider',
+    findings: [],
+    dispositions: [],
+    reviewedDigest: computeReviewedDigest({
+      planText,
+      storiesText,
+      adrTexts: {},
+      artifactTexts: { [`.docs/coherence/${slug}.md`]: '' },
+      changedPaths: [],
+    }),
+  }), 'utf-8');
 }
 
 /** Create the per-idea worktree and write real .docs into it — the pre-`land` state. */
