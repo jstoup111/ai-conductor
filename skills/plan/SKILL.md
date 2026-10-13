@@ -508,6 +508,10 @@ After generating tasks, check the total count:
 | 21-29 | Warning — surface to user: "This plan has N tasks (~X hours). Consider splitting into multiple features." |
 | 30+ | Hard stop — refused when the spec is landed unless the plan carries an authorized scope exception. Break into separately plannable features and run the stories and plan steps for each. |
 
+Reaching this table with 30+ tasks usually means the split was missed upstream. `/architecture-review`
+§3a owns the split decision before stories are written, and its rules for ordering, flagging, and
+reachability apply here too.
+
 The only exception for a plan with 30 or more tasks is exactly one
 `**Scope-exception:** <non-empty rationale>` declaration on one physical line in the plan. A
 missing, empty, or duplicate declaration is rejected when the spec is landed; a valid rationale is

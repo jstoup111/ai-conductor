@@ -148,6 +148,32 @@ For each story in the plan, assess:
 | **High** | 4+ models, external APIs, complex state machines | Consider splitting |
 | **Spike** | Unknown tech, unclear requirements, novel patterns | Time-box spike before planning |
 
+### 3a. Split a Large Design Before Stories
+
+Estimate the plan's task count here, from the approved design, before `/stories` runs. When the
+estimate approaches the plan's scope ceiling (20+ tasks; `/plan` §6 refuses 30+ at land without a
+scope exception), propose splitting the design into sequential specs and get the operator's
+decision now. Splitting after stories and plan exist forces a full restructuring pass: stories,
+plan, coverage, coherence mapping, and waivers all have to be re-cut.
+
+A proposed split states:
+
+- **The specs, in order.** The first ships the foundation; each later spec is blocked by the one
+  before it, and every spec inherits the original intake's blocking edges.
+- **A default-off flag** that keeps the partially delivered behavior dark. Only the last spec turns
+  it on, so no intermediate merge changes production behavior.
+- **Reachability per spec.** Each spec ships only primitives that have a production caller inside
+  that same spec; otherwise the as-built review (§12) blocks them as unreachable. Move a
+  constructor, writer, or helper to the spec that first calls it.
+- **Where deferred outcomes live.** Outcomes delivered by a later spec are waived in the coherence
+  mapping, each naming the later spec as its home. Leave the counterpart empty; do not invent a
+  placeholder id such as `none`. The draft stories and plan slices for later specs travel with
+  their follow-up intakes.
+
+The ADR records the whole design once, with the split and the flag among its decisions; each spec
+then plans only its own slice. If the operator declines the split, record that decision. A plan
+above the ceiling then needs a `**Scope-exception:**` with that decision as its rationale.
+
 ### 4. Architectural Alignment
 
 Check stories and plan against documented architecture:
