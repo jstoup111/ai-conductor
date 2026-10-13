@@ -10,9 +10,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { parseTrack } from '../../../src/engine/artifacts.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 
@@ -54,7 +55,8 @@ async function seedWorktree(opts: { spec?: boolean; track?: string }): Promise<s
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   await writeFile(join(dir, '.docs/stories', `${STEM}.md`), ACCEPTED_STORIES);
-  await writeFile(join(dir, '.docs/plans', `${STEM}.md`), PLAN.replace('stories/t.md', `stories/${STEM}.md`));
+  const planText = PLAN.replace('stories/t.md', `stories/${STEM}.md`);
+  await writeFile(join(dir, '.docs/plans', `${STEM}.md`), planText);
   if (opts.spec) {
     await mkdir(join(dir, '.docs/specs'), { recursive: true });
     await writeFile(join(dir, '.docs/specs', `${STEM}.md`), '# PRD: t\n\nApproved.\n');
@@ -63,6 +65,26 @@ async function seedWorktree(opts: { spec?: boolean; track?: string }): Promise<s
     await mkdir(join(dir, '.docs/track'), { recursive: true });
     await writeFile(join(dir, '.docs/track', `${STEM}.md`), `# Track\n\nTrack: ${opts.track}\n`);
   }
+  await mkdir(join(dir, '.docs/plan-review'), { recursive: true });
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText: ACCEPTED_STORIES,
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${STEM}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(dir, repo)],
+  });
+  await writeFile(
+    join(dir, '.docs/plan-review', `${STEM}.md`),
+    renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest,
+    }),
+  );
   return dir;
 }
 
