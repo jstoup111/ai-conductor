@@ -95,13 +95,13 @@ policy across both catalogs and both host metadata formats.
 | Skill | `enforcement` | `phase` | `model` | Engine step | Gate role |
 | --- | --- | --- | --- | --- | --- |
 | `bootstrap` | advisory | understand | — | `bootstrap` (out-of-band) | Advisory |
-| `memory` | gating | understand | — | `memory` (1) | Advisory |
-| `assess` | gating | understand | sonnet | `assess` (out-of-band) | Advisory |
+| `memory` | advisory | understand | — | `memory` (1) | Advisory |
+| `assess` | advisory | understand | sonnet | `assess` (out-of-band) | Advisory |
 | `conduct` | gating | all | — | `worktree` (0), `complexity` (3) | Blocking via `worktree` (structural) |
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
 | `code-removal` | advisory | all | — | none | Advisory |
 | `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only diagnosis; recovery only on per-action operator approval |
-| `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
+| `architecture-diagram` | advisory | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
 | `architecture-review` | gating | decide | — | `architecture_review` (6), `architecture_review_as_built` (18) | Blocking |
@@ -119,7 +119,7 @@ policy across both catalogs and both host metadata formats.
 | `debugging` | gating | build | opus | none — on demand | Neither |
 | `manual-test` | gating | ship | — | `manual_test` (16) | Blocking |
 | `prd-audit` | gating | ship | opus | `prd_audit` (17) | Blocking |
-| `remediate` | gating | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
+| `remediate` | advisory | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
 | `rebase` | advisory | ship | — | `rebase` (19) — on conflict only | Blocking via the structural step |
 | `finish` | gating | ship | — | `finish` (20) | Blocking |
 | `pr` | advisory | ship | — | none — operator-invoked; `/finish` inlines it rather than calling it | Neither |
@@ -195,7 +195,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 > Use only within an active harness lifecycle when its architecture-diagram step is current. Generates and maintains C4 Mermaid diagrams; do not invoke for ordinary code changes or general architecture questions.
 
-- **Frontmatter** — `enforcement: gating`, `phase: all`, `standalone: true`, `requires: []`, `model: sonnet`.
+- **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `requires: []`, `model: sonnet`.
 - **Engine step** — `architecture_diagram` (index 5, DECIDE, skipped at tier S). Engine enforcement is
   `advisory`.
 - **Inputs** — codebase structure (Procfile, `docker-compose.yml`, `database.yml`, routes, model
@@ -229,7 +229,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 > Use when the operator requests project recall, when the harness dispatches its memory step, or when an active harness workflow requires a memory checkpoint. Recall-before-act protocol with categorized persistence and staleness detection.
 
-- **Frontmatter** — `enforcement: gating`, `phase: understand`, `standalone: true`, `requires: []`, no model pin.
+- **Frontmatter** — `enforcement: advisory`, `phase: understand`, `standalone: true`, `requires: []`, no model pin.
 - **Engine step** — `memory` (index 1, UNDERSTAND). Engine enforcement is `advisory`.
 - **Inputs** — `.memory/index.md`; entries under `.memory/decisions/`, `patterns/`, `gotchas/`, and
   `context/`, read in full; referenced file paths, checked for drift.
@@ -242,7 +242,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 > Use for codebase health assessment. Dispatches 9 specialist agents + CTO orchestrator to evaluate security, data integrity, dependencies, architecture, duplication, testing, infrastructure, observability, and developer experience.
 
-- **Frontmatter** — `enforcement: gating`, `phase: understand`, `standalone: true`,
+- **Frontmatter** — `enforcement: advisory`, `phase: understand`, `standalone: true`,
   `requires: [verify-claims]`, `model: sonnet`.
 - **Engine step** — `assess` (out-of-band, UNDERSTAND prelude). Auto-skipped with a `mode_skip` event
   when `bootstrap_mode` is `new`.
@@ -662,10 +662,10 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 ### manual-test
 
-> Use after /finish to validate stories via curl (API) or browser (full-stack). Bugs found loop back through /tdd.
+> Use to validate stories via curl (API) or browser (full-stack) after the test suite and before /finish. Browser capability gaps warn; observed bugs loop back through /tdd.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: false`,
-  `requires: [finish, verify-claims]`, no model pin.
+  `requires: [verify-claims]`, no model pin.
 - **Engine step** — `manual_test` (index 16, SHIP, prerequisite `test_suite`, skipped at tier S).
   Checkpoint and loop gate, and the only step that opts into `configDisableAllowed`.
 - **Inputs** — story acceptance criteria; the running application; the absolute worktree `.pipeline`
@@ -720,7 +720,7 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 > Use when a SHIP gate blocks — a prd-audit FIXABLE finding, an all-`REMEDIABLE` as-built architecture-review BLOCKED verdict, or finish verification — or on a build stall. Guides remediation toward the owning step and HALTs only for gaps that need a human.
 
-- **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
+- **Frontmatter** — `enforcement: advisory`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `remediate` (out-of-band, SHIP, prerequisite `prd_audit`). Engine enforcement is
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
@@ -958,32 +958,18 @@ The frontmatter is not always the truth. Where a skill's declared `enforcement` 
 engine step definition, **the engine wins** — `isGatingStep` and `canSkipStep` read the step
 definition, never the SKILL.md.
 
-> **Known limitation.** Five skills' `enforcement:` frontmatter disagrees with the engine's step
-> definition. A reader who trusts the frontmatter will predict the wrong skippability.
->
-> | Skill | SKILL.md `enforcement` | Engine step enforcement |
-> | --- | --- | --- |
-> | `memory` | `gating` | `advisory` |
-> | `assess` | `gating` | `advisory` |
-> | `architecture-diagram` | `gating` | `advisory` |
-> | `remediate` | `gating` | `advisory` |
-> | `rebase` | `advisory` | `structural` |
->
-> Tracked in [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
+`src/conductor/test/skill-frontmatter-engine-drift.test.ts` fails when a step-mapped skill's
+`enforcement:` differs from its strictest mapped step, or when it `requires:` a skill whose step runs
+later. Skills with no step `skillName` are outside that check.
 
-> **Known limitation.** `manual-test/SKILL.md` declares `requires: [finish, verify-claims]` and its
-> description says "Use after /finish". The engine runs `manual_test` at index 16 with prerequisite
-> `test_suite`, and `finish` at index 21 with prerequisite `rebase`. `finish` is not a prerequisite of
-> `manual_test` in any code path — the declared dependency is inverted relative to execution order.
-> Follow the engine order. Tracked in
+> **Known limitation.** `rebase/SKILL.md` declares `enforcement: advisory`; the engine's `rebase` step
+> is `structural`. The step carries no `skillName`, so the drift test does not cover it. Tracked in
 > [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
 
 > **Known limitation.** `conduct/SKILL.md`'s tier table claims that tier S skips `pipeline` ("use direct
-> /tdd") and `code-review` ("domain review in TDD suffices"). Neither is implemented. `build` declares
-> `skippableForTiers: []` and is `structural`, so it can be neither tier-skipped nor config-disabled;
-> `code-review` is not an engine step at all, and the engine's separate `build_review` step is likewise
-> never tier-skipped. The same file's "Small flow" summary also omits `complexity`, `worktree`,
-> `build_review`, `test_suite`, and `rebase`, all of which run at tier S. The
+> /tdd"). This is not implemented: `build` declares `skippableForTiers: []` and is `structural`, so it
+> can be neither tier-skipped nor config-disabled. The same file's "Small flow" summary also omits
+> `complexity`, `worktree`, `build_review`, `test_suite`, and `rebase`, all of which run at tier S. The
 > authoritative tier-S skip set is the 8 steps listed in [steps](steps.md). Tracked in
 > [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
 
