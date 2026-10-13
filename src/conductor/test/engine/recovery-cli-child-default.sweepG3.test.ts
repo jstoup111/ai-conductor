@@ -186,7 +186,7 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
       // rewind refusal for the closed child.
       const childOneBefore = await readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8');
       await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '1' }, worktree)).resolves.toBe(1);
-      expect(errors).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#2944)');
+      expect(errors).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#3203)');
       await expect(readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8')).resolves.toBe(childOneBefore);
     } finally {
       errors.mockRestore();

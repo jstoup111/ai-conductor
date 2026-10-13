@@ -34,6 +34,7 @@ import {
 import { renderKickbackBudgetView } from './kickback-budget-view.js';
 import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import {
   COVERAGE_BINDING_COMPLETION_STATUSES,
@@ -709,7 +710,9 @@ async function activeChildStatusLabel(
       .map((position) => parseChildId(position))
       .filter((position): position is ChildId => position !== undefined)
     : [];
-  const executionChild = cursor.routedRepair?.child ?? cursor.revalidating?.child ?? cursor.child;
+  const execution = resolveExecutionChild(cursor, slug);
+  if (!('target' in execution)) return undefined;
+  const executionChild = execution.target.child;
   return positions.length >= 2 ? { child: executionChild, total: positions.length } : undefined;
 }
 

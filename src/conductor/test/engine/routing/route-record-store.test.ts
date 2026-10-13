@@ -34,6 +34,7 @@ const routeRecord: RouteRecord = {
   outbox: [],
 };
 
+
 function sha(raw: string): CommitSha {
   const parsed = parseCommitSha(raw);
   if (!parsed) throw new Error(`expected commit sha, received ${raw}`);
@@ -185,4 +186,5 @@ describe('ref-backed route record store', () => {
       await rm(fixture.repo, { recursive: true, force: true });
     }
   });
+
 });

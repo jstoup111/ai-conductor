@@ -26,6 +26,7 @@ import {
 } from './coverage-binding-envelope.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 
 export interface PlanGapInput {
   index: number;
@@ -172,7 +173,11 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     console.error(`[task-cli] active child resolution refused (${cursor.kind})`);
     return 1;
   }
-  const selectedChild = cmd.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.routedRepair?.child ?? cursor.revalidating?.child ?? cursor.child) : undefined);
+  // This CLI consumes only the selected child id; branch reconstruction in
+  // the resolver is immaterial here, but retaining the one resolver keeps the
+  // default aligned with conductor and the recovery commands.
+  const execution = resolveExecutionChild(cursor, 'task-cli');
+  const selectedChild = cmd.child ?? ('target' in execution ? String(execution.target.child) : undefined);
 
   if (selectedChild !== undefined) {
     const child = parseChildId(selectedChild);

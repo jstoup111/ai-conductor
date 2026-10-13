@@ -84,6 +84,10 @@ export async function drainOutbox(worktree: string, stored: StoredRouteRecord, p
     if (wrote.kind === 'updated') {
       const reread = await readRouteRecord(worktree, current.slug, current.record.roundId, dependencies);
       if (reread.kind !== 'record') return { kind: 'unavailable' };
+      // A successful CAS must have consumed this exact head entry. Treat a
+      // malformed or unexpectedly non-progressing ref as a retry boundary
+      // rather than looping forever and duplicating delivery in one process.
+      if (reread.record.outbox.length >= current.record.outbox.length) return { kind: 'retry' };
       current = reread;
     } else if (wrote.kind === 'cas-failed') return { kind: 'retry' };
     else return { kind: 'unavailable' };

@@ -16,6 +16,7 @@ import {
 import { readFullSuiteEvidence } from './full-suite-evidence.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 import { parseChildId, isRegionStep, type ChildId } from './child-context.js';
 import { readConductStateOverlay } from './conduct-state-store.js';
 import {
@@ -441,7 +442,9 @@ async function loadDashboardWorktreeState(
     : [];
   if (positions.length < 2) return flat;
 
-  const executionChild = cursor.routedRepair?.child ?? cursor.revalidating?.child ?? cursor.child;
+  const execution = resolveExecutionChild(cursor, slug);
+  if (!('target' in execution)) return flat;
+  const executionChild = execution.target.child;
   const activeChild = { child: executionChild, total: positions.length };
   const overlay = await readConductStateOverlay(wt, executionChild);
   if (overlay.ok) return { present: true, state: overlay.value, activeChild };

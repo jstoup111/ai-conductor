@@ -187,6 +187,7 @@ import {
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
+import { routingEligible } from './routing/route-types.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
   advanceChildRegion,
@@ -4543,6 +4544,15 @@ export class Conductor {
     }
     const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
     const routedFixes = buildStallSource ? fixes : admittedFixes;
+    // This is the single dark-launch decision point for an admitted repair
+    // lap.  The existing remediation route remains byte-for-byte authoritative
+    // on either result until the route writer/settler feature lands; making
+    // the decision here keeps an unsliced or flag-off feature out of the
+    // routing namespace without duplicating eligibility checks downstream.
+    if (routedFixes.length > 0 && this.featureSlug) {
+      const cursor = await this.resolveActiveChild(this.projectRoot, this.featureSlug);
+      void routingEligible(cursor, this.config);
+    }
     if (fixes.length > 0 && routedFixes.length === 0) {
       const rejectedAppendGapIds = fixes
         .filter((gap) => remediationDispositionAppendsToPlan(gap.disposition))
