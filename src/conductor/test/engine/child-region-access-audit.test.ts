@@ -30,7 +30,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/coverage-binding-void.ts:readVerdict': 1,
   'engine/coverage-binding-void.ts:writeVerdict': 1,
   'engine/daemon-observe-cli.ts:readKickbackLedger': 1,
-  'engine/daemon-rekick.ts:readKickbackLedger': 1,
+  'engine/daemon-rekick.ts:readKickbackLedger': 2,
   'engine/finish-publication-production.ts:readAllVerdicts': 1,
   'engine/finish-publication-production.ts:readVerdict': 2,
   'engine/finish-record-cli.ts:ConductStateStore.apply': 1,
