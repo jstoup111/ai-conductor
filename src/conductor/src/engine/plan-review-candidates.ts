@@ -10,7 +10,7 @@ import {
   transitiveDependencies,
   type PlanDependencyViolation,
 } from './plan-dependencies.js';
-import { isTestFilePath } from './test-path.js';
+import { isTestFilePath, isTestPath } from './test-path.js';
 
 export interface TestImpactCandidate {
   readonly lens: 'test-impact';
@@ -61,6 +61,16 @@ export class PlanReviewInputError extends Error {
 }
 
 const IGNORED_DIRECTORIES = new Set(['.git', 'node_modules']);
+const NON_PRODUCTION_CALLER_TREES = new Set([
+  '.agents',
+  '.claude',
+  '.codex',
+  '.daemon',
+  '.docs',
+  '.github',
+  '.pipeline',
+  'docs',
+]);
 
 async function filesBelow(root: string, directory = root): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -76,6 +86,12 @@ async function filesBelow(root: string, directory = root): Promise<string[]> {
 
 function isPlanReviewTestPath(path: string): boolean {
   return isTestFilePath(path) || /^(?:test|tests)(?:\/|$)/i.test(path);
+}
+
+function isProductionCallerPath(path: string): boolean {
+  const topLevel = path.split('/', 1)[0] ?? '';
+  return !isTestPath(path) && !NON_PRODUCTION_CALLER_TREES.has(topLevel)
+    && path !== 'CHANGELOG.md' && !/^README(?:\.[A-Za-z]+)?$/i.test(path);
 }
 
 function backtickedIdentifiers(text: string): string[] {
@@ -196,7 +212,7 @@ export async function reachabilityCandidates({
     }
   }
 
-  const sourcePaths = (await filesBelow(worktreePath)).filter((path) => !isPlanReviewTestPath(path)).sort();
+  const sourcePaths = (await filesBelow(worktreePath)).filter(isProductionCallerPath).sort();
   const sourceContents = new Map(await Promise.all(sourcePaths.map(async (path) => [
     path,
     await readFile(join(worktreePath, path), 'utf8'),

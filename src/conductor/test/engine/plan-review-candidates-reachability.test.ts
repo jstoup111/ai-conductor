@@ -55,6 +55,23 @@ describe('parseWiringSurface', () => {
 });
 
 describe('reachabilityCandidates', () => {
+  it('does not treat the plan document as a production caller', async () => {
+    const worktreePath = await fixture({
+      'src/conductor/src/engine/project-child-ownership.ts': 'export const projectChildOwnership = () => true;\n',
+      '.docs/plans/project-child-ownership.md': PROJECT_CHILD_OWNERSHIP_PLAN,
+    });
+
+    await expect(reachabilityCandidates({
+      worktreePath,
+      planText: PROJECT_CHILD_OWNERSHIP_PLAN,
+      architectureReviewText: '',
+    })).resolves.toContainEqual(expect.objectContaining({
+      lens: 'reachability',
+      identifier: 'projectChildOwnership',
+      taskId: '7',
+    }));
+  });
+
   it('names an uncalled export, its introducing task, plan evidence, and searched source paths', async () => {
     const worktreePath = await fixture({
       'src/conductor/src/engine/project-child-ownership.ts': 'export const projectChildOwnership = () => true;\n',
