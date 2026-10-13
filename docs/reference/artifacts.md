@@ -539,6 +539,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
 | `test-suite-evidence.json` | Scalar and scoped verification use version 4. Ordered `test_suite.commands` aggregate verification uses version 5 and records `plannedEntryCount` plus ordered per-entry results; FAIL also records `failedEntryIndex`, so unexecuted entries are distinguishable from successful ones. PASS requires every planned entry to succeed. Both forms include the fingerprint, provenance, timing, diagnostics, and one of nine failure reasons; diagnostics truncate at 16384 bytes. | `full-suite-evidence.ts` |
+| `test-suite-output.log` | Complete, secret-redacted stdout and stderr of the last failed suite run. When the failure message drops output (truncation, or a second stream), it leads with this path so BUILD repairs every failure in one round. | `full-suite-evidence.ts` |
 | `version-signal.json` | `{ verdict, level, files, classifiedAt }` — the PATCH auto-pass audit | `self-host/version-gate.ts` |
 In a post-repair BUILD-verification round, `test_suite` reuses only matching content fingerprints;
 the current verifier result, not a file left on disk, decides whether it is satisfied.
