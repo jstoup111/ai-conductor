@@ -50,4 +50,35 @@ describe('runPlanReview', () => {
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex', 'claude']);
     expect(artifact).toMatchObject({ round: 1, reviewerProvider: 'claude', independence: 'same-provider' });
   });
+
+  it('feeds the feature architecture review Wiring Surface into reachability candidates', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs/plans/idea.md'), `# Plan
+
+### Task 1: Introduce \`unwiredSurface\`
+**Steps:**
+1. Add the surface.
+
+**Done when:**
+- [test] the surface is covered.
+
+**Dependencies:** none
+`, 'utf8');
+    await writeFile(join(root, '.docs/decisions/architecture-review-2026-10-13-idea.md'), `# Architecture review
+
+## Wiring Surface
+
+| New surface | Production caller (design-time commitment) |
+|---|---|
+| \`unwiredSurface\` | \`runSurface\` |
+`, 'utf8');
+
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; },
+    });
+
+    expect(calls[0].options.prompt).toContain('"lens":"reachability"');
+    expect(calls[0].options.prompt).toContain('"identifier":"unwiredSurface"');
+    expect(calls[0].options.prompt).toContain('"taskId":"1"');
+  });
 });

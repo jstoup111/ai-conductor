@@ -20,12 +20,22 @@ async function reviewInputs(worktreePath: string, planStem: string) {
   const planText = await readFile(join(worktreePath, '.docs', 'plans', `${planStem}.md`), 'utf8');
   const storiesText = await readFile(join(worktreePath, '.docs', 'stories', `${planStem}.md`), 'utf8').catch(() => '');
   const coherenceText = await readFile(join(worktreePath, '.docs', 'coherence', `${planStem}.md`), 'utf8').catch(() => '');
+  const architectureReviewText = await (async () => {
+    try {
+      const review = (await readdir(join(worktreePath, '.docs', 'decisions')))
+        .filter((name) => name.startsWith('architecture-review-') && name.endsWith(`-${planStem}.md`))
+        .sort()[0];
+      return review ? await readFile(join(worktreePath, '.docs', 'decisions', review), 'utf8') : '';
+    } catch {
+      return '';
+    }
+  })();
   const adrTexts: Record<string, string> = {};
   try { for (const file of await readdir(join(worktreePath, '.docs', 'decisions'))) if (file.endsWith('.md')) adrTexts[file.slice(0, -3)] = await readFile(join(worktreePath, '.docs', 'decisions', file), 'utf8'); } catch { /* optional */ }
   const sourceFiles: Record<string, string> = {};
   for (const path of await files(worktreePath)) if (!path.startsWith('.docs/') && !path.startsWith('.pipeline/')) sourceFiles[path] = await readFile(join(worktreePath, path), 'utf8').catch(() => '');
   const digest = computeReviewedDigest({ planText, storiesText, adrTexts, artifactTexts: { [` .docs/coherence/${planStem}.md`.trim()]: coherenceText }, changedPaths: [] });
-  return { planText, storiesText, coherenceText, adrTexts, sourceFiles, digest };
+  return { planText, storiesText, coherenceText, architectureReviewText, adrTexts, sourceFiles, digest };
 }
 
 function selectedPlanTasks(planText: string, ids: readonly string[]): string {
@@ -67,7 +77,7 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const host = resolveAuthoringHost(input.env);
   const candidates = orderReviewerCandidates({ config: input.config, host, configuredProviders: input.configuredProviders });
   if (!candidates.length) throw new Error('plan review has no configured reviewer provider');
-  const rows = await Promise.all([testImpactCandidates({ worktreePath: input.worktreePath, planText: source.planText }), reachabilityCandidates({ worktreePath: input.worktreePath, planText: source.planText, architectureReviewText: '' }), Promise.resolve(dependencyOrderCandidates(source.planText))]);
+  const rows = await Promise.all([testImpactCandidates({ worktreePath: input.worktreePath, planText: source.planText }), reachabilityCandidates({ worktreePath: input.worktreePath, planText: source.planText, architectureReviewText: source.architectureReviewText }), Promise.resolve(dependencyOrderCandidates(source.planText))]);
   const prior = previous && !('kind' in previous) ? previous : undefined;
   const changed = prior ? diffReviewedDigests(prior.reviewedDigest, source.digest) : undefined;
   const reviewPlan = changed ? selectedPlanTasks(source.planText, changed.planTaskIds) : source.planText;

@@ -4,6 +4,7 @@ import {
   parsePlanTaskBodies,
   parsePlanTaskDoneWhen,
   parsePlanTaskPaths,
+  parsePlanTaskTitles,
 } from './plan-task-parse.js';
 import {
   parsePlanDependencyGraph,
@@ -189,6 +190,7 @@ export async function reachabilityCandidates({
   const taskPaths = parsePlanTaskPaths(planText);
   const taskBodies = parsePlanTaskBodies(planText);
   const evidenceByTask = taskIdentifierEvidence(planText);
+  const taskTitles = parsePlanTaskTitles(planText);
   const taskDoneWhen = parsePlanTaskDoneWhen(planText);
   const identifiers = new Map<string, { taskId: string; evidence: string }>();
 
@@ -200,7 +202,7 @@ export async function reachabilityCandidates({
     }
   }
   for (const item of parseWiringSurface(architectureReviewText)) {
-    for (const identifier of identifierTokens(item.surface)) {
+    for (const identifier of IDENTIFIER.test(item.surface) ? [item.surface] : []) {
       if (identifiers.has(identifier)) continue;
       for (const [taskId, evidence] of evidenceByTask) {
         const location = evidence.get(identifier);
@@ -208,6 +210,15 @@ export async function reachabilityCandidates({
           identifiers.set(identifier, { taskId, evidence: location });
           break;
         }
+      }
+      if (identifiers.has(identifier)) continue;
+      for (const [taskId, title] of taskTitles) {
+        if (!identifierTokens(title).includes(identifier)) continue;
+        identifiers.set(identifier, {
+          taskId,
+          evidence: `plan.md:${firstMatchingLine(planText, `\`${identifier}\``) ?? 1}`,
+        });
+        break;
       }
     }
   }
