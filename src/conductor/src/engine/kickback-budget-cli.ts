@@ -267,10 +267,10 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       print(`kickback-budget: active child resolution refused (${activeCursor.kind}).`);
       return 1;
     }
-    // Restack cap evidence belongs to the active child; --child names only the
-    // originating child in the durable cascade ref.
-    const execution = resolveExecutionChild(activeCursor, command.feature);
-    ledgerChild = 'target' in execution ? execution.target.child : undefined;
+    // Restack cap evidence belongs to the cursor range (normally the leaf);
+    // --child names only the originating child in the durable cascade ref.
+    // A routed host is an execution overlay and must not move this ledger.
+    ledgerChild = activeCursor.child;
   }
   // Mutations reconcile only after D3's argument/authority refusals, which must
   // leave the park and the ledger untouched.
