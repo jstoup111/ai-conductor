@@ -1,6 +1,10 @@
 // Covers: task:1
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { delimiter, join } from 'node:path';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCallback);
 
 /** Commit the golden fixtures were recorded from; every fixture header names it. */
 export const BASE_SHA = '14a615c678ab0df4bb467fa0313bcb24434ef68f';
@@ -228,4 +232,42 @@ export function normalizeGolden(text: string, root: string): string {
   // Normalize root path
   text = text.replaceAll(root, '<ROOT>');
   return text;
+}
+
+/**
+ * Run a controlled local-Git fixture with a temporary `git` executable placed
+ * first on PATH. The shim records each argv as one JSONL line, then delegates
+ * to the real binary resolved before PATH changes. Tests use this to prove an
+ * N=1 path does not even probe routing-only refs.
+ */
+export async function withGitArgvShim(root: string, fn: () => Promise<unknown>): Promise<string[][]> {
+  const realGit = (await execFile('which', ['git'])).stdout.trim();
+  if (realGit === '') throw new Error('git argv shim could not resolve git');
+  const shimDir = await mkdtemp(join(root, '.git-argv-shim-'));
+  const logPath = join(shimDir, 'argv.jsonl');
+  const shimPath = join(shimDir, 'git');
+  await writeFile(shimPath, `#!${process.execPath}
+import { appendFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const realGit = ${JSON.stringify(realGit)};
+const logPath = ${JSON.stringify(logPath)};
+const args = process.argv.slice(2);
+appendFileSync(logPath, JSON.stringify(args) + '\\n');
+const result = spawnSync(realGit, args, { stdio: 'inherit' });
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);
+`, { mode: 0o700 });
+  await chmod(shimPath, 0o700);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${shimDir}${delimiter}${originalPath ?? ''}`;
+  try {
+    await fn();
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+  }
+
+  const lines = await readFile(logPath, 'utf8').catch(() => '');
+  return lines.split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]);
 }

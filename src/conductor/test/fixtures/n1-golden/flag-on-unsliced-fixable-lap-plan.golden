@@ -1,0 +1,26 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+# Implementation Plan: n1-golden
+
+### Task 1: Setup
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Setup complete.
+
+### Task 2: Implement
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Implementation complete.
+
+### Task 3: Verify
+**Story:** Story 1
+**Dependencies:** none
+**Done when:** Verification complete.
+
+### Task rem-prd-audit-rem-prd-audit-s1.1: Repair the Task 2-owned golden finding
+**Gate:** prd-audit
+**Rationale:** Append a bounded repair for the task-two-owned finding.
+**Criterion:** S1.1
+**Parent task:** 2
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-s1.1 is committed and its targeted tests pass.
