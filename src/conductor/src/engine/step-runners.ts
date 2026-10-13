@@ -1231,7 +1231,7 @@ export class DefaultStepRunner implements StepRunner {
         } else {
         const planStem = basename(planPath, '.md');
         await runPlanReview({
-          worktreePath: this.projectDir, planStem, config: this.config,
+          worktreePath: this.projectDir, canonicalPath: this.projectRoot, planStem, config: this.config,
           runtimes: this.providerRuntimes, sessions: this.sessionStore,
           configuredProviders: this.configuredProviders, providerExecutor: this.providerExecutor,
           emit: async (event) => { await this.events?.emit(event); },

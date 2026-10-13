@@ -7,6 +7,7 @@ describe('plan_review step runner', () => {
     const source = await readFile(new URL('../../src/engine/step-runners.ts', import.meta.url), 'utf8');
     expect(source).toContain("step === 'plan_review'");
     expect(source).toContain('runPlanReview({');
+    expect(source).toContain('canonicalPath: this.projectRoot');
     expect(source).toContain('emit: async (event) => { await this.events?.emit(event); }');
   });
 });
