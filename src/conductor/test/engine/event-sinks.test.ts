@@ -21,6 +21,7 @@ import type { SchedulingUnitRef } from '../../src/engine/conductor.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { emitRestackRefused } from '../../src/engine/restack/restack-events.js';
 import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -151,6 +152,13 @@ const REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES = [
   'remediation_effect_applied',
   'remediation_effect_failed',
   'remediation_semantic_repeat_halt',
+] satisfies Array<ConductorEvent['type']>;
+
+const ROUTING_EVENT_TYPES = [
+  'remediation_routed',
+  'remediation_rerouted',
+  'routed_repair_phase',
+  'child_revalidated',
 ] satisfies Array<ConductorEvent['type']>;
 
 const RESEAL_EVENT_TYPES = [
@@ -294,6 +302,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'restack_recovered',
   'push_lease_refused',
   'story_reowned',
+  ...ROUTING_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -514,7 +523,113 @@ void [
   unrelatedDegradationWithProbeFailedReadiness,
 ];
 
+const routingRoundId = parseRoundId('r1')!;
+const routingChild = parseChildId(1)!;
+const routingClosureSha = parseCommitSha('a'.repeat(40))!;
+const routingEvents = [
+  {
+    type: 'remediation_routed',
+    eventId: 'routing-1',
+    occurredAt: '2026-10-12T00:00:00.000Z',
+    roundId: routingRoundId,
+    kind: 'audit',
+    items: [{ findingId: 'finding-1', owner: routingChild, host: routingChild, reason: 'task ownership' }],
+    child: routingChild,
+  },
+  {
+    type: 'remediation_rerouted',
+    eventId: 'routing-2',
+    occurredAt: '2026-10-12T00:00:01.000Z',
+    roundId: routingRoundId,
+    from: routingChild,
+    to: parseChildId(2)!,
+    evidence: 'prerequisite-paths',
+    child: routingChild,
+  },
+  {
+    type: 'routed_repair_phase',
+    eventId: 'routing-3',
+    occurredAt: '2026-10-12T00:00:02.000Z',
+    roundId: routingRoundId,
+    host: routingChild,
+    phase: 'repairing',
+    credit: true,
+    child: routingChild,
+  },
+  {
+    type: 'child_revalidated',
+    eventId: 'routing-4',
+    occurredAt: '2026-10-12T00:00:03.000Z',
+    child: routingChild,
+    generation: 1,
+    closureSha: routingClosureSha,
+    outcome: 'passed',
+  },
+] as const satisfies readonly ConductorEvent[];
+
+// @ts-expect-error -- routing occurrences always retain their execution child.
+const routedWithoutChild = (({ child: _child, ...event }) => event)(routingEvents[0]) satisfies ConductorEvent;
+// @ts-expect-error -- routing occurrences are at-least-once deliveries and require stable ids.
+const routedWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routingEvents[0]) satisfies ConductorEvent;
+// @ts-expect-error -- rerouting events always retain their execution child.
+const reroutedWithoutChild = (({ child: _child, ...event }) => event)(routingEvents[1]) satisfies ConductorEvent;
+// @ts-expect-error -- rerouting events are at-least-once deliveries and require stable ids.
+const reroutedWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routingEvents[1]) satisfies ConductorEvent;
+// @ts-expect-error -- routed repair phases always retain their execution child.
+const phaseWithoutChild = (({ child: _child, ...event }) => event)(routingEvents[2]) satisfies ConductorEvent;
+// @ts-expect-error -- routed repair phases are at-least-once deliveries and require stable ids.
+const phaseWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routingEvents[2]) satisfies ConductorEvent;
+// @ts-expect-error -- a route phase must be one of the durable HostState values.
+const phaseWithInvalidHostState = { ...routingEvents[2], phase: 'unrecognized' } satisfies ConductorEvent;
+// @ts-expect-error -- revalidation occurrences always retain their execution child.
+const revalidatedWithoutChild = (({ child: _child, ...event }) => event)(routingEvents[3]) satisfies ConductorEvent;
+// @ts-expect-error -- revalidation occurrences are at-least-once deliveries and require stable ids.
+const revalidatedWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routingEvents[3]) satisfies ConductorEvent;
+void [
+  routedWithoutChild,
+  routedWithoutEventId,
+  reroutedWithoutChild,
+  reroutedWithoutEventId,
+  phaseWithoutChild,
+  phaseWithoutEventId,
+  phaseWithInvalidHostState,
+  revalidatedWithoutChild,
+  revalidatedWithoutEventId,
+];
+
 describe('event sink subscriptions', () => {
+  // Covers: task:6
+  it('persists routing occurrences with every declared field through the canonical event spine', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'routing-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+
+    try {
+      persister.start();
+      for (const event of routingEvents) await events.emit(event);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const { ts: _ts, ...record } = JSON.parse(line);
+          return record;
+        });
+
+      expect(records).toEqual(routingEvents);
+      expect(Object.fromEntries(ROUTING_EVENT_TYPES.map((type) => [type, EVENT_SINKS[type]]))).toEqual({
+        remediation_routed: { render: false, persist: true, audit: false, otel: false },
+        remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
+        routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
+        child_revalidated: { render: false, persist: true, audit: false, otel: false },
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   // Covers: task:2
   it('persists restack and lease occurrences with every declared field through the canonical event spine', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'restack-event-sinks-'));

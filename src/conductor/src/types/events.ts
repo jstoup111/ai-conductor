@@ -34,6 +34,7 @@ import type {
   RestackOpId,
   RestackRefusalReason,
 } from '../engine/restack/restack-types.js';
+import type { HostState, RoundId, RouteKind } from '../engine/routing/route-types.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -2064,6 +2065,50 @@ type ConductorEventBody =
       story: string;
       from: number;
       to: number;
+    }
+  // ── Routed whole-feature repair occurrences ─────────────────────────────
+  | {
+      type: 'remediation_routed';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      kind: RouteKind;
+      items: readonly {
+        findingId: string;
+        owner: ChildId;
+        host: ChildId;
+        reason: string;
+      }[];
+      child: ChildId;
+    }
+  | {
+      type: 'remediation_rerouted';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      from: ChildId;
+      to: ChildId;
+      evidence: string;
+      child: ChildId;
+    }
+  | {
+      type: 'routed_repair_phase';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      host: ChildId;
+      phase: HostState;
+      credit: boolean;
+      child: ChildId;
+    }
+  | {
+      type: 'child_revalidated';
+      eventId: string;
+      occurredAt: string;
+      child: ChildId;
+      generation: number;
+      closureSha: CommitSha;
+      outcome: string;
     }
   // ── Worktree reclamation lifecycle ──
   | {
