@@ -1,11 +1,11 @@
 ---
 name: manual-test
 disable-model-invocation: true
-description: "Use after /finish to validate stories via curl (API) or browser (full-stack). Browser capability gaps warn; observed bugs loop back through /tdd."
+description: "Use to validate stories via curl (API) or browser (full-stack) after the test suite and before /finish. Browser capability gaps warn; observed bugs loop back through /tdd."
 enforcement: gating
 phase: ship
 standalone: false
-requires: [finish, verify-claims]
+requires: [verify-claims]
 ---
 
 ## Purpose

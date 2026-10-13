@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 
 import { readFile } from 'node:fs/promises';
 
@@ -32,6 +32,15 @@ function declaredEnforcement(skill: string): string | undefined {
   return skill.match(/^enforcement:\s*(\S+)$/m)?.[1];
 }
 
+function declaredRequires(skill: string): string[] {
+  const frontmatter = skill.match(/^---\n([\s\S]*?)\n---/);
+  const declaration = frontmatter?.[1].match(/^requires:\s*\[(.*)\]$/m)?.[1];
+
+  return declaration
+    ? declaration.split(',').map((requirement) => requirement.trim().replaceAll(/^['"]|['"]$/g, '')).filter(Boolean)
+    : [];
+}
+
 describe('skill frontmatter engine drift', () => {
   it('keeps step-mapped skill enforcement aligned with the strictest mapped engine step', async () => {
     const mappedSkills = stepMappedSkills();
@@ -63,5 +72,45 @@ describe('skill frontmatter engine drift', () => {
 
     expect(mappedSkills.has('tdd')).toBe(false);
     expect(mappedSkills.has('verify-claims')).toBe(false);
+  });
+
+  it('does not allow step-mapped skills to require a skill that runs later', async () => {
+    const mappedSkills = stepMappedSkills();
+    const orderedSkillIndices = new Map<string, number[]>();
+    const mismatches: string[] = [];
+
+    for (const [index, step] of ALL_STEPS.entries()) {
+      if (!step.skillName) continue;
+      const indices = orderedSkillIndices.get(step.skillName) ?? [];
+      indices.push(index);
+      orderedSkillIndices.set(step.skillName, indices);
+    }
+
+    for (const [skillName] of mappedSkills) {
+      const sourceIndices = orderedSkillIndices.get(skillName);
+      if (!sourceIndices) continue;
+
+      let skill: string;
+      try {
+        skill = await readFile(new URL(`../../../skills/${skillName}/SKILL.md`, import.meta.url), 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      for (const requirement of declaredRequires(skill)) {
+        const requiredIndices = orderedSkillIndices.get(requirement);
+        if (!requiredIndices) continue;
+
+        const sourceLatestIndex = Math.max(...sourceIndices);
+        const requiredEarliestIndex = Math.min(...requiredIndices);
+        if (requiredEarliestIndex > sourceLatestIndex) {
+          mismatches.push(
+            `${skillName} requires ${requirement}, but ${requirement} (earliest step ${ALL_STEPS[requiredEarliestIndex]!.name}, index ${requiredEarliestIndex}) runs after ${skillName} (latest step ${ALL_STEPS[sourceLatestIndex]!.name}, index ${sourceLatestIndex})`,
+          );
+        }
+      }
+    }
+
+    expect(mismatches).toEqual([]);
   });
 });
