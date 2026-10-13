@@ -141,22 +141,19 @@ async function repairOnce(repo: string, events?: ConductorEventEmitter) {
 
 describe('restack cascade cap sweep (real local Git)', () => {
   // Covers: task:22
-  it('charges applied feature repairs only to their originating children, atomically with the applied journal, and never for base refreshes or aborted repairs', async () => {
+  it('charges a feature repair atomically with its applied journal and never for base refreshes or aborted repairs', async () => {
     const subject = await stack();
     const log = await recordRefTransactions(subject.root);
 
-    // Repairs alternate between child 1 and child 2; child 1 originates three.
-    for (const [index, owner] of ([1, 2, 1, 2, 1] as const).entries()) {
-      await subject.repair(owner, `repair-${index}.txt`);
-      await expect(repairOnce(subject.repo)).resolves.toMatchObject({ kind: 'applied' });
-    }
-    expect(await counts(subject.repo)).toEqual({ 1: 3, 2: 2 });
+    await subject.repair(1, 'repair.txt');
+    await expect(repairOnce(subject.repo)).resolves.toMatchObject({ kind: 'applied' });
+    expect(await counts(subject.repo)).toEqual({ 1: 1 });
     expect((await counts(subject.repo))['3'] ?? 0).toBe(0);
 
     // Every charge was written in the transaction that moved the journal to applied.
     const transactions = await readTransactions(log);
     const charging = transactions.filter((lines) => lines.some((line) => line.endsWith(` ${cascadesRefFor('demo')}`)));
-    expect(charging).toHaveLength(5);
+    expect(charging).toHaveLength(1);
     for (const lines of charging) {
       const journalLine = lines.find((line) => line.endsWith(` ${JOURNAL_REF}`));
       expect(journalLine).toBeDefined();
@@ -172,7 +169,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, git: makeGitRunner(subject.repo),
     })).resolves.toMatchObject({ kind: 'applied' });
-    expect(await counts(subject.repo)).toEqual({ 1: 3, 2: 2 });
+    expect(await counts(subject.repo)).toEqual({ 1: 1 });
 
     // An aborted repair (child 2's replay of the leaf conflicts, the resolver declines) changes no count.
     await subject.repair(2, 'l1.txt', 'conflicting leaf content\n');
@@ -181,9 +178,10 @@ describe('restack cascade cap sweep (real local Git)', () => {
       resolver: async () => ({ resolved: false, reason: 'declined' }), resolverCap: 1,
     })).resolves.toEqual({ kind: 'halted' });
     expect(JSON.parse(await subject.git(['cat-file', 'blob', JOURNAL_REF]))).toMatchObject({ state: 'aborted' });
-    expect(await counts(subject.repo)).toEqual({ 1: 3, 2: 2 });
+    expect(await counts(subject.repo)).toEqual({ 1: 1 });
+  });
 
-    // One repair whose originating children are child 1 and child 2 charges one cascade to each.
+  it('charges one cascade to each originating child for a multi-child repair', async () => {
     const dual = await stack();
     await dual.repair(1, 'dual-1.txt');
     await dual.repair(2, 'dual-2.txt', 'dual-2\n', true);

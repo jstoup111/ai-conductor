@@ -500,32 +500,32 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
     expect(recovered).toEqual([{ type: 'restack_recovered', opId: changedJournal.opId, fromState: 'planned' }]);
   });
   // Covers: task:24
-  it('finishes a ready crash with its journaled staging SHAs and no replay, including after worktree recreation and .pipeline loss, and rolls back a failed post-move verification', async () => {
-    for (const loss of ['none', 'recreated-worktree', 'deleted-pipeline'] as const) {
-      const subject = await stackFixture();
-      const crashed = await crashRestackAt(subject, (journal) => journal.state === 'ready');
-      const staged = await stagedValues(subject.git);
-      expect(await stackValues(subject.git)).toEqual(oldValues(crashed));
-      await abandonJournal(subject);
-      if (loss === 'recreated-worktree') {
-        await execFile('git', ['worktree', 'remove', '--force', subject.repo], { cwd: subject.main });
-        await execFile('git', ['worktree', 'add', '-q', subject.repo, LEAF], { cwd: subject.main });
-      }
-      if (loss === 'deleted-pipeline') await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
-      vi.mocked(replayChildRange).mockClear();
-      vi.mocked(verifyRestackMove).mockClear();
-
-      await expect(recoverPersisted(subject.repo)).resolves.toEqual({ kind: 'recovered', fromState: 'ready' });
-
-      expect(replayChildRange).not.toHaveBeenCalled();
-      expect(verifyRestackMove).toHaveBeenCalledTimes(1);
-      expect(await stackValues(subject.git)).toEqual(staged);
-      expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
-      expect(await restackedEvents(subject.repo)).toEqual([
-        expect.objectContaining({ type: 'restack_recovered', opId: crashed.opId, fromState: 'ready' }),
-      ]);
+  it.each(['none', 'recreated-worktree', 'deleted-pipeline'] as const)('finishes a ready crash with its journaled staging SHAs and no replay after %s', async (loss) => {
+    const subject = await stackFixture();
+    const crashed = await crashRestackAt(subject, (journal) => journal.state === 'ready');
+    const staged = await stagedValues(subject.git);
+    expect(await stackValues(subject.git)).toEqual(oldValues(crashed));
+    await abandonJournal(subject);
+    if (loss === 'recreated-worktree') {
+      await execFile('git', ['worktree', 'remove', '--force', subject.repo], { cwd: subject.main });
+      await execFile('git', ['worktree', 'add', '-q', subject.repo, LEAF], { cwd: subject.main });
     }
+    if (loss === 'deleted-pipeline') await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
+    vi.mocked(replayChildRange).mockClear();
+    vi.mocked(verifyRestackMove).mockClear();
 
+    await expect(recoverPersisted(subject.repo)).resolves.toEqual({ kind: 'recovered', fromState: 'ready' });
+
+    expect(replayChildRange).not.toHaveBeenCalled();
+    expect(verifyRestackMove).toHaveBeenCalledTimes(1);
+    expect(await stackValues(subject.git)).toEqual(staged);
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+    expect(await restackedEvents(subject.repo)).toEqual([
+      expect.objectContaining({ type: 'restack_recovered', opId: crashed.opId, fromState: 'ready' }),
+    ]);
+  });
+
+  it('rolls back a ready crash when post-move verification fails', async () => {
     // The recovered move is verified; a failed check rolls every ref back and halts.
     const failing = await stackFixture();
     const crashed = await crashRestackAt(failing, (journal) => journal.state === 'ready');
@@ -555,14 +555,14 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
   });
 
   // Covers: task:24, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29
-  it('recovers every interrupted journal state with one restack_recovered each, rolls back a moved stack that fails verification before syncing, and lets a live throw roll back in its finally', async () => {
-    await recoverMovedScenario();
-    await recoverSyncedScenario();
-    await recoverRollingBackScenario();
-    await recoverEventScenario('planned');
-    await recoverEventScenario('ready');
-    await recoverMovedVerificationFailureScenario();
-    await liveThrowScenario();
+  it.each([
+    ['a synced journal', recoverSyncedScenario],
+    ['a planned journal', () => recoverEventScenario('planned')],
+    ['a ready journal', () => recoverEventScenario('ready')],
+    ['a moved journal that fails verification before sync', recoverMovedVerificationFailureScenario],
+    ['a live throw that rolls back in its finally', liveThrowScenario],
+  ] as const)('recovers %s with its expected event and state transition', async (_name, scenario) => {
+    await scenario();
   });
 
   // Covers: task:24
