@@ -384,15 +384,16 @@ export async function dispatchRewindCommand(
     console.error(`rewind: active child resolution refused (${cursor.kind})`);
     return 1;
   }
-  const requestedChild = command.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.child) : undefined);
+  const executionChild = (cursor.kind === 'active' || cursor.kind === 'repair-pending') ? (cursor.routedRepair?.child ?? cursor.revalidating?.child ?? cursor.child) : undefined;
+  const requestedChild = command.child ?? (executionChild === undefined ? undefined : String(executionChild));
   if (requestedChild !== undefined) {
     const child = parseChildId(requestedChild);
     if (child === undefined) {
       console.error(`rewind: invalid child id "${requestedChild}" (expected 1-9)`);
       return 1;
     }
-    if (command.child !== undefined && (cursor.kind === 'active' || cursor.kind === 'repair-pending') && child < cursor.child) {
-      console.error(`rewind: child ${child} is closed and cannot be rewound (#2944)`);
+    if (command.child !== undefined && executionChild !== undefined && child < executionChild) {
+      console.error(`rewind: child ${child} is closed and cannot be rewound (#3203)`);
       return 1;
     }
     if (!(await childStateExists(cwd, child))) {

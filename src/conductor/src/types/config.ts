@@ -829,6 +829,8 @@ export interface StackedPrsConfig {
   enabled?: boolean;
   /** Maximum number of stacked plan slices. Default: 1 when configured. */
   max_slices?: number;
+  /** Opt in to routed whole-feature remediation; absent remains dark. */
+  route_whole_feature_fixes?: boolean;
 }
 
 /** The closed set of independently-executed build-review rubric branches. */

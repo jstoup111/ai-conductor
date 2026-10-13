@@ -431,7 +431,7 @@ async function loadDashboardWorktreeState(
   if (!flat.present || flat.state === null) return flat;
 
   const cursor = await resolveActiveChild(wt, slug);
-  if (cursor.kind !== 'active') return flat;
+  if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return flat;
 
   const envelope = await readCoverageBindingEnvelope(wt, coverageBindingFilesystem);
   const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
@@ -441,8 +441,9 @@ async function loadDashboardWorktreeState(
     : [];
   if (positions.length < 2) return flat;
 
-  const activeChild = { child: cursor.child, total: positions.length };
-  const overlay = await readConductStateOverlay(wt, cursor.child);
+  const executionChild = cursor.routedRepair?.child ?? cursor.revalidating?.child ?? cursor.child;
+  const activeChild = { child: executionChild, total: positions.length };
+  const overlay = await readConductStateOverlay(wt, executionChild);
   if (overlay.ok) return { present: true, state: overlay.value, activeChild };
 
   // Do not leak a previous child's region progress when its active child's

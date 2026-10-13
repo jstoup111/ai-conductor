@@ -702,14 +702,15 @@ async function activeChildStatusLabel(
   slug: string,
 ): Promise<ActiveChildStatusLabel | undefined> {
   const cursor = await resolveActiveChild(featureRoot, slug);
-  if (cursor.kind !== 'active') return undefined;
+  if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return undefined;
   const envelope = await readCoverageBindingEnvelope(featureRoot, coverageBindingFilesystem);
   const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
     ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
       .map((position) => parseChildId(position))
       .filter((position): position is ChildId => position !== undefined)
     : [];
-  return positions.length >= 2 ? { child: cursor.child, total: positions.length } : undefined;
+  const executionChild = cursor.routedRepair?.child ?? cursor.revalidating?.child ?? cursor.child;
+  return positions.length >= 2 ? { child: executionChild, total: positions.length } : undefined;
 }
 
 /**

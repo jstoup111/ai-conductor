@@ -1,5 +1,6 @@
 import { parseChildId, type ChildId } from '../child-context.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
+import type { StackedPrsConfig } from '../../types/config.js';
 
 /** The explicit round bound used by routing-ref teardown. */
 export const MAX_ROUTE_ROUNDS = 999;
@@ -24,6 +25,16 @@ export type RouteKind = 'audit' | 'revalidate';
 /** Makes routing-union consumers fail closed when their union gains a member. */
 export function assertNever(value: never): never {
   throw new Error(`Unhandled routing value: ${JSON.stringify(value)}`);
+}
+
+/** The dark-launch setting is deliberately false unless explicitly enabled. */
+export function routingSettingOn(config: { readonly stacked_prs?: StackedPrsConfig } | undefined): boolean {
+  return config?.stacked_prs?.route_whole_feature_fixes === true;
+}
+
+/** A caller supplies its cursor; flat and unsliced features are never eligible. */
+export function routingEligible(cursor: { readonly kind: string }, config: { readonly stacked_prs?: StackedPrsConfig } | undefined): boolean {
+  return routingSettingOn(config) && (cursor.kind === 'active' || cursor.kind === 'repair-pending');
 }
 
 export interface RoutedItem {

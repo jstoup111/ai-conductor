@@ -81,6 +81,8 @@ export class EventPersistError extends Error {
 export interface EventPersisterDependencies {
   /** Test seam for observing the one-time canonical replay index scan. */
   readonly readPersistedEvents?: (filePath: string) => string | undefined;
+  /** Test seam for the canonical append. */
+  readonly appendFile?: (filePath: string, contents: string, encoding: BufferEncoding) => void;
 }
 
 /**
@@ -103,6 +105,7 @@ export class EventPersister {
   private readonly persistedObservationIds = new Set<string>();
   private observationIndexBuilt = false;
   private dirEnsured = false;
+  private readonly appendCanonical: (filePath: string, contents: string, encoding: BufferEncoding) => void;
 
   constructor(
     filePath: string,
@@ -114,11 +117,10 @@ export class EventPersister {
     this.emitter = emitter;
     this.clock = clock;
     this.readPersistedEvents = dependencies.readPersistedEvents ?? readCanonicalEvents;
+    this.appendCanonical = dependencies.appendFile ?? appendFileSync;
     this.executionScope = { featureId: filePath, runId: 'event-persister' };
 
-    this.handler = (event: ConductorEvent): void => {
-      this.persist(event);
-    };
+    this.handler = (event: ConductorEvent) => this.persistDurably(event).then(() => undefined);
   }
 
   private readonly readPersistedEvents: (filePath: string) => string | undefined;
@@ -142,11 +144,12 @@ export class EventPersister {
     }
   }
 
-  private persist(event: ConductorEvent): void {
+  /** Append once to the canonical event spine, preserving a producer occurrence timestamp. */
+  async persistDurably(event: ConductorEvent): Promise<'persisted' | 'duplicate'> {
     try {
       this.buildObservationIndex();
       const observationId = observationEventId(event);
-      if (observationId !== undefined && this.persistedObservationIds.has(observationId)) return;
+      if (observationId !== undefined && this.persistedObservationIds.has(observationId)) return 'duplicate';
       if (!this.dirEnsured) {
         mkdirSync(dirname(this.filePath), { recursive: true });
         this.dirEnsured = true;
@@ -212,9 +215,9 @@ export class EventPersister {
           ? { observedIntervals: [...(lifecycleEvent?.observedIntervals ?? []), lifecycleInterval] }
           : {}),
         ...(activeInterval ? { activeInterval } : {}),
-        ts: new Date().toISOString(),
+        ts: isRoutingOccurrence(event) ? event.occurredAt : new Date().toISOString(),
       });
-      appendFileSync(this.filePath, record + '\n', 'utf-8');
+      this.appendCanonical(this.filePath, record + '\n', 'utf-8');
       if (observationId !== undefined) this.persistedObservationIds.add(observationId);
       if (event.type === 'step_started' && intervalKey !== undefined) {
         this.openSteps.set(intervalKey, this.clock.nowMs());
@@ -236,6 +239,7 @@ export class EventPersister {
           this.openSteps.set(lifecycleKey, lifecycleNow);
         }
       }
+      return 'persisted';
     } catch (err) {
       throw new EventPersistError(this.filePath, err);
     }
@@ -286,14 +290,21 @@ const OBSERVATION_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'github_possible_bypass',
   'session_event_delivery_diagnostic',
 ]);
+const ROUTING_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
+  'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'child_revalidated',
+]);
 
 /** Only producer observations are replay-deduplicated; ordinary events still append. */
 function observationEventId(event: ConductorEvent): string | undefined {
-  return OBSERVATION_EVENT_TYPES.has(event.type)
+  return (OBSERVATION_EVENT_TYPES.has(event.type) || ROUTING_OCCURRENCE_TYPES.has(event.type))
     && 'eventId' in event
     && typeof event.eventId === 'string'
     ? event.eventId
     : undefined;
+}
+
+function isRoutingOccurrence(event: ConductorEvent): event is Extract<ConductorEvent, { occurredAt: string }> {
+  return ROUTING_OCCURRENCE_TYPES.has(event.type) && 'occurredAt' in event;
 }
 
 /**

@@ -186,6 +186,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
   advanceChildRegion,
@@ -2465,13 +2466,14 @@ export class Conductor {
     if (!stackConfigured && durableChildState === false) return true;
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-    if (cursor.kind === 'active') {
-      await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
+    const execution = resolveExecutionChild(cursor, slug);
+    if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
+      await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
       return true;
     }
     if (cursor.kind === 'no-child') return true;
 
-    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
     return false;
   }
 
@@ -6155,10 +6157,11 @@ export class Conductor {
         const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
         if (slug) {
           const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-          if (cursor.kind === 'active') {
-            await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
+          const execution = resolveExecutionChild(cursor, slug);
+          if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
+            await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
           } else if (cursor.kind !== 'no-child') {
-            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
             return;
           }
         }
@@ -6920,8 +6923,9 @@ export class Conductor {
             const childCursorRelevant = this.config.stacked_prs?.enabled === true || durableChildState !== false;
             if (childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-            if (cursor.kind === 'active') {
-              const target: ActiveChildLifecycleTarget = cursor;
+            const execution = resolveExecutionChild(cursor, slug);
+            if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
+              const target: ActiveChildLifecycleTarget = execution.target;
               const entered = await this.enterChildRegion(
                 this.projectRoot,
                 slug,
@@ -6936,7 +6940,7 @@ export class Conductor {
               await this.activateChildRegionState(state, target.child, target.isLeaf);
               activeChild = target;
             } else if (cursor.kind !== 'no-child') {
-              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
             }
             }

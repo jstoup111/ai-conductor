@@ -172,7 +172,7 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     console.error(`[task-cli] active child resolution refused (${cursor.kind})`);
     return 1;
   }
-  const selectedChild = cmd.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.child) : undefined);
+  const selectedChild = cmd.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.routedRepair?.child ?? cursor.revalidating?.child ?? cursor.child) : undefined);
 
   if (selectedChild !== undefined) {
     const child = parseChildId(selectedChild);

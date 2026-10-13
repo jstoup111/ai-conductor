@@ -11,6 +11,9 @@ import {
 import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveThroughMap } from './rebase-translate.js';
+import { readRepairMarker, readRevalidationQueue } from './routing/route-record-store.js';
+import type { RoundId } from './routing/route-types.js';
+import { routingSettingOn } from './routing/route-types.js';
 
 type ActiveChildTarget = {
   child: ChildId;
@@ -19,11 +22,19 @@ type ActiveChildTarget = {
   branch: string;
   leafMovePending?: boolean;
   nextChild?: ChildId;
+  /** Pending revalidation entries do not change the cursor kind. */
+  revalidating?: { child: ChildId; generation: number };
+  /** A routed host does not change the active stack range. */
+  routedRepair?: { child: ChildId; roundId: RoundId };
 };
 
 export type RepairPendingChildResolution = ActiveChildTarget & {
   kind: 'repair-pending';
   repairChildren: ChildId[];
+  routedRepair?: { child: ChildId; roundId: RoundId };
+  coOrigins?: readonly ChildId[];
+  foreignRoundChildren?: readonly ChildId[];
+  foreignRounds?: Readonly<Record<number, string>>;
 };
 
 export type ActiveChildResolution =
@@ -282,6 +293,13 @@ export async function resolveActiveChild(
     envelope?.storyOwnership !== undefined;
   if (!artifacts && !eligible) return { kind: 'no-child' };
 
+  // Routing metadata is only consulted after durable child state established
+  // a stacked feature. That preserves the N=1 no-routing-ref contract.
+  const routingOn = artifacts === true && routingSettingOn(config.ok ? config.config : undefined);
+  const repair = routingOn ? await readRepairMarker(worktree, slug, { git }) : { kind: 'absent' as const };
+  const queue = routingOn ? await readRevalidationQueue(worktree, slug, { git }) : { kind: 'absent' as const };
+  if (repair.kind === 'unreadable' || queue.kind === 'unreadable') return { kind: 'git-error' };
+
   const symbolic = await runGit(git, ['symbolic-ref', '-q', 'HEAD']);
   if (!symbolic || (symbolic.exitCode !== 0 && symbolic.exitCode !== 1)) return { kind: 'git-error' };
   if (symbolic.exitCode === 1) return { kind: 'detached-head' };
@@ -294,6 +312,9 @@ export async function resolveActiveChild(
   if (leafMoved === 'git-error') return { kind: 'git-error' };
   let leafMovePending = false;
   const repairChildren: ChildId[] = [];
+  const coOrigins: ChildId[] = [];
+  const foreignRoundChildren: ChildId[] = [];
+  const foreignRounds: Record<number, string> = {};
   const lastClosed = closed.reduce<ClosedChild | undefined>((last, closure) => (
     last === undefined || positions.indexOf(closure.child) > positions.indexOf(last.child) ? closure : last
   ), undefined);
@@ -313,12 +334,28 @@ export async function resolveActiveChild(
       const postClosure = await runGit(git, ['rev-list', `${closure.tip}..refs/heads/${branch.branch}`]);
       if (!postClosure || postClosure.exitCode !== 0) return { kind: 'git-error' };
       let needsRepair = false;
+      let allUnstamped = true;
+      let foreignStamp: string | undefined;
       for (const sha of postClosure.stdout.split('\n').filter(Boolean)) {
         const haltOnly = await onlyHaltRecordChanged(git, sha, slug);
         if (haltOnly === 'git-error') return { kind: 'git-error' };
-        if (!haltOnly) needsRepair = true;
+        if (!haltOnly) {
+          needsRepair = true;
+          if (repair.kind === 'marker') {
+            const message = await runGit(git, ['log', '-1', '--format=%B', sha]);
+            if (!message || message.exitCode !== 0) return { kind: 'git-error' };
+            const stamp = message.stdout.match(/^Round:\s*(r\d+)\s*$/m)?.[1];
+            if (stamp !== undefined) { allUnstamped = false; if (closure.child !== repair.marker.host) foreignStamp = stamp; }
+          }
+        }
       }
-      if (needsRepair) repairChildren.push(closure.child);
+      if (needsRepair) {
+        repairChildren.push(closure.child);
+        if (repair.kind === 'marker' && closure.child !== repair.marker.host) {
+          if (allUnstamped) coOrigins.push(closure.child);
+          else { foreignRoundChildren.push(closure.child); foreignRounds[closure.child] = foreignStamp ?? repair.marker.roundId; }
+        }
+      }
     }
     const index = positions.indexOf(closure.child);
     const next = positions[index + 1];
@@ -360,15 +397,23 @@ export async function resolveActiveChild(
       return branch.ok ? { kind: 'active' as const, child, position: child, isLeaf, branch: branch.branch, ...(nextChild === undefined ? {} : { nextChild }) } : undefined;
     })();
   if (active === undefined) return { kind: 'git-error' };
-  if (repairChildren.length > 0) return { ...active, kind: 'repair-pending', repairChildren };
+  const routingFields = {
+    ...(repair.kind === 'marker' ? { routedRepair: { child: repair.marker.host, roundId: repair.marker.roundId } } : {}),
+    ...(queue.kind === 'queue' && queue.queue.entries[0] !== undefined ? { revalidating: { child: queue.queue.entries[0].child, generation: queue.queue.generation } } : {}),
+  };
+  if (repairChildren.length > 0) return {
+    ...active, kind: 'repair-pending', repairChildren, ...routingFields,
+    ...(coOrigins.length ? { coOrigins } : {}),
+    ...(foreignRoundChildren.length ? { foreignRoundChildren, foreignRounds } : {}),
+  };
   if (isLeaf) {
     if (!leafMoved && !leafMovePending && lastClosureRewriteOnLeaf) {
       if (!await writeLeafMovedMarker(slug, git)) return { kind: 'git-error' };
       leafMoved = true;
     }
-    return { ...active, ...(leafMovePending || leafMoved ? { leafMovePending } : {}) };
+    return { ...active, ...(leafMovePending || leafMoved ? { leafMovePending } : {}), ...routingFields };
   }
-  return active;
+  return { ...active, ...routingFields };
 }
 
 /**
