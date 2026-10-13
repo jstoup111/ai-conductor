@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-13T23:26:49.189Z
 Slug: source-grounded-plan-defects-pass-every-decide-gat
 Class: needs-human
 Halting step: unknown
