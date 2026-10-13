@@ -178,9 +178,12 @@ function expectExplicitDeleteTransaction(repo: string, expectedRefs: readonly st
   const deletes = lines.slice(1, -2);
   for (const line of deletes) expect(line).toMatch(/^delete refs\/conductor\/demo\/[^\s*?[\]]+ [0-9a-f]{40}$/);
   expect(deletes.map((line) => line.split(' ')[1]).sort()).toEqual([...expectedRefs].sort());
-  // Every candidate is named explicitly before the transaction.
-  const verified = calls.filter(({ args }) => args[0] === 'rev-parse').map(({ args }) => args.at(-1));
-  for (const ref of expectedRefs) expect(verified).toContain(ref);
+  // Every candidate is named explicitly before the transaction. The cleanup
+  // protocol batches those explicit names through cat-file; it never discovers
+  // a prefix or probes refs one at a time.
+  const probes = calls.filter(({ args }) => args[0] === 'cat-file' && args[1] === '--batch-check');
+  const probedRefs = probes.flatMap(({ input }) => (input ?? '').split('\n').filter(Boolean));
+  for (const ref of expectedRefs) expect(probedRefs).toContain(ref);
   for (const call of calls) expect(call.args.join(' ')).not.toMatch(/[*?]/);
 }
 
@@ -328,26 +331,22 @@ describe('feature conductor ref cleanup at its production call sites (real local
     expect(rerun.logs).toContain('[mergeable-sweep] reaped demo — reason: shipped-record-on-main');
     for (const ref of sweepSeed.expected) expect(await refOid(sweepRepo, ref)).toBeUndefined();
 
-    // reconcileMergedPark: one candidate cannot be verified, so the deletion
-    // is partial; the reclaim outcome is unchanged and a re-run finishes it.
+    // reconcileMergedPark: a failed explicit-name batch leaves the reclaim
+    // decision intact; a re-run finishes the same finite transaction.
     const reclaimRepo = await projectFixture();
     const reclaimSeed = await seedFeatureRefs(reclaimRepo);
-    const cascades = 'refs/conductor/demo/cascades';
-    boundary.intercept = (args) => args[0] === 'rev-parse' && args.at(-1) === cascades
+    boundary.intercept = (args) => args[0] === 'cat-file' && args[1] === '--batch-check'
       ? { exitCode: 128, stdout: '', stderr: 'simulated read failure' }
       : undefined;
     await expect(reconcileMergedPark({ projectRoot: reclaimRepo, slug: 'demo', runGit: reclaimGit }))
       .resolves.toEqual({ slug: 'demo', steps: ['worktree-removed', 'branch-absent'] });
-    expect(await refOid(reclaimRepo, cascades)).toBeDefined();
-    for (const ref of reclaimSeed.expected.filter((ref) => ref !== cascades)) {
-      expect(await refOid(reclaimRepo, ref)).toBeUndefined();
-    }
+    for (const ref of reclaimSeed.expected) expect(await refOid(reclaimRepo, ref)).toBeDefined();
     boundary.intercept = (args) => args[0] === 'update-ref' && args[1] === '--stdin'
       ? { exitCode: 1, stdout: '', stderr: 'simulated transaction failure' }
       : undefined;
     await expect(reconcileMergedPark({ projectRoot: reclaimRepo, slug: 'demo', runGit: reclaimGit }))
       .resolves.toEqual({ slug: 'demo', steps: ['worktree-removed', 'branch-absent'] });
-    expect(await refOid(reclaimRepo, cascades)).toBeDefined();
+    for (const ref of reclaimSeed.expected) expect(await refOid(reclaimRepo, ref)).toBeDefined();
     boundary.intercept = undefined;
     await expect(reconcileMergedPark({ projectRoot: reclaimRepo, slug: 'demo', runGit: reclaimGit }))
       .resolves.toEqual({ slug: 'demo', steps: ['worktree-removed', 'branch-absent'] });

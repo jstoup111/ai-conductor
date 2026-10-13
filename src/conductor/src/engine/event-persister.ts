@@ -500,15 +500,11 @@ export function startDaemonEventPersistence(
   let loggedMemorySampleFailure = false;
   const handler: EventHandler = (event) => {
     if (isForwardedFromFeature(event)) return;
-    try {
-      // EventPersister is intentionally private; invoke its subscribed handler through a small local emitter
-      // would duplicate subscriptions. The direct method is runtime-private only and preserves its schema.
-      (persister as unknown as { persist(event: ConductorEvent): void }).persist(event);
-    } catch (error) {
+    return persister.persistDurably(event).catch((error: unknown) => {
       if (event.type === 'daemon_memory_sample' && loggedMemorySampleFailure) return;
       if (event.type === 'daemon_memory_sample') loggedMemorySampleFailure = true;
       log(`[daemon] event persistence failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    });
   };
   for (const type of persistedEventTypes()) events.on(type, handler);
   return { stop: () => { for (const type of persistedEventTypes()) events.off(type, handler); } };

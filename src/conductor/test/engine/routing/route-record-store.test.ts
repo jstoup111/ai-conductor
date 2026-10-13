@@ -1,9 +1,7 @@
 // Covers: task:5
-import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
@@ -18,7 +16,6 @@ import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/rout
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 
-const execFile = promisify(execFileCallback);
 const roundId = parseRoundId('r1');
 if (!roundId) throw new Error('r1 must be a valid route round');
 
@@ -43,7 +40,7 @@ function sha(raw: string): CommitSha {
 
 async function createRepo() {
   const repo = await mkdtemp(join(tmpdir(), 'route-record-store-'));
-  const git = (args: readonly string[], input?: string) => execFile('git', [...args], { cwd: repo, input });
+  const git = makeGitRunner(repo);
   try {
     await git(['init', '-q', '-b', 'main']);
     await git(['config', 'user.email', 'routing@example.invalid']);
@@ -59,8 +56,8 @@ async function createRepo() {
 }
 
 async function writeRef(fixture: Awaited<ReturnType<typeof createRepo>>, ref: string, value: unknown): Promise<CommitSha> {
-  const blob = sha((await fixture.git(['hash-object', '-w', '--stdin'], JSON.stringify(value))).stdout.trim());
-  await fixture.git(['update-ref', ref, blob, '']);
+  const blob = sha((await fixture.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) })).stdout.trim());
+  await fixture.git(['update-ref', ref, blob]);
   return blob;
 }
 
@@ -85,7 +82,7 @@ async function journalFixture(
     owner: { host: 'test-host', pid: 1, processStartTime: '1' },
   };
   const blob = await writeRestackJournalBlob(fixture.repo, journal);
-  await fixture.git(['update-ref', journalRefFor('demo'), blob, '']);
+  await fixture.git(['update-ref', journalRefFor('demo'), blob]);
   expect(base).toBeTruthy();
 }
 

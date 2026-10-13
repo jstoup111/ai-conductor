@@ -2621,9 +2621,6 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
   if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
     return { type: 'validation_error', message: 'build_progress.enabled must be a boolean' };
   }
-  if (obj.route_whole_feature_fixes !== undefined && typeof obj.route_whole_feature_fixes !== 'boolean') {
-    return { type: 'validation_error', message: 'stacked_prs.route_whole_feature_fixes must be a boolean' };
-  }
   if (obj.active_stall_minutes !== undefined) {
     if (
       typeof obj.active_stall_minutes !== 'number' ||
@@ -2976,6 +2973,12 @@ function validateStackedPrsBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'stacked_prs.enabled must be a boolean',
+    };
+  }
+  if (obj.route_whole_feature_fixes !== undefined && typeof obj.route_whole_feature_fixes !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'stacked_prs.route_whole_feature_fixes must be a boolean',
     };
   }
   if (

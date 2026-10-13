@@ -39,6 +39,7 @@ function resolveActiveExecutionChild(
   const target: ActiveChildLifecycleTarget = {
     child, position: child, isLeaf: child === cursor.position && cursor.isLeaf,
     branch: typeof branch === 'string' ? branch : branch.branch,
+    ...(child === cursor.child && cursor.leafMovePending ? { leafMovePending: true } : {}),
   };
   return {
     source: routed ? 'routed-host' : revalidating ? 'revalidating' : 'cursor',
