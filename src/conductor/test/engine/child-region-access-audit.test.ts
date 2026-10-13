@@ -30,7 +30,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/coverage-binding-void.ts:readVerdict': 1,
   'engine/coverage-binding-void.ts:writeVerdict': 1,
   'engine/daemon-observe-cli.ts:readKickbackLedger': 1,
-  'engine/daemon-rekick.ts:readKickbackLedger': 2,
+  'engine/daemon-rekick.ts:readKickbackLedger': 3,
   'engine/finish-publication-production.ts:readAllVerdicts': 1,
   'engine/finish-publication-production.ts:readVerdict': 2,
   'engine/finish-record-cli.ts:ConductStateStore.apply': 1,
@@ -88,7 +88,8 @@ const CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS: Readonly<Record<string, Classific
  */
 const RESTACK_REGION_ACCESS_CLASSIFICATIONS: Readonly<Record<string, Classification>> = {
   'engine/daemon-rekick.ts:readKickbackLedger(path)': 'whole-feature-only',
-  'engine/daemon-rekick.ts:readKickbackLedger(path,child)': 'child-aware',
+  'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)': 'child-aware',
+  'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)': 'child-aware',
   'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)': 'child-aware',
 };
 
@@ -102,7 +103,7 @@ const RESTACK_REGION_ACCESS_CLASSIFICATIONS: Readonly<Record<string, Classificat
 const RESTACK_WRITER_MANIFEST = {
   'engine/restack/restack-transition.ts': ['applyDecision', 'options.activeChild', 'leaf.child'],
   'engine/restack/cascade-cap.ts': ['updateCascadeLimit', 'cascadeUpdateLines', 'String(child)'],
-  'engine/daemon-rekick.ts': ['readKickbackLedger(path, child)'],
+  'engine/daemon-rekick.ts': ['readKickbackLedger(path, executionChild)', 'readKickbackLedger(path, cursorChild)'],
 } as const;
 
 const PENDING_CHILD_WIRING: readonly string[] = [];
@@ -272,7 +273,8 @@ describe('child-region flat-access audit', () => {
     }
     expect(Object.keys(RESTACK_REGION_ACCESS_CLASSIFICATIONS)).toEqual([
       'engine/daemon-rekick.ts:readKickbackLedger(path)',
-      'engine/daemon-rekick.ts:readKickbackLedger(path,child)',
+      'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)',
+      'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)',
       'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)',
     ]);
   });

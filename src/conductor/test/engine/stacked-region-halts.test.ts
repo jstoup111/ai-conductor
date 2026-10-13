@@ -8,6 +8,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState } from '../../src/types/index.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { resolveActiveChild, type ActiveChildResolution } from '../../src/engine/child-cursor.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 let root: string;
 let statePath: string;
@@ -137,5 +138,41 @@ describe('stacked BUILD-region refusals', () => {
     expect(halt.haltClass).toBe('needs-human');
     expect(halt.body).toContain('child 1 region exit refused');
     expect(halt.body).toContain(reason);
+  });
+
+  it('does not try to close an already closed routed host after its BUILD region', async () => {
+    const regionState = {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    } as const;
+    await writeState(regionState);
+    await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+    await writeFile(
+      join(root, '.pipeline', 'children', '1', 'conduct-state.json'),
+      JSON.stringify(regionState),
+    );
+    const advanceChildRegion = vi.fn(async () => ({ kind: 'refused' as const, reason: 'closed ref already exists' }));
+    const cursor: ActiveChildResolution = {
+      kind: 'repair-pending', child: parseChildId(3)!, position: parseChildId(3)!, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [child1],
+      routedRepair: { child: child1, roundId: parseRoundId('r1')! },
+    };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      fromStep: 'build_review',
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: async () => ({ success: true }) },
+      config: { stacked_prs: { enabled: true } } as never,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => cursor,
+        enterChildRegion: async () => ({ kind: 'completed' }),
+        advanceChildRegion,
+      },
+    });
+
+    await conductor.run();
+
+    expect(advanceChildRegion).not.toHaveBeenCalled();
   });
 });

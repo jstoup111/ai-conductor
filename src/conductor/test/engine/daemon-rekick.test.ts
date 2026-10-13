@@ -139,6 +139,42 @@ describe('consumeResumeAuthorizations', () => {
     }
   });
 
+  it('keeps a restack authorization in the cursor leaf ledger while a routed host is repairing', async () => {
+    const { root, worktree } = await seed();
+    try {
+      const host = 1 as import('../../src/engine/child-context.js').ChildId;
+      const leaf = 3 as import('../../src/engine/child-context.js').ChildId;
+      await writeFile(join(worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }));
+      await mkdir(join(worktree, '.pipeline', 'children', '1'), { recursive: true });
+      await mkdir(join(worktree, '.pipeline', 'children', '3'), { recursive: true });
+      const restackEntry = {
+        ...gateEntry,
+        capEvidence: { gate: 'restack', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'g1' },
+      };
+      await writeFile(
+        join(worktree, '.pipeline', 'children', '3', 'kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { restack: restackEntry } }),
+      );
+      await writeFile(
+        join(worktree, '.pipeline', 'children', '1', 'kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { restack: { ...restackEntry, resumeAuthorization: { adjustmentId: 'host', haltGeneration: 'g1', consumed: false } } } }),
+      );
+
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        readLiveHaltClass: async () => 'needs-human',
+        resolveActiveChild: async () => ({
+          kind: 'repair-pending', child: leaf, position: leaf, isLeaf: true, branch: 'feat/feature', repairChildren: [host],
+          routedRepair: { child: host, roundId: 'r1' as import('../../src/engine/routing/route-types.js').RoundId },
+        }),
+      }) as never)).resolves.toEqual(['feature']);
+
+      expect((await readKickbackLedger(worktree, leaf)).gates.restack.resumeAuthorization?.consumed).toBe(true);
+      expect((await readKickbackLedger(worktree, host)).gates.restack.resumeAuthorization?.consumed).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('retains the halt with an unconsumed authorization when the clear reports partial', async () => {
     const { root, worktree } = await seed();
     try {

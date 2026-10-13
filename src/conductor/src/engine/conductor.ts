@@ -6846,6 +6846,10 @@ export class Conductor {
     // every BUILD-region entry and after a non-leaf closure; it only avoids
     // re-emitting lifecycle events while the same child is already checked out.
     let activeChild: ActiveChildLifecycleTarget | undefined;
+    // Only the cursor's ordinary non-leaf region creates a new closure ref.
+    // Routed hosts and revalidation children already have one, so their region
+    // completion must continue through the tail without trying to close again.
+    let activeChildRequiresClosure = false;
     let parkedAtOperatorBoundary = false;
     const stopAtOperatorParkBoundary =
       async (
@@ -6949,6 +6953,7 @@ export class Conductor {
               }
               await this.activateChildRegionState(state, target.child, target.isLeaf);
               activeChild = target;
+              activeChildRequiresClosure = execution.source === 'cursor';
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
@@ -14204,6 +14209,7 @@ export class Conductor {
           if (
             step.name === 'build_review' &&
             activeChild !== undefined &&
+            activeChildRequiresClosure &&
             !activeChild.isLeaf &&
             CHILD_REGION_STEPS.every((regionStep) => {
               const status = getStepStatus(state, regionStep);

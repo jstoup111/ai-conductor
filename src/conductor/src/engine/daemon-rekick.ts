@@ -271,14 +271,25 @@ export async function consumeResumeAuthorizations(
       })();
       const flatLedger = await readKickbackLedger(path);
       const execution = activeChild === undefined ? undefined : resolveExecutionChild(activeChild, slug);
-      const child = execution !== undefined && 'target' in execution ? execution.target.child : undefined;
-      const childLedger = child === undefined ? flatLedger : await readKickbackLedger(path, child);
+      const executionChild = execution !== undefined && 'target' in execution ? execution.target.child : undefined;
+      // A restack cap belongs to the cursor range (normally the leaf), even
+      // while a routed host temporarily owns the BUILD region.
+      const cursorChild = activeChild === undefined ? undefined : activeChild.child;
+      const executionLedger = executionChild === undefined ? flatLedger : await readKickbackLedger(path, executionChild);
+      const cursorLedger = cursorChild === undefined || cursorChild === executionChild
+        ? executionLedger
+        : await readKickbackLedger(path, cursorChild);
       const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
-      const liveGate = [flatLedger, childLedger].flatMap((ledger) => Object.entries(ledger.gates))
+      const liveGate = [flatLedger, executionLedger, cursorLedger].flatMap((ledger) => Object.entries(ledger.gates))
         .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
-      const ledger = liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
-        ? childLedger
-        : flatLedger;
+      const ledger = liveGate === 'restack'
+        ? cursorLedger
+        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+          ? executionLedger
+          : flatLedger;
+      const ledgerChild = liveGate === 'restack' ? cursorChild
+        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate) ? executionChild
+          : undefined;
       if (isUnreadableKickbackLedger(ledger)) {
         throw new Error('kickback ledger is unreadable');
       }
@@ -320,7 +331,7 @@ export async function consumeResumeAuthorizations(
       // Repair-then-clear, then consume. A `partial` clear leaves the halt and
       // the authorization exactly as they were, so the next iteration retries.
       if ((await deps.clearHalt(slug)) === 'partial') continue;
-      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId, child)) {
+      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId, ledgerChild)) {
         await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
