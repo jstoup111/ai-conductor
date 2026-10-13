@@ -271,13 +271,12 @@ export async function consumeResumeAuthorizations(
       })();
       const flatLedger = await readKickbackLedger(path);
       const execution = activeChild === undefined ? undefined : resolveExecutionChild(activeChild, slug);
-      const childLedger = execution !== undefined && 'target' in execution
-        ? await readKickbackLedger(path, execution.target.child)
-        : flatLedger;
+      const child = execution !== undefined && 'target' in execution ? execution.target.child : undefined;
+      const childLedger = child === undefined ? flatLedger : await readKickbackLedger(path, child);
       const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
       const liveGate = [flatLedger, childLedger].flatMap((ledger) => Object.entries(ledger.gates))
         .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
-      const ledger = liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate) && liveGate !== 'restack'
+      const ledger = liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
         ? childLedger
         : flatLedger;
       if (isUnreadableKickbackLedger(ledger)) {
