@@ -112,6 +112,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Validation groups reliably retry members that report stale verdicts. ([implementation PR #3179](https://github.com/jstoup111/ai-conductor/pull/3179)).
 - Docs-only pull requests now catch live documentation-corpus failures before merge. ([implementation PR #3168](https://github.com/jstoup111/ai-conductor/pull/3168)).
 - CI repair agents receive focused failed-log excerpts. ([implementation PR #3175](https://github.com/jstoup111/ai-conductor/pull/3175)).
+- A stalled build now applies the repair its remediation planner proposes, instead of halting with the fix named but never run. ([implementation PR #3218](https://github.com/jstoup111/ai-conductor/pull/3218)).
+- Skill metadata now matches the engine's execution rules. ([implementation PR #3217](https://github.com/jstoup111/ai-conductor/pull/3217)).
 
 ## Migration
 
