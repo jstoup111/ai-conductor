@@ -22,7 +22,7 @@ async function fixture(includeUncitedAdr = false): Promise<string> {
   await writeFile(join(root, '.docs/decisions/adr-review.md'), '## Decision\n\nD1. The flag is allowed.\n', 'utf8');
   if (includeUncitedAdr) await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Original decision.\n', 'utf8');
   await writeFile(join(root, 'source.ts'), 'export const reviewFlag = true;\n', 'utf8');
-  await execFile('git', ['init'], { cwd: root });
+  await execFile('git', ['init', '-b', 'main'], { cwd: root });
   await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: root });
   await execFile('git', ['add', '.'], { cwd: root });

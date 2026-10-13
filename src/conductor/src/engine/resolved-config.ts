@@ -46,7 +46,9 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   conflict_check: 3,
   plan: 3,
   coherence_check: 3,
-  plan_review: 0,
+  // max_retries is the total attempt budget: one dispatch, no auto-retry,
+  // so a blocking round 1 never auto-dispatches round 2 before the author edits.
+  plan_review: 1,
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,

@@ -61,6 +61,7 @@ const FRONT_DONE_M: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
+  plan_review: 'done',
   coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'done',

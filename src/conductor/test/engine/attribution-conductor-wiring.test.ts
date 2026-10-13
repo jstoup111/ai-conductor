@@ -38,6 +38,7 @@ import {
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
+import { writeState } from '../../src/engine/state.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
@@ -833,6 +834,9 @@ describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', (
 
   it('emits unattributed_dispatch naming the streak when every dispatch in the build cycle is "Task: none"', async () => {
     await writeIncompleteTaskStatus();
+    // plan_review's completion predicate requires a committed review artifact
+    // this mocked runner never writes; pre-resolve it so the run reaches build.
+    await writeState(statePath, { plan_review: 'done' });
 
     const received: Array<Record<string, unknown>> = [];
     events.on('unattributed_dispatch' as never, (e: unknown) => {

@@ -61,7 +61,8 @@ describe('DECIDE artifact amendment lifecycle contract', () => {
   it.each([
     ['conflict-check', 'skills/conflict-check/SKILL.md'],
     ['architecture-review', 'skills/architecture-review/SKILL.md'],
-    ['coherence-check', 'skills/coherence-check/SKILL.md'],
+    // coherence-check no longer amends artifacts: its contradiction sweep (the
+    // only path that did) moved to plan review, which reports and never amends.
   ])('%s restricts amendment notes to artifacts on the base and revises drafts in place', async (_name, path) => {
     const contract = await readContract(path);
 

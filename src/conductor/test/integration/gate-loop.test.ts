@@ -28,6 +28,7 @@ import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 
 // Drives the gate-driven tail (build…finish) with verifyArtifacts on. The front
 // half is pre-marked done and the loop is started at `build` (fromStep), so each
@@ -48,6 +49,7 @@ const FRONT_DONE: ConductState = {
   conflict_check: 'skipped',
   plan: 'done',
   coherence_check: 'done',
+  plan_review: 'done',
   coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
@@ -186,6 +188,22 @@ describe('integration/gate-loop', () => {
     } else if (step === 'coherence_check') {
       await mkdir(join(dir, '.docs/coherence'), { recursive: true });
       await writeFile(join(dir, '.docs/coherence/p.md'), '| Row |\n|---|\n| x |\n');
+    } else if (step === 'plan_review') {
+      // A plan re-opened by a kickback re-runs the DECIDE plan_review gate;
+      // satisfy it with a clean (no-finding) review for this feature.
+      await mkdir(join(dir, '.docs/plan-review'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/plan-review/add foo.md'),
+        renderPlanReviewArtifact({
+          round: 1,
+          authoringHost: 'claude',
+          reviewerProvider: 'codex',
+          independence: 'cross-provider',
+          findings: [],
+          dispositions: [],
+          reviewedDigest: computeReviewedDigest({ planText: '', storiesText: '', adrTexts: {}, artifactTexts: {}, changedPaths: [] }),
+        }),
+      );
     }
     return { success: true };
   }

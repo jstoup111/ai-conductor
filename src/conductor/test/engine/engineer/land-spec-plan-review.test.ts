@@ -18,7 +18,7 @@ async function input(findings: any[] = [], includeUncitedAdr = false) {
   await mkdir(join(root, '.docs/decisions'), { recursive: true });
   await writeFile(join(root, '.docs/coherence/idea.md'), '');
   if (includeUncitedAdr) await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Original decision.\n');
-  await execFile('git', ['init'], { cwd: root });
+  await execFile('git', ['init', '-b', 'main'], { cwd: root });
   await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: root });
   const reviewedDigest = computeReviewedDigest({ planText, storiesText, adrTexts: {}, artifactTexts: { '.docs/coherence/idea.md': '' }, changedPaths: [] });

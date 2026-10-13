@@ -252,7 +252,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     await cp(source, projectRoot, { recursive: true });
     const stateFilePath = join(projectRoot, 'conduct-state.json');
     const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
-    await writeFile(stateFilePath, JSON.stringify({ ...state, coverage_binding: 'done' }));
+    await writeFile(stateFilePath, JSON.stringify({ ...state, plan_review: 'done', coverage_binding: 'done' }));
     return stateFilePath;
   }
 

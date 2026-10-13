@@ -33,6 +33,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { writeState } from '../../src/engine/state.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -152,6 +153,9 @@ describe('ST-1071-4 — both conductor call sites hand runInteractive the failur
     await initGitRepo(dir);
     await seedAllArtifactsExceptTaskStatus(dir);
     await writePlanAndStatus(dir, 3);
+    // plan_review is not under test here: its completion predicate needs a
+    // feature-keyed review artifact this fixture never seeds.
+    await writeState(statePath, { plan_review: 'done' });
 
     const runner = makeRunner(
       vi.fn(async (step: StepName) => {
