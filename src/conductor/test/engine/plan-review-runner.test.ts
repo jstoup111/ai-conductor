@@ -12,7 +12,7 @@ const roots: string[] = [];
 const execFile = promisify(execFileCb);
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-async function fixture(): Promise<string> {
+async function fixture(includeUncitedAdr = false): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'plan-review-runner-')); roots.push(root);
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
   await mkdir(join(root, '.docs', 'stories'), { recursive: true });
@@ -20,6 +20,7 @@ async function fixture(): Promise<string> {
   await writeFile(join(root, '.docs/plans/idea.md'), `# Plan\n\n### Task 1: Configure\n**Steps:**\n1. Add \`reviewFlag\`.\n\n**Done when:**\n- [test] the flag works.\n\n**Dependencies:** none\n`, 'utf8');
   await writeFile(join(root, '.docs/stories/idea.md'), '# Stories\n\n## Story 1: Review\nThe flag is reviewed.\n', 'utf8');
   await writeFile(join(root, '.docs/decisions/adr-review.md'), '## Decision\n\nD1. The flag is allowed.\n', 'utf8');
+  if (includeUncitedAdr) await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Original decision.\n', 'utf8');
   await writeFile(join(root, 'source.ts'), 'export const reviewFlag = true;\n', 'utf8');
   await execFile('git', ['init'], { cwd: root });
   await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
@@ -50,8 +51,8 @@ describe('runPlanReview', () => {
     expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [] });
   });
 
-  it('includes an uncited ADR authored by this spec in the reviewed digest', async () => {
-    const root = await fixture();
+  it('includes a modified tracked uncited ADR in the reviewed digest', async () => {
+    const root = await fixture(true);
     await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. This must still be reviewed.\n', 'utf8');
 
     const artifact = await runPlanReview({

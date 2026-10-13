@@ -21,13 +21,19 @@ export async function resolveIdeaFiles(
     'git', ['diff', '--name-only', baseOut.trim(), 'HEAD'], { cwd: worktreePath },
   );
   const { stdout: porcelainOut } = await execFile(
-    'git', ['status', '--porcelain', '--untracked-files=all'], { cwd: worktreePath },
+    'git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: worktreePath },
   );
   const committed = diffOut.trim() === '' ? [] : diffOut.trim().split('\n');
-  const untracked = porcelainOut.trim() === '' ? [] : porcelainOut.trim().split('\n')
-    .filter((line) => line.slice(0, 2) === '??')
-    .map((line) => line.slice(3).trim().replace(/^"(.*)"$/, '$1'));
-  return new Set([...committed, ...untracked]
+  const worktreePaths: string[] = [];
+  const entries = porcelainOut.split('\0');
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    if (!entry || entry.slice(0, 2) === '!!') continue;
+    const status = entry.slice(0, 2);
+    worktreePaths.push(entry.slice(3));
+    if (status.includes('R') || status.includes('C')) index += 1;
+  }
+  return new Set([...committed, ...worktreePaths]
     .map((path) => path.replaceAll('\\', '/'))
     .filter((path) => path.startsWith('.docs/')));
 }

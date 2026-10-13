@@ -11,12 +11,13 @@ import { runPlanReviewGate } from '../../../src/engine/engineer/plan-review-gate
 const roots: string[] = [];
 const execFile = promisify(execFileCb);
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
-async function input(findings: any[] = []) {
+async function input(findings: any[] = [], includeUncitedAdr = false) {
   const root = await mkdtemp(join(tmpdir(), 'plan-review-gate-')); roots.push(root);
   const planText = '# Plan\n\n### Task 1: One\n**Dependencies:** none\n'; const storiesText = '# Stories\n\n## Story 1: One\nworks\n';
   await mkdir(join(root, '.docs/plan-review'), { recursive: true }); await mkdir(join(root, '.docs/coherence'), { recursive: true });
   await mkdir(join(root, '.docs/decisions'), { recursive: true });
   await writeFile(join(root, '.docs/coherence/idea.md'), '');
+  if (includeUncitedAdr) await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Original decision.\n');
   await execFile('git', ['init'], { cwd: root });
   await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: root });
@@ -39,6 +40,13 @@ describe('plan-review land gate', () => {
   it('marks a review stale when this spec adds an uncited ADR after review', async () => {
     const stale = await input();
     await writeFile(join(stale.root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Newly authored decision.\n');
+
+    await expect(runPlanReviewGate({ worktreePath: stale.root, canonicalPath: stale.root, planStem: 'idea', tier: 'M', planText: stale.planText, storiesText: stale.storiesText }))
+      .rejects.toThrow('plan review is stale: adr-uncited#D1');
+  });
+  it('marks a review stale when this spec modifies a tracked uncited ADR after review', async () => {
+    const stale = await input([], true);
+    await writeFile(join(stale.root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Modified decision.\n');
 
     await expect(runPlanReviewGate({ worktreePath: stale.root, canonicalPath: stale.root, planStem: 'idea', tier: 'M', planText: stale.planText, storiesText: stale.storiesText }))
       .rejects.toThrow('plan review is stale: adr-uncited#D1');
