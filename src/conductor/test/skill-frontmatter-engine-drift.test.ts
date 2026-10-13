@@ -1,6 +1,6 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
 
@@ -42,6 +42,27 @@ function declaredRequires(skill: string): string[] {
 }
 
 describe('skill frontmatter engine drift', () => {
+  it('requires every step-mapped skill directory to exist', async () => {
+    const missing: string[] = [];
+
+    for (const step of builtInSteps) {
+      if (!step.skillName) continue;
+
+      const skillPath = `skills/${step.skillName}/SKILL.md`;
+      try {
+        await access(new URL(`../../../${skillPath}`, import.meta.url));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          missing.push(`${step.name}: ${skillPath} missing`);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    expect(missing).toEqual([]);
+  });
+
   it('keeps step-mapped skill enforcement aligned with the strictest mapped engine step', async () => {
     const mappedSkills = stepMappedSkills();
     const mismatches: string[] = [];

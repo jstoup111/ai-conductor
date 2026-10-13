@@ -10,7 +10,6 @@ export const ALL_STEPS: StepDefinition[] = [
     prerequisites: [],
     skippableForTiers: [],
     isCheckpoint: false,
-    skillName: 'worktree',
   },
   {
     name: 'memory',
@@ -334,7 +333,6 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
     prerequisites: [],
     skippableForTiers: [],
     isCheckpoint: false,
-    skillName: 'attribution-verify',
   },
 };
 
