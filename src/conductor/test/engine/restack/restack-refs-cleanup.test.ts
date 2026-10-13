@@ -1,4 +1,4 @@
-// Covers: task:38
+// Covers: task:4, task:38
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
