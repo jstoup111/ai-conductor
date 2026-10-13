@@ -19,6 +19,7 @@ const expectedPolicies: Record<ComplexityTier, {
       'architecture_review',
       'conflict_check',
       'coherence_check',
+      'plan_review',
       'acceptance_specs',
       'manual_test',
     ],

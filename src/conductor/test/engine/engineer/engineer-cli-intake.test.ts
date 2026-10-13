@@ -18,6 +18,8 @@ import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import type { InteractiveGithubOperationConfirmation } from '../../../src/engine/github-operation-approval.js';
 import type { GithubIssueTarget } from '../../../src/engine/github-operations.js';
@@ -213,6 +215,29 @@ describe('engineer land tracker write-back (Task 11)', () => {
       '| criterion | Story 1 happy: Given X, when Y, then Z. | task-1 | covered | Jira write-backs are no-ops. | diff-local |',
       '| criterion | Story 1 negative: Given invalid input, when Y, then it is refused. | task-1 | covered | The ledger advances after the no-op. | diff-local |', '',
     ].join('\n'));
+    const planText = await readFile(join(worktree, '.docs', 'plans', 'jira-writeback.md'), 'utf8');
+    const storiesText = await readFile(join(worktree, '.docs', 'stories', 'jira-writeback.md'), 'utf8');
+    const coherenceText = await readFile(join(worktree, '.docs', 'coherence', 'jira-writeback.md'), 'utf8');
+    const reviewedDigest = computeReviewedDigest({
+      planText,
+      storiesText,
+      adrTexts: {},
+      artifactTexts: { '.docs/coherence/jira-writeback.md': coherenceText },
+      changedPaths: [...await resolveIdeaFiles(worktree, repoPath)],
+    });
+    await mkdir(join(worktree, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(
+      join(worktree, '.docs', 'plan-review', 'jira-writeback.md'),
+      renderPlanReviewArtifact({
+        round: 1,
+        authoringHost: 'claude',
+        reviewerProvider: 'codex',
+        independence: 'cross-provider',
+        findings: [],
+        dispositions: [],
+        reviewedDigest,
+      }),
+    );
 
     const sourceRef = 'ENG-42';
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
