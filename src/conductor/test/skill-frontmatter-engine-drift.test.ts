@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 
 import { access, readFile } from 'node:fs/promises';
 
@@ -133,5 +133,27 @@ describe('skill frontmatter engine drift', () => {
     }
 
     expect(mismatches).toEqual([]);
+  });
+
+  it('keeps the conduct tier-skip table limited to engine steps and step-mapped skills', async () => {
+    const conductSkill = await readFile(new URL('../../../skills/conduct/SKILL.md', import.meta.url), 'utf8');
+    const lines = conductSkill.split('\n');
+    const headerIndex = lines.indexOf('| Step | Can Skip? | Reason |');
+    const engineStepNames = new Set<string>(builtInSteps.map((step) => step.name));
+    const mappedSkillNames = new Set(stepMappedSkills().keys());
+    const invalidRows: string[] = [];
+
+    expect(headerIndex).toBeGreaterThanOrEqual(0);
+
+    for (const row of lines.slice(headerIndex + 2)) {
+      if (!row.startsWith('|')) break;
+
+      const step = row.split('|')[1]?.trim();
+      if (step && !engineStepNames.has(step.replaceAll('-', '_')) && !mappedSkillNames.has(step)) {
+        invalidRows.push(step);
+      }
+    }
+
+    expect(invalidRows).toEqual([]);
   });
 });

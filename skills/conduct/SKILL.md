@@ -316,7 +316,6 @@ Consult the repository's daemon PR-labeling documentation.
 | architecture-diagram | Tier-dependent | Skip for Small, required for Medium/Large |
 | writing-system-tests | Tier-dependent | Skip for Small (request specs in TDD suffice), required for Medium/Large |
 | build | No (structural) | This is the implementation |
-| code-review | Tier-dependent | Skip for Small (domain review suffices), required for Medium/Large |
 | prd-audit | No (gating) | Shipped impl must be verified against the PRD's FRs before ship |
 | architecture-review-as-built | Auto-skip only | Gating when it runs, but auto-skipped when `architecture_review` was skipped (Small tier / config / `when:`) — no APPROVED ADRs to audit. Cannot be skipped manually otherwise. |
 | finish | No (gating) | Fresh verification required |
