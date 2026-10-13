@@ -2,7 +2,7 @@
 name: architecture-diagram
 implicit_invocation: required
 description: "Use only within an active harness lifecycle when its architecture-diagram step is current. Generates and maintains C4 Mermaid diagrams; do not invoke for ordinary code changes or general architecture questions."
-enforcement: gating
+enforcement: advisory
 phase: all
 standalone: true
 requires: []
