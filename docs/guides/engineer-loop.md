@@ -38,9 +38,11 @@ There are two surfaces and you use both:
 
 Every primitive prints a single JSON line on success, so each step's output feeds the next.
 
-For Medium and Large work, authoring runs `coherence_check` immediately after `plan` and commits
-`.docs/coherence/<plan-stem>.md` with the spec artifacts. Small work skips both the gate and the
-artifact, allowing the daemon to begin at BUILD after the spec PR merges.
+For Medium and Large work, authoring runs `coherence_check` immediately after `plan`, then
+`compose plan-review`, and commits `.docs/coherence/<plan-stem>.md` and
+`.docs/plan-review/<plan-stem>.md` with the spec artifacts. `plan-review` prints plain text, not JSON.
+Small work skips both gates and both artifacts, allowing the daemon to begin at BUILD after the spec
+PR merges.
 
 ## Start a session
 
@@ -176,6 +178,26 @@ worktree, never the primary checkout.
 7. `/conflict-check` — skipped at tier S.
 8. `/plan`.
 9. `/coherence-check` — tiers M and L only.
+10. Plan review — tiers M and L only. A fresh read-only reviewer judges the final plan against the
+    worktree source:
+
+    ```bash
+    ai-conductor compose plan-review --project <name> --worktree <worktreePath>
+    ```
+
+    You should see `plan review clean`. Otherwise read the `blocking` findings in
+    `.docs/plan-review/<plan-stem>.md`, amend the plan, and run the command once more. Review stops
+    after round 2: accept each finding that still stands, and acknowledge any plan edit made after
+    round 2, before landing:
+
+    ```bash
+    ai-conductor compose plan-review --project <name> --worktree <worktreePath> \
+      --accept <finding-id> --reason "<why it is safe to proceed>"
+    ai-conductor compose plan-review --project <name> --worktree <worktreePath> \
+      --acknowledge --reason "<what changed after review>"
+    ```
+
+    Never edit the review file by hand; its integrity line rejects the change at land.
 
 Do not hand-write stub or DRAFT artifacts. See [steps reference](../reference/steps.md) for the
 per-step tier-skip and enforcement table, and [SDLC phases](../explanation/sdlc-phases.md) for why
@@ -206,6 +228,9 @@ Before committing, `land` refuses on any of:
 - an invalid assumptions ledger (`adr-assumption-ledger`) in an added ADR, or in a changed ADR that
   has an `## Assumptions` section,
 - an empty or stub artifact,
+- at tiers M and L, a plan review (`plan-review`) that is missing, unparseable, integrity-mismatched,
+  or stale against the plan, stories, in-scope ADR decisions, or coherence artifact, or that has a
+  `blocking` finding without an accepted disposition,
 - uncommitted changes to tracked files at any path, including tracked artifacts under `.docs/`,
 - untracked files outside `.docs/`,
 - an unresolved identity (no `spec_owner` configured and no `gh` login).
