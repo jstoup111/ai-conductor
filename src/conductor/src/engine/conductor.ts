@@ -2260,7 +2260,9 @@ export class Conductor {
   ): Promise<ReturnType<typeof decideEntryDisposition>> {
     const targetStep = input.steps.find((step) => step.name === input.target);
     const artifactPresent =
-      (await findArtifactFilesForStep(this.projectRoot, input.target)).length > 0;
+      input.target === 'plan_review'
+        ? await this.planReviewArtifactPresent()
+        : (await findArtifactFilesForStep(this.projectRoot, input.target)).length > 0;
     const dispositionInput = { ...input, artifactPresent };
     if (!input.daemon || targetStep?.phase !== 'DECIDE') {
       return decideEntryDisposition(dispositionInput);
@@ -2275,6 +2277,15 @@ export class Conductor {
     return (await consumeOperatorGrant(this.projectRoot, input.target))
       ? disposition
       : decideEntryDisposition({ ...dispositionInput, grant: null });
+  }
+
+  /** Resolve plan-review presence to this feature's active plan, not the corpus. */
+  private async planReviewArtifactPresent(): Promise<boolean> {
+    const planPath = await resolveFeaturePlanPath(this.projectRoot, this.haltState.feature_desc);
+    if (!planPath) return false;
+    return accessFile(
+      join(this.projectRoot, '.docs', 'plan-review', `${planStem(planPath)}.md`),
+    ).then(() => true).catch(() => false);
   }
 
   /** Read expectations immediately before constructing a guarded mutation. */

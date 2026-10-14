@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-// Covers: task:8
+// Covers: S9.2
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -44,6 +44,12 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
   });
 
   it('reaches acceptance_specs with zero DECIDE provider dispatches', async () => {
+    await mkdir(join(fixture.root, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(
+      join(fixture.root, '.docs', 'plan-review', 'another-feature.md'),
+      '# Historical plan review\n',
+      'utf8',
+    );
     await writeFixtureState(fixture, {
       feature_desc: 'decide-entry-fixture',
       track: 'technical',
