@@ -23,11 +23,11 @@ async function paths(root: string, at = root): Promise<string[]> {
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'engineer-cli-plan-review-')); roots.push(root);
-  const canonical = join(root, 'canonical'); const worktree = join(root, 'worktree');
+  const canonical = join(root, 'canonical'); const worktree = join(root, 'engineer-active-feature');
   for (const dir of [canonical, worktree]) {
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
-    const stem = basename(dir);
+    const stem = dir === worktree ? 'active-feature' : basename(dir);
     await writeFile(join(dir, '.docs', 'plans', `${stem}.md`), '# Plan\n\n### Task 1: Review\n**Done when:**\n- review runs\n\n**Dependencies:** none\n', 'utf8');
     await writeFile(join(dir, '.docs', 'stories', `${stem}.md`), '# Stories\n\n## Story 1: Review\n', 'utf8');
     await mkdir(join(dir, '.ai-conductor'), { recursive: true });
@@ -37,6 +37,7 @@ async function fixture() {
     await execFileAsync('git', ['-C', dir, 'config', 'user.name', 'Test']);
     await execFileAsync('git', ['-C', dir, 'add', '.']);
     await execFileAsync('git', ['-C', dir, 'commit', '-m', 'baseline']);
+    if (dir === worktree) await execFileAsync('git', ['-C', dir, 'checkout', '-b', 'spec/active-feature']);
   }
   const registryPath = join(root, 'registry.json');
   await writeFile(registryPath, JSON.stringify([{ schemaVersion: 1, name: 'alpha', path: canonical, status: 'registered', registeredAt: '2026-10-13T00:00:00.000Z' }]));
@@ -57,7 +58,7 @@ describe('compose plan-review command surface', () => {
       .toEqual({ kind: 'reject', sub: 'plan-review', flag: '--unknown' });
   });
 
-  it('dispatches codex first, writes a clean cross-provider review, and persists lifecycle events', async () => {
+  it('selects the active feature plan despite historical plans, writes a clean cross-provider review, and persists lifecycle events', async () => {
     const { canonical, worktree, registryPath } = await fixture(); const out: string[] = []; const calls: any[] = [];
     await writeFile(join(worktree, '.docs', 'plans', 'historical.md'), '# Historical plan\n', 'utf8');
     const before = await paths(worktree);
@@ -69,8 +70,8 @@ describe('compose plan-review command surface', () => {
     })).resolves.toBe(0);
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex']);
     expect(out).toEqual(['plan review clean']);
-    expect(await paths(worktree)).toEqual([...before, '.docs/plan-review/worktree.md'].sort());
-    expect(parsePlanReviewArtifact(await readFile(join(worktree, '.docs/plan-review/worktree.md'), 'utf8')))
+    expect(await paths(worktree)).toEqual([...before, '.docs/plan-review/active-feature.md'].sort());
+    expect(parsePlanReviewArtifact(await readFile(join(worktree, '.docs/plan-review/active-feature.md'), 'utf8')))
       .toMatchObject({ authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider' });
     const events = (await readFile(join(canonical, '.pipeline', 'composer-events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(events.map((event) => event.type)).toEqual(['plan_review_dispatched', 'plan_review_completed']);
@@ -88,7 +89,7 @@ describe('compose plan-review command surface', () => {
       }) as any,
     });
     expect(code).toBe(0);
-    await expect(readFile(join(worktree, '.docs/plan-review/worktree.md'), 'utf8')).resolves.toContain('reviewerProvider');
+    await expect(readFile(join(worktree, '.docs/plan-review/active-feature.md'), 'utf8')).resolves.toContain('reviewerProvider');
     expect(errors.join('\n')).toContain('event ledger write failed');
   });
 
@@ -101,7 +102,7 @@ describe('compose plan-review command surface', () => {
       providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
     });
     expect(code).toBe(0);
-    await expect(readFile(join(worktree, '.docs/plan-review/worktree.md'), 'utf8')).resolves.toContain('reviewerProvider');
+    await expect(readFile(join(worktree, '.docs/plan-review/active-feature.md'), 'utf8')).resolves.toContain('reviewerProvider');
     expect(errors.join('\n')).toContain('event ledger write failed');
   });
 });

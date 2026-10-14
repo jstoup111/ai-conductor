@@ -23,6 +23,7 @@
 import { spawn } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { execa } from 'execa';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
@@ -142,6 +143,19 @@ export const ENGINEER_SUBCOMMANDS = [
   'projects', 'dep-audit', 'worktree', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
+
+/** Resolve the authored feature identity from the engineer worktree's spec branch. */
+async function resolvePlanReviewFeatureSlug(worktree: string): Promise<string | undefined> {
+  const result = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+    cwd: worktree,
+    reject: false,
+  });
+  if (result.exitCode !== 0) return undefined;
+  const branch = result.stdout.trim();
+  if (!branch.startsWith('spec/')) return undefined;
+  const slug = branch.slice('spec/'.length);
+  return isSpecSlug(slug) ? slug : undefined;
+}
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
@@ -1387,7 +1401,11 @@ export async function dispatchEngineer(
       catch (error) { printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`); return 1; }
       const configResult = await loadMergedConfig(worktree);
       if (!configResult.ok) { printErr(`engineer plan-review: ${configResult.error.message}`); return 1; }
-      const planStem = basename(worktree);
+      const planStem = await resolvePlanReviewFeatureSlug(worktree);
+      if (!planStem) {
+        printErr(`engineer plan-review: worktree must be on a canonical spec/<slug> branch to resolve its active feature plan.`);
+        return 1;
+      }
       try { await access(join(worktree, '.docs', 'plans', `${planStem}.md`)); }
       catch { printErr(`engineer plan-review: active feature plan .docs/plans/${planStem}.md is required in the worktree.`); return 1; }
       const events = new ConductorEventEmitter();
