@@ -377,7 +377,6 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'unattributed_progress',
   'build_no_progress',
   'build_stall',
-  'pipeline_closeout',
   'pipeline_tail_diagnostic',
   'renderer_error',
   'provider_attempt',
@@ -1025,7 +1024,6 @@ describe('event sink subscriptions', () => {
       'build_progress',
       'build_no_progress',
       'build_active_stall',
-      'pipeline_closeout',
       'group_member_step',
       'gate_verdict',
       'kickback',
@@ -1057,7 +1055,6 @@ describe('event sink subscriptions', () => {
       'build_progress',
       'build_no_progress',
       'build_active_stall',
-      'pipeline_closeout',
       'group_member_step',
       'gate_verdict',
       'kickback',
@@ -1512,32 +1509,6 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('renders pipeline closeouts without persisting the pipeline-owned ledger event', () => {
-    expect({
-      sinks: EVENT_SINKS.pipeline_closeout,
-      rendered: renderedEventTypes().includes('pipeline_closeout'),
-      persisted: persistedEventTypes().includes('pipeline_closeout'),
-    }).toEqual({
-      sinks: { render: true, persist: false, audit: false, otel: true },
-      rendered: true,
-      persisted: false,
-    });
-  });
-
-  it('keeps closeout starts off every engine sink', () => {
-    const sinks = EVENT_SINKS as Record<string, SinkDeclaration>;
-
-    expect({
-      sinks: sinks.pipeline_closeout_started,
-      rendered: renderedEventTypes().includes('pipeline_closeout_started' as never),
-      persisted: persistedEventTypes().includes('pipeline_closeout_started' as never),
-    }).toEqual({
-      sinks: { render: false, persist: false, audit: false, otel: false },
-      rendered: false,
-      persisted: false,
-    });
-  });
-
   it('renders and persists tail diagnostics without widening audit or OTel sinks', () => {
     expect(EVENT_SINKS.pipeline_tail_diagnostic).toEqual({
       render: true,
@@ -1715,7 +1686,6 @@ describe('event sink subscriptions', () => {
     const neverPersisted = [
       'loop_converged',
       'build_review_base',
-      'pipeline_closeout',
       'retry_decision',
       ...NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES,
     ] satisfies Array<ConductorEvent['type']>;

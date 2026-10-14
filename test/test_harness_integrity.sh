@@ -1166,71 +1166,26 @@ else
   assert "pipeline SKILL.md exists" 1
 fi
 
-# ── Pipeline evaluator-closeout boundary contract ────────────────────────────
-# The prose gate is the implementation for pipeline-runner sessions. Exercise
-# the semantic predicate against destructive fixtures so its assertions cannot
-# silently devolve into a keyword-presence check.
-pipeline_closeout_gate_contract_holds() {
+# ── Pipeline batch boundary contract ─────────────────────────────────────────
+pipeline_batch_boundary_contract_holds() {
   local skill_file="$1"
-
-  grep -qF 'pipeline_closeout' "$skill_file" \
-    && grep -qF 'obligation` is exactly `evaluator`' "$skill_file" \
-    && grep -qF 'An event for another obligation does not satisfy this check.' "$skill_file" \
-    && grep -qF 'A missing or empty `review.json` remains an independent hard gate:' "$skill_file" \
-    && grep -qF 'Batch N blocked: missing recorded closeout event for evaluator' "$skill_file" \
-    && grep -qF 'a valid evaluator closeout record cannot cure an empty' "$skill_file" \
-    && grep -qF 'a non-empty review cannot cure an absent or mismatched evaluator record' "$skill_file" \
-    && grep -qF 'ai-conductor closeout-event start evaluator' "$skill_file" \
-    && grep -qF 'ai-conductor closeout-event end evaluator' "$skill_file" \
-    && ! grep -qE 'closeout-event evaluator <started-at|<started-at-ms>|<ended-at-ms>' "$skill_file"
+  grep -qF '`BATCH_AFFECTED_TESTS`' "$skill_file" \
+    && grep -qi 'simplify' "$skill_file" \
+    && grep -qi 'linter' "$skill_file" \
+    && grep -qi 'orphaned' "$skill_file" \
+    && ! grep -qiE 'HARD GATE: Evaluator dispatch|closeout-event|batches_with_evaluator' "$skill_file"
 }
-
 if [ -f "$_pipeline_skill" ]; then
-  closeout_missing_evaluator_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-closeout-missing-evaluator.XXXXXX")"
-  closeout_empty_review_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-closeout-empty-review.XXXXXX")"
-  closeout_other_obligation_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-closeout-other-obligation.XXXXXX")"
-  closeout_legacy_timestamp_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-closeout-legacy-timestamp.XXXXXX")"
-
-  sed 's/Batch N blocked: missing recorded closeout event for evaluator/Batch N blocked: closeout event missing/' \
-    "$_pipeline_skill" >"$closeout_missing_evaluator_fixture"
-  sed 's/A missing or empty `review.json` remains an independent hard gate:/An empty review is advisory:/' \
-    "$_pipeline_skill" >"$closeout_empty_review_fixture"
-  sed 's/An event for another obligation does not satisfy this check\./An event for another obligation satisfies this check./' \
-    "$_pipeline_skill" >"$closeout_other_obligation_fixture"
-  sed 's/ai-conductor closeout-event end evaluator/ai-conductor closeout-event evaluator <started-at-ms> <ended-at-ms>/' \
-    "$_pipeline_skill" >"$closeout_legacy_timestamp_fixture"
-
-  if pipeline_closeout_gate_contract_holds "$closeout_missing_evaluator_fixture"; then
-    assert "pipeline closeout gate rejects a missing evaluator blocker fixture" 1
-  else
-    assert "pipeline closeout gate rejects a missing evaluator blocker fixture" 0
-  fi
-
-  if pipeline_closeout_gate_contract_holds "$closeout_empty_review_fixture"; then
-    assert "pipeline closeout gate rejects an empty-review-independent-blocker fixture" 1
-  else
-    assert "pipeline closeout gate rejects an empty-review-independent-blocker fixture" 0
-  fi
-
-  if pipeline_closeout_gate_contract_holds "$closeout_other_obligation_fixture"; then
-    assert "pipeline closeout gate rejects an other-obligation fixture" 1
-  else
-    assert "pipeline closeout gate rejects an other-obligation fixture" 0
-  fi
-
-  if pipeline_closeout_gate_contract_holds "$closeout_legacy_timestamp_fixture"; then
-    assert "pipeline closeout gate rejects a restored timestamp command fixture" 1
-  else
-    assert "pipeline closeout gate rejects a restored timestamp command fixture" 0
-  fi
-
-  if pipeline_closeout_gate_contract_holds "$_pipeline_skill"; then
-    assert "pipeline closeout gate requires evaluator evidence and independent review evidence" 0
-  else
-    assert "pipeline closeout gate requires evaluator evidence and independent review evidence" 1
-  fi
-
-  rm -f "$closeout_missing_evaluator_fixture" "$closeout_empty_review_fixture" "$closeout_other_obligation_fixture" "$closeout_legacy_timestamp_fixture"
+  evaluator_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-evaluator.XXXXXX")"
+  closeout_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-closeout.XXXXXX")"
+  cp "$_pipeline_skill" "$evaluator_fixture"
+  cp "$_pipeline_skill" "$closeout_fixture"
+  printf '\nHARD GATE: Evaluator dispatch is mandatory at required batch boundaries.\n' >>"$evaluator_fixture"
+  printf '\nai-conductor closeout-event start evaluator\n' >>"$closeout_fixture"
+  pipeline_batch_boundary_contract_holds "$_pipeline_skill"; assert "pipeline batch boundary is evaluator-free" $?
+  pipeline_batch_boundary_contract_holds "$evaluator_fixture"; test $? -ne 0; assert "pipeline batch boundary rejects evaluator fixture" $?
+  pipeline_batch_boundary_contract_holds "$closeout_fixture"; test $? -ne 0; assert "pipeline batch boundary rejects closeout fixture" $?
+  rm -f "$evaluator_fixture" "$closeout_fixture"
 fi
 
 # ── 11. Issue-template YAML validity and blank-issues guard ─────────────────

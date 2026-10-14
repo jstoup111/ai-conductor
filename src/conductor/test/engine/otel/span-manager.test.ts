@@ -849,60 +849,6 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
   });
 });
 
-// ── Task 19: pipeline closeout span events ──────────────────────────────────
-
-describe('Task 19: pipeline_closeout span event', () => {
-  it('falls back to the active run span when no build step span is open', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
-    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-    await emitter.emit({
-      type: 'pipeline_closeout',
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      ts: 1_788_045_067_790,
-    });
-    await emitter.emit({ type: 'feature_complete' });
-    await vis.stop();
-
-    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
-    const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
-    expect(closeout?.attributes).toMatchObject({
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      durationMs: 120_000,
-    });
-  });
-
-  it('keeps untrusted closeout timing attributes without a duration', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({
-      type: 'pipeline_closeout',
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584_758_500,
-      endedAt: 1_788_045_067_588_425_500,
-      ts: 1_788_045_067_588_425_500,
-    });
-    await emitter.emit({ type: 'feature_complete' });
-    await vis.stop();
-
-    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
-    const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
-    expect(closeout?.attributes).toMatchObject({
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584_758_500,
-      endedAt: 1_788_045_067_588_425_500,
-    });
-    expect(closeout?.attributes).not.toHaveProperty('durationMs');
-  });
-});
-
 describe('Task 9: execution-correlated spans', () => {
   it('keeps interleaved same-name configured executions as distinct member spans', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);

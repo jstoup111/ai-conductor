@@ -482,36 +482,6 @@ describe('daemon state-store command boundary (Task 17)', () => {
   });
 });
 
-describe('daemon closeout rendering', () => {
-  // Covers: task:3
-  it('renders trusted closeout duration', () => {
-    const lines: string[] = [];
-
-    renderDaemonEvent({
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      ts: 1_788_045_067_790,
-    }, (line) => lines.push(line));
-
-    expect(lines).toEqual(['· ✓ closeout evaluator (120000ms)']);
-  });
-
-  it('renders unavailable closeout duration', () => {
-    const lines: string[] = [];
-
-    renderDaemonEvent({
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 1_788_012_400_000,
-      endedAt: 178_801_157_372_296_540,
-      ts: 1_788_012_400_000,
-    }, (line) => lines.push(line));
-
-    expect(lines).toEqual(['· ✓ closeout evaluator (duration unavailable)']);
-  });
-});
 
 describe('protected artifact rotation rendering', () => {
   // Covers: task:9

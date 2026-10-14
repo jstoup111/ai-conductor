@@ -36,7 +36,7 @@ describe('guardDaemonSessionInvocation', () => {
     ['overlap-scan', true],
     ['plan-protected-targets', true],
     ['manual-test-record', true],
-    ['closeout-event', true],
+    ['closeout-event', false],
     ['derive-feedback', true],
     ['scope-check', true],
     ['task-membership-check', true],
@@ -108,7 +108,6 @@ describe('guardDaemonSessionInvocation', () => {
       argvFor('overlap-scan', '--files', 'a,b'),
       argvFor('plan-protected-targets', '.docs/plans/x.md'),
       argvFor('manual-test-record', '--skip', '--reason', 'r'),
-      argvFor('closeout-event', 'evaluator', '1', '2'),
       argvFor('derive-feedback', '--sha', 'abc'),
       // git-hook-assets.ts — commit-msg records containment from the same
       // daemon-managed maker session that authored the commit.

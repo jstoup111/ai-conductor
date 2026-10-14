@@ -390,6 +390,26 @@ else
   fail "batch boundary must retain verification without evaluator dispatch"
 fi
 
+# Batch boundaries retain their own verification discipline; an evaluator is
+# neither a required dispatch nor a gate-satisfaction record.
+batch_boundary_contract_holds() {
+  local skill_file="$1"
+  grep -qF '`BATCH_AFFECTED_TESTS`' "$skill_file" \
+    && grep -qi 'simplify' "$skill_file" \
+    && grep -qi 'linter' "$skill_file" \
+    && grep -qi 'orphaned' "$skill_file" \
+    && ! grep -qiE 'HARD GATE: Evaluator dispatch|closeout-event|batches_with_evaluator' "$skill_file"
+}
+batch_boundary_fixture="$(mktemp "${TMPDIR:-/tmp}/pipeline-batch-boundary.XXXXXX")"
+cp "$SKILL_FILE" "$batch_boundary_fixture"
+printf '\nHARD GATE: Evaluator dispatch is mandatory at required batch boundaries.\n' >>"$batch_boundary_fixture"
+if batch_boundary_contract_holds "$SKILL_FILE" && ! batch_boundary_contract_holds "$batch_boundary_fixture"; then
+  pass "batch boundary retains verification without evaluator dispatch"
+else
+  fail "batch boundary must reject evaluator dispatch"
+fi
+rm -f "$batch_boundary_fixture"
+
 # Code review keeps routing batches touching security boundaries to the higher
 # capability evaluator, while its quality review scope remains non-security.
 if [ -f "$CODE_REVIEW_SKILL" ] \

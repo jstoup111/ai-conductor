@@ -204,8 +204,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_progress: 'not-audited-by-design',
   step_in_flight: 'not-audited-by-design',
   build_no_progress: 'not-audited-by-design',
-  pipeline_closeout_started: 'not-audited-by-design',
-  pipeline_closeout: 'not-audited-by-design',
   pipeline_tail_diagnostic: 'not-audited-by-design',
   renderer_error: 'not-audited-by-design',
   when_skip: 'not-audited-by-design', // skipped steps must have zero records
@@ -749,18 +747,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3, activity: 'quiet' },
   step_in_flight: { type: 'step_in_flight', step: 'test_suite', elapsedMs: 1 },
   build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3, activity: 'quiet' },
-  pipeline_closeout_started: {
-    type: 'pipeline_closeout_started',
-    obligation: 'evaluator',
-    ts: 100,
-  },
-  pipeline_closeout: {
-    type: 'pipeline_closeout',
-    obligation: 'evaluator',
-    startedAt: 100,
-    endedAt: 140,
-    ts: 140,
-  },
   pipeline_tail_diagnostic: {
     type: 'pipeline_tail_diagnostic',
     reason: 'malformed-line',

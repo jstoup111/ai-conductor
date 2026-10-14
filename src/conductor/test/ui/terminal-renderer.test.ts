@@ -12,7 +12,7 @@ const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'credentials_park_progress', 'provider_fallback', 'session_policy', 'when_skip',
   'parallel_started', 'parallel_completed', 'parallel_failure', 'tier_skip', 'config_skip',
   'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached',
-  'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall', 'pipeline_closeout',
+  'build_progress', 'unattributed_progress', 'build_no_progress', 'build_active_stall',
   'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
   'renderer_error', 'pipeline_tail_diagnostic',
   'session_command_refused', 'github_bypass_attempt', 'github_bypass_result',
@@ -314,31 +314,6 @@ describe('TerminalRenderer', () => {
     await renderer.handle({ type: 'coverage_binding_judged' } as ConductorEvent);
 
     expect(stream.output()).not.toContain('coverage_binding_judged');
-  });
-
-  // Covers: task:3
-  it('renders trusted closeout duration', async () => {
-    await renderer.handle({
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      ts: 1_788_045_067_790,
-    });
-
-    expect(stream.output()).toContain('closeout evaluator (120000ms)');
-  });
-
-  it('renders unavailable closeout duration', async () => {
-    await renderer.handle({
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 1_788_012_400_000,
-      endedAt: 178_801_157_372_296_540,
-      ts: 1_788_012_400_000,
-    });
-
-    expect(stream.output()).toContain('closeout evaluator (duration unavailable)');
   });
 
   it('renders active build stalls with their elapsed time and selected action', async () => {

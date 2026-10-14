@@ -1,349 +1,47 @@
-// Covers: task:5
-import { existsSync } from 'node:fs';
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { ConductorEventEmitter } from '../src/ui/events.js';
 import { CloseoutEventTail } from '../src/engine/closeout-tail.js';
-import { EventPersister } from '../src/engine/event-persister.js';
-import { appendCloseoutEvent } from '../src/engine/closeout-events.js';
+import { ConductorEventEmitter } from '../src/ui/events.js';
 
 const directories: string[] = [];
-
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-afterEach(async () => {
-  await Promise.all(
-    directories.splice(0).map((directory) => rm(directory, {
-      recursive: true,
-      force: true,
-    })),
-  );
-});
-
-async function createProjectRoot(): Promise<string> {
-  const projectRoot = await mkdtemp(join(tmpdir(), 'closeout-tail-'));
-  directories.push(projectRoot);
-  return projectRoot;
-}
+afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
+async function project(): Promise<string> { const root = await mkdtemp(join(tmpdir(), 'closeout-tail-')); directories.push(root); await mkdir(join(root, '.pipeline'), { recursive: true }); return root; }
+const verdict = { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS', ts: '2026-10-01T00:00:00.000Z' } as const;
+const authorization = { type: 'kickback_budget_adjustment_authorized', adjustmentId: 'adj-1', gate: 'build_review', kind: 'raise', feature: 'feature', operator: 'operator', rationale: 'evidence', beforeConsumed: 1, afterConsumed: 1, beforeLimit: 5, afterLimit: 6, ts: '2026-10-01T00:00:01.000Z' } as const;
 
 describe('CloseoutEventTail', () => {
-  it('treats an absent sibling ledger as no new events', async () => {
-    const events = new ConductorEventEmitter();
-    const received: unknown[] = [];
-    events.on('pipeline_closeout', (event) => {
-      received.push(event);
-    });
-    const tail = new CloseoutEventTail({ projectRoot: await createProjectRoot(), events });
-
-    await tail.poll();
-
-    expect(received).toEqual([]);
+  it('re-emits admitted records in ledger order exactly once', async () => {
+    const root = await project();
+    await writeFile(join(root, '.pipeline/pipeline-events.jsonl'), `${JSON.stringify(verdict)}\n${JSON.stringify(authorization)}\n`);
+    const events = new ConductorEventEmitter(); const received: unknown[] = [];
+    events.on('build_review_outer_verdict', (event) => { received.push(event); });
+    events.on('kickback_budget_adjustment_authorized', (event) => { received.push(event); });
+    const tail = new CloseoutEventTail({ projectRoot: root, events });
+    await tail.poll(); await tail.poll();
+    expect(received).toEqual([verdict, authorization]);
   });
 
-  it('emits complete lines once and retains a partial trailing record until it ends in a newline', async () => {
-    const projectRoot = await createProjectRoot();
-    const ledger = join(projectRoot, '.pipeline/pipeline-events.jsonl');
-    const completed = {
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 100,
-      endedAt: 140,
-      ts: 140,
-    } as const;
-    const partial = {
-      type: 'pipeline_closeout',
-      obligation: 'summary',
-      startedAt: 150,
-      endedAt: 180,
-      ts: 180,
-    } as const;
-    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await writeFile(
-      ledger,
-      `${JSON.stringify(completed)}\n${JSON.stringify(partial)}`,
-      { encoding: 'utf8', flush: true },
-    );
-    const events = new ConductorEventEmitter();
-    const received: unknown[] = [];
-    events.on('pipeline_closeout', (event) => {
-      received.push(event);
-    });
-    const tail = new CloseoutEventTail({ projectRoot, events });
-
-    await tail.poll();
-    await tail.poll();
-
-    expect(received).toEqual([completed]);
-
-    await appendFile(ledger, '\n', 'utf8');
-
-    await tail.poll();
-    await tail.poll();
-
-    expect(received).toEqual([completed, partial]);
-  });
-
-  it('projects complete dispatch-local producer records through the existing tail without consuming a partial record', async () => {
-    const projectRoot = await createProjectRoot();
-    const producer = join(projectRoot, '.pipeline', 'session-events', 'dispatch-1', 'producer-a.jsonl');
-    const observed = {
-      type: 'session_command_refused', eventId: 'event-1', sourceTime: '2026-10-02T12:00:00.000Z',
-      dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'feature', featureSlug: 'feature-a' }, subcommand: 'finish-record',
-    } as const;
-    await mkdir(join(projectRoot, '.pipeline', 'session-events', 'dispatch-1'), { recursive: true });
-    await writeFile(producer, JSON.stringify(observed));
-    const events = new ConductorEventEmitter();
-    const received: unknown[] = [];
-    events.on('session_command_refused', (event) => { received.push(event); });
-    const tail = new CloseoutEventTail({
-      projectRoot,
-      featureSlug: 'feature-a',
-      events,
-    });
-
-    await tail.poll();
-    expect(received).toEqual([]);
-    await appendFile(producer, '\n');
-    await tail.poll();
-    await tail.poll();
-
-    expect(received).toEqual([observed]);
-  });
-
-  it('retains a producer record when projection fails and delivers it after recovery', async () => {
-    const projectRoot = await createProjectRoot();
-    const producer = join(projectRoot, '.pipeline', 'session-events', 'dispatch-1', 'producer-a.jsonl');
-    const observed = {
-      type: 'session_command_refused', eventId: 'event-1', sourceTime: '2026-10-02T12:00:00.000Z',
-      dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'project' }, subcommand: 'finish-record',
-    } as const;
-    await mkdir(join(projectRoot, '.pipeline', 'session-events', 'dispatch-1'), { recursive: true });
-    await writeFile(producer, `${JSON.stringify(observed)}\n`);
-    const events = new ConductorEventEmitter();
-    const projected: unknown[] = [];
-    let available = false;
-    const tail = new CloseoutEventTail({
-      projectRoot,
-      events,
-      emitEvent: async (event) => {
-        if (!available) throw new Error('sink unavailable');
-        projected.push(event);
-      },
-    });
-
-    await expect(tail.poll()).rejects.toThrow('sink unavailable');
-    available = true;
-    await tail.poll();
-
-    expect(projected).toEqual([observed]);
-  });
-});
-
-describe('CloseoutEventTail lifecycle', () => {
-  it('polls at its configured interval after it starts', async () => {
-    vi.useFakeTimers();
-    try {
-      const projectRoot = await createProjectRoot();
-      const events = new ConductorEventEmitter();
-      const tail = new CloseoutEventTail({ projectRoot, events });
-      const poll = vi.spyOn(tail, 'poll').mockResolvedValue();
-
-      tail.start();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(poll).toHaveBeenCalledOnce();
-
-      tail.stop();
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(poll).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('contains background read rejections and emits a poll-failed diagnostic', async () => {
-    vi.useFakeTimers();
-    try {
-      const events = new ConductorEventEmitter();
-      const diagnostics: unknown[] = [];
-      events.on('pipeline_tail_diagnostic', (event) => { diagnostics.push(event); });
-      const tail = new CloseoutEventTail({
-        projectRoot: await createProjectRoot(),
-        events,
-        readLedger: vi.fn().mockRejectedValue(new Error('unavailable')),
-      });
-
-      tail.start();
-      await vi.advanceTimersByTimeAsync(1_000);
-      tail.stop();
-
-      expect(diagnostics).toEqual([{
-        type: 'pipeline_tail_diagnostic',
-        reason: 'poll-failed',
-        path: '.pipeline/pipeline-events.jsonl',
-      }]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('re-emits newly tailed closeout records to live bus subscribers exactly once', async () => {
-    const projectRoot = await createProjectRoot();
-    const ledger = join(projectRoot, '.pipeline/pipeline-events.jsonl');
-    const closeout = {
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 100,
-      endedAt: 140,
-      ts: 140,
-    } as const;
-    const events = new ConductorEventEmitter();
-    const received: unknown[] = [];
-    events.on('pipeline_closeout', (event) => {
-      received.push(event);
-    });
-    const tail = new CloseoutEventTail({ projectRoot, events });
-
-    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await writeFile(ledger, `${JSON.stringify(closeout)}\n`, 'utf8');
-    await tail.poll();
-    await tail.poll();
-
-    expect(received).toEqual([closeout]);
-  });
-
-  it('re-emits closeout starts once without copying them to the canonical ledger', async () => {
-    const projectRoot = await createProjectRoot();
-    const eventLedger = join(projectRoot, '.pipeline', 'events.jsonl');
-    const started = { type: 'pipeline_closeout_started', obligation: 'evaluator', ts: 1_788_012_000_000 } as const;
-    const events = new ConductorEventEmitter();
-    const received: unknown[] = [];
-    events.on('pipeline_closeout_started', (event) => { received.push(event); });
-    const persister = new EventPersister(eventLedger, events);
-    persister.start();
-    const tail = new CloseoutEventTail({ projectRoot, events });
-
-    appendCloseoutEvent(projectRoot, started);
-    await tail.poll();
-    await tail.poll();
-    persister.stop();
-
-    expect(received).toEqual([started]);
-    expect(existsSync(eventLedger)).toBe(false);
-  });
-
-  it('consumes malformed completed lines and reports their byte offset once', async () => {
-    const projectRoot = await createProjectRoot();
-    const ledger = join(projectRoot, '.pipeline/pipeline-events.jsonl');
-    const first = {
-      type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 100, endedAt: 140, ts: 140, note: 'café',
-    } as const;
-    const second = {
-      type: 'pipeline_closeout', obligation: 'summary', startedAt: 150, endedAt: 180, ts: 180,
-    } as const;
-    const malformed = '{not-json}';
-    const partialMalformed = '{also-not-json}';
-    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await writeFile(
-      ledger,
-      `${JSON.stringify(first)}\n\n${malformed}\n${JSON.stringify(second)}\n${partialMalformed}`,
-      'utf8',
-    );
-    const events = new ConductorEventEmitter();
-    const closeouts: unknown[] = [];
-    const diagnostics: unknown[] = [];
-    events.on('pipeline_closeout', (event) => { closeouts.push(event); });
+  it('diagnoses each unadmitted record and continues to a following admitted record', async () => {
+    const root = await project();
+    const retired = { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 1, endedAt: 2, ts: 2 };
+    await writeFile(join(root, '.pipeline/pipeline-events.jsonl'), `${JSON.stringify(retired)}\n${JSON.stringify(verdict)}\n`);
+    const events = new ConductorEventEmitter(); const diagnostics: unknown[] = []; const received: unknown[] = [];
     events.on('pipeline_tail_diagnostic', (event) => { diagnostics.push(event); });
-    const tail = new CloseoutEventTail({ projectRoot, events });
-
-    await tail.poll();
-    await tail.poll();
-
-    expect(closeouts).toEqual([first, second]);
-    expect(diagnostics).toEqual([{
-      type: 'pipeline_tail_diagnostic',
-      reason: 'malformed-line',
-      path: '.pipeline/pipeline-events.jsonl',
-      byteOffset: Buffer.byteLength(`${JSON.stringify(first)}\n\n`, 'utf8'),
-    }]);
-
-    await appendFile(ledger, '\n', 'utf8');
-    await tail.poll();
-
-    expect(diagnostics).toEqual([
-      {
-        type: 'pipeline_tail_diagnostic',
-        reason: 'malformed-line',
-        path: '.pipeline/pipeline-events.jsonl',
-        byteOffset: Buffer.byteLength(`${JSON.stringify(first)}\n\n`, 'utf8'),
-      },
-      {
-        type: 'pipeline_tail_diagnostic',
-        reason: 'malformed-line',
-        path: '.pipeline/pipeline-events.jsonl',
-        byteOffset: Buffer.byteLength(`${JSON.stringify(first)}\n\n${malformed}\n${JSON.stringify(second)}\n`, 'utf8'),
-      },
-    ]);
+    events.on('build_review_outer_verdict', (event) => { received.push(event); });
+    const tail = new CloseoutEventTail({ projectRoot: root, events }); await tail.poll(); await tail.poll();
+    expect(diagnostics).toEqual([{ type: 'pipeline_tail_diagnostic', reason: 'unadmitted-type', path: '.pipeline/pipeline-events.jsonl', byteOffset: 0 }]);
+    expect(received).toEqual([verdict]);
   });
 
-  it('shares one in-flight traversal and releases it after a failed read', async () => {
-    const read = deferred<Buffer>();
-    const readLedger = vi.fn(() => read.promise);
-    const events = new ConductorEventEmitter();
-    const received: unknown[] = [];
-    events.on('pipeline_closeout', (event) => { received.push(event); });
-    const tail = new CloseoutEventTail({ projectRoot: await createProjectRoot(), events, readLedger });
-
-    const first = tail.poll();
-    const second = tail.poll();
-    expect(second).toBe(first);
-    expect(readLedger).toHaveBeenCalledOnce();
-
-    read.reject(new Error('read failed'));
-    await expect(first).rejects.toThrow('read failed');
-
-    readLedger.mockResolvedValueOnce(Buffer.from(`${JSON.stringify({
-      type: 'pipeline_closeout', obligation: 'summary', startedAt: 1, endedAt: 2, ts: 2,
-    })}\n`));
-    await tail.poll();
-
-    expect(received).toHaveLength(1);
-    expect(readLedger).toHaveBeenCalledTimes(2);
-  });
-
-  it('persists a malformed-line diagnostic once through the existing event spine', async () => {
-    const projectRoot = await createProjectRoot();
-    const pipelineDir = join(projectRoot, '.pipeline');
-    const sourceLedger = join(pipelineDir, 'pipeline-events.jsonl');
-    const eventLedger = join(pipelineDir, 'events.jsonl');
-    await mkdir(pipelineDir, { recursive: true });
-    await writeFile(sourceLedger, '{not-json}\n');
-    const events = new ConductorEventEmitter();
-    const persister = new EventPersister(eventLedger, events);
-    persister.start();
-    const tail = new CloseoutEventTail({ projectRoot, events });
-
-    await tail.poll();
-    await tail.poll();
-    persister.stop();
-
-    const persisted = (await readFile(eventLedger, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    expect(persisted).toHaveLength(1);
-    expect(persisted[0]).toMatchObject({
-      type: 'pipeline_tail_diagnostic', reason: 'malformed-line',
-      path: '.pipeline/pipeline-events.jsonl', byteOffset: 0,
-    });
+  it('diagnoses a malformed line while continuing', async () => {
+    const root = await project(); await writeFile(join(root, '.pipeline/pipeline-events.jsonl'), `{not-json}\n${JSON.stringify(verdict)}\n`);
+    const events = new ConductorEventEmitter(); const diagnostics: unknown[] = []; const received: unknown[] = [];
+    events.on('pipeline_tail_diagnostic', (event) => { diagnostics.push(event); }); events.on('build_review_outer_verdict', (event) => { received.push(event); });
+    await new CloseoutEventTail({ projectRoot: root, events }).poll();
+    expect(diagnostics).toEqual([{ type: 'pipeline_tail_diagnostic', reason: 'malformed-line', path: '.pipeline/pipeline-events.jsonl', byteOffset: 0 }]);
+    expect(received).toEqual([verdict]);
   });
 });

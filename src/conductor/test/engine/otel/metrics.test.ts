@@ -102,13 +102,6 @@ async function recordMetricsWithIdentity(identityAttrs: { project: string; worke
   const recorder = new MetricsRecorder(meterProvider.getMeter('metrics-recorder-test'), identityAttrs);
 
   recorder.onStepClose('build', 25, 1, { input: 100, output: 50 }, 'test-model');
-  recorder.onPipelineCloseout({
-    type: 'pipeline_closeout',
-    obligation: 'simplify',
-    startedAt: 1_788_044_947_584,
-    endedAt: 1_788_045_067_584,
-    ts: 1_788_045_067_790,
-  });
   await meterProvider.forceFlush();
 
   return exporter;
@@ -281,7 +274,6 @@ describe('Task 8: tier remains feature-scoped', () => {
       recorder.onMemorySetup({ type: 'memory_setup', before: 'absent', canonical: true });
       recorder.onGateVerdict('build', 'pass');
       recorder.onKickback('build_review', 'pipeline');
-      recorder.onPipelineCloseout({ type: 'pipeline_closeout', obligation: 'simplify', startedAt: 1_788_044_947_584, endedAt: 1_788_045_067_584, ts: 1_788_045_067_790 });
       recorder.onDaemonBacklog({
         type: 'daemon_backlog_snapshot',
         counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
@@ -301,7 +293,6 @@ describe('Task 8: tier remains feature-scoped', () => {
       const customShipped = points('conductor.feature.shipped').map((point) => point.attributes);
       const nonFeatureNames = [
         'conductor.memory.setup', 'conductor.gate.verdicts', 'conductor.gate.kickbacks',
-        'conductor.pipeline.closeout.duration',
       ];
       const customUntiered = customShipped.find((attrs) => !Object.hasOwn(attrs, 'tier'));
       const customTiered = customShipped.find((attrs) => attrs.tier === 'S');
@@ -487,37 +478,6 @@ describe('Task 2: step-duration histogram advice', () => {
   });
 });
 
-// ── Task 3: closeout-duration histogram advice and descriptions ─────────────
-
-describe('Task 3: closeout-duration histogram advice and descriptions', () => {
-  it('shares duration advice and declares the 8-hour saturation bound for both duration instruments', () => {
-    const createHistogram = vi.fn();
-    const meter = {
-      createHistogram,
-      createCounter: vi.fn(),
-      createGauge: vi.fn(),
-    } as unknown as Meter;
-
-    new MetricsRecorder(meter);
-
-    const durationOptions = Object.fromEntries(createHistogram.mock.calls) as Record<string, {
-      advice?: { explicitBucketBoundaries?: number[] };
-      description?: string;
-    }>;
-
-    expect({
-      closeoutAdvice: durationOptions['conductor.pipeline.closeout.duration']?.advice
-        ?.explicitBucketBoundaries,
-      stepDescription: durationOptions['conductor.step.duration']?.description,
-      closeoutDescription: durationOptions['conductor.pipeline.closeout.duration']?.description,
-    }).toEqual({
-      closeoutAdvice: DURATION_BUCKET_BOUNDARIES_MS,
-      stepDescription: expect.stringContaining('quantiles saturate above 8 h (largest finite bucket boundary)'),
-      closeoutDescription: expect.stringContaining('quantiles saturate above 8 h (largest finite bucket boundary)'),
-    });
-  });
-});
-
 // ── Task 4: step-duration overflow and zero observations ───────────────────
 
 describe('Task 4: step-duration overflow and zero observations', () => {
@@ -545,44 +505,6 @@ describe('Task 4: step-duration overflow and zero observations', () => {
       expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
       expect(point?.value.buckets.counts.at(-1)).toBe(1);
       expect(point?.value.buckets.counts[0]).toBe(1);
-    } finally {
-      await provider.shutdown();
-    }
-  });
-});
-
-// ── Task 5: closeout-duration overflow observation ─────────────────────────
-
-describe('Task 5: closeout-duration overflow observation', () => {
-  it('keeps a closeout overflow observation in the bucket above the largest finite boundary', async () => {
-    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    const provider = new MeterProvider({
-      readers: [new PeriodicExportingMetricReader({ exporter })],
-    });
-
-    try {
-      const recorder = new MetricsRecorder(provider.getMeter('task-5'));
-      const closeout = {
-        type: 'pipeline_closeout',
-        obligation: 'summary',
-        startedAt: 1_788_044_947_584,
-        endedAt: 1_788_074_947_584,
-        ts: 1_788_074_947_584,
-      } as const;
-
-      expect(() => recorder.onPipelineCloseout(closeout)).not.toThrow();
-      await provider.forceFlush();
-
-      const metric = findMetric(exporter, 'conductor.pipeline.closeout.duration');
-      const point = (metric as HistogramMetricData | undefined)?.dataPoints.find(
-        (dataPoint) => dataPoint.attributes['obligation'] === 'summary',
-      );
-
-      expect(point).toBeDefined();
-      expect(point?.value.count).toBe(1);
-      expect(point?.value.sum).toBe(30_000_000);
-      expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
-      expect(point?.value.buckets.counts.at(-1)).toBe(1);
     } finally {
       await provider.shutdown();
     }
@@ -1358,52 +1280,6 @@ describe('feature usage total cost export', () => {
   });
 });
 
-// ── Task 19: closeout duration histogram ────────────────────────────────────
-
-describe('Task 19: closeout duration histogram', () => {
-  it('records the closeout duration with its obligation attribute', async () => {
-    const vis = makeVisualizer(metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-    await emitter.emit({
-      type: 'pipeline_closeout',
-      obligation: 'simplify',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      ts: 1_788_045_067_790,
-    });
-    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
-    await emitter.emit({ type: 'feature_complete' });
-    await vis.stop();
-
-    const metric = findMetric(metricExporter, 'conductor.pipeline.closeout.duration')!;
-    const point = metric.dataPoints.find(
-      (dataPoint) => dataPoint.attributes['obligation'] === 'simplify',
-    );
-    expect(point?.value).toMatchObject({ count: 1, sum: 120_000 });
-  });
-
-  it('skips an untrusted closeout duration', async () => {
-    const vis = makeVisualizer(metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-    await emitter.emit({
-      type: 'pipeline_closeout',
-      obligation: 'simplify',
-      startedAt: 1_788_044_947_584_758_500,
-      endedAt: 1_788_045_067_588_425_500,
-      ts: 1_788_045_067_588_425_500,
-    });
-    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
-    await emitter.emit({ type: 'feature_complete' });
-    await vis.stop();
-
-    expect(findMetric(metricExporter, 'conductor.pipeline.closeout.duration')).toBeUndefined();
-  });
-});
-
 describe('Task 3: metric identity attributes', () => {
   it('adds identity without removing each instrument’s existing attributes', async () => {
     const exporter = await recordMetricsWithIdentity({
@@ -1416,12 +1292,10 @@ describe('Task 3: metric identity attributes', () => {
       duration: findMetric(exporter, 'conductor.step.duration')!.dataPoints.map((point) => point.attributes),
       retries: findMetric(exporter, 'conductor.step.retries')!.dataPoints.map((point) => point.attributes),
       dispatches: findMetric(exporter, 'conductor.step.dispatches')!.dataPoints.map((point) => point.attributes),
-      closeout: findMetric(exporter, 'conductor.pipeline.closeout.duration')!.dataPoints.map((point) => point.attributes),
     }).toEqual({
       duration: [{ step: 'build', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
       retries: [{ step: 'build', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
       dispatches: [{ step: 'build', metering: 'cost-unmetered', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
-      closeout: [{ obligation: 'simplify', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
     });
   });
 
@@ -1449,13 +1323,6 @@ describe('Task 4: bounded metric identity', () => {
       step: 'build',
       status: 'done',
       tokenUsage: { input: 100, output: 50 },
-    });
-    await emitter.emit({
-      type: 'pipeline_closeout',
-      obligation: 'simplify',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      ts: 1_788_045_067_790,
     });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
@@ -1488,13 +1355,11 @@ describe('Task 4: bounded metric identity', () => {
         'conductor.step.duration',
         'conductor.step.retries',
         'conductor.step.dispatches',
-        'conductor.pipeline.closeout.duration',
       ],
       secondInstrumentNames: [
         'conductor.step.duration',
         'conductor.step.retries',
         'conductor.step.dispatches',
-        'conductor.pipeline.closeout.duration',
       ],
       retriesTotal: 2,
     });
