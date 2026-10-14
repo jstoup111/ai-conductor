@@ -1182,9 +1182,21 @@ if [ -f "$_pipeline_skill" ]; then
   cp "$_pipeline_skill" "$closeout_fixture"
   printf '\nHARD GATE: Evaluator dispatch is mandatory at required batch boundaries.\n' >>"$evaluator_fixture"
   printf '\nai-conductor closeout-event start evaluator\n' >>"$closeout_fixture"
-  pipeline_batch_boundary_contract_holds "$_pipeline_skill"; assert "pipeline batch boundary is evaluator-free" $?
-  pipeline_batch_boundary_contract_holds "$evaluator_fixture"; test $? -ne 0; assert "pipeline batch boundary rejects evaluator fixture" $?
-  pipeline_batch_boundary_contract_holds "$closeout_fixture"; test $? -ne 0; assert "pipeline batch boundary rejects closeout fixture" $?
+  if pipeline_batch_boundary_contract_holds "$_pipeline_skill"; then
+    assert "pipeline batch boundary is evaluator-free" 0
+  else
+    assert "pipeline batch boundary is evaluator-free" 1
+  fi
+  if pipeline_batch_boundary_contract_holds "$evaluator_fixture"; then
+    assert "pipeline batch boundary rejects evaluator fixture" 1
+  else
+    assert "pipeline batch boundary rejects evaluator fixture" 0
+  fi
+  if pipeline_batch_boundary_contract_holds "$closeout_fixture"; then
+    assert "pipeline batch boundary rejects closeout fixture" 1
+  else
+    assert "pipeline batch boundary rejects closeout fixture" 0
+  fi
   rm -f "$evaluator_fixture" "$closeout_fixture"
 fi
 
