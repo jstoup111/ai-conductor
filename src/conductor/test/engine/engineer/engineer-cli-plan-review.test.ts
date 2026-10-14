@@ -62,7 +62,7 @@ describe('compose plan-review command surface', () => {
     const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
     await expect(dispatchEngineer(command, {
       registryPath, print: (line) => out.push(line), printErr: (line) => { throw new Error(line); },
-      probeGhVersion: async () => ({ kind: 'ok' }), env: { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' },
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), env: { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' },
       providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
     })).resolves.toBe(0);
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex']);
@@ -78,7 +78,7 @@ describe('compose plan-review command surface', () => {
     const { canonical, worktree, registryPath } = await fixture(); const errors: string[] = [];
     const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
     const code = await dispatchEngineer(command, {
-      registryPath, printErr: (line) => errors.push(line), probeGhVersion: async () => ({ kind: 'ok' }),
+      registryPath, printErr: (line) => errors.push(line), probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       providerExecutor: (async () => {
         await rm(join(canonical, '.pipeline'), { recursive: true, force: true });
         await writeFile(join(canonical, '.pipeline'), 'not a directory', 'utf8');

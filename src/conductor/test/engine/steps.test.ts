@@ -38,8 +38,11 @@ describe('engine/steps', () => {
       'architecture_review_as_built', 'rebase', 'finish',
     ];
 
-    it('has exactly the 22 surviving steps', () => {
+    it('has exactly the 22 surviving steps including plan_review at the DECIDE boundary', () => {
       expect(ALL_STEPS).toHaveLength(22);
+      expect(ALL_STEPS.slice(10, 13).map((step) => step.name)).toEqual([
+        'coherence_check', 'plan_review', 'coverage_binding',
+      ]);
     });
 
     it('has the exact surviving registry in order', () => {
