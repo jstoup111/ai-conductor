@@ -112,6 +112,10 @@ export async function deleteFeatureConductorRefs(
   if (hasDurableChildState) {
     const routingProbe = await probeRefs(git, routingTeardownRefNames(slug));
     complete = complete && routingProbe.complete;
+    // Closure refs are the only durable eligibility evidence for a later
+    // routing teardown. If its bounded probe is incomplete, keep them (and
+    // leave the whole deletion retryable) rather than stranding routing refs.
+    if (!routingProbe.complete) return false;
     existing.push(...routingProbe.existing);
   }
   if (existing.length === 0) return complete;

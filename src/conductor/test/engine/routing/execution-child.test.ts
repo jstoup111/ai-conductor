@@ -29,4 +29,12 @@ describe('resolveExecutionChild', () => {
       .toMatchObject({ source: 'cursor', target: { child: 2, branch: 'feat/c2/demo' } });
     expect(resolveExecutionChild({ kind: 'no-child' }, 'demo')).toEqual({ source: 'none' });
   });
+
+  it('refuses a repair-pending cursor without a routing or revalidation overlay', () => {
+    const cursor = {
+      kind: 'repair-pending' as const, child: c3, position: c3, isLeaf: true, branch: 'feat/demo', repairChildren: [c1],
+    };
+
+    expect(resolveExecutionChild(cursor, 'demo')).toEqual({ source: 'refused', cursor });
+  });
 });

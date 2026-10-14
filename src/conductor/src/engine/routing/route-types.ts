@@ -149,7 +149,8 @@ function parseOutboxEntry(value: unknown): OutboxEntry | undefined {
   if (!isRecord(value)) return undefined;
   const eventId = nonEmptyString(value.eventId);
   const occurredAt = nonEmptyString(value.occurredAt);
-  if (!eventId || !occurredAt || Number.isNaN(Date.parse(occurredAt)) || !isRecord(value.event) || !nonEmptyString(value.event.type)) return undefined;
+  if (!eventId || !occurredAt || Number.isNaN(Date.parse(occurredAt)) || !isRecord(value.event) || !nonEmptyString(value.event.type)
+    || value.event.eventId !== eventId || value.event.occurredAt !== occurredAt) return undefined;
   return { eventId, occurredAt, event: value.event };
 }
 

@@ -724,16 +724,17 @@ export function createProgram(): Command {
     .option('--confirm', 'Apply the migration (default: dry-run only, zero writes)');
 
   // Task subcommand (Task 7). NON-INTERACTIVE: dispatched by index.ts
-  // (detectTaskCommand) before the pipeline boots. Routes to task start/done
+  // (detectTaskCommand) before the pipeline boots. Routes to task start/done/status
   // operations. Declared here so `--help` lists it.
   program
-    .command('task <command> <id>')
-    .description('Manage task execution: task start <id> | task done <id>')
+    .command('task <command> [id]')
+    .description('Manage task execution: task start <id> | task done <id> | task status [--child <n>]')
     .addHelpText(
       'after',
       '\nExamples:\n' +
         '  conduct task start 7               Start task 7 (flip status to in_progress)\n' +
         '  conduct task done 7                Mark task 7 done (clear stamp file)\n' +
+        '  conduct task status                Show rows for the execution child\n' +
         '  conduct task start rem-fr10-1      Start task with alphanumeric id\n',
     );
 

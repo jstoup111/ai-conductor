@@ -21,7 +21,10 @@ const routeRecord = {
   hosts: { 1: 'restacked', 2: 'repairing', 3: 'pending' },
   currentHostIndex: 1,
   receipt: { settlementId: 'settlement-1' },
-  outbox: [{ eventId: 'event-1', occurredAt: '2026-10-12T00:00:00.000Z', event: { type: 'routed_repair_phase' } }],
+  outbox: [{
+    eventId: 'event-1', occurredAt: '2026-10-12T00:00:00.000Z',
+    event: { type: 'routed_repair_phase', eventId: 'event-1', occurredAt: '2026-10-12T00:00:00.000Z' },
+  }],
 };
 
 describe('routed repair durable record parsers', () => {
@@ -44,16 +47,41 @@ describe('routed repair durable record parsers', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, phase: 'settling' }))).toBeUndefined();
   });
 
+  it('rejects outbox events missing or disagreeing with their envelope identity', () => {
+    const missingEventId = structuredClone(routeRecord);
+    delete (missingEventId.outbox[0]!.event as Record<string, unknown>).eventId;
+    expect(parseRouteRecord(JSON.stringify(missingEventId))).toBeUndefined();
+
+    const missingOccurredAt = structuredClone(routeRecord);
+    delete (missingOccurredAt.outbox[0]!.event as Record<string, unknown>).occurredAt;
+    expect(parseRouteRecord(JSON.stringify(missingOccurredAt))).toBeUndefined();
+
+    const mismatched = structuredClone(routeRecord);
+    (mismatched.outbox[0]!.event as Record<string, unknown>).eventId = 'other-event';
+    expect(parseRouteRecord(JSON.stringify(mismatched))).toBeUndefined();
+    expect(parseRevalidationQueueRecord(JSON.stringify({
+      generation: 1,
+      entries: [],
+      outbox: [{ eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z', event: { type: 'child_revalidated' } }],
+    }))).toBeUndefined();
+  });
+
   it('parses valid repair markers and revalidation queues', () => {
     expect(parseRepairMarker(JSON.stringify({ host: 2, roundId: 'r1' }))).toEqual({ host: 2, roundId: 'r1' });
     expect(parseRevalidationQueueRecord(JSON.stringify({
       generation: 3,
       entries: [{ child: 2, closureSha: 'a'.repeat(40), state: 'pending' }],
-      outbox: [{ eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z', event: { type: 'child_revalidated' } }],
+      outbox: [{
+        eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z',
+        event: { type: 'child_revalidated', eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z' },
+      }],
     }))).toEqual({
       generation: 3,
       entries: [{ child: 2, closureSha: 'a'.repeat(40), state: 'pending' }],
-      outbox: [{ eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z', event: { type: 'child_revalidated' } }],
+      outbox: [{
+        eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z',
+        event: { type: 'child_revalidated', eventId: 'event-2', occurredAt: '2026-10-12T00:00:00.000Z' },
+      }],
     });
   });
 

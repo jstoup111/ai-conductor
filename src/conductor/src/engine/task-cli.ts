@@ -26,7 +26,9 @@ import {
 } from './coverage-binding-envelope.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
+import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
+import { readRouteRecord } from './routing/route-record-store.js';
 
 export interface PlanGapInput {
   index: number;
@@ -43,6 +45,7 @@ export type TaskDispatch =
       unverified?: DoneWhenUnverifiedInput[];
       planGap?: PlanGapInput;
     }
+  | { kind: 'status'; child?: string }
   | { kind: 'guide' };
 
 const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
@@ -56,6 +59,7 @@ const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
  * Parse argv for the `task` subcommand.
  *   conduct task start <id>      → {kind:'start', id:'<id>'}
  *   conduct task done <id>       → {kind:'done', id:'<id>'}
+ *   conduct task status [--child <n>] → {kind:'status'}
  *   conduct task [malformed]     → {kind:'guide'}
  *   (any other sub)              → null
  */
@@ -66,8 +70,20 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
   const id = argv[4];
 
   // Missing or unknown verb
-  if (!verb || (verb !== 'start' && verb !== 'done')) {
+  if (!verb || (verb !== 'start' && verb !== 'done' && verb !== 'status')) {
     return { kind: 'guide' };
+  }
+
+  if (verb === 'status') {
+    let child: string | undefined;
+    for (let index = 4; index < argv.length; index++) {
+      if (argv[index] !== '--child') return { kind: 'guide' };
+      const value = argv[index + 1];
+      if (!value || child !== undefined) return { kind: 'guide' };
+      child = value;
+      index++;
+    }
+    return child === undefined ? { kind: 'status' } : { kind: 'status', child };
   }
 
   // Missing or empty id
@@ -143,7 +159,7 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
 
 /**
  * Dispatch the `task` subcommand. Prints guide text or handles the task
- * start/done operations. (Future: this will coordinate with task-status.json)
+ * start/done/status operations.
  *
  * Exit codes:
  *   0 = success
@@ -162,7 +178,10 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
         '  The engine records that evidence and clears the current-task stamp when one is present.\n' +
         '\n' +
         'conduct task done <id> --plan-gap <n> --reason <text>\n' +
-        '  Halt when Done when check <n> cannot be satisfied within the approved plan.',
+        '  Halt when Done when check <n> cannot be satisfied within the approved plan.\n' +
+        '\n' +
+        'conduct task status [--child <n>]\n' +
+        '  Report flat task-status rows for the execution child and its active routed tasks.',
     );
     return 2;
   }
@@ -177,7 +196,13 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
   // the resolver is immaterial here, but retaining the one resolver keeps the
   // default aligned with conductor and the recovery commands.
   const execution = resolveExecutionChild(cursor, 'task-cli');
+  if (execution.source === 'refused') {
+    console.error(`[task-cli] active child resolution refused (${cursor.kind})`);
+    return 1;
+  }
   const selectedChild = cmd.child ?? ('target' in execution ? String(execution.target.child) : undefined);
+  let selectedChildId: ReturnType<typeof parseChildId>;
+  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>> | undefined;
 
   if (selectedChild !== undefined) {
     const child = parseChildId(selectedChild);
@@ -189,12 +214,13 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
       console.error(`[task-cli] child ${child} has no child state (.pipeline/children/${child}/ does not exist)`);
       return 1;
     }
-    const envelope = await readCoverageBindingEnvelope(projectRoot, coverageBindingFilesystem);
+    envelope = await readCoverageBindingEnvelope(projectRoot, coverageBindingFilesystem);
     if (!envelope?.sliceMembership) {
       console.error('[task-cli] no slice membership is recorded for the feature (coverage-binding envelope missing)');
       return 1;
     }
-    if (!isEngineAppendedRemediationTaskId(cmd.id)) {
+    selectedChildId = child;
+    if (cmd.kind !== 'status' && !isEngineAppendedRemediationTaskId(cmd.id)) {
       const membership = envelope.sliceMembership.taskSlices[cmd.id];
       if (!projectChildOwnership(envelope, child).taskIds.includes(cmd.id)) {
         if (membership === undefined) {
@@ -207,6 +233,15 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     }
   }
 
+  if (cmd.kind === 'status') {
+    return runTaskStatus(
+      projectRoot,
+      selectedChildId,
+      envelope,
+      execution.source === 'routed-host' ? execution.roundId : undefined,
+    );
+  }
+
   if (cmd.kind === 'start') {
     return runTaskStart(projectRoot, cmd.id);
   }
@@ -217,6 +252,59 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
 
   // Should never reach here
   return 2;
+}
+
+/** Reports task-status rows without creating per-child status files. */
+async function runTaskStatus(
+  projectRoot: string,
+  child: ReturnType<typeof parseChildId>,
+  envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>> | undefined,
+  routedRoundId?: Parameters<typeof readRouteRecord>[2],
+): Promise<number> {
+  let status: { tasks?: unknown };
+  try {
+    status = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf8')) as { tasks?: unknown };
+  } catch (error) {
+    console.error(`[task-cli] could not read task-status.json: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  if (!Array.isArray(status.tasks)) {
+    console.error('[task-cli] task-status.json does not have a tasks array');
+    return 1;
+  }
+
+  const taskIds = new Set(child === undefined || !envelope
+    ? []
+    : projectChildOwnership(envelope, child).taskIds);
+  if (child !== undefined && routedRoundId !== undefined) {
+    const routed = await routedTaskIds(projectRoot, child, routedRoundId);
+    if (routed === undefined) {
+      console.error('[task-cli] active routed task allocation is unavailable');
+      return 1;
+    }
+    for (const id of routed) taskIds.add(id);
+  }
+  const rows = child === undefined
+    ? status.tasks
+    : status.tasks.filter((task) => task !== null && typeof task === 'object' && taskIds.has((task as Record<string, unknown>).id as string));
+  console.log(JSON.stringify(rows, null, 2));
+  return 0;
+}
+
+async function routedTaskIds(
+  projectRoot: string,
+  child: NonNullable<ReturnType<typeof parseChildId>>,
+  roundId: Parameters<typeof readRouteRecord>[2],
+): Promise<readonly string[] | undefined> {
+  try {
+    const head = await execa('git', ['symbolic-ref', '-q', '--short', 'HEAD'], { cwd: projectRoot, reject: false });
+    const slug = head.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
+    if (!slug) return undefined;
+    const record = await readRouteRecord(projectRoot, slug, roundId);
+    return record.kind === 'record' ? record.record.allocation[child]?.remTaskIds ?? [] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** CLI commands may begin in a nested worktree directory; non-Git fixtures

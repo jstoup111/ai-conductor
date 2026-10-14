@@ -898,9 +898,10 @@ file. Use `config read conductor.<key>` or `config read spec_owner` to inspect t
 ai-conductor task start <id>
 ai-conductor task done <id> [--done-when <n>=<evidence>]... [--unverified <n>=<reason>]...
 ai-conductor task done <id> --plan-gap <n> --reason <text>
+ai-conductor task status [--child <k>]
 ```
 
-Both verbs accept an optional `--child <k>`; see [Per-child selection](#per-child-selection---child).
+All three verbs accept an optional `--child <k>`; see [Per-child selection](#per-child-selection---child).
 
 Exactly two positionals: the verb and a task id matching `[A-Za-z0-9._-]+` (for example `7` or
 `rem-fr10-1`). A missing or unknown verb, or a missing id, prints the guide to stderr and exits 2.
@@ -926,6 +927,10 @@ exit-0, no-write behavior. A stamp holding a different id prints `cannot clear t
 stamp is <other>` and exits 1 with both the stamp and `task-status.json` untouched. A matching stamp
 is removed after a successful close. See [gates](../explanation/gates.md).
 
+`status` is read-only. It prints the flat `.pipeline/task-status.json` rows belonging to the selected
+child. Without `--child`, it uses the execution child; during an active routed repair it also includes
+that round's routed `rem-*` rows. It never creates a per-child task-status file.
+
 ### Per-child selection (`--child`)
 
 `task`, `rewind`, and `kickback-budget` accept `--child <k>` to select one child of a stacked
@@ -940,7 +945,8 @@ resolved, for example on a diverged stack, these commands exit 1 before any read
 `rewind` and `kickback-budget` it falls through to `error: unknown command` (exit 1).
 
 `task start|done --child <k>` also requires the coverage-binding envelope's slice membership to place
-the task in child `k`. A missing envelope, an unmapped task, or a task in another child exits 1.
+the task in child `k`. `task status` uses that same membership to filter its output. A missing envelope,
+an unmapped task, or a task in another child exits 1.
 Engine-appended remediation task ids skip the membership check. After validation the verb runs
 unchanged against the flat `task-status.json` and `current-task`.
 

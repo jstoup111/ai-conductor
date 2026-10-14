@@ -4,11 +4,14 @@ import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChildId } from '../../src/engine/child-context.js';
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 // Record every git invocation made through the production git runner, and every
 // restack entry-function call, without changing their behavior.
@@ -77,7 +80,7 @@ const authorizedGate = {
 };
 
 /** Two-child stack whose closed child 1 has operator commit X past its closure. */
-async function repairPendingFixture(): Promise<{ root: string; worktree: string }> {
+async function repairPendingFixture(withRepair = true): Promise<{ root: string; worktree: string }> {
   const root = await mkdtemp(join(tmpdir(), 'recovery-cli-sweep-'));
   roots.push(root);
   await git(root, ['init', '-q', '-b', 'main']);
@@ -92,11 +95,13 @@ async function repairPendingFixture(): Promise<{ root: string; worktree: string 
   await git(worktree, ['branch', 'feat/c1/feature', 'feat/daemon-feature']);
   const closure = (await git(worktree, ['rev-parse', 'HEAD'])).trim();
   await git(worktree, ['update-ref', 'refs/conductor/feature/closed/c1', closure]);
-  await git(worktree, ['checkout', '-q', 'feat/c1/feature']);
-  await writeFile(join(worktree, 'operator-change.txt'), 'X\n');
-  await git(worktree, ['add', 'operator-change.txt']);
-  await git(worktree, ['commit', '-qm', 'operator change X']);
-  await git(worktree, ['checkout', '-q', 'feat/daemon-feature']);
+  if (withRepair) {
+    await git(worktree, ['checkout', '-q', 'feat/c1/feature']);
+    await writeFile(join(worktree, 'operator-change.txt'), 'X\n');
+    await git(worktree, ['add', 'operator-change.txt']);
+    await git(worktree, ['commit', '-qm', 'operator change X']);
+    await git(worktree, ['checkout', '-q', 'feat/daemon-feature']);
+  }
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
   await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n');
   await writeCoverageBindingEnvelope(worktree, {
@@ -143,7 +148,7 @@ function refWritingCalls(calls: readonly string[][]): string[][] {
 
 describe('read-only CLI resolutions while stack repair is pending (sweep)', () => {
   // Covers: task:29
-  it('reports child 2 from consumeResumeAuthorizations, kickback-budget inspect, task and the rewind refusal with no ref write, journal write, restack entry or restack event', async () => {
+  it('refuses un-overlaid repair-pending state without a ref write, journal write, restack entry or restack event', async () => {
     // Test setup imports part of the engine graph; reload it so every consumer
     // binds the recording git runner and restack spies rather than cached originals.
     vi.resetModules();
@@ -165,9 +170,9 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
         readLiveHaltClass: async () => 'needs-human',
         readLiveHaltGeneration: async () => 'g1',
         clearHalt,
-      } as never)).resolves.toEqual(['feature']);
-      expect(clearHalt).toHaveBeenCalledTimes(1);
-      expect((await readKickbackLedger(worktree, 2 as ChildId)).gates.build_review?.resumeAuthorization?.consumed).toBe(true);
+      } as never)).resolves.toEqual([]);
+      expect(clearHalt).not.toHaveBeenCalled();
+      expect((await readKickbackLedger(worktree, 2 as ChildId)).gates.build_review?.resumeAuthorization?.consumed).toBe(false);
 
       // kickback-budget inspect with default-child resolution.
       const output: string[] = [];
@@ -175,12 +180,13 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
         { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
         { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
       )).resolves.toBe(0);
-      expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
+      expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature' });
+      expect(JSON.parse(output.join('\n')).child).toBeUndefined();
 
-      // task: default child is child 2, so child 1's task is refused naming child 2.
+      // An un-overlaid repair-pending cursor remains refused for task commands.
       const taskStatusBefore = await readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8');
       await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'start', 'T1'])!, worktree)).resolves.toBe(1);
-      expect(errors).toHaveBeenCalledWith('[task-cli] task T1 belongs to child 1, not child 2');
+      expect(errors).toHaveBeenCalledWith('[task-cli] active child resolution refused (repair-pending)');
       await expect(readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8')).resolves.toBe(taskStatusBefore);
 
       // rewind refusal for the closed child.
@@ -200,5 +206,46 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
     expect(recorded.restack).toEqual([]);
     const events = await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8').catch(() => '');
     expect(events.split('\n').filter((line) => line.includes('"type":"restack_'))).toEqual([]);
+  });
+
+  it('reports the routed host membership plus its active round tasks, and otherwise reports the cursor child rows', async () => {
+    vi.resetModules();
+    const { detectTaskCommand, dispatchTaskCommand } = await import('../../src/engine/task-cli.js');
+    const { worktree } = await repairPendingFixture();
+    const routeRound = parseRoundId('r1')!;
+    await writeFile(join(worktree, '.ai-conductor', 'config.yml'),
+      'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+    const writeRef = async (ref: string, value: unknown) => {
+      const blob = (await execa('git', ['hash-object', '-w', '--stdin'], { cwd: worktree, input: JSON.stringify(value) })).stdout.trim();
+      await git(worktree, ['update-ref', ref, blob]);
+    };
+    await writeRef(repairMarkerRefFor('feature'), { host: 1, roundId: routeRound });
+    await writeRef(routeRecordRefFor('feature', routeRound), {
+      roundId: routeRound, kind: 'audit', phase: 'open', items: [],
+      allocation: { 1: { remTaskIds: ['rem-r1'], blockBodies: ['### Task rem-r1\n'] } },
+      hosts: { 1: 'repairing' }, currentHostIndex: 0, receipt: {}, outbox: [],
+    });
+    await writeFile(join(worktree, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+      { id: 'T1', status: 'pending' }, { id: 'T3', status: 'pending' }, { id: 'rem-r1', status: 'in_progress' },
+    ] }));
+
+    const output: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line) => { output.push(String(line)); });
+    try {
+      await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'status'])!, worktree)).resolves.toBe(0);
+      expect(JSON.parse(output.join('\n')).map((row: { id: string }) => row.id)).toEqual(['T1', 'rem-r1']);
+    } finally {
+      log.mockRestore();
+    }
+
+    const cursorFixture = await repairPendingFixture(false);
+    const cursorOutput: string[] = [];
+    const cursorLog = vi.spyOn(console, 'log').mockImplementation((line) => { cursorOutput.push(String(line)); });
+    try {
+      await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'status'])!, cursorFixture.worktree)).resolves.toBe(0);
+      expect(JSON.parse(cursorOutput.join('\n')).map((row: { id: string }) => row.id)).toEqual(['T3']);
+    } finally {
+      cursorLog.mockRestore();
+    }
   });
 });

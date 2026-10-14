@@ -166,6 +166,32 @@ describe('deleteFeatureConductorRefs (real local Git)', () => {
     await expect(subject.git(['rev-parse', '-q', '--verify', route])).resolves.toMatchObject({ exitCode: 1 });
   });
 
+  it('retains closure refs when the routing probe is incomplete so a later teardown can remove routing state', async () => {
+    const subject = await fixture();
+    const tip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const closure = 'refs/conductor/demo/closed/c1';
+    const route = routeRecordRefFor('demo', parseRoundId('r1')!);
+    await subject.git(['update-ref', closure, tip]);
+    await subject.git(['update-ref', route, tip]);
+
+    let failRoutingProbe = true;
+    const flakyGit: GitRunner = async (args, options) => {
+      if (failRoutingProbe && args[0] === 'cat-file' && args[1] === '--batch-check' && options?.input?.includes(route)) {
+        return { exitCode: 1, stdout: '', stderr: 'routing probe failed' };
+      }
+      return subject.git(args, options);
+    };
+
+    await expect(deleteFeatureConductorRefs('demo', flakyGit)).resolves.toBe(false);
+    await expect(subject.git(['rev-parse', '-q', '--verify', closure])).resolves.toMatchObject({ exitCode: 0 });
+    await expect(subject.git(['rev-parse', '-q', '--verify', route])).resolves.toMatchObject({ exitCode: 0 });
+
+    failRoutingProbe = false;
+    await expect(deleteFeatureConductorRefs('demo', flakyGit)).resolves.toBe(true);
+    await expect(subject.git(['rev-parse', '-q', '--verify', closure])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(subject.git(['rev-parse', '-q', '--verify', route])).resolves.toMatchObject({ exitCode: 1 });
+  });
+
   it('deletes the finite pushed, cascade, leaf, journal and journal-named staging refs in one explicit transaction', async () => {
     const subject = await fixture();
     const { child, tip } = await seedRefs(subject);

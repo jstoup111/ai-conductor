@@ -98,8 +98,8 @@ foreground and opens guided resolution sessions one at a time. See the [CLI refe
 Self-host dispatches wait for root-refresh admission before starting their provider preparation timeout.
 Queued work resumes automatically when the earlier dispatch releases the root.
 
-Daemon-managed sessions can run `ai-conductor task start` and `task done` for task attribution;
-completion remains gate-owned. See [task commands](docs/reference/cli.md#ai-conductor-task).
+Daemon-managed sessions can run `ai-conductor task start`, `task done`, and read-only `task status`
+for task attribution and progress; completion remains gate-owned. See [task commands](docs/reference/cli.md#ai-conductor-task).
 
 The harness runs on Claude Code and Codex. Select the host with the `llm_provider` config key; an ordered
 array such as `[claude, codex]` acts as a fallback ladder. See

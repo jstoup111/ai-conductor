@@ -78,7 +78,10 @@ export async function drainOutbox(worktree: string, stored: StoredRouteRecord, p
   let current = stored;
   while (current.record.outbox.length > 0) {
     const entry = current.record.outbox[0]!;
-    try { await persist(entry.event as ConductorEvent); } catch { return { kind: 'persist-failed' }; }
+    // The durable envelope is the identity authority at this replay boundary.
+    // Parsing has already proved these values agree with the inner event.
+    const event = { ...entry.event, eventId: entry.eventId, occurredAt: entry.occurredAt } as ConductorEvent;
+    try { await persist(event); } catch { return { kind: 'persist-failed' }; }
     const next = { ...current.record, outbox: current.record.outbox.slice(1) };
     const wrote = await writeRouteRecord(worktree, current, next, dependencies);
     if (wrote.kind === 'updated') {
