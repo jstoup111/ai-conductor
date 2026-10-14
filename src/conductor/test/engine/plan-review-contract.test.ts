@@ -90,6 +90,28 @@ describe('plan-review contract', () => {
     expect(result.kind).toBe('accepted');
   });
 
+  it('accepts a task-versus-criterion contradiction with .docs-only evidence', () => {
+    const result = validatePlanReviewResult({ findings: [finding('contradiction', {
+      reference: 'task 1',
+      relatedReference: 'S5.2',
+      evidence: [
+        '.docs/plans/example.md:1',
+        '.docs/stories/example.md:4',
+        '"Build the contract"',
+        '"The contract is validated."',
+      ],
+    })] }, {
+      ...context,
+      sourceFiles: {
+        ...context.sourceFiles,
+        '.docs/plans/example.md': context.planText,
+        '.docs/stories/example.md': '# Stories\n\n## Story 5\nS5.2 The contract is validated.',
+      },
+    });
+
+    expect(result.kind).toBe('accepted');
+  });
+
   it.each([
     ['test-impact', ['"Build the contract"']],
     ['reachability', ['"Build the contract"']],
