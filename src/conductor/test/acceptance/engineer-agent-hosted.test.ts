@@ -793,6 +793,24 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
       join(dir, '.docs', 'decisions', 'adr-2026-09-08-streaming.md'),
       `# ADR-001\n\n**Status:** ${opts.adrStatus ?? 'APPROVED'}\n\n## Decision\n\n1. **Use streaming.**\n\n## Assumptions\n\nNo load-bearing assumptions.\n`,
     );
+    const adrPath = join(dir, '.docs', 'decisions', 'adr-2026-09-08-streaming.md');
+    const planText = await readFile(join(dir, '.docs', 'plans', `${slug}.md`), 'utf8');
+    const storiesText = await readFile(join(dir, '.docs', 'stories', `${slug}.md`), 'utf8');
+    await writeFile(join(dir, '.docs', 'plan-review', `${slug}.md`), renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest: computeReviewedDigest({
+        planText,
+        storiesText,
+        adrTexts: { 'adr-2026-09-08-streaming': await readFile(adrPath, 'utf8') },
+        artifactTexts: { [`.docs/coherence/${slug}.md`]: '' },
+        changedPaths: ['.docs/decisions/adr-2026-09-08-streaming.md'],
+      }),
+    }), 'utf8');
   }
 
   it('non-Small: commits the full DECIDE set (complexity/conflicts/architecture/decisions)', async () => {

@@ -13,7 +13,7 @@
 // with valid Accepted DECIDE artifacts.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile, writeFile, utimes } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, mkdir, readFile, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -195,10 +195,18 @@ function passingRenderDeps() {
 /** Seed the current clean review state required for every non-Small land. */
 async function seedCleanPlanReview(dir: string, stem: string, planText: string, storiesText: string): Promise<void> {
   await mkdir(join(dir, '.docs', 'plan-review'), { recursive: true });
+  const decisionsDir = join(dir, '.docs', 'decisions');
+  const decisionFiles = await readdir(decisionsDir).catch(() => [] as string[]);
+  const adrTexts = Object.fromEntries(await Promise.all(
+    decisionFiles.filter((file) => file.endsWith('.md')).map(async (file) => [
+      file.slice(0, -3),
+      await readFile(join(decisionsDir, file), 'utf8'),
+    ] as const),
+  ));
   const reviewedDigest = computeReviewedDigest({
     planText,
     storiesText,
-    adrTexts: {},
+    adrTexts,
     artifactTexts: { [`.docs/coherence/${stem}.md`]: '' },
     changedPaths: [...await resolveIdeaFiles(dir, repoPath)],
   });
@@ -542,6 +550,7 @@ describe('landSpec ADR citability gate (Task 6)', () => {
     const dir = await seedValidWorktree();
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
     await writeFile(join(dir, '.docs', 'decisions', 'adr-2026-09-08-citable.md'), APPROVED_CITABLE_ADR);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -587,6 +596,7 @@ describe('landSpec ADR citability gate (Task 6)', () => {
     );
     await git(['add', '.docs/decisions/adr-existing.md'], dir);
     await git(['commit', '-m', 'amend ATX ADR body'], dir);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -626,6 +636,7 @@ describe('Task 2: landSpec canonical ADR filename gate', () => {
       join(dir, '.docs', 'decisions', 'adr-2026-09-08-canonical.md'),
       APPROVED_CITABLE_ADR,
     );
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -700,6 +711,7 @@ describe('Task 3: landSpec canonical ADR filename gate merge-base exemptions', (
       join(dir, '.docs', 'decisions', 'adr-2026-09-08-new-decision.md'),
       APPROVED_CITABLE_ADR,
     );
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -717,6 +729,7 @@ describe('Task 3: landSpec canonical ADR filename gate merge-base exemptions', (
     await writeFile(adrPath, `${LEGACY_CITABLE_ADR}\nUpdated while preserving citation.\n`);
     await git(['add', '.docs/decisions/adr-001-legacy.md'], dir);
     await git(['commit', '-m', 'update legacy sequential ADR'], dir);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
