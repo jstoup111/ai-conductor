@@ -1,0 +1,1 @@
+Inapplicable: acceptance_specs — refactor: relocating modules and imports preserves all observable behavior, so the existing Vitest suite and the new structural layer-direction test are the specification.
