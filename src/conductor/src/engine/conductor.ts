@@ -656,6 +656,13 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
+/** A cursor still needs stack preflight before it may dispatch BUILD work. */
+function isUnroutedRepairPending(
+  cursor: ActiveChildResolution,
+): cursor is Extract<ActiveChildResolution, { kind: 'repair-pending' }> {
+  return cursor.kind === 'repair-pending' && cursor.routedRepair === undefined && cursor.revalidating === undefined;
+}
+
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
@@ -2467,6 +2474,10 @@ export class Conductor {
     if (!stackConfigured && durableChildState === false) return true;
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+    if (isUnroutedRepairPending(cursor)) {
+      await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+      return false;
+    }
     const execution = resolveExecutionChild(cursor, slug);
     if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
       await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
@@ -6167,6 +6178,10 @@ export class Conductor {
         const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
         if (slug) {
           const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+          if (isUnroutedRepairPending(cursor)) {
+            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+            return;
+          }
           const execution = resolveExecutionChild(cursor, slug);
           if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
             await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
@@ -6937,6 +6952,10 @@ export class Conductor {
             const childCursorRelevant = this.config.stacked_prs?.enabled === true || durableChildState !== false;
             if (childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+            if (isUnroutedRepairPending(cursor)) {
+              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              return;
+            }
             const execution = resolveExecutionChild(cursor, slug);
             if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
               const target: ActiveChildLifecycleTarget = execution.target;
