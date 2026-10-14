@@ -27,4 +27,23 @@ describe('build tail rollup', () => {
     const root = await ledger([{ type: 'feature_started', ts: 1 }], [{ type: 'pipeline_closeout', ts: 2 }]);
     await expect(readBuildWindows(root)).resolves.toEqual({ state: 'unavailable' });
   });
+
+  it('ignores historical closeout records while preserving measured execution and ticks', async () => {
+    const events = [
+      { type: 'step_started', step: 'build', ts: 10 }, { type: 'build_progress', resolved: 0, total: 1, ts: 15 },
+      { type: 'build_progress', resolved: 1, total: 1, ts: 20 }, { type: 'build_progress', resolved: 1, total: 1, ts: 25 },
+      { type: 'step_completed', step: 'build', status: 'done', ts: 30 },
+    ];
+    const withoutCloseout = await ledger(events);
+    const withCloseout = await ledger(events, [{ type: 'pipeline_closeout', ts: 22 }]);
+    const [baseline, historical] = await Promise.all([readBuildWindows(withoutCloseout), readBuildWindows(withCloseout)]);
+    expect(baseline).toMatchObject({ state: 'measured' });
+    expect(historical).toMatchObject({ state: 'measured' });
+    if (baseline.state !== 'measured' || historical.state !== 'measured') throw new Error('expected measured windows');
+    expect(computeBuildTailRollup(historical.windows)).toEqual(computeBuildTailRollup(baseline.windows));
+  });
+
+  it('is partial when a completed window has no progress ticks', () => {
+    expect(computeBuildTailRollup([{ startedAt: 10, endedAt: 20, events: [] }])).toEqual({ state: 'partial' });
+  });
 });

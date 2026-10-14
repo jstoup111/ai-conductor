@@ -9,6 +9,7 @@ import { CodexProvider } from '../../src/execution/codex-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
 import {
   DAEMON_SESSION_MARKER,
+  SESSION_SANCTIONED_SUBCOMMANDS,
   evaluateDaemonSessionCommandPolicy,
   guardDaemonSessionInvocation,
   withDaemonSessionMarker,
@@ -30,6 +31,16 @@ const markedEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
 });
 
 describe('guardDaemonSessionInvocation', () => {
+  it('exports exactly the sanctioned worker subcommands and permits each one', () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).toEqual([
+      'scoped-run', 'task', 'overlap-scan', 'plan-protected-targets', 'manual-test-record',
+      'derive-feedback', 'scope-check', 'task-membership-check', 'github-operation',
+    ]);
+    for (const subcommand of SESSION_SANCTIONED_SUBCOMMANDS) {
+      expect(guardDaemonSessionInvocation(argvFor(subcommand), markedEnv())).toEqual({ allowed: true });
+    }
+  });
+
   it.each([
     ['task', true],
     ['scoped-run', true],

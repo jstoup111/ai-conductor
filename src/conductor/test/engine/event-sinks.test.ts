@@ -81,6 +81,10 @@ void restackRefusalReasonContract;
 const restackRefusalWithUnknownReason = { type: 'restack_refused', reason: 'unexpected-reason' } satisfies ConductorEvent;
 void restackRefusalWithUnknownReason;
 
+// @ts-expect-error -- closeout telemetry is not part of the engine event union.
+const retiredPipelineCloseout = { type: 'pipeline_closeout' } satisfies ConductorEvent;
+void retiredPipelineCloseout;
+
 const DEPENDENCY_EVENT_TYPES = [
   'land_dependency_decided',
   'dependency_drift_swept',

@@ -3247,7 +3247,7 @@ steps:
 
     it.each([
       [
-        { enabled: 'yes' },
+        { enabled: 'no' },
         'build_review.rubrics.security.enabled must be a boolean',
       ],
       [

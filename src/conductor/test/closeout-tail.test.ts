@@ -36,6 +36,17 @@ describe('CloseoutEventTail', () => {
     expect(received).toEqual([verdict]);
   });
 
+  it('diagnoses an engine record once without re-emitting it', async () => {
+    const root = await project();
+    await writeFile(join(root, '.pipeline/pipeline-events.jsonl'), `${JSON.stringify({ type: 'step_started', step: 'build', index: 1 })}\n`);
+    const events = new ConductorEventEmitter(); const diagnostics: unknown[] = []; const received: unknown[] = [];
+    events.on('pipeline_tail_diagnostic', (event) => { diagnostics.push(event); });
+    events.on('step_started', (event) => { received.push(event); });
+    const tail = new CloseoutEventTail({ projectRoot: root, events }); await tail.poll(); await tail.poll();
+    expect(diagnostics).toEqual([{ type: 'pipeline_tail_diagnostic', reason: 'unadmitted-type', path: '.pipeline/pipeline-events.jsonl', byteOffset: 0 }]);
+    expect(received).toEqual([]);
+  });
+
   it('diagnoses a malformed line while continuing', async () => {
     const root = await project(); await writeFile(join(root, '.pipeline/pipeline-events.jsonl'), `{not-json}\n${JSON.stringify(verdict)}\n`);
     const events = new ConductorEventEmitter(); const diagnostics: unknown[] = []; const received: unknown[] = [];
