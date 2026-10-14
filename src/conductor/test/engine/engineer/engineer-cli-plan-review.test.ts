@@ -77,6 +77,25 @@ describe('compose plan-review command surface', () => {
     expect(events.map((event) => event.type)).toEqual(['plan_review_dispatched', 'plan_review_completed']);
   });
 
+  it.each([
+    ['same-provider', { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }],
+    ['unknown-host', {}],
+  ] as const)('reports a one-line %s independence notice to the compose operator', async (independence, env) => {
+    const { canonical, worktree, registryPath } = await fixture(); const errors: string[] = [];
+    await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'llm_provider: claude\n', 'utf8');
+    const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
+
+    await expect(dispatchEngineer(command, {
+      registryPath, printErr: (line) => errors.push(line),
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), env,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+    })).resolves.toBe(0);
+
+    expect(errors).toEqual([expect.stringContaining(`plan review independence: ${independence}`)]);
+    expect(parsePlanReviewArtifact(await readFile(join(worktree, '.docs/plan-review/active-feature.md'), 'utf8')))
+      .toMatchObject({ independence });
+  });
+
   it('keeps the review artifact when completion-event persistence fails', async () => {
     const { canonical, worktree, registryPath } = await fixture(); const errors: string[] = [];
     const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
