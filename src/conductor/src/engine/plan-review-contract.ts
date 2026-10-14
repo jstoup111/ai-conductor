@@ -88,12 +88,12 @@ function isReference(value: string): boolean {
     /^[a-z0-9][a-z0-9-]*#D\d+$/i.test(value);
 }
 
-function sourceLocation(value: string, sourceFiles: Readonly<Record<string, string>>): string | undefined {
+function evidenceLocation(value: string, sourceFiles: Readonly<Record<string, string>>): string | undefined {
   const match = /(^|\s)([^\s:]+):(\d+)\b/.exec(value);
   if (match === null) return undefined;
   const path = match[2]!;
   const line = Number(match[3]);
-  if (!Number.isSafeInteger(line) || line < 1 || path.startsWith('.docs/') || sourceFiles[path] === undefined) return undefined;
+  if (!Number.isSafeInteger(line) || line < 1 || sourceFiles[path] === undefined) return undefined;
   return path;
 }
 
@@ -129,8 +129,15 @@ function validateFinding(value: unknown, index: number, context: PlanReviewValid
   if (!Array.isArray(value.evidence) || !value.evidence.every(nonEmptyText)) {
     diagnostics.push(`${id}.evidence must be a non-empty array of evidence text`);
   } else {
-    const sourceEvidence = value.evidence.some((entry) => sourceLocation(entry, context.sourceFiles) !== undefined);
-    if (!sourceEvidence) diagnostics.push(`${id}.evidence requires a worktree source file:line`);
+    const artifactEvidence = value.evidence.some((entry) => evidenceLocation(entry, context.sourceFiles) !== undefined);
+    const requiresSourceEvidence = value.lens === 'test-impact' || value.lens === 'feasibility';
+    const sourceEvidence = value.evidence.some((entry) => {
+      const path = evidenceLocation(entry, context.sourceFiles);
+      return path !== undefined && !path.startsWith('.docs/');
+    });
+    if (!(requiresSourceEvidence ? sourceEvidence : artifactEvidence)) {
+      diagnostics.push(`${id}.evidence requires a ${requiresSourceEvidence ? 'worktree source' : 'worktree artifact'} file:line`);
+    }
     if (value.lens === 'contradiction' && !hasTwoGroundedQuotes(value.evidence, context)) {
       diagnostics.push(`${id}.evidence requires two quoted passages grounded in the reviewed artifacts or source`);
     }

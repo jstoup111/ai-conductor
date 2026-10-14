@@ -17,10 +17,12 @@ export function orderReviewerCandidates(input: { config: HarnessConfig; host: Au
   const configured = [...(input.configuredProviders ?? input.config.llm_provider ?? [])];
   const preferred = input.config.steps?.plan_review?.llm_provider;
   const preference = Array.isArray(preferred) ? preferred[0] : preferred;
-  const ordered = preference && configured.includes(preference)
+  const ordered = preference
     ? [preference, ...configured.filter((provider) => provider !== preference)]
     : configured;
-  return input.host === 'unknown' ? ordered : [...ordered.filter((provider) => provider !== input.host), ...ordered.filter((provider) => provider === input.host)];
+  return input.host === 'unknown' || preference === input.host
+    ? ordered
+    : [...ordered.filter((provider) => provider !== input.host), ...ordered.filter((provider) => provider === input.host)];
 }
 
 export function classifyIndependence(host: AuthoringHost, reviewer: string): PlanReviewIndependence {

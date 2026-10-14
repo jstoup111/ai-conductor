@@ -17,7 +17,7 @@ async function fixture(includeUncitedAdr = false): Promise<string> {
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
   await mkdir(join(root, '.docs', 'stories'), { recursive: true });
   await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
-  await writeFile(join(root, '.docs/plans/idea.md'), `# Plan\n\n### Task 1: Configure\n**Steps:**\n1. Add \`reviewFlag\`.\n\n**Done when:**\n- [test] the flag works.\n\n**Dependencies:** none\n`, 'utf8');
+  await writeFile(join(root, '.docs/plans/idea.md'), `# Plan\n\nThis plan follows adr-review.\n\n### Task 1: Configure\n**Steps:**\n1. Add \`reviewFlag\`.\n\n**Done when:**\n- [test] the flag works.\n\n**Dependencies:** none\n`, 'utf8');
   await writeFile(join(root, '.docs/stories/idea.md'), '# Stories\n\n## Story 1: Review\nThe flag is reviewed.\n', 'utf8');
   await writeFile(join(root, '.docs/decisions/adr-review.md'), '## Decision\n\nD1. The flag is allowed.\n', 'utf8');
   if (includeUncitedAdr) await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Original decision.\n', 'utf8');
@@ -51,7 +51,7 @@ describe('runPlanReview', () => {
     expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [] });
   });
 
-  it('includes a modified tracked uncited ADR in the reviewed digest', async () => {
+  it('excludes a modified uncited ADR from the reviewed digest', async () => {
     const root = await fixture(true);
     await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. This must still be reviewed.\n', 'utf8');
 
@@ -61,16 +61,39 @@ describe('runPlanReview', () => {
       providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
     });
 
-    expect(artifact.reviewedDigest.adrDecisionDigests).toHaveProperty('adr-uncited#D1');
+    expect(artifact.reviewedDigest.adrDecisionDigests).not.toHaveProperty('adr-uncited#D1');
   });
 
   it('falls through a failed candidate while preserving round one and recording same-provider independence', async () => {
-    const root = await fixture(); const calls: any[] = [];
+    const root = await fixture(); const calls: any[] = []; const notices: string[] = [];
     const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: ['codex', 'claude'] } as any, configuredProviders: ['codex', 'claude'], env: { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }, runtimes: {} as any, sessions: {} as any,
       providerExecutor: (async (input: any) => { calls.push(input); return calls.length === 1 ? { success: false } : { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+      onNotice: (notice) => notices.push(notice),
     });
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex', 'claude']);
     expect(artifact).toMatchObject({ round: 1, reviewerProvider: 'claude', independence: 'same-provider' });
+    expect(notices).toEqual([expect.stringContaining('same-provider')]);
+  });
+
+  it('falls through a schema-invalid response in a fresh provider session', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: ['codex', 'claude'] } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return calls.length === 1 ? { success: true, finalStructuredResult: { nope: [] } } : { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex', 'claude']);
+    expect(artifact.reviewerProvider).toBe('claude');
+  });
+
+  it('drops invalid individual findings and writes the passing findings', async () => {
+    const root = await fixture();
+    const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [
+        { id: 'bad', severity: 'blocking', lens: 'reachability', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'missing evidence', evidence: ['no location'] },
+        { id: 'good', severity: 'significant', lens: 'feasibility', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'grounded', evidence: ['source.ts:1'] },
+      ] } })) as any,
+    });
+    expect(artifact.findings.map((finding) => finding.id)).toEqual(['good']);
+    expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [{ id: 'good' }] });
   });
 
   it('feeds the feature architecture review Wiring Surface into reachability candidates', async () => {

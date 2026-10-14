@@ -938,6 +938,8 @@ type ConductorEventBody =
       type: 'step_completed';
       step: StepName;
       status: StepStatus;
+      /** Present for a deterministic fast-forward or skip disposition. */
+      reason?: string;
       tail?: string[];
       tokenUsage?: TokenUsage;
       model?: string;

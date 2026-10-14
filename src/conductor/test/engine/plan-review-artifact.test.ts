@@ -115,4 +115,10 @@ describe('plan-review artifact', () => {
       artifactPaths: ['.docs/stories/example.md'],
     });
   });
+
+  it('digests numbered Markdown decisions through the shared ADR parser', () => {
+    const digest = computeReviewedDigest({ ...inputs, adrTexts: { ...inputs.adrTexts, 'adr-example': '## Decision\n\n1. First numbered decision.\n\n2. Second numbered decision.' } });
+    expect(digest.adrDecisionDigests).toHaveProperty('adr-example#D1');
+    expect(digest.adrDecisionDigests).toHaveProperty('adr-example#D2');
+  });
 });

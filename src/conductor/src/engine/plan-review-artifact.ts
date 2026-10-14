@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { parsePlanTaskBodies, parsePlanTaskTitles } from './plan-task-parse.js';
+import { parseAdrDecisions } from './artifacts.js';
 import type { PlanReviewFinding } from './plan-review-contract.js';
 
 export type PlanReviewIndependence = 'cross-provider' | 'same-provider' | 'unknown-host';
@@ -82,11 +83,10 @@ function storySections(text: string): Record<string, string> {
 
 function decisionSections(text: string): Record<string, string> {
   const result: Record<string, string> = {};
-  const matches = [...text.matchAll(/^D(\d+)\.\s+[^\n]*(?:\n|$)/gm)];
-  for (const [index, match] of matches.entries()) {
-    const start = match.index!;
-    const end = matches[index + 1]?.index ?? text.length;
-    result[`D${match[1]}`] = text.slice(start, end);
+  const parsed = parseAdrDecisions(text);
+  if (parsed.kind !== 'decisions') return result;
+  for (const [id, passages] of parsed.passages) {
+    result[`D${id}`] = passages.join('\n');
   }
   return result;
 }

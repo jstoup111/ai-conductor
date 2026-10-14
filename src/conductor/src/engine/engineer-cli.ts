@@ -21,8 +21,8 @@
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
@@ -1387,9 +1387,9 @@ export async function dispatchEngineer(
       catch (error) { printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`); return 1; }
       const configResult = await loadMergedConfig(worktree);
       if (!configResult.ok) { printErr(`engineer plan-review: ${configResult.error.message}`); return 1; }
-      const plans = await readdir(join(worktree, '.docs', 'plans')).catch(() => [] as string[]);
-      if (plans.length !== 1 || !plans[0]!.endsWith('.md')) { printErr('engineer plan-review: exactly one feature plan is required in the worktree.'); return 1; }
-      const planStem = plans[0]!.slice(0, -3);
+      const planStem = basename(worktree);
+      try { await access(join(worktree, '.docs', 'plans', `${planStem}.md`)); }
+      catch { printErr(`engineer plan-review: active feature plan .docs/plans/${planStem}.md is required in the worktree.`); return 1; }
       const events = new ConductorEventEmitter();
       const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
       persister.start();
@@ -1401,7 +1401,10 @@ export async function dispatchEngineer(
           registerBuiltInLlmProviders(registry, { codexDoctorTimeoutMs: (configResult.config.codex_doctor_timeout_seconds ?? 10) * 1_000 });
           registry.markInitialized();
           const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
-          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: async (event) => events.emitOrThrow(event) });
+          let ledgerError: string | undefined;
+          const safeEmit = async (event: any) => { try { await events.emitOrThrow(event); } catch (error) { ledgerError ??= error instanceof Error ? error.message : String(error); } };
+          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr });
+          if (ledgerError) printErr(`engineer plan-review: event ledger write failed: ${ledgerError}`);
           if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
         }
         return 0;

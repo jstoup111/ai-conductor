@@ -2,7 +2,7 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
@@ -27,8 +27,9 @@ async function fixture() {
   for (const dir of [canonical, worktree]) {
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
-    await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '# Plan\n\n### Task 1: Review\n**Done when:**\n- review runs\n\n**Dependencies:** none\n', 'utf8');
-    await writeFile(join(dir, '.docs', 'stories', 'feature.md'), '# Stories\n\n## Story 1: Review\n', 'utf8');
+    const stem = basename(dir);
+    await writeFile(join(dir, '.docs', 'plans', `${stem}.md`), '# Plan\n\n### Task 1: Review\n**Done when:**\n- review runs\n\n**Dependencies:** none\n', 'utf8');
+    await writeFile(join(dir, '.docs', 'stories', `${stem}.md`), '# Stories\n\n## Story 1: Review\n', 'utf8');
     await mkdir(join(dir, '.ai-conductor'), { recursive: true });
     await writeFile(join(dir, '.ai-conductor', 'config.yml'), 'llm_provider:\n  - claude\n  - codex\n', 'utf8');
     await execFileAsync('git', ['init', '-b', 'main', dir]);
@@ -58,6 +59,7 @@ describe('compose plan-review command surface', () => {
 
   it('dispatches codex first, writes a clean cross-provider review, and persists lifecycle events', async () => {
     const { canonical, worktree, registryPath } = await fixture(); const out: string[] = []; const calls: any[] = [];
+    await writeFile(join(worktree, '.docs', 'plans', 'historical.md'), '# Historical plan\n', 'utf8');
     const before = await paths(worktree);
     const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
     await expect(dispatchEngineer(command, {
@@ -67,8 +69,8 @@ describe('compose plan-review command surface', () => {
     })).resolves.toBe(0);
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex']);
     expect(out).toEqual(['plan review clean']);
-    expect(await paths(worktree)).toEqual([...before, '.docs/plan-review/feature.md'].sort());
-    expect(parsePlanReviewArtifact(await readFile(join(worktree, '.docs/plan-review/feature.md'), 'utf8')))
+    expect(await paths(worktree)).toEqual([...before, '.docs/plan-review/worktree.md'].sort());
+    expect(parsePlanReviewArtifact(await readFile(join(worktree, '.docs/plan-review/worktree.md'), 'utf8')))
       .toMatchObject({ authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider' });
     const events = (await readFile(join(canonical, '.pipeline', 'composer-events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     expect(events.map((event) => event.type)).toEqual(['plan_review_dispatched', 'plan_review_completed']);
@@ -85,8 +87,8 @@ describe('compose plan-review command surface', () => {
         return { success: true, finalStructuredResult: { findings: [] } };
       }) as any,
     });
-    expect(code).toBe(1);
-    await expect(readFile(join(worktree, '.docs/plan-review/feature.md'), 'utf8')).resolves.toContain('reviewerProvider');
-    expect(errors.join('\n')).toContain('EventPersister failed to write');
+    expect(code).toBe(0);
+    await expect(readFile(join(worktree, '.docs/plan-review/worktree.md'), 'utf8')).resolves.toContain('reviewerProvider');
+    expect(errors.join('\n')).toContain('event ledger write failed');
   });
 });

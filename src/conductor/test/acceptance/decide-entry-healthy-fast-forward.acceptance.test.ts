@@ -70,6 +70,7 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
     expect(state.ok && state.value.explore).toBe('skipped');
     expect(state.ok && state.value.complexity).toBe('skipped');
     expect(state.ok && state.value.plan_review).toBe('skipped');
+    expect(state.ok && state.value.step_reasons?.plan_review).toBe('landed-before-plan-review');
     expect(haltedBeforeFirstDispatch).toBe(false);
   });
 

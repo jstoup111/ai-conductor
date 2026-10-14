@@ -40,6 +40,15 @@ describe('plan-review contract', () => {
     });
   });
 
+  it.each(['reachability', 'dependency-order', 'contradiction'])('accepts plan-only evidence for %s', (lens) => {
+    const result = validatePlanReviewResult({ findings: [finding(lens, {
+      evidence: lens === 'contradiction'
+        ? ['.docs/plans/example.md:1', '"Build the contract"', '"Wire the contract"']
+        : ['.docs/plans/example.md:1'],
+    })] }, { ...context, sourceFiles: { ...context.sourceFiles, '.docs/plans/example.md': context.planText } });
+    expect(result.kind).toBe('accepted');
+  });
+
   it('accepts a contradiction only with two source-grounded quoted passages', () => {
     const result = validatePlanReviewResult({
       findings: [finding('contradiction', {

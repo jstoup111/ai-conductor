@@ -15,6 +15,11 @@ describe('plan-review provider selection', () => {
     expect(orderReviewerCandidates({ config, host: 'unknown' })).toEqual(['pi', 'claude', 'codex']);
   });
 
+  it('keeps an explicit plan-review provider first even when it is absent from the global list or is the host', () => {
+    expect(orderReviewerCandidates({ config: { llm_provider: ['claude'], steps: { plan_review: { llm_provider: 'codex' } } } as any, host: 'claude' })).toEqual(['codex', 'claude']);
+    expect(orderReviewerCandidates({ config: { llm_provider: ['claude', 'codex'], steps: { plan_review: { llm_provider: 'claude' } } } as any, host: 'claude' })).toEqual(['claude', 'codex']);
+  });
+
   it('classifies cross-provider, same-provider, and an unresolved authoring host', () => {
     expect(classifyIndependence('claude', 'codex')).toBe('cross-provider');
     expect(classifyIndependence('claude', 'claude')).toBe('same-provider');

@@ -2129,6 +2129,7 @@ export class Conductor {
     state: ConductState,
     step: StepName,
     status: StepStatus,
+    reason?: string,
   ): Promise<void> {
     await this.restoreMissingStateFile(state);
     // The routed child store owns BUILD-region fields.  Reading
@@ -2150,11 +2151,18 @@ export class Conductor {
           intent: 'record last completed step',
           next: step,
         },
+        ...(reason ? [{
+          field: 'step_reasons',
+          expected: state.step_reasons,
+          intent: `record ${step} step disposition reason`,
+          next: { ...(state.step_reasons ?? {}), [step]: reason },
+        } as StateMutation<ConductState>] : []),
       ],
     });
     requireStateMutation(result, `Conductor step-status update for ${step}`);
     if (result.kind === 'applied' && result.resolvedFields?.includes(step)) return;
     state[step] = status;
+    if (reason) state.step_reasons = { ...(state.step_reasons ?? {}), [step]: reason };
     state.last_step = step;
     this.persistedStateSnapshot = { ...state };
   }
@@ -7305,7 +7313,8 @@ export class Conductor {
             this.remediationDecideReentryTargets.delete(step.name);
           }
           if (disposition.kind === 'fast-forward') {
-            await this.saveConductorStepStatus(state, step.name, disposition.as);
+            await this.saveConductorStepStatus(state, step.name, disposition.as, disposition.reason);
+            await emitTracked({ type: 'step_completed', step: step.name, status: disposition.as, reason: disposition.reason });
             continue;
           }
           if (disposition.kind === 'halt') {
