@@ -166,7 +166,7 @@ because dispatched maker sessions have recursively invoked the conductor (includ
 park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them; the engine that
 started the session owns all conductor operations for it. The only exceptions are the
 session-sanctioned worker commands the harness's own skills and hooks require a session to run —
-`scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`, `closeout-event`, and
+`scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`,
 `derive-feedback`, `scope-check`, `task-membership-check`, `task` (`start`/`done`), and `github-operation` — which stay
 available under the marker. There is no config off-switch; enforcement lives in
 `src/conductor/src/execution/daemon-session.ts`. The same policy backs the instruction audit that
@@ -1443,49 +1443,6 @@ citation-quality sampling now runs as a non-blocking spot audit. The command sur
 resolves to a clear message instead of an unrecognized-command error. Any argument form prints the
 retirement notice and exits **2**. The help string does not mention the non-zero exit.
 
-## `ai-conductor closeout-event`
-
-```bash
-ai-conductor closeout-event start <obligation>
-ai-conductor closeout-event end <obligation>
-```
-
-Records the start or end of one pipeline closeout obligation. `<obligation>` must be one of
-`evaluator`, `simplify`, `architecture-diagram`, `memory`, `summary`. The command stamps every
-timestamp itself from the clock; callers never pass times.
-
-| Action | Effect |
-| --- | --- |
-| `start` | Appends a `pipeline_closeout_started` event (`obligation`, `ts`) to the pipeline-owned sibling ledger, `.pipeline/pipeline-events.jsonl`, and exits 0. |
-| `end` | Pairs with the latest open `start` for the same obligation and appends a `pipeline_closeout` event whose `startedAt` is that start's `ts` and whose `endedAt` and `ts` are the current time. Exits 0. |
-
-Exit 1, with a message on stderr and nothing appended, when:
-
-- the action is not `start` or `end`, or extra arguments follow the obligation (including the
-  retired `<obligation> <started-at> <ended-at>` form);
-- the obligation is not recognized;
-- `end` finds no open `start` for the obligation (`no open start for <obligation>`);
-- `end` would record a non-positive elapsed time.
-
-Run `start` immediately before the obligation's work and `end` immediately after it. Never run
-`start` and `end` back to back to satisfy a gate.
-
-This command is called by a closeout obligation itself (for example the `evaluator` gate in the
-[pipeline skill](skills.md)), not typed by an operator, so it never starts a
-conductor or daemon and works identically whether `pipeline` is running under the engine or
-invoked inline in a bare session. The sibling ledger is a separate single-writer file from
-`.pipeline/events.jsonl` — when a `build` step is running under the engine, a tail reader
-re-emits each recorded event onto the live bus. `pipeline_closeout` reaches the daemon log,
-terminal UI, and OTel export but is never persisted a second time into `.pipeline/events.jsonl`;
-`pipeline_closeout_started` is not rendered, persisted, or exported.
-
-Consumers trust a `pipeline_closeout` duration only when `startedAt`, `endedAt`, and `ts` are safe
-integers, both bounds are epoch milliseconds on or after 2020-01-01, neither bound is more than
-60 seconds after `ts`, and `endedAt > startedAt`. An untrusted record renders as
-`closeout <obligation> (duration unavailable)`, is omitted from the
-`conductor.pipeline.closeout.duration` histogram, carries no `durationMs` on its trace span event,
-and makes `build-tail` report `partial` with no closeout total.
-
 ## `ai-conductor build-tail`
 
 ```bash
@@ -1502,15 +1459,14 @@ three states:
 
 | State | Meaning |
 | --- | --- |
-| `measured` | At least one complete `build` window (`step_started`/`step_completed`) was decomposed. Reports, per window, its classification (`first-pass` or `re-entry`), task execution duration, post-resolution tick counts split into remediation and closeout, and closeout duration with a per-obligation breakdown — plus an aggregate across all windows. |
-| `partial` | The ledgers are readable but a window is unterminated, malformed, or an inline pipeline run (no engine) produced closeout events with no engine window boundaries. When closeout events exist, the closeout-only timeline is still rendered. |
-| `unavailable` | No `build` window and no closeout events were found. |
+| `measured` | At least one complete `build` window (`step_started`/`step_completed`) was decomposed. Reports, per window, its classification (`first-pass` or `re-entry`), task execution duration, and post-resolution tick counts split into remediation and closeout — plus an aggregate across all windows. |
+| `partial` | A ledger line is malformed or lacks a valid `ts`, or a `build` window is unterminated, ends before it starts, or has no `build_progress` tick. |
+| `unavailable` | No `build` window was found. |
 
 A window's first tick determines its classification: if it already reads `resolved == total`,
 the window is a re-entry (the task graph was complete on entry); otherwise its task-execution
 segment ends at the first tick where `resolved == total`. Post-resolution ticks with
-`headMoved: true` classify as remediation; closeout classification comes from the merged
-`pipeline_closeout` timeline. See `.docs/architecture/build-post-task-tail-telemetry.md` for the
+`headMoved: true` classify as remediation; the rest classify as closeout. See `.docs/architecture/build-post-task-tail-telemetry.md` for the
 full model.
 
 ## Internal commands, invoked by the engine

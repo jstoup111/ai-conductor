@@ -511,7 +511,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `assessment/` | Assessment outputs | `assess` skill |
 | `attribution-memo.json` | Fast-lane attribution memo | `attribution-lane.ts` |
 | `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
-| `audit-trail/` | Per-task `review.json`, `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
+| `audit-trail/` | Per-task `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
 | `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { testQuality, security, implementationQuality }, codeStamp?, declaredReplicationSuppressions? }`. `declaredReplicationSuppressions` lists `{ findingId, sourcePath, targetPath }` for `implementationQuality` `duplication` findings the engine suppressed under a declared pattern replication. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as a retired rubric — `tautology`, `scope`, `rootCause`, `completeness`, `wiring`) is ignored, so a verdict written before the rubric consolidation still parses. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
@@ -583,7 +583,7 @@ To clear a halt safely, use the procedure in
 | `session-hooks/` | `pre-dispatch.sh`, `docs-guard.sh` | Written mode 0755 during worktree preparation; retired no-op assets are removed; see [settings and hooks](settings-and-hooks.md) |
 | `git-hooks/` | `pre-commit`, `prepare-commit-msg`, `commit-msg`, `reference-transaction`, `pre-push` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
-| `pipeline-events.jsonl` | Pipeline-owned closeout timing events | Separate single-writer ledger — see below |
+| `pipeline-events.jsonl` | Externally written `build_review` disposition and kickback-budget authorization events | Separate ledger — see below |
 | `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
@@ -1003,42 +1003,34 @@ reached `build_progress.active_stall_minutes` without task or HEAD movement: `mi
 `step_in_flight` records a running non-build step: `step`, `elapsedMs` since the step started, and
 optional `featureSlug`. Its cadence is `build_progress.heartbeat_minutes`.
 
-The `pipeline_closeout` event type is declared on `ConductorEvent` but is never written here —
-`EVENT_SINKS.pipeline_closeout` sets `persist: false`, so it stays a single-writer event confined
-to `.pipeline/pipeline-events.jsonl` (below). It is rendered (`render: true`) when a running
-`build` step's `CloseoutEventTail` re-emits it onto the live bus, so it still reaches the daemon
-log, the terminal UI, and the OTel visualizer without a second writer to this file.
-
 `pipeline_tail_diagnostic` records a recoverable tailing problem in `events.jsonl`. Its `reason`
-is `malformed-line` when a completed source-ledger line cannot be parsed, or `poll-failed` when a
-background read fails; it includes the relative source-ledger `path` and, for a malformed line,
-its byte `byteOffset`. The event is rendered and persisted, but is not audited or sent to OTel.
+is `malformed-line` when a completed source-ledger line cannot be parsed, `unadmitted-type` when a
+parsed line's `type` is not on the admitted list, or `poll-failed` when a background read fails; it
+includes the relative source-ledger `path` and, for a skipped line, its byte `byteOffset`. The event is rendered and persisted, but is not audited or sent to OTel.
 It never includes the corrupt line's contents or an exception message.
 
 ### `.pipeline/pipeline-events.jsonl`
 
-The pipeline's own closeout timing ledger, written by `ai-conductor closeout-event` — see
-[`ai-conductor closeout-event`](cli.md#ai-conductor-closeout-event). One JSON `ConductorEvent` per
-line, each with an `obligation` (one of `evaluator`, `simplify`, `architecture-diagram`, `memory`,
-`summary`) and a command-stamped epoch-millisecond `ts`:
+A sibling ledger for events written outside the engine process. One JSON `ConductorEvent` per
+line. `CloseoutEventTail` admits only these types (`ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES` in
+`src/conductor/src/engine/closeout-events.ts`):
 
-- `pipeline_closeout_started` — written by `closeout-event start`.
-- `pipeline_closeout` — written by `closeout-event end`; `startedAt` is the paired start's `ts`,
-  and `endedAt` equals `ts`.
+- `build_review_disposition_accepted`
+- `build_review_reduced_coverage_accepted`
+- `build_review_disposition_refused`
+- `build_review_outer_verdict`
+- `kickback_budget_adjustment_authorized` — appended at most once per `adjustmentId`, under a
+  writer lease.
 
 Append-only, gitignored, never committed.
 
-This is a deliberate second single-writer ledger, not a duplicate of `events.jsonl`: the pipeline
-process that runs closeout obligations may have no conductor or daemon attached (an inline run),
-so it cannot depend on `EventPersister` to observe its own completions. When a `build` step is
-running under the engine, `CloseoutEventTail` tails this file incrementally (skipping partial
-trailing lines) and re-emits each valid complete record onto the live bus exactly once. A malformed
-complete line is consumed once so later valid records remain observable; the tail emits one
-`pipeline_tail_diagnostic` instead of replaying or exposing the line. An inline run produces the
-same records with no tail and no re-emission. A re-emitted `pipeline_closeout_started` reaches bus
-listeners only; its sink entry disables rendering, persistence, audit, and OTel. `computeBuildTailRollup` (see
-[`ai-conductor build-tail`](cli.md#ai-conductor-build-tail)) merges this ledger with `events.jsonl` by
-`ts` to decompose a `build` window into task execution, remediation, and closeout segments.
+When a `build` step is running under the engine, `CloseoutEventTail` tails this file incrementally
+(skipping partial trailing lines) and re-emits each admitted complete record onto the live bus
+exactly once; a `kickback_budget_adjustment_authorized` already present in `events.jsonl` is not
+re-emitted. A malformed or unadmitted complete line is consumed once so later valid records remain
+observable; the tail emits one `pipeline_tail_diagnostic` instead of replaying or exposing the line.
+`readMergedFeatureEvents` (used by [`ai-conductor build-tail`](cli.md#ai-conductor-build-tail))
+merges this ledger with `events.jsonl` by `ts`.
 
 ### `.pipeline/audit-trail/events.jsonl`
 
