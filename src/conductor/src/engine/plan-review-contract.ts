@@ -106,6 +106,19 @@ function hasTwoGroundedQuotes(evidence: readonly string[], context: PlanReviewVa
   return quotedPassages(evidence).filter((passage) => searchable.some((text) => text.includes(passage))).length >= 2;
 }
 
+function hasDependencyClosureEvidence(evidence: readonly string[], reference: string, relatedReference: string | null): boolean {
+  if (!nonEmptyText(relatedReference)) return false;
+  const taskReference = reference.toLowerCase();
+  const relatedTaskReference = relatedReference.toLowerCase();
+  return evidence.some((entry) => {
+    const normalized = entry.toLowerCase();
+    return normalized.includes('dependency closure') &&
+      normalized.includes(taskReference) &&
+      normalized.includes(relatedTaskReference) &&
+      /\bnot reachable\b|\boutside (?:the )?dependency closure\b/.test(normalized);
+  });
+}
+
 function validateFinding(value: unknown, index: number, context: PlanReviewValidationContext, diagnostics: string[]): PlanReviewFinding | undefined {
   const field = `findings[${index}]`;
   const keys = ['id', 'severity', 'lens', 'artifact', 'reference', 'relatedReference', 'resolvesPrior', 'summary', 'evidence'];
@@ -144,6 +157,10 @@ function validateFinding(value: unknown, index: number, context: PlanReviewValid
   }
   if (value.lens === 'dependency-order' && (!nonEmptyText(value.relatedReference) || !/^task\s+\S+$/i.test(value.relatedReference) || value.relatedReference === value.reference)) {
     diagnostics.push(`${id}.relatedReference must name a second task for dependency-order`);
+  }
+  if (value.lens === 'dependency-order' && Array.isArray(value.evidence) &&
+    !hasDependencyClosureEvidence(value.evidence as readonly string[], value.reference as string, value.relatedReference as string | null)) {
+    diagnostics.push(`${id}.evidence requires dependency-closure evidence naming both tasks and showing the related task is not reachable`);
   }
   if (diagnostics.some((diagnostic) => diagnostic.startsWith(`${id}.`) || diagnostic.startsWith(`${field}.`))) return undefined;
   return value as unknown as PlanReviewFinding;

@@ -27,7 +27,12 @@ function finding(lens: string, overrides: Record<string, unknown> = {}) {
     relatedReference: lens === 'dependency-order' ? 'task 2' : null,
     resolvesPrior: null,
     summary: 'The proposed behavior needs a source-grounded check.',
-    evidence: ['src/conductor/src/engine/contract.ts:1'],
+    evidence: lens === 'dependency-order'
+      ? [
+        'src/conductor/src/engine/contract.ts:1',
+        'Dependency closure for task 1: none; task 2 is not reachable.',
+      ]
+      : ['src/conductor/src/engine/contract.ts:1'],
     ...overrides,
   };
 }
@@ -44,7 +49,12 @@ describe('plan-review contract', () => {
     const result = validatePlanReviewResult({ findings: [finding(lens, {
       evidence: lens === 'contradiction'
         ? ['.docs/plans/example.md:1', '"Build the contract"', '"Wire the contract"']
-        : ['.docs/plans/example.md:1'],
+        : lens === 'dependency-order'
+          ? [
+            '.docs/plans/example.md:1',
+            'Dependency closure for task 1: none; task 2 is not reachable.',
+          ]
+          : ['.docs/plans/example.md:1'],
     })] }, { ...context, sourceFiles: { ...context.sourceFiles, '.docs/plans/example.md': context.planText } });
     expect(result.kind).toBe('accepted');
   });
@@ -91,6 +101,26 @@ describe('plan-review contract', () => {
     expect(diagnostics).toContain('severity-1');
     expect(diagnostics).toContain('reference-1');
     expect(diagnostics).toContain('dependency-1');
+  });
+
+  it('accepts a dependency-order finding with its transitive closure and an unreachable related task', () => {
+    const result = validatePlanReviewResult({ findings: [finding('dependency-order', {
+      evidence: [
+        'src/conductor/src/engine/contract.ts:1',
+        'Dependency closure for task 1: task 3 -> task 4; task 2 is not reachable.',
+      ],
+    })] }, context);
+
+    expect(result.kind).toBe('accepted');
+  });
+
+  it('rejects a dependency-order finding without dependency-closure evidence', () => {
+    const result = validatePlanReviewResult({ findings: [finding('dependency-order', {
+      evidence: ['src/conductor/src/engine/contract.ts:1'],
+    })] }, context);
+
+    expect(result).toMatchObject({ kind: 'rejected' });
+    expect(result.kind === 'rejected' && result.diagnostics.join('\n')).toContain('dependency-order-1.evidence requires dependency-closure evidence');
   });
 
   it('is already Codex strict-compatible and serializes unchanged for Pi schema files', () => {
