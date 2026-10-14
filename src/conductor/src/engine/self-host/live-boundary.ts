@@ -176,6 +176,10 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
                                        // halt of custom-build-review-rubrics-cannot-run-off-linux-o.
                                        // Only the stamp is excluded: `policy-limits.json` itself is
                                        // policy config and stays fingerprinted.
+  'remote-settings.json.synced-at',   // epoch-ms stamp the CLI rewrites on every remote-settings
+                                       // sync; verified 2026-10-14 as the sole diff ("changed
+                                       // remote-settings.json.synced-at") behind 2 false halts.
+                                       // `remote-settings.json` itself stays fingerprinted (#3096).
 ];
 
 /** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
@@ -445,6 +449,22 @@ export async function fingerprintLiveBoundary(args: {
   ] };
 }
 
+/**
+ * True iff `path` was removed from a Claude plugin-cache version directory that the
+ * BASELINE already marked orphaned (`plugins/cache/<marketplace>/<plugin>/<version>/.orphaned_at`).
+ * The CLI stamps that marker on a superseded version and later garbage-collects the whole
+ * directory. Verified 2026-10-13 as the sole diff ("0 added, 22 removed": every file of
+ * `plugins/cache/claude-plugins-official/skill-creator/fbe07fb6ce7d/`, `.orphaned_at`
+ * included) behind a false halt of source-grounded-plan-defects-pass-every-decide-gat.
+ * Only removals qualify, and only from a version already orphaned before the dispatch:
+ * an addition or rewrite of plugin content, or removal of a live version, still halts.
+ */
+function isOrphanedPluginRemoval(path: string, baseline: ReadonlySet<string>): boolean {
+  const segments = path.split('/');
+  if (segments.length < 6 || segments[0] !== 'plugins' || segments[1] !== 'cache') return false;
+  return baseline.has(`${segments.slice(0, 5).join('/')}/.orphaned_at`);
+}
+
 /** Most paths named in a halt reason before it collapses to a bare count. */
 const MAX_REPORTED_PATHS = 8;
 
@@ -539,6 +559,11 @@ export async function verifyLiveBoundary(
     )).entries;
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
+      if (surface.label === 'provider state') {
+        const baseline = new Set(surface.manifest.map(entry => entry.path));
+        diff.removed = diff.removed.filter(path => !isOrphanedPluginRemoval(path, baseline));
+        if (diff.added.length + diff.removed.length + diff.changed.length === 0) continue;
+      }
       if (surface.label === 'live checkout') {
         if (containmentVerdict.contained) {
           containedDrift = {
