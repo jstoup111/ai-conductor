@@ -1,4 +1,4 @@
-// Covers: task:12, task:17, task:rem-prd-audit-R2, task:rem-as-built-rem-validation-AB2
+// Covers: task:12, task:17, task:rem-prd-audit-R2, task:rem-prd-audit-R3, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -75,7 +75,21 @@ describe('runPlanReview', () => {
     });
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex', 'claude']);
     expect(artifact).toMatchObject({ round: 1, reviewerProvider: 'claude', independence: 'same-provider' });
-    expect(notices).toEqual([expect.stringContaining('same-provider')]);
+    expect(notices).toEqual(['plan review independence: same-provider (claude authoring host, claude reviewer)']);
+  });
+
+  it('emits one unknown-host independence notice after writing the review artifact', async () => {
+    const root = await fixture(); const notices: string[] = [];
+    const artifact = await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: ['claude'] } as any,
+      configuredProviders: ['claude'], runtimes: {} as any, sessions: {} as any, env: {},
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+      onNotice: (notice) => notices.push(notice),
+    });
+
+    expect(artifact).toMatchObject({ reviewerProvider: 'claude', independence: 'unknown-host' });
+    await expect(readFile(join(root, '.docs/plan-review/idea.md'), 'utf8')).resolves.toContain('unknown-host');
+    expect(notices).toEqual(['plan review independence: unknown-host (unknown authoring host, claude reviewer)']);
   });
 
   it('falls through a schema-invalid response in a fresh provider session', async () => {
