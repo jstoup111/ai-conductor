@@ -131,7 +131,7 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
     : allDecisionSections(source.adrTexts);
   const priorFindings = prior?.findings.filter((finding) => finding.severity === 'blocking' || finding.severity === 'significant') ?? [];
   const roundCandidates = changed
-    ? rows.flat().filter((candidate: any) => changed.planTaskIds.includes(candidate.taskId) || priorFindings.some((finding) => finding.reference === `task ${candidate.taskId}` || finding.relatedReference === `task ${candidate.taskId}`))
+    ? rows.flat().filter((candidate: any) => changed.planTaskIds.includes(candidate.taskId))
     : rows.flat();
   const prompt = `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${JSON.stringify(reviewDecisions)}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${JSON.stringify(roundCandidates)}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`;
   const executor = input.providerExecutor ?? executeProviderCandidates;

@@ -29,4 +29,28 @@ describe('runPlanReview bounded rounds', () => {
     await expect(runPlanReview(input)).rejects.toThrow('plan review bound reached');
     expect(prompts).toHaveLength(2);
   });
+
+  it('keeps prior blocking and significant findings while excluding candidates for unchanged tasks', async () => {
+    const root = await seed(); const prompts: string[] = []; let dispatch = 0;
+    const input = {
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => {
+        prompts.push(request.options.prompt); dispatch++;
+        return { success: true, finalStructuredResult: { findings: dispatch === 1 ? [
+          { id: 'blocking-task-2', severity: 'blocking', lens: 'feasibility', artifact: '.docs/plans/idea.md', reference: 'task 2', relatedReference: null, resolvesPrior: null, summary: 'blocking prior', evidence: ['source.ts:1'] },
+          { id: 'significant-task-2', severity: 'significant', lens: 'feasibility', artifact: '.docs/plans/idea.md', reference: 'task 2', relatedReference: null, resolvesPrior: null, summary: 'significant prior', evidence: ['source.ts:1'] },
+          { id: 'advisory-task-2', severity: 'advisory', lens: 'feasibility', artifact: '.docs/plans/idea.md', reference: 'task 2', relatedReference: null, resolvesPrior: null, summary: 'advisory prior', evidence: ['source.ts:1'] },
+        ] : [] } };
+      }) as any,
+    };
+    await runPlanReview(input);
+    await writeFile(join(root, '.docs/plans/idea.md'), '# Plan\n\n### Task 1: First changed\n**Steps:**\n1. Add `thing`.\n\n**Done when:**\n- changed.\n\n**Dependencies:** none\n\n### Task 2: Unchanged surface\n**Steps:**\n1. Add `unwiredSurface`.\n\n**Done when:**\n- second.\n\n**Dependencies:** none\n', 'utf8');
+
+    await runPlanReview(input);
+
+    expect(prompts[1]).toContain('blocking-task-2');
+    expect(prompts[1]).toContain('significant-task-2');
+    expect(prompts[1]).not.toContain('advisory-task-2');
+    expect(prompts[1]).not.toContain('"taskId":"2"');
+  });
 });
