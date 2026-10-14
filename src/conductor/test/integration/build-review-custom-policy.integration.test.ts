@@ -99,7 +99,7 @@ function materializedPolicyRunner(input: {
       featureDesc: 'feature', planPath: join(input.root, '.docs', 'plans', 'feature.md'), gitRunner: materialized.runner,
       config: { llm_provider: 'claude', build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false }, security: { enabled: input.mixed }, implementationQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, security: { enabled: input.mixed ?? false }, implementationQuality: { enabled: false } },
         custom_rubrics: { portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' } },
       } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
