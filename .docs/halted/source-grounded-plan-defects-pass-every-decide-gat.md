@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-14T12:24:42.146Z
 Slug: source-grounded-plan-defects-pass-every-decide-gat
 Class: needs-human
 Halting step: unknown
