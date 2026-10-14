@@ -10,6 +10,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const INTAKE_FILE_CLI = join(CONDUCTOR_ROOT, 'src', 'intake-file-cli.ts');
 const TSX = join(CONDUCTOR_ROOT, 'node_modules', '.bin', 'tsx');
+// tsx's CLI creates an IPC socket below TMPDIR. Keep its Linux socket path
+// below the Unix-domain limit in deep worktrees while retaining the fixture.
+const CHILD_TMPDIR = process.platform === 'linux' ? '/proc/self/cwd' : undefined;
 
 const roots: string[] = [];
 
@@ -47,7 +50,11 @@ else if (args[0] === 'api' && args[1] === 'repos/acme/app/issues/43' && process.
 `, 'utf8');
   await writeFile(join(bin, 'gh'), '#!/bin/sh\nexec node "$(dirname "$0")/gh-stub.mjs" "$@"\n', 'utf8');
   await chmod(join(bin, 'gh'), 0o755);
-  const { AI_CONDUCTOR_NO_REAL_EXEC: _testExecGuard, ...environment } = process.env;
+  const {
+    AI_CONDUCTOR_NO_REAL_EXEC: _testExecGuard,
+    CONDUCT_GH_REAL_EXECUTABLE: _managedGhBypass,
+    ...environment
+  } = process.env;
 
   const result = await execa(TSX, [INTAKE_FILE_CLI,
     '--title', 'Typed dependency', '--body', 'body', '--size', 'S', '--priority', 'low', '--repo', 'acme/app',
@@ -61,6 +68,9 @@ else if (args[0] === 'api' && args[1] === 'repos/acme/app/issues/43' && process.
       HOME: home,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       GH_CALLS: callsPath,
+      TMPDIR: CHILD_TMPDIR ?? root,
+      TMP: CHILD_TMPDIR ?? root,
+      TEMP: CHILD_TMPDIR ?? root,
       ...(options.failPost43 ? { FAIL_POST_43: '1' } : {}),
       ...(options.failRead43 ? { FAIL_READ_43: '1' } : {}),
     },
