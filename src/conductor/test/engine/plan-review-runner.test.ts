@@ -1,4 +1,4 @@
-// Covers: task:12, task:17, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R3, task:rem-as-built-rem-validation-AB2
+// Covers: task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -119,6 +119,33 @@ describe('runPlanReview', () => {
     expect(invocations.map(({ resume }) => resume)).toEqual([false, false]);
     expect(invocations[1].sessionId).not.toBe(invocations[0].sessionId);
     expect(events.filter((event) => event.type === 'plan_review_dispatched').map((event) => event.reviewerProvider)).toEqual(['codex', 'claude']);
+    expect(artifact.reviewerProvider).toBe('claude');
+  });
+
+  // Covers: task:rem-prd-audit-R2-3
+  it('falls through a malformed findings envelope to a fresh second-provider session', async () => {
+    const root = await fixture(); const invocations: any[] = [];
+    const codex = { invoke: vi.fn(async (options) => {
+      invocations.push({ provider: 'codex', ...options });
+      return { success: true, finalStructuredResult: { findings: 'not-an-array' } };
+    }) };
+    const claude = { invoke: vi.fn(async (options) => {
+      invocations.push({ provider: 'claude', ...options });
+      return { success: true, finalStructuredResult: { findings: [] } };
+    }) };
+    const runtimes = new ProviderRuntimeSet([
+      { key: 'codex', provider: codex as any, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder), nativeSchemaCapability: { nativeOutputSchema: true } },
+      { key: 'claude', provider: claude as any, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder), nativeSchemaCapability: { nativeOutputSchema: true } },
+    ]);
+
+    const artifact = await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: ['codex', 'claude'] } as any,
+      runtimes, sessions: new ProviderSessionStore(),
+    });
+
+    expect(invocations.map(({ provider }) => provider)).toEqual(['codex', 'claude']);
+    expect(invocations.map(({ resume }) => resume)).toEqual([false, false]);
+    expect(invocations[1].sessionId).not.toBe(invocations[0].sessionId);
     expect(artifact.reviewerProvider).toBe('claude');
   });
 
