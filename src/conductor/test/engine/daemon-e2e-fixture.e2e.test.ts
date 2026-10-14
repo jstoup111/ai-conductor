@@ -424,7 +424,7 @@ describe('daemon E2E fixture', () => {
               verifyArtifacts: false,
               config: {
                 llm_provider: 'codex',
-                build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+                build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false } } },
               },
               buildReviewEffectiveResolver,
               fullSuiteVerifier: {

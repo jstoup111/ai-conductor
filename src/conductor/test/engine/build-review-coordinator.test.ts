@@ -166,7 +166,7 @@ describe("build-review coordinator: registered dispatch", () => {
       build_review: { rubrics: { security: { enabled: true } } },
     } as HarnessConfig);
     const runChildren = async (resolved: ResolvedBuildReviewConfig) => {
-      const dispatchModel = vi.fn(async () => ({ findings: [] }));
+      const dispatchModel = vi.fn(async (_branch, _projection) => ({ findings: [] }));
       const nonLeaf = await coordinateBuildReviewRubrics(coordinationInput(false, {
         config: resolved, securityLeafOnly: true, dispatchModel,
         engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: {

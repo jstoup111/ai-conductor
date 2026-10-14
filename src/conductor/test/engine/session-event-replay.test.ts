@@ -50,7 +50,7 @@ describe('session event canonical replay', () => {
       'github_possible_bypass',
       'session_event_delivery_diagnostic',
     ] as const) {
-      events.on(type, (event) => replayed.push(event));
+      events.on(type, (event) => { replayed.push(event); });
     }
 
     await new CloseoutEventTail({ projectRoot: root, events }).poll();

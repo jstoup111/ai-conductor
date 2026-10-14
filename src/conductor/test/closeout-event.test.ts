@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { joinBuildReviewRubricOutcomes } from '../src/engine/build-review-aggregate.js';
-import { dispatchBuildReviewAccept } from '../src/engine/build-review-cli.js';
+import { dispatchBuildReviewAccept, type BuildReviewAcceptDeps } from '../src/engine/build-review-cli.js';
 import { parseBuildReviewLapId } from '../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../src/engine/build-review-finding-identity.js';
 import { appendCloseoutEvent } from '../src/engine/closeout-events.js';
@@ -35,9 +35,12 @@ async function writeAcceptanceThroughCli(root: string): Promise<{ findingId: str
       },
     },
   });
-  const store = {
+  const store: ReturnType<NonNullable<BuildReviewAcceptDeps['createStore']>> = {
     list: async () => ({ ok: true as const, records: [] }),
-    append: async (input: unknown) => ({ ok: true as const, record: input }),
+    append: async (input) => ({
+      ok: true as const,
+      record: { ...input, version: 'v1' as const, acceptedAt: '2026-10-14T00:00:00.000Z' },
+    }),
   };
   await expect(dispatchBuildReviewAccept({
     kind: 'accept', feature, lapId: 'lap-1', findingId: identity.id, rationale: 'Known fixture risk.',
