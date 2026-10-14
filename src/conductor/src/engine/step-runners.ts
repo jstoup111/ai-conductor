@@ -1235,6 +1235,7 @@ export class DefaultStepRunner implements StepRunner {
           runtimes: this.providerRuntimes, sessions: this.sessionStore,
           configuredProviders: this.configuredProviders, providerExecutor: this.providerExecutor,
           emit: async (event) => { await this.events?.emit(event); },
+          onNotice: (notice) => this.log(notice),
         });
         this.callCount++;
         return { success: true };
