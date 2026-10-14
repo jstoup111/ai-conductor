@@ -146,6 +146,49 @@ describe('runPlanReview', () => {
     expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [{ id: 'good' }, { id: 'story-grounded' }] });
   });
 
+  // Covers: task:rem-prd-audit-R1-5
+  it('writes a task-versus-task contradiction grounded by two plan Done-when passages', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs/plans/idea.md'), `# Plan
+
+### Task 1: Enable the legacy path
+
+**Done when:**
+- The legacy path remains enabled.
+
+**Dependencies:** none
+
+### Task 2: Remove the legacy path
+
+**Done when:**
+- The legacy path is removed.
+
+**Dependencies:** task 1
+`, 'utf8');
+
+    const finding = {
+      id: 'task-pair-contradiction', severity: 'blocking', lens: 'contradiction',
+      artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: 'task 2', resolvesPrior: null,
+      summary: 'The two task completion conditions cannot both hold.',
+      evidence: [
+        '.docs/plans/idea.md:6',
+        '.docs/plans/idea.md:11',
+        'Task 1 requires "The legacy path remains enabled."',
+        'Task 2 requires "The legacy path is removed."',
+      ],
+    };
+    const artifact = await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [finding] } })) as any,
+    });
+
+    expect(artifact.findings).toEqual([finding]);
+    expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({
+      findings: [{ id: 'task-pair-contradiction', reference: 'task 1', relatedReference: 'task 2' }],
+    });
+  });
+
   it('feeds the feature architecture review Wiring Surface into reachability candidates', async () => {
     const root = await fixture(); const calls: any[] = [];
     await writeFile(join(root, '.docs/plans/idea.md'), `# Plan
