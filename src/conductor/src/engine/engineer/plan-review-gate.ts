@@ -1,7 +1,8 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { computeReviewedDigest, diffReviewedDigests, parsePlanReviewArtifact } from '../plan-review-artifact.js';
 import { resolveIdeaFiles } from './spec-change-set.js';
+import { selectPlanReviewAdrStems } from '../plan-review-adr-scope.js';
 
 export async function runPlanReviewGate(input: { worktreePath: string; canonicalPath: string; planStem: string; tier: string; planText: string; storiesText: string }): Promise<void> {
   if (input.tier === 'S') return;
@@ -10,11 +11,12 @@ export async function runPlanReviewGate(input: { worktreePath: string; canonical
   try { parsed = parsePlanReviewArtifact(await readFile(artifactPath, 'utf8')); }
   catch { throw new Error('plan review has not run'); }
   if ('kind' in parsed) throw new Error(`plan review artifact is ${parsed.kind}`);
-  const decisions = join(input.worktreePath, '.docs', 'decisions');
-  const adrTexts: Record<string, string> = {};
-  try { for (const file of await readdir(decisions)) if (file.endsWith('.md')) adrTexts[file.slice(0, -3)] = await readFile(join(decisions, file), 'utf8'); } catch { /* no ADRs */ }
-  const coherence = await readFile(join(input.worktreePath, '.docs', 'coherence', `${input.planStem}.md`), 'utf8').catch(() => '');
   const changedPaths = await resolveIdeaFiles(input.worktreePath, input.canonicalPath);
+  const adrTexts: Record<string, string> = {};
+  for (const stem of selectPlanReviewAdrStems({ planText: input.planText, changedPaths: [...changedPaths] })) {
+    try { adrTexts[stem] = await readFile(join(input.worktreePath, '.docs', 'decisions', `${stem}.md`), 'utf8'); } catch { /* absent ADR */ }
+  }
+  const coherence = await readFile(join(input.worktreePath, '.docs', 'coherence', `${input.planStem}.md`), 'utf8').catch(() => '');
   const digest = computeReviewedDigest({ planText: input.planText, storiesText: input.storiesText, adrTexts, artifactTexts: { [`.docs/coherence/${input.planStem}.md`]: coherence }, changedPaths: [...changedPaths] });
   if (digest.digest !== parsed.reviewedDigest.digest) {
     const changed = diffReviewedDigests(parsed.reviewedDigest, digest);

@@ -11,6 +11,7 @@ import type { ProviderSessionStore } from './provider-session.js';
 import { executeProviderCandidates, type ExecuteProviderCandidatesInput } from './provider-execution.js';
 import { resolveIdeaFiles } from './engineer/spec-change-set.js';
 import { parseAdrDecisions } from './artifacts.js';
+import { selectPlanReviewAdrDecisionSections, selectPlanReviewAdrStems, selectPlanReviewAdrTexts } from './plan-review-adr-scope.js';
 
 function isSchemaValidFinding(value: unknown): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -48,21 +49,22 @@ async function reviewInputs(worktreePath: string, planStem: string, canonicalPat
       return '';
     }
   })();
-  const cited = new Set([...planText.matchAll(/\b(adr-[a-z0-9][a-z0-9-]*)\b/gi)].map((match) => match[1]!));
-  const adrTexts: Record<string, string> = {};
-  for (const stem of cited) {
+  const changedPaths = canonicalPath ? await resolveIdeaFiles(worktreePath, canonicalPath) : new Set<string>();
+  const allAdrTexts: Record<string, string> = {};
+  for (const stem of selectPlanReviewAdrStems({ planText, changedPaths: [...changedPaths] })) {
     try {
-      adrTexts[stem] = await readFile(join(worktreePath, '.docs', 'decisions', `${stem}.md`), 'utf8');
+      allAdrTexts[stem] = await readFile(join(worktreePath, '.docs', 'decisions', `${stem}.md`), 'utf8');
     } catch {
-      // A cited ADR may be absent while a plan is being authored; its absence
-      // remains represented by the reviewed digest rather than widening scope.
+      // A cited or changed ADR may be absent while a plan is being authored.
     }
   }
+  const adrScope = { planText, adrTexts: allAdrTexts, changedPaths: [...changedPaths] };
+  const adrTexts = selectPlanReviewAdrTexts(adrScope);
+  const adrDecisionSections = selectPlanReviewAdrDecisionSections(adrScope);
   const sourceFiles: Record<string, string> = {};
   for (const path of await files(worktreePath)) if (!path.startsWith('.pipeline/')) sourceFiles[path] = await readFile(join(worktreePath, path), 'utf8').catch(() => '');
-  const changedPaths = canonicalPath ? await resolveIdeaFiles(worktreePath, canonicalPath) : new Set<string>();
-  const digest = computeReviewedDigest({ planText, storiesText, adrTexts, artifactTexts: { [` .docs/coherence/${planStem}.md`.trim()]: coherenceText }, changedPaths: [...changedPaths] });
-  return { planText, storiesText, coherenceText, architectureReviewText, adrTexts, sourceFiles, digest };
+  const digest = computeReviewedDigest({ planText, storiesText, adrTexts: allAdrTexts, artifactTexts: { [` .docs/coherence/${planStem}.md`.trim()]: coherenceText }, changedPaths: [...changedPaths] });
+  return { planText, storiesText, coherenceText, architectureReviewText, adrTexts, adrDecisionSections, sourceFiles, digest };
 }
 
 function selectedPlanTasks(planText: string, ids: readonly string[]): string {
@@ -95,15 +97,6 @@ function selectedDecisions(adrTexts: Readonly<Record<string, string>>, ids: read
 }
 
 /** Render only the decision passages that are in scope for a first review round. */
-function allDecisionSections(adrTexts: Readonly<Record<string, string>>): Record<string, string> {
-  const selected: Record<string, string> = {};
-  for (const [stem, text] of Object.entries(adrTexts)) {
-    const parsed = parseAdrDecisions(text);
-    if (parsed.kind !== 'decisions') continue;
-    for (const [decision, passages] of parsed.passages) selected[`${stem}#D${decision}`] = passages.join('\n');
-  }
-  return selected;
-}
 export interface RunPlanReviewInput {
   worktreePath: string; canonicalPath?: string; planStem: string; config: HarnessConfig; runtimes: ProviderRuntimeSet; sessions: ProviderSessionStore;
   env?: NodeJS.ProcessEnv; configuredProviders?: readonly string[]; emit?: (event: Extract<ConductorEvent, { type: 'plan_review_dispatched' | 'plan_review_completed' | 'plan_review_finding_accepted' }>) => Promise<void>; onNotice?: (notice: string) => void; providerExecutor?: typeof executeProviderCandidates;
@@ -128,7 +121,7 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const reviewStories = changed ? selectedStories(source.storiesText, changed.storyIds) : source.storiesText;
   const reviewDecisions = changed
     ? selectedDecisions(source.adrTexts, changed.adrDecisionIds)
-    : allDecisionSections(source.adrTexts);
+    : source.adrDecisionSections;
   const priorFindings = prior?.findings.filter((finding) => finding.severity === 'blocking' || finding.severity === 'significant') ?? [];
   const roundCandidates = changed
     ? rows.flat().filter((candidate: any) => changed.planTaskIds.includes(candidate.taskId))

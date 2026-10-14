@@ -56,10 +56,11 @@ describe('runPlanReview', () => {
     expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [] });
   });
 
-  it('loads only cited Decision sections and excludes unrelated ADR and review files from the prompt', async () => {
+  // Covers: task:rem-as-built-rem-validation-AB4
+  it('loads cited and changed ADR Decision sections while excluding unchanged unrelated ADRs and review files from the prompt', async () => {
     const root = await fixture(true);
     const uncitedAdr = join(root, '.docs/decisions/adr-uncited.md');
-    await writeFile(uncitedAdr, '## Decision\n\nD1. This unrelated ADR must not reach the prompt.\n', 'utf8');
+    await writeFile(uncitedAdr, '## Decision\n\nD1. This changed uncited ADR must reach the prompt.\n', 'utf8');
     await writeFile(join(root, '.docs/decisions/architecture-review-unrelated.md'), '## Decision\n\nD1. This unrelated review must not reach the prompt.\n', 'utf8');
     // An unrelated directory with an `.md` suffix proves the runner does not
     // attempt to read every decision-directory entry before narrowing scope.
@@ -72,9 +73,9 @@ describe('runPlanReview', () => {
       providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
     });
 
-    expect(artifact.reviewedDigest.adrDecisionDigests).not.toHaveProperty('adr-uncited#D1');
+    expect(artifact.reviewedDigest.adrDecisionDigests).toHaveProperty('adr-uncited#D1');
     expect(calls[0].options.prompt).toContain('D1. The flag is allowed.');
-    expect(calls[0].options.prompt).not.toContain('This unrelated ADR must not reach the prompt.');
+    expect(calls[0].options.prompt).toContain('This changed uncited ADR must reach the prompt.');
     expect(calls[0].options.prompt).not.toContain('This unrelated review must not reach the prompt.');
   });
 

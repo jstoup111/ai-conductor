@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { parsePlanTaskBodies, parsePlanTaskTitles } from './plan-task-parse.js';
-import { parseAdrDecisions } from './artifacts.js';
+import { selectPlanReviewAdrDecisionSections } from './plan-review-adr-scope.js';
 import type { PlanReviewFinding } from './plan-review-contract.js';
 
 export type PlanReviewIndependence = 'cross-provider' | 'same-provider' | 'unknown-host';
@@ -81,29 +81,6 @@ function storySections(text: string): Record<string, string> {
   return result;
 }
 
-function decisionSections(text: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  const parsed = parseAdrDecisions(text);
-  if (parsed.kind !== 'decisions') return result;
-  for (const [id, passages] of parsed.passages) {
-    result[`D${id}`] = passages.join('\n');
-  }
-  return result;
-}
-
-function citedAdrStems(planText: string): Set<string> {
-  return new Set([...planText.matchAll(/\b(adr-[a-z0-9][a-z0-9-]*)\b/gi)].map((match) => match[1]!));
-}
-
-function changedAdrStems(paths: readonly string[]): Set<string> {
-  const stems = new Set<string>();
-  for (const path of paths) {
-    const match = /(?:^|\/)((?:adr-)[a-z0-9][a-z0-9-]*)\.md$/i.exec(path);
-    if (match) stems.add(match[1]!);
-  }
-  return stems;
-}
-
 /** Computes stable identities for exactly the plan-review inputs. */
 export function computeReviewedDigest(input: ComputeReviewedDigestInput): ReviewedDigest {
   const titles = parsePlanTaskTitles(input.planText);
@@ -111,15 +88,8 @@ export function computeReviewedDigest(input: ComputeReviewedDigestInput): Review
     [id, sha256(`${titles.get(id) ?? ''}\n${body}`)],
   ));
   const storyDigests = Object.fromEntries(Object.entries(storySections(input.storiesText)).map(([id, text]) => [id, sha256(text)]));
-  const inScopeAdrs = new Set([...citedAdrStems(input.planText), ...changedAdrStems(input.changedPaths)]);
   const adrDecisionDigests: Record<string, string> = {};
-  for (const stem of [...inScopeAdrs].sort()) {
-    const text = input.adrTexts[stem];
-    if (text === undefined) continue;
-    for (const [decision, section] of Object.entries(decisionSections(text))) {
-      adrDecisionDigests[`${stem}#${decision}`] = sha256(section);
-    }
-  }
+  for (const [id, section] of Object.entries(selectPlanReviewAdrDecisionSections(input))) adrDecisionDigests[id] = sha256(section);
   const artifactDigests = Object.fromEntries(Object.entries(input.artifactTexts).map(([path, text]) => [path, sha256(text)]));
   return digestComponents({ planTaskDigests, storyDigests, adrDecisionDigests, artifactDigests });
 }

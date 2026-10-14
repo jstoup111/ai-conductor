@@ -45,11 +45,23 @@ describe('plan-review land gate', () => {
     await expect(runPlanReviewGate({ worktreePath: stale.root, canonicalPath: stale.root, planStem: 'idea', tier: 'M', planText: stale.planText, storiesText: stale.storiesText }))
       .rejects.toThrow('plan review is stale: adr-uncited#D1');
   });
-  it('marks a review stale when this spec modifies a tracked uncited ADR after review', async () => {
-    const stale = await input([], true);
-    await writeFile(join(stale.root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Modified decision.\n');
+  // Covers: task:rem-as-built-rem-validation-AB4
+  it('accepts a fresh artifact that includes a changed uncited ADR and ignores unchanged unrelated ADRs', async () => {
+    const fresh = await input([], true);
+    const adrTexts = { 'adr-uncited': '## Decision\n\nD1. Modified decision.\n' };
+    await writeFile(join(fresh.root, '.docs/decisions/adr-uncited.md'), adrTexts['adr-uncited']);
+    const reviewedDigest = computeReviewedDigest({
+      planText: fresh.planText,
+      storiesText: fresh.storiesText,
+      adrTexts,
+      artifactTexts: { '.docs/coherence/idea.md': '' },
+      changedPaths: ['.docs/decisions/adr-uncited.md'],
+    });
+    await writeFile(join(fresh.root, '.docs/plan-review/idea.md'), renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider', findings: [], dispositions: [], reviewedDigest,
+    }));
 
-    await expect(runPlanReviewGate({ worktreePath: stale.root, canonicalPath: stale.root, planStem: 'idea', tier: 'M', planText: stale.planText, storiesText: stale.storiesText }))
-      .rejects.toThrow('plan review is stale: adr-uncited#D1');
+    await expect(runPlanReviewGate({ worktreePath: fresh.root, canonicalPath: fresh.root, planStem: 'idea', tier: 'M', planText: fresh.planText, storiesText: fresh.storiesText }))
+      .resolves.toBeUndefined();
   });
 });
