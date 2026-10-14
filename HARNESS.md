@@ -237,7 +237,7 @@ through `ai-conductor scoped-run <selectors...>`. The agent derives the selector
 hand-assemble or narrate a test command. Debugging and conduct progression use the same policy.
 Pipeline batch boundaries and parallel joins retain pipeline's named `BATCH_AFFECTED_TESTS`
 union and supplied results without routine reruns. A concrete interaction risk or changed behavior
-may justify a minimal targeted check through the same interface. Evaluators inspect the supplied results
+may justify a minimal targeted check through the same interface. `build_review` and `/code-review` reviewers inspect the supplied results
 without routine reruns; they run targeted tests only to reproduce a specific suspected defect.
 A known scoped failure blocks its current
 BUILD activity; it is never deferred to the aggregate gate.
@@ -271,7 +271,7 @@ Independent CI remains a separate authority.
   useful to them. No play-by-play of internal steps.
 - Between TDD phases, output ONLY the status line (PASS/FAIL + reason). No commentary.
 
-**Rules for subagents (generator, domain-reviewer, evaluator):**
+**Rules for subagents (generator, domain-reviewer):**
 - Follow your output format exactly. No preamble, no sign-off.
 - Test output: include ONLY the failure message and assertion diff, not the full test run.
   Truncate after the first relevant failure unless multiple unrelated failures exist.

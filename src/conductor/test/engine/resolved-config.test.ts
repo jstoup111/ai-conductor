@@ -272,7 +272,7 @@ describe('engine/resolved-config', () => {
       expect(resolved.enabled).toBe(true);
     });
 
-    it('defaults implementation quality on at medium effort while the existing rubrics remain off', () => {
+    it('defaults implementation quality and security on with their registered efforts', () => {
       const resolved = resolveBuildReviewConfig(undefined);
       expect({
         testQuality: resolved.rubrics.testQuality.enabled,
@@ -280,16 +280,16 @@ describe('engine/resolved-config', () => {
         implementationQuality: resolved.rubrics.implementationQuality,
       }).toEqual({
         testQuality: false,
-        security: false,
+        security: true,
         implementationQuality: expect.objectContaining({ enabled: true, effort: 'medium' }),
       });
     });
 
-    it('materializes the default-off security policy with its high effort and no confidence floor', () => {
+    it('materializes the default-on security policy with its high effort and no confidence floor', () => {
       const resolved = resolveBuildReviewConfig(undefined);
 
       expect(resolved.rubrics.security).toMatchObject({
-        enabled: false,
+        enabled: true,
         effort: 'high',
         min_confidence: 0,
       });
@@ -396,7 +396,7 @@ describe('engine/resolved-config', () => {
         maxParallel: resolved.maxParallel,
         rubrics: resolved.rubrics,
       }).toEqual({
-        maxParallel: 1,
+        maxParallel: 2,
         rubrics: {
           testQuality: {
             enabled: false,
@@ -410,7 +410,7 @@ describe('engine/resolved-config', () => {
             min_confidence: 0,
           },
           security: {
-            enabled: false,
+            enabled: true,
             max_projection_bytes: 1_048_576,
             llm_provider: ['claude', 'codex'],
             model: 'opus',
@@ -524,7 +524,7 @@ describe('engine/resolved-config', () => {
       const kotlinPolicy = resolved.catalog.find(({ id }) => id === 'kotlinPolicy');
       const testQuality = resolved.catalog.find(({ id }) => id === 'testQuality');
 
-      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'implementationQuality', 'kotlinPolicy']);
+      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'security', 'implementationQuality', 'kotlinPolicy']);
       expect(testQuality).toMatchObject({
         id: 'testQuality',
         kind: 'builtin',
@@ -600,7 +600,7 @@ describe('engine/resolved-config', () => {
         catalog: readonly { id: string }[];
       };
 
-      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['testQuality', 'implementationQuality']);
+      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['testQuality', 'security', 'implementationQuality']);
       expect(disabledGate.catalog).toEqual([]);
     });
 
@@ -633,7 +633,7 @@ describe('engine/resolved-config', () => {
         catalog: readonly EffectiveReviewCatalogMember[];
       };
 
-      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['implementationQuality']);
+      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['security', 'implementationQuality']);
       expect(disabledGate.catalog).toEqual([]);
 
       const preflight = vi.fn(async () => { throw new Error('preflight must not run'); });

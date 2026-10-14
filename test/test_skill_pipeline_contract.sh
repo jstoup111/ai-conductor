@@ -375,21 +375,19 @@ else
   fail "missing reference to session-hook machinery"
 fi
 
-# Batch verification and its evaluator must share one named affected-test union. Indeterminate
-# scope defers aggregate proof to the engine's test_suite gate; build sessions never run the
-# full suite (#2232).
+# Batch boundaries retain their affected-test, simplify, lint, and orphaned-caller
+# safeguards without dispatching an evaluator or writing closeout telemetry.
 pipeline_text="$(tr '\n' ' ' < "$SKILL_FILE" | tr -s ' ')"
 code_review_text="$(tr '\n' ' ' < "$CODE_REVIEW_SKILL" 2>/dev/null | tr -s ' ')"
 if [ -f "$CODE_REVIEW_SKILL" ] \
-  && grep -qF 'compute one named `BATCH_AFFECTED_TESTS` union' <<<"$pipeline_text" \
-  && grep -qF 'The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.' <<<"$pipeline_text" \
+  && grep -qF '`BATCH_AFFECTED_TESTS` union' <<<"$pipeline_text" \
   && grep -qF 'When `BATCH_AFFECTED_TESTS` cannot be determined with confidence, record that in the REPORT and defer aggregate proof' <<<"$pipeline_text" \
   && grep -qF 'the build session never runs the full test suite.' <<<"$pipeline_text" \
-  && grep -qF 'For batch reviews, inspect the provided `BATCH_AFFECTED_TESTS` result set' <<<"$code_review_text" \
-  && grep -qF 'Never require or launch an intermediate full-suite run.' <<<"$code_review_text"; then
-  pass "batch verification and evaluator use affected-test union and defer aggregate proof to test_suite"
+  && grep -qF 'orphaned' <<<"$pipeline_text" \
+  && ! grep -qiE 'HARD GATE: Evaluator dispatch|closeout-event|batches_with_evaluator' <<<"$pipeline_text"; then
+  pass "batch boundary retains verification without evaluator dispatch"
 else
-  fail "batch verification and evaluator must use affected-test union and defer aggregate proof to test_suite"
+  fail "batch boundary must retain verification without evaluator dispatch"
 fi
 
 # Code review keeps routing batches touching security boundaries to the higher

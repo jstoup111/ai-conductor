@@ -1388,37 +1388,9 @@ type ConductorEventBody =
       featureSlug?: string;
     }
   | {
-      /** A pipeline-owned closeout obligation began during a build. */
-      type: 'pipeline_closeout_started';
-      obligation:
-        | 'evaluator'
-        | 'simplify'
-        | 'architecture-diagram'
-        | 'memory'
-        | 'summary';
-      /** Epoch milliseconds when the pipeline recorded the start. */
-      ts: number;
-    }
-  | {
-      /** A pipeline-owned closeout obligation completed during a build. */
-      type: 'pipeline_closeout';
-      obligation:
-        | 'evaluator'
-        | 'simplify'
-        | 'architecture-diagram'
-        | 'memory'
-        | 'summary';
-      /** Epoch milliseconds when the obligation began. */
-      startedAt: number;
-      /** Epoch milliseconds when the obligation completed. */
-      endedAt: number;
-      /** Epoch milliseconds when the pipeline recorded this event. */
-      ts: number;
-    }
-  | {
-      /** A malformed complete record observed in the pipeline closeout ledger. */
+      /** A skipped complete record observed in the pipeline-owned event ledger. */
       type: 'pipeline_tail_diagnostic';
-      reason: 'malformed-line' | 'poll-failed';
+      reason: 'malformed-line' | 'unadmitted-type' | 'poll-failed';
       /** Relative path to the tailed pipeline-owned ledger. */
       path: string;
       /** Byte offset of a malformed line, when a line was skipped. */

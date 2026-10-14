@@ -95,9 +95,9 @@ practice**, so satisfying one re-breaks the other. This is the costliest conflic
 and the hardest to see, because nothing looks wrong at authoring time — both stories
 read as reasonable, and each is implementable on its own.
 
-- Story A: "Every batch boundary blocks until the evaluator has written a verdict"
-- Story B: "A batch with no code changes skips evaluator dispatch to save tokens"
-- Conflict: a no-change batch must both block on a verdict and never request one. An
+- Story A: "Every build change has current aggregate test-suite evidence before SHIP"
+- Story B: "The test-suite gate may reuse current aggregate evidence without rerunning it"
+- Conflict: a build that requires a fresh rerun can never reuse current evidence. An
   implementation satisfying A fails B's gate; the fix for B then fails A's gate.
 
 The damage is not a failed build — it is a **loop that does not terminate on its own**.

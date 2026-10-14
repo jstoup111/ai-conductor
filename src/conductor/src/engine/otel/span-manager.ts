@@ -29,7 +29,6 @@ import {
   Context,
 } from '@opentelemetry/api';
 import type { ConductorEvent } from '../../types/events.js';
-import { closeoutDurationMs } from '../closeout-trust.js';
 import type { ResolvedOtelProvenance } from './otel-config.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 import { resolveExecutionIdentity, type ExecutionScope } from '../execution-identity.js';
@@ -547,24 +546,6 @@ export class SpanManager {
       resolvedAfter: event.resolvedAfter,
     };
     targetSpan.addEvent('build_stall', attrs);
-  }
-
-  onPipelineCloseout(event: Extract<ConductorEvent, { type: 'pipeline_closeout' }>): void {
-    this.ensureRunSpan();
-    // Closeout belongs to the build lifecycle. It is emitted out-of-band, so
-    // prefer an active build step and otherwise preserve it on the run span.
-    const targetSpan = this.stateFor('build')?.span ?? this.runSpan;
-    if (!targetSpan) {
-      this.warn('pipeline_closeout received but no span available — dropping');
-      return;
-    }
-    const durationMs = closeoutDurationMs(event);
-    targetSpan.addEvent('pipeline_closeout', {
-      obligation: event.obligation,
-      startedAt: event.startedAt,
-      endedAt: event.endedAt,
-      ...(durationMs === undefined ? {} : { durationMs }),
-    });
   }
 
   // ── Run completion ─────────────────────────────────────────────────────────

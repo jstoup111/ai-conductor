@@ -37,7 +37,7 @@ Gather what the evaluator needs:
 - Git diff of changes — **for batch reviews, scope to the current batch only** (commits since
   last batch boundary via `git diff <batch-start-commit>..HEAD`), not the full branch diff.
   For the final batch, add a lightweight integration check (full branch diff stat summary) but
-  do NOT re-review earlier batches line by line — they already passed their own evaluator gate.
+  do NOT re-review earlier batches line by line.
 - The story/acceptance criteria being implemented (from `.docs/stories/`)
 - The implementation plan task (from `.docs/plans/`)
 - The relevant affected-test result set

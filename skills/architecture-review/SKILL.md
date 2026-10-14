@@ -295,7 +295,7 @@ Terminal ADR declarations use only `Status: APPROVED` or `Status: SUPERSEDED by 
 **Phase 1: DRAFT**
 - Architecture-review creates the ADR with `Status: DRAFT` in the frontmatter
 - DRAFT ADRs are written to `.docs/decisions/` as `adr-YYYY-MM-DD-<kebab-slug>.md` (see §7)
-- DRAFT ADRs cannot be cited as justification in code review, evaluator verdicts, or
+- DRAFT ADRs cannot be cited as justification in `build_review`, as-built review, or
   implementation decisions — they are proposals, not decisions
 
 **Phase 2: REVIEW**
@@ -310,7 +310,7 @@ Terminal ADR declarations use only `Status: APPROVED` or `Status: SUPERSEDED by 
 
 **Phase 3: AUTHORITATIVE**
 - Only `Status: APPROVED` ADRs are binding on downstream work
-- Pipeline evaluators, code review, and `/finish` gates may cite APPROVED ADRs
+- `build_review`, the as-built review, and `/finish` may cite APPROVED ADRs
 - If a subsequent feature conflicts with an APPROVED ADR, the conflict must be resolved by
   either superseding the ADR (new ADR with `Supersedes: <old>`) or changing the implementation
 - Superseded ADRs get `Status: SUPERSEDED` and a `Superseded by:` reference
@@ -367,7 +367,7 @@ with it.
 
 **APPROVED** — Proceed to `/writing-system-tests`.
 
-**APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. Evaluator checks at code review. Unmet conditions at `/finish` are blocking.
+**APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. `build_review` and as-built review check conditions. Unmet conditions at `/finish` are blocking.
 
 **BLOCKED** — Pipeline HALTS. Present to the user: what is violated, resolution options with trade-offs, and which ADRs are in conflict. The user must explicitly approve a resolution. Do not auto-resolve. Capture the resolution as a new ADR only when resolving it makes or changes a structural decision; resolve non-structural blockers without an ADR. Re-run the review.
 
