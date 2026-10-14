@@ -365,7 +365,10 @@ describe('daemon E2E fixture', () => {
           // the sole supported build-review branch without running a command.
           config: {
             llm_provider: 'codex',
-            build_review: { maxParallel: 1, rubrics: { testQuality: { enabled: true } } },
+            build_review: {
+              maxParallel: 1,
+              rubrics: { testQuality: { enabled: true }, security: { enabled: false } },
+            },
           },
           buildReviewInputOptions: {
             inspectTestSuite: async () => ({
