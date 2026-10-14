@@ -37,9 +37,10 @@ describe('plan-review land gate', () => {
     await expect(runPlanReviewGate({ worktreePath: blocked.root, canonicalPath: blocked.root, planStem: 'missing', tier: 'M', planText: blocked.planText, storiesText: blocked.storiesText })).rejects.toThrow('plan review has not run');
     await expect(runPlanReviewGate({ worktreePath: blocked.root, canonicalPath: blocked.root, planStem: 'idea', tier: 'M', planText: blocked.planText, storiesText: blocked.storiesText })).rejects.toThrow('block-1 (task 1): must change');
   });
-  it('marks a review stale when this spec adds an uncited ADR after review', async () => {
+  // Covers: task:rem-as-built-R6
+  it('marks a review stale when this spec adds a numbered-Markdown ADR decision after review', async () => {
     const stale = await input();
-    await writeFile(join(stale.root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Newly authored decision.\n');
+    await writeFile(join(stale.root, '.docs/decisions/adr-uncited.md'), '## Decision\n\n1. Newly authored decision.\n');
 
     await expect(runPlanReviewGate({ worktreePath: stale.root, canonicalPath: stale.root, planStem: 'idea', tier: 'M', planText: stale.planText, storiesText: stale.storiesText }))
       .rejects.toThrow('plan review is stale: adr-uncited#D1');

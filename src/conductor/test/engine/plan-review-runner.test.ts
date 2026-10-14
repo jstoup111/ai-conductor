@@ -78,6 +78,28 @@ describe('runPlanReview', () => {
     expect(calls[0].options.prompt).not.toContain('This unrelated review must not reach the prompt.');
   });
 
+  // Covers: task:rem-as-built-R6
+  it('supplies a changed numbered-Markdown ADR decision to the round-two reviewer', async () => {
+    const root = await fixture();
+    const prompts: string[] = [];
+    const input = {
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => {
+        prompts.push(request.options.prompt);
+        return { success: true, finalStructuredResult: { findings: [] } };
+      }) as any,
+    };
+
+    await runPlanReview(input);
+    await writeFile(join(root, '.docs/decisions/adr-review.md'), '# ADR review\n\n## Decision\n\n1. The numbered replacement is allowed.\n', 'utf8');
+    await runPlanReview(input);
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('1. The numbered replacement is allowed.');
+    expect(prompts[1]).not.toContain('D1. The flag is allowed.');
+  });
+
   it('falls through a failed candidate while preserving round one and recording same-provider independence', async () => {
     const root = await fixture(); const calls: any[] = []; const notices: string[] = [];
     const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: ['codex', 'claude'] } as any, configuredProviders: ['codex', 'claude'], env: { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }, runtimes: {} as any, sessions: {} as any,
