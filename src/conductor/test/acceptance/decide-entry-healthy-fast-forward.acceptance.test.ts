@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { StepName } from '../../src/types/index.js';
+import type { ConductorEvent, StepName } from '../../src/types/index.js';
 import { readState } from '../../src/engine/state.js';
 import { renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import {
@@ -58,6 +58,10 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       memory: 'done',
     });
     const ran: StepName[] = [];
+    const completions: Array<Extract<ConductorEvent, { type: 'step_completed' }>> = [];
+    fixture.events.on('step_completed', (event) => {
+      completions.push(event);
+    });
     let haltedBeforeFirstDispatch = false;
 
     await conductorFor(fixture, {
@@ -77,6 +81,9 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
     expect(state.ok && state.value.complexity).toBe('skipped');
     expect(state.ok && state.value.plan_review).toBe('skipped');
     expect(state.ok && state.value.step_reasons?.plan_review).toBe('landed-before-plan-review');
+    expect(completions).toContainEqual(expect.objectContaining({
+      step: 'plan_review', status: 'skipped', reason: 'landed-before-plan-review',
+    }));
     expect(haltedBeforeFirstDispatch).toBe(false);
   });
 

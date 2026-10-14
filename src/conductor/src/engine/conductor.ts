@@ -7325,7 +7325,10 @@ export class Conductor {
           }
           if (disposition.kind === 'fast-forward') {
             await this.saveConductorStepStatus(state, step.name, disposition.as, disposition.reason);
-            await emitTracked({ type: 'step_completed', step: step.name, status: disposition.as, reason: disposition.reason });
+            // Fast-forwards are never admitted executions, so their terminal
+            // disposition must bypass the execution lifecycle but still use
+            // the canonical event spine.
+            await this.events.emit({ type: 'step_completed', step: step.name, status: disposition.as, reason: disposition.reason });
             continue;
           }
           if (disposition.kind === 'halt') {
