@@ -128,7 +128,7 @@ describe('live self-host boundary', () => {
         'paste-cache', 'skills/synced/**/.last-complete-round',
         'plugins/plugin-*-cache*.json', 'plugins/.last_inuse_sweep', 'plugins/synced/.bucket-*',
         'plugins/synced/**/.marketplaces.json', 'plugins/synced/**/.last-complete-round',
-        'policy-limits.json.stamp.json',
+        'policy-limits.json.stamp.json', 'remote-settings.json.synced-at',
       ],
       codex: [
         'history.jsonl', 'sessions', 'shell_snapshots', 'cache', 'plugins/cache',
@@ -352,6 +352,62 @@ describe('live self-host boundary', () => {
       expect(result).toMatchObject({ ok: false });
       expect(result.reason).toContain('provider state changed during self-host execution');
       expect(result.reason).toContain('SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('ignores garbage collection of an already-orphaned plugin version but not of a live one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-orphaned-plugin-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const skillCreator = join(provider, 'plugins', 'cache', 'claude-plugins-official', 'skill-creator');
+    const orphaned = join(skillCreator, 'fbe07fb6ce7d'); const current = join(skillCreator, '8d392c816966');
+    await Promise.all([mkdir(live), mkdir(join(orphaned, 'skills'), { recursive: true }), mkdir(current, { recursive: true })]);
+    await Promise.all([
+      writeFile(join(orphaned, '.orphaned_at'), '1791900000000'),
+      writeFile(join(orphaned, 'skills', 'SKILL.md'), 'superseded plugin content\n'),
+      writeFile(join(current, 'SKILL.md'), 'installed plugin content\n'),
+    ]);
+    const verify = (b: Awaited<ReturnType<typeof fingerprintLiveBoundary>>) =>
+      verifyLiveBoundary(b, { contained: false, reason: 'per-step verification' });
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await rm(orphaned, { recursive: true });
+      expect(await verify(baseline)).toEqual({ ok: true });
+      await rm(current, { recursive: true });
+      const result = await verify(baseline);
+      expect(result).toMatchObject({ ok: false });
+      expect(result.reason).toContain('0 added, 1 removed, 0 changed: removed plugins/cache/claude-plugins-official/skill-creator/8d392c816966/SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('halts when content is added to an orphaned plugin version', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-orphaned-plugin-add-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const orphaned = join(provider, 'plugins', 'cache', 'claude-plugins-official', 'skill-creator', 'fbe07fb6ce7d');
+    await Promise.all([mkdir(live), mkdir(orphaned, { recursive: true })]);
+    await writeFile(join(orphaned, '.orphaned_at'), '1791900000000');
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(orphaned, 'SKILL.md'), 'written by the self-host process\n');
+      const result = await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.reason).toContain('added plugins/cache/claude-plugins-official/skill-creator/fbe07fb6ce7d/SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('ignores the remote-settings sync stamp but still halts on remote-settings.json content', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-remote-settings-stamp-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'remote-settings.json'), '{}');
+    await writeFile(join(provider, 'remote-settings.json.synced-at'), '1791946625065');
+    const verify = (b: Awaited<ReturnType<typeof fingerprintLiveBoundary>>) =>
+      verifyLiveBoundary(b, { contained: false, reason: 'per-step verification' });
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(provider, 'remote-settings.json.synced-at'), '1791950000000');
+      expect(await verify(baseline)).toEqual({ ok: true });
+      await writeFile(join(provider, 'remote-settings.json'), '{"permissions":{"allow":["Bash"]}}');
+      expect((await verify(baseline)).reason).toContain('changed remote-settings.json');
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
