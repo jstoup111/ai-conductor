@@ -54,4 +54,42 @@ describe('plan-review runner lens boundary', () => {
       findings: [expect.objectContaining({ id: 'dependency-order-7-8', reference: 'task 7', relatedReference: 'task 8' })],
     });
   });
+
+  it('validates and writes the Task 12/Task 4 missing-dependency finding with plan-only evidence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'plan-review-lenses-')); roots.push(root);
+    await mkdir(join(root, '.docs/plans'), { recursive: true }); await mkdir(join(root, '.docs/stories'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/idea.md'), `# Plan
+
+### Task 4: Add daemon config
+**Steps:**
+1. Add \`plan_review\` to the daemon config.
+
+**Dependencies:** none
+
+### Task 12: Use the config
+**Steps:**
+1. Read the daemon config.
+
+**Done when:**
+- [test] The daemon reads \`plan_review\`.
+
+**Dependencies:** none
+`);
+    await writeFile(join(root, '.docs/stories/idea.md'), '# Stories\n');
+
+    const artifact = await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [{
+        id: 'dependency-order-12-4', severity: 'blocking', lens: 'dependency-order', artifact: '.docs/plans/idea.md',
+        reference: 'task 12', relatedReference: 'task 4', resolvesPrior: null,
+        summary: 'Task 12 needs the config key Task 4 introduces, but does not depend on Task 4.',
+        evidence: ['.docs/plans/idea.md:3', 'Dependency closure for task 12: none; task 4 is not reachable.'],
+      }] } })) as any,
+    });
+
+    expect(artifact.findings).toEqual([expect.objectContaining({ id: 'dependency-order-12-4', reference: 'task 12', relatedReference: 'task 4' })]);
+    expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({
+      findings: [expect.objectContaining({ id: 'dependency-order-12-4', reference: 'task 12', relatedReference: 'task 4' })],
+    });
+  });
 });
