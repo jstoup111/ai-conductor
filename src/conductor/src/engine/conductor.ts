@@ -6070,7 +6070,11 @@ export class Conductor {
     if (!ctx.planPath) {
       return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
     }
-    return checkStepCompletion(this.projectRoot, 'build', ctx);
+    // The unverified Done-when nudge is a once-per-lap prompt to a BUILD
+    // dispatch, not completion evidence. Post-rebase, the question is only
+    // whether the recorded BUILD's evidence survives; the re-opened
+    // build_review owns the Done-when checks.
+    return checkStepCompletion(this.projectRoot, 'build', { ...ctx, unverifiedDoneWhenNudgeSpent: true });
   }
 
   async run(): Promise<OperatorParkedTermination | undefined> {

@@ -3066,9 +3066,34 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     });
 
     expect(result).toBe('halted');
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      'completed BUILD evidence is unavailable after rebase: unreadable completed evidence',
-    );
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('completed BUILD evidence is unavailable after rebase: unreadable completed evidence');
+    expect(halt).toMatch(/^rebase completed — parked for human review/);
+    expect(halt).not.toContain('Conflicted files');
+  });
+
+  it('keeps a completed BUILD with an unspent unverified Done-when nudge after rebase instead of halting', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    await writeFile(statePath, JSON.stringify({ ...state, build: 'done' }, null, 2));
+    const statusPath = join(dir, '.pipeline', 'task-status.json');
+    await writeFile(statusPath, JSON.stringify({
+      plan_ref: '.docs/plans/foo.md',
+      tasks: [
+        {
+          id: '1', name: 'Do thing 1', status: 'done',
+          doneWhen: [{ source: 'unverified', check: '[test] reviewer writes are refused', reason: 'needs a live provider' }],
+        },
+        { id: '2', name: 'Do thing 2', status: 'done' },
+      ],
+    }, null, 2) + '\n');
+
+    const result = await resumeRebaseFirst({ worktreePath: dir, localBase: 'main', events, ranManualTest: false });
+
+    expect(result).toBe('rebased');
+    await expect(access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
   });
 
   it.each([
