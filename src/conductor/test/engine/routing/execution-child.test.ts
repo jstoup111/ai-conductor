@@ -1,4 +1,4 @@
-// Covers: task:14
+// Covers: task:14, task:rem-prd-audit-refusal-9e34528a-5d56-4ec3-adbc-e8c2a0a6002f
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
