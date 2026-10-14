@@ -102,7 +102,7 @@ import { PluginRegistry } from './plugin-registry.js';
 import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
-import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview } from './plan-review-runner.js';
+import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview, type RunPlanReviewInput } from './plan-review-runner.js';
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -596,6 +596,8 @@ export interface DispatchEngineerOpts {
   githubOperationConfirmation?: InteractiveGithubOperationConfirmation;
   /** Environment used to form host-owned interactive argv. */
   env?: NodeJS.ProcessEnv;
+  /** Injectable reviewer executor for the deterministic plan-review boundary. */
+  providerExecutor?: RunPlanReviewInput['providerExecutor'];
   /**
    * Injected pre-poll hook (for tests). When provided, the 'launch' kind calls this
    * before each fresh session (unless a CLI idea was supplied) to prime the intake
@@ -1399,7 +1401,7 @@ export async function dispatchEngineer(
           registerBuiltInLlmProviders(registry, { codexDoctorTimeoutMs: (configResult.config.codex_doctor_timeout_seconds ?? 10) * 1_000 });
           registry.markInitialized();
           const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
-          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, emit: async (event) => events.emitOrThrow(event) });
+          const artifact = await runPlanReview({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: async (event) => events.emitOrThrow(event) });
           if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
         }
         return 0;
