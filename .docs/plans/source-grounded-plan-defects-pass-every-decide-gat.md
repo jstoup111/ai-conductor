@@ -1003,3 +1003,44 @@ re-run and §4d. 24 tasks.
 **Done when:**
 - adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 9 is satisfied by this task.
 - The repair for task rem-prd-audit-R7-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-validation-S9.2: conductor.ts plan_review fast-forward: compute artifactPresent from the feature's own `.docs/plan-review/<plan-stem>.md` (resolved from the active plan stem), not findArtifactFilesForStep's repo-wide glob; extend decide-entry-healthy-fast-forward.acceptance.test.ts with a fixture that contains another feature's plan-review artifact and assert plan_review is still skipped with reason landed-before-plan-review
+**Gate:** prd-audit
+**Rationale:** Implementation defect (95%, verified from audit evidence): the artifact-present probe uses the repo-wide `.docs/plan-review/*.md` glob instead of the feature's plan-stem artifact. On main, other features' landed review artifacts would suppress the `landed-before-plan-review` skip. Task 8 owns this criterion and Task 7 owns the structural absent-artifact disposition, so both admit the fix. The approved architecture is unchanged.
+**Criterion:** S9.2
+**Parent task:** 8
+**Done when:**
+- [test] S9.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-validation-S9.2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-validation-AB1: step-runners.ts plan_review runner: pass an onNotice callback to runPlanReview that prints the same-provider/unknown-host one-line notice to the interactive conduct operator; add a step-runner test asserting the notice is printed for same-provider and unknown-host independence
+**Gate:** as-built
+**Rationale:** Conforming wiring gap under ADR decision 4: the runner already emits the notice through onNotice, but the interactive conduct step runner (step-runners.ts:1233-1238) does not pass that callback. Task 16 (the plan_review step runner under interactive conduct) and the earlier notice remediation admit this fix. It needs no architectural decision.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 4
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-validation-AB1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-validation-AB2: plan-review-runner.ts: schema-validate every finding inside the provider loop and treat any schema-invalid finding (e.g. {findings:[{}]}) as an invalid response that falls through to the next provider in a fresh session; keep evidence-insufficiency filtering only for schema-valid findings; add plan-review-runner.test.ts cases for both paths
+**Gate:** as-built
+**Rationale:** The implementation is incomplete against ADR decision 5. Only the response envelope is schema-validated, so a schema-invalid finding is silently filtered out and the round counts as clean. The fix separates per-finding schema failures, which fall through to the next provider, from schema-valid findings rejected for insufficient evidence, which are dropped. Task 12 and remediation R2 admit it.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-validation-AB2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-validation-AB3: plan-review-contract.ts: require dependency-order findings to carry dependency-closure evidence (the transitive Depends-on chain showing the second task is not reachable) in addition to the second-task relatedReference; reject findings lacking it; add accept/reject tests in plan-review-contract.test.ts
+**Gate:** as-built
+**Rationale:** Under ADR decision 5, a dependency-order finding must carry dependency-closure evidence. The contract currently checks only for a second-task reference. Tasks 2 (evidence validator) and 6 (dependency-order lens), together with remediation R1-6, admit this validator fix.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-validation-AB3 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-validation-AB4: Extract one in-scope ADR selector (plan-cited plus changed ADRs, Decision sections via parseAdrDecisions) and use it in plan-review-runner.ts round inputs and acknowledgement, plan-review-artifact.ts reviewed digest, and plan-review-gate.ts land check; add a test where a changed, uncited ADR appears in the reviewer input and a freshly written artifact passes the gate as fresh
+**Gate:** as-built
+**Rationale:** A prior remediation introduced a regression: the runner, artifact digest and land gate each select a different ADR set (runner: cited only; artifact: cited plus changed; gate: all). As a result, a fresh review looks stale. ADR decision 7 already defines the digest scope as cited plus changed ADRs, so the fix is one shared selector, with no new architectural decision. Tasks 3, 12, 14 and 17 and remediations R4 and R6 admit it.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 7
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 7 is satisfied by this task.
+- The repair for task rem-as-built-rem-validation-AB4 is committed and its targeted tests pass.
