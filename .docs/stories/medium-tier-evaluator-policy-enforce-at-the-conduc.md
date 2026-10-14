@@ -7,8 +7,8 @@ Technical track. These stories come from the track scope boundary, the approved 
 (conditions 1–5), and the amended ADRs `adr-2026-08-22-build-review-opt-in-rubric-container`
 (decisions 1 and 4) and `adr-2026-08-22-one-owner-per-review-question` (D1). The rubric judges code
 quality and domain modelling only. Acceptance-criteria compliance stays with `prd_audit`, and ADR
-conformance stays with the as-built review. Retiring the `/pipeline` batch evaluators is #3056 and is
-out of scope.
+conformance stays with the as-built review. The `/pipeline` batch boundary dispatches no evaluator;
+build_review is the post-build review authority.
 
 ## Story 1: Register the implementation-quality rubric as a default-on built-in member
 
@@ -22,11 +22,12 @@ configuration, and I can opt out through the same policy keys as the other rubri
 
 - Given a project config that never mentions `implementationQuality`, when configuration is resolved, then `implementationQuality` resolves to `enabled: true` with default effort `medium`, and the build_review step classifies it as a dispatchable branch.
 - Given a project config with `build_review.rubrics.implementationQuality` set to an explicit `llm_provider`, `model`, `effort`, `model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`, when its branch is classified, then the branch carries exactly those resolved values.
-- Given a project config that never mentions any rubric, when configuration is resolved, then `testQuality` and `security` still resolve to `enabled: false` and only `implementationQuality` is dispatched.
+- Given a project config that never mentions any rubric, when configuration is resolved, then `implementationQuality` and `security` resolve to `enabled: true`, `testQuality` resolves to `enabled: false`, and only `implementationQuality` and `security` are dispatched.
 
 #### Negative Paths
 
-- Given `build_review.rubrics.implementationQuality.enabled: false`, with `testQuality` and `security` left at their defaults, when the lap runs, then the verdict is PASS with reason `build_review_no_rubrics` and no grader is dispatched.
+- Given `build_review.rubrics.implementationQuality.enabled: false`, with `testQuality` and `security` left at their defaults, when the lap runs, then only `security` is dispatched and no implementation-quality judgement runs.
+- Given `build_review.rubrics.implementationQuality.enabled: false` and `build_review.rubrics.security.enabled: false`, with `testQuality` left at its default, when the lap runs, then the verdict is PASS with reason `build_review_no_rubrics` and no grader is dispatched.
 - Given `build_review.rubrics.implementationQuality.enabled: "yes"`, when configuration is validated, then validation fails naming `build_review.rubrics.implementationQuality.enabled` and its expected boolean type, and no lap is dispatched.
 - Given `build_review.rubrics.implementationQuality.effort: extreme`, when configuration is validated, then validation fails naming the key and the allowed effort values.
 - Given `build_review.enabled: false`, when the build reaches build_review, then no implementation-quality judgement runs, even though the rubric defaults to enabled.
@@ -34,8 +35,8 @@ configuration, and I can opt out through the same policy keys as the other rubri
 ### Done When
 
 - [ ] The registry descriptor for `implementationQuality` exists with skill name `build-review-implementation-quality`, projection version `v3`, and a content-addressed cache policy, and `isRegisteredRubric('implementationQuality')` is true.
-- [ ] Resolved configuration for a project that omits `implementationQuality` reports `enabled: true` and `effort: medium`, while `testQuality` and `security` still report `enabled: false`.
-- [ ] Classification with `implementationQuality` disabled and the other rubrics at their defaults yields the `build_review_no_rubrics` PASS with zero dispatches.
+- [ ] Resolved configuration for a project that omits `implementationQuality` reports `enabled: true` and `effort: medium`, while `testQuality` reports `enabled: false` and `security` reports `enabled: true`.
+- [ ] Classification with `implementationQuality` and `security` disabled and `testQuality` at its default yields the `build_review_no_rubrics` PASS with zero dispatches.
 - [ ] Validation rejects a non-boolean `enabled` and an out-of-set `effort` for `implementationQuality`, with messages that name the key.
 
 ## Story 2: Freeze a diff-only projection and cache the judgement by content

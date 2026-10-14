@@ -8,22 +8,23 @@ Tier: M
 
 Approved by the operator on 2026-09-14.
 
-Scope: a second built-in `build_review` rubric, `security`, default-off, that judges the whole feature diff since the merge base for ten closed defect classes and whose findings always block through the shared adjudicator. Governing decisions: adr-2026-08-22-build-review-opt-in-rubric-container D1/D4, adr-2026-08-22-one-owner-per-review-question D1, adr-2026-08-21-review-bound-by-plan-done-when-criteria D3/D6, adr-2026-08-16-closed-build-review-finding-vocabularies D1, and adr-2026-08-18-content-anchored-finding-reference-schema, each as amended 2026-09-14 by #2034.
+Scope: a second built-in `build_review` rubric, `security`, enabled by default, that judges the whole feature diff since the merge base for ten closed defect classes and whose findings always block through the shared adjudicator. Governing decisions: adr-2026-08-22-build-review-opt-in-rubric-container D1/D4, adr-2026-08-22-one-owner-per-review-question D1, adr-2026-08-21-review-bound-by-plan-done-when-criteria D3/D6, adr-2026-08-16-closed-build-review-finding-vocabularies D1, and adr-2026-08-18-content-anchored-finding-reference-schema, each as amended 2026-09-14 by #2034.
 
-## Story 1: Register the security rubric as an opt-in built-in member
+## Story 1: Register the security rubric as a default-on built-in member
 
-As a project operator, I want `security` to be a registered build_review rubric that stays off until I enable it, so that existing projects keep today's gate behaviour and a project that opts in gets security grading through the same policy keys as test quality.
+As a project operator, I want `security` to be a registered build_review rubric that runs unless I turn it off, so that a default-configured build gets security grading and a project can tune or opt out of it through the same policy keys as test quality.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
 - Given a project config with `build_review.rubrics.security.enabled: true`, when the build_review step classifies its branches, then `security` is a dispatchable branch alongside any other enabled member (in a stacked feature, only at the leaf; non-leaf children skip it with reason `leaf-only`) and carries its resolved `llm_provider`, `model`, `effort`, `model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`.
-- Given a project config that never mentions `security`, when configuration is resolved, then `security` resolves to `enabled: false` with default effort `high` and the branch settles as skipped with reason `disabled` without any provider, cache, or preflight work.
+- Given a project config that never mentions `security`, when configuration is resolved, then `security` resolves to `enabled: true` with default effort `high` and the build_review step classifies it as a dispatchable branch.
 - Given `build_review.rubrics.security.enabled: true` and every other member disabled, when the lap runs, then only `security` is dispatched and the outer verdict is derived from its judged result alone.
 
 #### Negative Paths
 
+- Given a project config with `build_review.rubrics.security.enabled: false`, when the build_review step classifies its branches, then the `security` branch settles as skipped with reason `disabled` without any provider, cache, or preflight work.
 - Given a project config with `build_review.rubrics.security.enabled: "yes"`, when configuration is validated, then validation fails naming `build_review.rubrics.security.enabled` and its expected boolean type, and no lap is dispatched.
 - Given a project config with `build_review.rubrics.security.effort: extreme`, when configuration is validated, then validation fails naming the key and the allowed effort values.
 - Given an enabled gate with `security`, `testQuality`, and `implementationQuality` all disabled, when the lap runs, then the verdict is PASS with reason `build_review_no_rubrics` and no grader is dispatched.
@@ -31,8 +32,8 @@ As a project operator, I want `security` to be a registered build_review rubric 
 ### Done When
 
 - [ ] The registry descriptor for `security` exists with skill name `build-review-security`, projection version `v3`, and a content-addressed cache policy, and `isRegisteredRubric('security')` is true.
-- [ ] Resolved configuration for a project that omits `security` reports `enabled: false` and `effort: high` for it.
-- [ ] Classification of an enabled `security` yields a dispatchable branch; classification of an absent or disabled `security` yields a skipped branch with reason `disabled`.
+- [ ] Resolved configuration for a project that omits `security` reports `enabled: true` and `effort: high` for it.
+- [ ] Classification of an enabled or absent `security` yields a dispatchable branch; classification of an explicitly disabled `security` yields a skipped branch with reason `disabled`.
 - [ ] Validation rejects a non-boolean `enabled` and an out-of-set `effort` for `security` with messages that name the key.
 
 ## Story 2: Freeze a whole-diff projection and cache the security judgement by content
@@ -126,7 +127,7 @@ As a harness maintainer, I want the security skill's closed vocabulary and ancho
 
 - Given `skills/build-review-security/SKILL.md` declares the ten-member `**Closed vocabulary:**` line and the `**Reference grammar:**` line for `anchor.locus`, when the rubric vocabulary integrity check runs, then it iterates `security` alongside `testQuality`, executes the engine parser against each declared member, and passes.
 - Given `skills/build-review-security/SKILL.md` exists with `name`, `description`, `enforcement: gating`, `phase: build`, and `disable-model-invocation: true`, when the harness integrity suite runs, then the frontmatter, invocation-policy, and model-table checks pass with a generated `build-review-security` row.
-- Given the per-batch code-review evaluator prompt, when it is rendered, then it contains no instruction to grade security, and its calibration text no longer names security vulnerabilities as an evaluator target.
+- Given the `/code-review` evaluator prompt, when it is rendered, then it contains no instruction to grade security, and its calibration text no longer names security vulnerabilities as an evaluator target.
 
 #### Negative Paths
 
@@ -163,8 +164,6 @@ As a feature owner, I want the security grader to raise a finding only when it c
 - Given a diff that introduces an exposure whose exploitable sink is on an unchanged line, when the security rubric judges it, then the finding anchors to the changed hunk that creates the exposure and names the unchanged line only in `evidenceLocations`.
 
 ### Done When
-
-_Amended 2026-09-17: `confidence` optional per ADR D4.2; the unchanged-sink fixture proves anchoring, not zero findings._
 
 - [ ] `skills/build-review-security/SKILL.md` instructs one finding per independent defect, requires the introducing hunk as the anchor and concrete evidence locations, defines each of the ten concern kinds with an explicit non-finding for each, and accepts an optional integer `confidence` on a finding (absent means blocking, per ADR D4.2).
 - [ ] Fixture provider payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the four zero-finding negative diffs validate as judged results with zero blocking findings, and the unchanged-sink fixture validates as one finding anchored to the changed hunk with the unchanged line named only in `evidenceLocations`.

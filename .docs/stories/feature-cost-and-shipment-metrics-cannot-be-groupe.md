@@ -113,7 +113,7 @@ As a dashboard owner relying on the closed label set, I want instruments outside
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a metrics recorder bound to a feature whose events all carry `tier: 'M'`, when `memory_setup`, `gate_verdict`, `kickback`, and `pipeline_closeout` events are recorded for that feature, then none of the resulting `conductor.memory.setup`, `conductor.gate.verdicts`, `conductor.gate.kickbacks`, or `conductor.pipeline.closeout.duration` points carries a `tier` attribute
+- Given a metrics recorder bound to a feature whose events all carry `tier: 'M'`, when `memory_setup`, `gate_verdict`, and `kickback` events are recorded for that feature, then none of the resulting `conductor.memory.setup`, `conductor.gate.verdicts`, or `conductor.gate.kickbacks` points carries a `tier` attribute
 - Given the same recorder, when a `daemon_backlog_snapshot` is recorded, then no `conductor.daemon.*` point carries a `tier` attribute
 
 #### Negative Paths
