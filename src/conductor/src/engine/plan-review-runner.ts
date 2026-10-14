@@ -48,10 +48,16 @@ async function reviewInputs(worktreePath: string, planStem: string, canonicalPat
       return '';
     }
   })();
-  const allAdrTexts: Record<string, string> = {};
-  try { for (const file of await readdir(join(worktreePath, '.docs', 'decisions'))) if (file.endsWith('.md')) allAdrTexts[file.slice(0, -3)] = await readFile(join(worktreePath, '.docs', 'decisions', file), 'utf8'); } catch { /* optional */ }
   const cited = new Set([...planText.matchAll(/\b(adr-[a-z0-9][a-z0-9-]*)\b/gi)].map((match) => match[1]!));
-  const adrTexts = Object.fromEntries([...cited].flatMap((stem) => allAdrTexts[stem] === undefined ? [] : [[stem, allAdrTexts[stem]] ]));
+  const adrTexts: Record<string, string> = {};
+  for (const stem of cited) {
+    try {
+      adrTexts[stem] = await readFile(join(worktreePath, '.docs', 'decisions', `${stem}.md`), 'utf8');
+    } catch {
+      // A cited ADR may be absent while a plan is being authored; its absence
+      // remains represented by the reviewed digest rather than widening scope.
+    }
+  }
   const sourceFiles: Record<string, string> = {};
   for (const path of await files(worktreePath)) if (!path.startsWith('.pipeline/')) sourceFiles[path] = await readFile(join(worktreePath, path), 'utf8').catch(() => '');
   const changedPaths = canonicalPath ? await resolveIdeaFiles(worktreePath, canonicalPath) : new Set<string>();

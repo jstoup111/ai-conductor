@@ -1,4 +1,4 @@
-// Covers: task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-rem-validation-AB2
+// Covers: task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -56,9 +56,14 @@ describe('runPlanReview', () => {
     expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [] });
   });
 
-  it('excludes a modified uncited ADR from the reviewed digest', async () => {
+  it('loads only cited Decision sections and excludes unrelated ADR and review files from the prompt', async () => {
     const root = await fixture(true);
-    await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. This must still be reviewed.\n', 'utf8');
+    const uncitedAdr = join(root, '.docs/decisions/adr-uncited.md');
+    await writeFile(uncitedAdr, '## Decision\n\nD1. This unrelated ADR must not reach the prompt.\n', 'utf8');
+    await writeFile(join(root, '.docs/decisions/architecture-review-unrelated.md'), '## Decision\n\nD1. This unrelated review must not reach the prompt.\n', 'utf8');
+    // An unrelated directory with an `.md` suffix proves the runner does not
+    // attempt to read every decision-directory entry before narrowing scope.
+    await mkdir(join(root, '.docs/decisions/adr-not-a-cited-document.md'));
 
     const calls: any[] = [];
     const artifact = await runPlanReview({
@@ -68,7 +73,9 @@ describe('runPlanReview', () => {
     });
 
     expect(artifact.reviewedDigest.adrDecisionDigests).not.toHaveProperty('adr-uncited#D1');
-    expect(calls[0].options.prompt).not.toContain('This must still be reviewed.');
+    expect(calls[0].options.prompt).toContain('D1. The flag is allowed.');
+    expect(calls[0].options.prompt).not.toContain('This unrelated ADR must not reach the prompt.');
+    expect(calls[0].options.prompt).not.toContain('This unrelated review must not reach the prompt.');
   });
 
   it('falls through a failed candidate while preserving round one and recording same-provider independence', async () => {
