@@ -849,3 +849,157 @@ re-run and §4d. 24 tasks.
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions; plan review sweeps this at Medium and Large tier, and Small tier gains no required step for it
+
+### Task rem-prd-audit-R1: plan-review-contract.ts + plan-review-runner.ts + plan-review-candidates: make evidence validation lens-specific (any worktree file:line incl. .docs plan/story/ADR lines for reachability, dependency-order, contradiction; source outside .docs only for test-impact/feasibility), include .docs artifact files in the runner evidence map, require dependency-order relatedReference to name a second task, emit reachability candidate paths as .docs/plans/<stem>.md:<n>; add per-lens accept/reject tests in plan-review-contract.test.ts
+**Gate:** prd-audit
+**Rationale:** Verified against plan Task 2 Done-when: only test-impact and feasibility findings require a source file:line outside .docs/; every other lens needs only worktree file:line evidence. Applying the source requirement to every lens is implementation drift from the approved contract, so it is BUILD work. Confidence 90%.
+**Criterion:** S2.1
+**Parent task:** 2
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-2: plan-review-contract.ts: accept plan-line evidence for dependency-order findings (with second-task relatedReference); test the Task 7/Task 8 fixture finding validates and is written
+**Gate:** prd-audit
+**Rationale:** Same validator defect as S2.1: a dependency-order finding is plan-grounded, and Task 2 does not require source-outside-.docs evidence for it. Repair lives in Task 2's validator.
+**Criterion:** S3.1
+**Parent task:** 2
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-3: plan-review-contract.ts: test that the Task 12/Task 4 missing-dependency finding with plan-only evidence validates and is written
+**Gate:** prd-audit
+**Rationale:** Same validator defect as S3.1 for the missing-dependency (Task 12/Task 4) fixture; the candidate lens is correct, only Task 2's validator rejects the finding.
+**Criterion:** S3.2
+**Parent task:** 2
+**Done when:**
+- [test] S3.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2: plan-review-runner.ts: validate each provider response inside the provider loop; fall through to the next candidate provider in a fresh session on a schema-invalid response; filter out individual findings failing validatePlanReviewResult and write only passing ones; tests in plan-review-runner.test.ts for a dropped invalid finding and schema-invalid fallthrough
+**Gate:** prd-audit
+**Rationale:** Task 12 Done-when requires writing only findings that pass validatePlanReviewResult, so a rejected finding is dropped rather than aborting the round. The runner throws on any rejection instead. Clear implementation drift within Task 12.
+**Criterion:** S4.3
+**Parent task:** 12
+**Done when:**
+- [test] S4.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-2: plan-review-runner.ts: move result validation into the provider loop so a schema-invalid response falls through; add a test where the first provider returns a contract-violating structured result and the second provider is dispatched in a fresh session
+**Gate:** prd-audit
+**Rationale:** Task 12 Done-when explicitly requires fallthrough to the next provider on a schema-invalid response. The loop breaks before validating, and the only test covers success:false. This is BUILD under Task 12.
+**Criterion:** S4.4
+**Parent task:** 12
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-4: plan-review-contract.ts: accept a task-vs-criterion/ADR contradiction grounded by two verbatim quotes and artifact file:line only; add a test
+**Gate:** prd-audit
+**Rationale:** Task 2 requires two verbatim-grounded quotes from plan, stories, ADR or a cited source for contradiction findings. It does not require extra source-outside-.docs evidence. Validator repair in Task 2.
+**Criterion:** S5.2
+**Parent task:** 2
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-5: plan-review-contract.ts: accept a task-vs-task contradiction quoting two plan Done-when passages with plan file:line evidence; add a test
+**Gate:** prd-audit
+**Rationale:** Same as S5.2 for task-vs-task contradictions quoting two plan Done-when passages; validator repair in Task 2.
+**Criterion:** S5.3
+**Parent task:** 2
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3: plan-review-runner.ts + engineer-cli.ts: return/emit a one-line operator notice when independence is same-provider or unknown-host and print it from the compose plan-review handler; tests in plan-review-runner.test.ts and engineer-cli-plan-review.test.ts
+**Gate:** prd-audit
+**Rationale:** Task 12 Done-when requires recording same-provider with a one-line notice. Independence is recorded, but no notice is surfaced. This is BUILD under Task 12, with the CLI print as its surface.
+**Criterion:** S6.4
+**Parent task:** 12
+**Done when:**
+- [test] S6.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R7: conductor.ts forward walk: persist the fast-forward disposition reason through the existing step-status state/event spine (no new channel); extend decide-entry-healthy-fast-forward.acceptance.test.ts to assert reason landed-before-plan-review
+**Gate:** prd-audit
+**Rationale:** Task 8 Done-when requires the forward walk to fast-forward plan_review as skipped with reason landed-before-plan-review. decideEntryDisposition returns the reason, but conductor.ts discards it, and the acceptance test asserts only status. Wiring within Task 8.
+**Criterion:** S9.2
+**Parent task:** 8
+**Done when:**
+- [test] S9.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R8: engineer-cli.ts plan-review handler: wrap event emission so ledger write failures (including before dispatch) are captured and reported without aborting dispatch or artifact write; add a test with composer-events.jsonl unwritable from the start asserting the artifact is written and the failure reported
+**Gate:** prd-audit
+**Rationale:** Task 15 Done-when requires the subcommand to still write the artifact and report the failure when an event write fails. emitOrThrow before dispatch aborts the run when the ledger is unwritable from the outset. Handler fix in Task 15.
+**Criterion:** S11.4
+**Parent task:** 15
+**Done when:**
+- [test] S11.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R8-2: engineer-cli.ts plan-review handler: resolve the active feature plan by the worktree's feature slug (.docs/plans/<slug>.md) instead of requiring exactly one plan file; test with historical plans present
+**Gate:** prd-audit
+**Rationale:** Conforming implementation drift under ADR D1. The compose handler must select the active feature plan, not require that one plan exist repository-wide. Task 15 owns the handler and no architecture change is needed.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 1
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 1 is satisfied by this task.
+- The repair for task rem-prd-audit-R8-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3-2: plan-review-provider.ts orderReviewerCandidates: place an explicit steps.plan_review.llm_provider first even when it is the host or absent from llm_provider; add tests in plan-review-provider.test.ts; same-provider/unknown-host one-line notice surfaced via engineer-cli
+**Gate:** prd-audit
+**Rationale:** ADR D4 and Task 11 Done-when say steps.plan_review.llm_provider wins for every authoring host, but the code demotes a host preference and ignores one absent from the global list. The missing notices duplicate S6.4. Conforming fixes in Tasks 11/12.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 4
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 4 is satisfied by this task.
+- The repair for task rem-prd-audit-R3-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2-3: plan-review-runner.ts: validate inside provider loop and fall through on invalid structured output
+**Gate:** prd-audit
+**Rationale:** Same defect as S4.4 against ADR D5 invalid-response fallback; fix in Task 12's runner loop.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5 is satisfied by this task.
+- The repair for task rem-prd-audit-R2-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-6: plan-review-contract.ts + plan-review-runner.ts: lens-specific evidence rules, .docs artifact files in the evidence map, reject dependency-order findings lacking a second-task relatedReference
+**Gate:** prd-audit
+**Rationale:** ADR D5 permits plan-line reachability evidence and requires dependency closure for dependency-order findings. Task 2 Done-when matches the ADR. Validator and evidence-map drift is BUILD.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 5 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-6 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: plan-review-runner.ts round-1 inputs: load only ADRs cited by the plan (in-scope) and include only their parsed Decision sections; test that unrelated decision/review files are excluded from the prompt
+**Gate:** as-built
+**Rationale:** ADR D3 and Task 12 Done-when require the in-scope ADR decisions, not every decision-directory document. The runner over-includes inputs, which is conforming implementation drift.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 3
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-R5: plan-review-runner.ts round 2: supply only candidates for changed components plus prior blocking/significant findings, not the full regenerated candidate set; extend plan-review-runner-bound.test.ts to assert unchanged-surface candidates are absent
+**Gate:** as-built
+**Rationale:** ADR D6 and Task 13 Done-when limit round 2 to changed tasks, stories and decisions plus prior blocking and significant findings. Regenerating all candidates breaks that scope. BUILD under Task 13.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 6
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 6 is satisfied by this task.
+- The repair for task rem-as-built-R5 is committed and its targeted tests pass.
+
+### Task rem-as-built-R6: plan-review-artifact.ts + plan-review-runner.ts: replace the local D<n>. decisionSections parsers with artifacts.ts parseAdrDecisions; test that numbered-Markdown ADR decisions (incl. this feature's governing ADR) produce digests, and that a changed decision makes plan-review-gate stale and appears in round-2 inputs
+**Gate:** as-built
+**Rationale:** Verified: plan-review-artifact.ts decisionSections matches only ^D<n>. lines, while artifacts.ts exports parseAdrDecisions for numbered, bold and heading forms. Task 3 requires per-in-scope-ADR-decision digests. Reusing the established parser is conforming BUILD work.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 7
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 7 is satisfied by this task.
+- The repair for task rem-as-built-R6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R7-2: conductor.ts: persist fast-forward reason landed-before-plan-review via existing step-status state/event; assert in acceptance test
+**Gate:** prd-audit
+**Rationale:** Same defect as S9.2 against ADR D9: the provenance reason is computed but dropped by conductor.ts. Persist it via the existing spine under Task 8.
+**Governing clause:** adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 9
+**Done when:**
+- adr-2026-10-10-source-grounded-adversarial-plan-review-step decision 9 is satisfied by this task.
+- The repair for task rem-prd-audit-R7-2 is committed and its targeted tests pass.
