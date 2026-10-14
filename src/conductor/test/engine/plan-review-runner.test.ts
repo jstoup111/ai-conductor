@@ -19,8 +19,8 @@ async function fixture(includeUncitedAdr = false): Promise<string> {
   await mkdir(join(root, '.docs', 'decisions'), { recursive: true });
   await writeFile(join(root, '.docs/plans/idea.md'), `# Plan\n\nThis plan follows adr-review.\n\n### Task 1: Configure\n**Steps:**\n1. Add \`reviewFlag\`.\n\n**Done when:**\n- [test] the flag works.\n\n**Dependencies:** none\n`, 'utf8');
   await writeFile(join(root, '.docs/stories/idea.md'), '# Stories\n\n## Story 1: Review\nThe flag is reviewed.\n', 'utf8');
-  await writeFile(join(root, '.docs/decisions/adr-review.md'), '## Decision\n\nD1. The flag is allowed.\n', 'utf8');
-  if (includeUncitedAdr) await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. Original decision.\n', 'utf8');
+  await writeFile(join(root, '.docs/decisions/adr-review.md'), '# ADR review\n\nThis introduction is not a decision.\n\n## Decision\n\nD1. The flag is allowed.\n', 'utf8');
+  if (includeUncitedAdr) await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '# Unrelated ADR\n\n## Decision\n\nD1. Original decision.\n', 'utf8');
   await writeFile(join(root, 'source.ts'), 'export const reviewFlag = true;\n', 'utf8');
   await execFile('git', ['init', '-b', 'main'], { cwd: root });
   await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
@@ -45,6 +45,7 @@ describe('runPlanReview', () => {
     expect(calls[0].options.prompt).toContain('### Task 1: Configure');
     expect(calls[0].options.prompt).toContain('## Story 1: Review');
     expect(calls[0].options.prompt).toContain('D1. The flag is allowed.');
+    expect(calls[0].options.prompt).not.toContain('This introduction is not a decision.');
     expect(artifact).toMatchObject({ round: 1, reviewerProvider: 'pi', independence: 'cross-provider', findings: [] });
     expect(events.map((event) => event.type)).toEqual(['plan_review_dispatched', 'plan_review_completed']);
     expect([...new Set(events.map((event) => event.reviewerProvider))]).toEqual(['pi']);
@@ -55,13 +56,15 @@ describe('runPlanReview', () => {
     const root = await fixture(true);
     await writeFile(join(root, '.docs/decisions/adr-uncited.md'), '## Decision\n\nD1. This must still be reviewed.\n', 'utf8');
 
+    const calls: any[] = [];
     const artifact = await runPlanReview({
       worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
       runtimes: {} as any, sessions: {} as any,
-      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
     });
 
     expect(artifact.reviewedDigest.adrDecisionDigests).not.toHaveProperty('adr-uncited#D1');
+    expect(calls[0].options.prompt).not.toContain('This must still be reviewed.');
   });
 
   it('falls through a failed candidate while preserving round one and recording same-provider independence', async () => {

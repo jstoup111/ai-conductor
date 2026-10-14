@@ -71,6 +71,17 @@ function selectedDecisions(adrTexts: Readonly<Record<string, string>>, ids: read
   }
   return selected;
 }
+
+/** Render only the decision passages that are in scope for a first review round. */
+function allDecisionSections(adrTexts: Readonly<Record<string, string>>): Record<string, string> {
+  const selected: Record<string, string> = {};
+  for (const [stem, text] of Object.entries(adrTexts)) {
+    const parsed = parseAdrDecisions(text);
+    if (parsed.kind !== 'decisions') continue;
+    for (const [decision, passages] of parsed.passages) selected[`${stem}#D${decision}`] = passages.join('\n');
+  }
+  return selected;
+}
 export interface RunPlanReviewInput {
   worktreePath: string; canonicalPath?: string; planStem: string; config: HarnessConfig; runtimes: ProviderRuntimeSet; sessions: ProviderSessionStore;
   env?: NodeJS.ProcessEnv; configuredProviders?: readonly string[]; emit?: (event: Extract<ConductorEvent, { type: 'plan_review_dispatched' | 'plan_review_completed' | 'plan_review_finding_accepted' }>) => Promise<void>; onNotice?: (notice: string) => void; providerExecutor?: typeof executeProviderCandidates;
@@ -94,7 +105,9 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const changed = prior ? diffReviewedDigests(prior.reviewedDigest, source.digest) : undefined;
   const reviewPlan = changed ? selectedPlanTasks(source.planText, changed.planTaskIds) : source.planText;
   const reviewStories = changed ? selectedStories(source.storiesText, changed.storyIds) : source.storiesText;
-  const reviewDecisions = changed ? selectedDecisions(source.adrTexts, changed.adrDecisionIds) : source.adrTexts;
+  const reviewDecisions = changed
+    ? selectedDecisions(source.adrTexts, changed.adrDecisionIds)
+    : allDecisionSections(source.adrTexts);
   const priorFindings = prior?.findings.filter((finding) => finding.severity === 'blocking' || finding.severity === 'significant') ?? [];
   const roundCandidates = changed
     ? rows.flat().filter((candidate: any) => changed.planTaskIds.includes(candidate.taskId) || priorFindings.some((finding) => finding.reference === `task ${candidate.taskId}` || finding.relatedReference === `task ${candidate.taskId}`))

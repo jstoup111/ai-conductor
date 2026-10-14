@@ -91,4 +91,17 @@ describe('compose plan-review command surface', () => {
     await expect(readFile(join(worktree, '.docs/plan-review/worktree.md'), 'utf8')).resolves.toContain('reviewerProvider');
     expect(errors.join('\n')).toContain('event ledger write failed');
   });
+
+  it('keeps the review artifact when the event ledger is unwritable before dispatch', async () => {
+    const { canonical, worktree, registryPath } = await fixture(); const errors: string[] = [];
+    await writeFile(join(canonical, '.pipeline'), 'not a directory', 'utf8');
+    const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
+    const code = await dispatchEngineer(command, {
+      registryPath, printErr: (line) => errors.push(line), probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+    });
+    expect(code).toBe(0);
+    await expect(readFile(join(worktree, '.docs/plan-review/worktree.md'), 'utf8')).resolves.toContain('reviewerProvider');
+    expect(errors.join('\n')).toContain('event ledger write failed');
+  });
 });
