@@ -4,6 +4,19 @@ spec_hash: e32ac84573c0a476d82124af601e3065034a7221772e1c02ddd9050e9e48ebb4
 pr: https://github.com/jstoup111/ai-conductor/pull/3224
 shipped: 2026-10-14
 engine_version: 20261014T105640Z-87fdea4376c8
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "The plan required changing fixtures that used retired closeout kinds, not removing regression coverage for tail mechanics that this feature keeps (ADR D2: the sibling ledger and tail survive). Production behavior is unchanged, so nothing user-visible widens, but the surviving tail now has materially less protection. These deletions are outside the plan's intent."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "Task 11 and Task 12 called for removing closeout-segment assertions. Deleting the only coverage of surviving rollup and build-review-metrics behavior goes beyond that. This is not user-visible but leaves unrelated production code untested."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
