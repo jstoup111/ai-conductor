@@ -19,7 +19,8 @@ describe('resolveExecutionChild', () => {
     expect(routed).toMatchObject({ source: 'routed-host', roundId, target: { child: 1, position: 1, isLeaf: false, branch: 'feat/c1/demo' } });
 
     const revalidating = resolveExecutionChild({
-      kind: 'active', child: c3, position: c3, isLeaf: true, branch: 'feat/demo', revalidating: { child: c2, generation: 2 },
+      kind: 'repair-pending', child: c3, position: c3, isLeaf: true, branch: 'feat/demo', repairChildren: [c1],
+      revalidating: { child: c2, generation: 2 },
     }, 'demo');
     expect(revalidating).toMatchObject({ source: 'revalidating', generation: 2, target: { child: 2, branch: 'feat/c2/demo' } });
   });
