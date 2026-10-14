@@ -939,8 +939,9 @@ feature's worktree; see [per-child state](artifacts.md#per-child-state). An inva
 with no state directory, exits 1 before any read or write.
 
 Without `--child`, `task`, `rewind`, and `kickback-budget inspect` select the
-[active child](configuration.md#child-by-child-build) when one exists; `kickback-budget raise|reset`
-use the flat ledger. A feature with no children behaves as before. If the active child cannot be
+[execution child](configuration.md#child-by-child-build) when one exists: the active child, or the
+host of a recorded routed repair or revalidation. `kickback-budget raise|reset --gate build_review`
+selects the execution child; other gates use the flat ledger. A feature with no children behaves as before. If the active child cannot be
 resolved, for example on a diverged stack, these commands exit 1 before any read or write. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
 `rewind` and `kickback-budget` it falls through to `error: unknown command` (exit 1).
 
@@ -1374,8 +1375,8 @@ The command demotes child `k`'s region from the target, then the region steps of
 above `k` in ascending order, then every later whole-feature step in the flat state. It then clears
 those verdicts and the halt markers, emits `operator_rewind` with a `child` field, and prints
 `Rewound child <k> to <step>.` A failure restores every changed store and leaves the halt in place.
-An explicit `--child <k>` naming a child before the active one exits 1 with `child <k> is closed and
-cannot be rewound (#2944)`. To change a closed child, commit to its branch and let the next
+An explicit `--child <k>` naming a closed child other than the execution child exits 1 with
+`child <k> is closed and cannot be rewound (#3203)`. To change a closed child, commit to its branch and let the next
 [restack](configuration.md#restack) carry the change upward.
 See [Per-child selection](#per-child-selection---child).
 

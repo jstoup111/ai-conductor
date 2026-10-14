@@ -657,7 +657,11 @@ outside `refs/heads` in the shared `.git`, so they survive worktree recreation:
 [restack](configuration.md#restack) adds `refs/conductor/<slug>/restack/journal` (the in-flight
 operation's journal), `refs/conductor/<slug>/restack/staging/c<k>` (replayed tips before the move),
 `refs/conductor/<slug>/cascades` (per-originating-child repair counts and raised limits), and
-`refs/conductor/<slug>/leaf-moved` (the leaf has been moved onto the last closure). For every
+`refs/conductor/<slug>/leaf-moved` (the leaf has been moved onto the last closure). Under
+[`route_whole_feature_fixes`](configuration.md#stacked_prs), routing state lives at
+`refs/conductor/<slug>/routes/r<n>` (route records), `rejected/r<n>/<m>`, `repairing` (the repair-host
+marker), `revalidate` (the revalidation queue), and `red/c<k>`; teardown deletes them only for a
+feature with a closure ref. For every
 feature, `refs/conductor/<slug>/pushed/<branch>` records the tip the engine last force-pushed and
 `refs/conductor/<slug>/push-intent/<branch>` an in-flight push; the next engine force push uses the
 recorded tip as its expected-SHA lease. None of these refs is pushed. Feature teardown deletes them
@@ -791,7 +795,11 @@ it. Stacked builds also persist `child_started`, `child_closed` (with the closur
 when a reseal changes a story's owner without moving a task; and the restack events
 `restack_planned` (`opId`, `cause`, `children`), `restack_applied` (per child: `oldTip`, `newTip`,
 `wouldInvalidate`, `parentOverlapPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
-(`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). None appears for a
+(`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). Routed repair adds
+`remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
+`remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
+`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome`). Each carries an
+`eventId` and `occurredAt`; the persister writes an `eventId` once and stamps `ts` from `occurredAt`. None appears for a
 feature without children; `rebase_skipped_for_stack` remains in the union for older logs but is no
 longer emitted. Any feature may persist `push_lease_refused` (`ref`, `expected`, `actual`) when an
 engine force push finds the remote tip differs from the recorded pushed tip. `EventPersister` writes the event types marked
