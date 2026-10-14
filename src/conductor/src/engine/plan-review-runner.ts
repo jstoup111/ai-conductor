@@ -113,8 +113,7 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   if (!candidates.length) throw new Error('plan review has no configured reviewer provider');
   const rows = await Promise.all([
     testImpactCandidates({ worktreePath: input.worktreePath, planText: source.planText }),
-    reachabilityCandidates({ worktreePath: input.worktreePath, planText: source.planText, architectureReviewText: source.architectureReviewText })
-      .then((candidates) => candidates.map((candidate) => ({ ...candidate, evidence: candidate.evidence.replace(/^plan\.md:/, `.docs/plans/${input.planStem}.md:`) }))),
+    reachabilityCandidates({ worktreePath: input.worktreePath, planPath: `.docs/plans/${input.planStem}.md`, planText: source.planText, architectureReviewText: source.architectureReviewText }),
     Promise.resolve(dependencyOrderCandidates(source.planText)),
   ]);
   const prior = previous && !('kind' in previous) ? previous : undefined;

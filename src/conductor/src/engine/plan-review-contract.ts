@@ -119,6 +119,11 @@ function hasDependencyClosureEvidence(evidence: readonly string[], reference: st
   });
 }
 
+function sameTaskReference(left: string, right: string): boolean {
+  const taskId = (value: string) => /^task\s+(\S+)$/i.exec(value.trim())?.[1]?.toLowerCase();
+  return taskId(left) !== undefined && taskId(left) === taskId(right);
+}
+
 function validateFinding(value: unknown, index: number, context: PlanReviewValidationContext, diagnostics: string[]): PlanReviewFinding | undefined {
   const field = `findings[${index}]`;
   const keys = ['id', 'severity', 'lens', 'artifact', 'reference', 'relatedReference', 'resolvesPrior', 'summary', 'evidence'];
@@ -155,7 +160,7 @@ function validateFinding(value: unknown, index: number, context: PlanReviewValid
       diagnostics.push(`${id}.evidence requires two quoted passages grounded in the reviewed artifacts or source`);
     }
   }
-  if (value.lens === 'dependency-order' && (!nonEmptyText(value.relatedReference) || !/^task\s+\S+$/i.test(value.relatedReference) || value.relatedReference === value.reference)) {
+  if (value.lens === 'dependency-order' && (!nonEmptyText(value.relatedReference) || !/^task\s+\S+$/i.test(value.relatedReference) || sameTaskReference(value.relatedReference, value.reference as string))) {
     diagnostics.push(`${id}.relatedReference must name a second task for dependency-order`);
   }
   if (value.lens === 'dependency-order' && Array.isArray(value.evidence) &&

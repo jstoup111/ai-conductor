@@ -98,16 +98,17 @@ describe('runPlanReview', () => {
     expect(artifact.reviewerProvider).toBe('claude');
   });
 
-  it('drops schema-valid findings with insufficient evidence and writes the passing findings', async () => {
+  it('drops insufficient evidence and writes findings grounded in source or permitted .docs artifacts', async () => {
     const root = await fixture();
     const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
       providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [
         { id: 'bad', severity: 'blocking', lens: 'reachability', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'missing evidence', evidence: ['no location'] },
         { id: 'good', severity: 'significant', lens: 'feasibility', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'grounded', evidence: ['source.ts:1'] },
+        { id: 'story-grounded', severity: 'significant', lens: 'reachability', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'grounded in the story artifact', evidence: ['.docs/stories/idea.md:3'] },
       ] } })) as any,
     });
-    expect(artifact.findings.map((finding) => finding.id)).toEqual(['good']);
-    expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [{ id: 'good' }] });
+    expect(artifact.findings.map((finding) => finding.id)).toEqual(['good', 'story-grounded']);
+    expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [{ id: 'good' }, { id: 'story-grounded' }] });
   });
 
   it('feeds the feature architecture review Wiring Surface into reachability candidates', async () => {

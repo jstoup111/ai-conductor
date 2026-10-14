@@ -63,6 +63,7 @@ describe('reachabilityCandidates', () => {
 
     await expect(reachabilityCandidates({
       worktreePath,
+      planPath: '.docs/plans/example.md',
       planText: PROJECT_CHILD_OWNERSHIP_PLAN,
       architectureReviewText: '',
     })).resolves.toContainEqual(expect.objectContaining({
@@ -80,13 +81,14 @@ describe('reachabilityCandidates', () => {
 
     await expect(reachabilityCandidates({
       worktreePath,
+      planPath: '.docs/plans/example.md',
       planText: PROJECT_CHILD_OWNERSHIP_PLAN,
       architectureReviewText: '',
     })).resolves.toEqual([expect.objectContaining({
       lens: 'reachability',
       identifier: 'projectChildOwnership',
       taskId: '7',
-      evidence: 'plan.md:8',
+      evidence: '.docs/plans/example.md:8',
       searchedPaths: [],
     })]);
   });
@@ -102,7 +104,7 @@ describe('reachabilityCandidates', () => {
 - The existing \`runProjectCommand\` CLI command observes \`projectChildOwnership\`.
 `;
 
-    await expect(reachabilityCandidates({ worktreePath, planText, architectureReviewText: '' }))
+    await expect(reachabilityCandidates({ worktreePath, planPath: '.docs/plans/example.md', planText, architectureReviewText: '' }))
       .resolves.toEqual([]);
   });
 
@@ -114,6 +116,7 @@ describe('reachabilityCandidates', () => {
 
     await expect(reachabilityCandidates({
       worktreePath,
+      planPath: '.docs/plans/example.md',
       planText: PROJECT_CHILD_OWNERSHIP_PLAN,
       architectureReviewText: `## Wiring Surface
 
@@ -131,12 +134,13 @@ describe('reachabilityCandidates', () => {
 
     await expect(reachabilityCandidates({
       worktreePath,
+      planPath: '.docs/plans/example.md',
       planText: PROJECT_CHILD_OWNERSHIP_PLAN,
       architectureReviewText: '## Risks\n\nNo wiring table here.\n',
     })).resolves.toContainEqual(expect.objectContaining({
       identifier: 'projectChildOwnership',
       taskId: '7',
-      evidence: 'plan.md:8',
+      evidence: '.docs/plans/example.md:8',
     }));
   });
 });

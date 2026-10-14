@@ -41,6 +41,8 @@ export interface ReachabilityCandidate {
 
 export interface ReachabilityCandidatesInput {
   readonly worktreePath: string;
+  /** Worktree-relative plan path used as reviewer-verifiable candidate evidence. */
+  readonly planPath: string;
   readonly planText: string;
   readonly architectureReviewText: string;
 }
@@ -134,7 +136,7 @@ function stepAndFileIdentifiers(taskBody: string): string[] {
   return identifiers;
 }
 
-function taskIdentifierEvidence(planText: string): Map<string, Map<string, string>> {
+function taskIdentifierEvidence(planText: string, planPath: string): Map<string, Map<string, string>> {
   const evidence = new Map<string, Map<string, string>>();
   let taskId: string | undefined;
   for (const [index, line] of planText.split(/\r?\n/).entries()) {
@@ -147,7 +149,7 @@ function taskIdentifierEvidence(planText: string): Map<string, Map<string, strin
     for (const identifier of identifierTokens(line)) {
       const byIdentifier = evidence.get(taskId) ?? new Map<string, string>();
       if (!evidence.has(taskId)) evidence.set(taskId, byIdentifier);
-      byIdentifier.set(identifier, `plan.md:${index + 1}`);
+      byIdentifier.set(identifier, `${planPath}:${index + 1}`);
     }
   }
   return evidence;
@@ -184,12 +186,13 @@ export function parseWiringSurface(reviewText: string): readonly WiringSurfaceIt
  */
 export async function reachabilityCandidates({
   worktreePath,
+  planPath,
   planText,
   architectureReviewText,
 }: ReachabilityCandidatesInput): Promise<readonly ReachabilityCandidate[]> {
   const taskPaths = parsePlanTaskPaths(planText);
   const taskBodies = parsePlanTaskBodies(planText);
-  const evidenceByTask = taskIdentifierEvidence(planText);
+  const evidenceByTask = taskIdentifierEvidence(planText, planPath);
   const taskTitles = parsePlanTaskTitles(planText);
   const taskDoneWhen = parsePlanTaskDoneWhen(planText);
   const identifiers = new Map<string, { taskId: string; evidence: string }>();
@@ -216,7 +219,7 @@ export async function reachabilityCandidates({
         if (!identifierTokens(title).includes(identifier)) continue;
         identifiers.set(identifier, {
           taskId,
-          evidence: `plan.md:${firstMatchingLine(planText, `\`${identifier}\``) ?? 1}`,
+          evidence: `${planPath}:${firstMatchingLine(planText, `\`${identifier}\``) ?? 1}`,
         });
         break;
       }

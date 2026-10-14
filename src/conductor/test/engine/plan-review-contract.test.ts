@@ -59,6 +59,23 @@ describe('plan-review contract', () => {
     expect(result.kind).toBe('accepted');
   });
 
+  it.each([
+    ['reachability', '.docs/stories/example.md'],
+    ['dependency-order', '.docs/decisions/adr-example.md'],
+    ['contradiction', '.docs/plans/example.md'],
+  ])('accepts permitted .docs evidence for %s', (lens, path) => {
+    const evidence = lens === 'contradiction'
+      ? [`${path}:1`, '"Build the contract"', '"Wire the contract"']
+      : lens === 'dependency-order'
+        ? [`${path}:1`, 'Dependency closure for task 1: none; task 2 is not reachable.']
+        : [`${path}:1`];
+    const result = validatePlanReviewResult({ findings: [finding(lens, { evidence })] }, {
+      ...context,
+      sourceFiles: { ...context.sourceFiles, [path]: lens === 'reachability' ? context.storiesText : context.planText },
+    });
+    expect(result.kind).toBe('accepted');
+  });
+
   it('accepts a contradiction only with two source-grounded quoted passages', () => {
     const result = validatePlanReviewResult({
       findings: [finding('contradiction', {
@@ -77,6 +94,7 @@ describe('plan-review contract', () => {
     ['test-impact', ['"Build the contract"']],
     ['reachability', ['"Build the contract"']],
     ['feasibility', ['.docs/plans/example.md:1']],
+    ['test-impact', ['.docs/plans/example.md:1']],
   ])('rejects %s evidence without a source file location', (lens, evidence) => {
     const result = validatePlanReviewResult({ findings: [finding(lens, { evidence })] }, context);
 
@@ -121,6 +139,14 @@ describe('plan-review contract', () => {
 
     expect(result).toMatchObject({ kind: 'rejected' });
     expect(result.kind === 'rejected' && result.diagnostics.join('\n')).toContain('dependency-order-1.evidence requires dependency-closure evidence');
+  });
+
+  it('rejects a dependency-order finding that calls the same task a second task', () => {
+    const result = validatePlanReviewResult({ findings: [finding('dependency-order', {
+      relatedReference: 'Task 1',
+    })] }, context);
+    expect(result.kind).toBe('rejected');
+    expect(result.kind === 'rejected' && result.diagnostics.join('\n')).toContain('second task');
   });
 
   it('is already Codex strict-compatible and serializes unchanged for Pi schema files', () => {
