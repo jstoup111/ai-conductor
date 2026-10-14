@@ -38,6 +38,7 @@ const FULL_SUITE_VERIFIER = 'src/conductor/src/engine/full-suite-verifier.ts';
 const HARNESS_COMMON = 'bin/lib/harness-common.sh';
 const OTEL_CONFIG = 'src/conductor/src/engine/otel/otel-config.ts';
 const MONITOR_CLI = 'src/conductor/src/engine/monitor-cli.ts';
+const ROUTE_TYPES = 'src/conductor/src/engine/routing/route-types.ts';
 
 /**
  * Every documented config key maps to its OWN production consumer declaration
@@ -228,6 +229,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     'src/conductor/src/engine/engineer/land-spec.ts',
     STEP_RUNNERS,
   ]),
+  'stacked_prs.route_whole_feature_fixes': consumer(ROUTE_TYPES),
 
   // ── build_review ──────────────────────────────────────────────────────────
   // `resolveBuildReviewConfig` is the only reader of the raw block and of every

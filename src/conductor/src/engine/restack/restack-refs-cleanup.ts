@@ -2,6 +2,7 @@ import { MAX_CHILD_ID } from '../child-context.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { pushedTipIntentRef, pushedTipRef } from '../push-lease.js';
 import type { GitRunner } from '../rebase.js';
+import { routingTeardownRefNames } from '../routing/routing-refs.js';
 import { journalRefFor, readRestackJournal, stagingRefFor } from './restack-journal.js';
 import { cascadesRefFor } from './cascade-cap.js';
 
@@ -37,6 +38,43 @@ async function run(git: GitRunner, args: string[], input?: string) {
   }
 }
 
+function closureRefNames(slug: string): readonly string[] {
+  return Array.from({ length: MAX_CHILD_ID }, (_unused, index) =>
+    `refs/conductor/${slug}/closed/c${index + 1}`,
+  );
+}
+
+interface RefProbe {
+  readonly existing: readonly { ref: string; oid: string }[];
+  readonly complete: boolean;
+}
+
+/** Probe a known list in one request, retaining only exact object ids. */
+async function probeRefs(git: GitRunner, refs: readonly string[]): Promise<RefProbe> {
+  if (refs.length === 0) return { existing: [], complete: true };
+  const result = await run(git, ['cat-file', '--batch-check'], `${refs.join('\n')}\n`);
+  if (result?.exitCode !== 0) return { existing: [], complete: false };
+
+  const lines = result.stdout.split('\n');
+  const existing: Array<{ ref: string; oid: string }> = [];
+  let complete = true;
+  for (const [index, ref] of refs.entries()) {
+    const line = lines[index]?.trim();
+    if (!line) {
+      complete = false;
+      continue;
+    }
+    const [oid, kind] = line.split(/\s+/, 2);
+    if (kind === 'missing') continue;
+    if (oid === undefined || !/^[0-9a-f]{40,64}$/i.test(oid) || !kind) {
+      complete = false;
+      continue;
+    }
+    existing.push({ ref, oid });
+  }
+  return { existing, complete };
+}
+
 /**
  * Remove all known durable state for one feature after its normal teardown
  * gate succeeded.  Every candidate is individually verified first and every
@@ -61,15 +99,24 @@ export async function deleteFeatureConductorRefs(
     complete = false;
   }
 
-  const existing: Array<{ ref: string; oid: string }> = [];
-  for (const ref of candidates) {
-    const resolved = await run(git, ['rev-parse', '-q', '--verify', ref]);
-    if (resolved?.exitCode === 1) continue;
-    if (resolved?.exitCode !== 0 || resolved.stdout.trim() === '') {
-      complete = false;
-      continue;
-    }
-    existing.push({ ref, oid: resolved.stdout.trim() });
+  // Closed-child refs establish durable child state after a worktree is gone.
+  // They lead the first batch so an N=1 feature never even names routing refs.
+  const closureProbe = await probeRefs(git, [
+    ...closureRefNames(slug),
+    ...candidates,
+  ]);
+  complete = complete && closureProbe.complete;
+  const existing = [...closureProbe.existing];
+  const hasDurableChildState = closureProbe.existing.some(({ ref }) => ref.startsWith(`refs/conductor/${slug}/closed/c`));
+
+  if (hasDurableChildState) {
+    const routingProbe = await probeRefs(git, routingTeardownRefNames(slug));
+    complete = complete && routingProbe.complete;
+    // Closure refs are the only durable eligibility evidence for a later
+    // routing teardown. If its bounded probe is incomplete, keep them (and
+    // leave the whole deletion retryable) rather than stranding routing refs.
+    if (!routingProbe.complete) return false;
+    existing.push(...routingProbe.existing);
   }
   if (existing.length === 0) return complete;
 

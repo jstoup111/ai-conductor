@@ -1,4 +1,5 @@
 // Covers: task:4, task:3, task:1
+// Covers: task:7
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -20,11 +21,45 @@ import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import type { ChildId } from '../../src/engine/child-context.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent, RunPrDisposition } from '../../src/types/index.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
+import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
 
 const CURRENT_TEST_SUITE_PROOF = {
   status: 'CURRENT',
   evidence: { provenanceHeadSha: 'head123', outcome: 'PASS' },
 } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>;
+
+const ROUTING_CHILD = parseChildId(1)!;
+const ROUTING_ROUND = parseRoundId('r1')!;
+const ROUTING_CLOSURE = parseCommitSha('a'.repeat(40))!;
+
+function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'routed_repair_phase' | 'child_revalidated', eventId: string): ConductorEvent {
+  const occurredAt = '2026-10-12T00:00:00.000Z';
+  switch (type) {
+    case 'remediation_routed':
+      return {
+        type, eventId, occurredAt, roundId: ROUTING_ROUND, kind: 'audit',
+        items: [{ findingId: 'finding-1', owner: ROUTING_CHILD, host: ROUTING_CHILD, reason: 'task ownership' }],
+        child: ROUTING_CHILD,
+      };
+    case 'remediation_rerouted':
+      return {
+        type, eventId, occurredAt, roundId: ROUTING_ROUND, from: ROUTING_CHILD, to: ROUTING_CHILD,
+        evidence: 'prerequisite-paths', child: ROUTING_CHILD,
+      };
+    case 'routed_repair_phase':
+      return {
+        type, eventId, occurredAt, roundId: ROUTING_ROUND, host: ROUTING_CHILD,
+        phase: 'repairing', credit: true, child: ROUTING_CHILD,
+      };
+    case 'child_revalidated':
+      return {
+        type, eventId, occurredAt, child: ROUTING_CHILD, generation: 1,
+        closureSha: ROUTING_CLOSURE, outcome: 'passed',
+      };
+  }
+}
 
 function fakeGitForExcludedMarkerFile(): GitRunner {
   return async (args) => {
@@ -151,6 +186,66 @@ describe('EventPersister', () => {
     persister.stop();
 
     expect(readPersistedEvents).toHaveBeenCalledTimes(1);
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
+  it.each([
+    'remediation_routed',
+    'remediation_rerouted',
+    'routed_repair_phase',
+    'child_revalidated',
+  ] as const)('deduplicates replayed %s events by eventId', async (type) => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    const event = routingEvent(type, `replay-${type}`);
+    await emitter.emit(event);
+    await emitter.emit(event);
+    persister.stop();
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('deduplicates a routing event after EventPersister restarts', async () => {
+    const event = routingEvent('routed_repair_phase', 'e1');
+    const first = new EventPersister(eventsPath, emitter);
+
+    await expect(first.persistDurably(event)).resolves.toBe('persisted');
+
+    const restarted = new EventPersister(eventsPath, new ConductorEventEmitter());
+    await expect(restarted.persistDurably(event)).resolves.toBe('duplicate');
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('uses a routing event occurrence time rather than its later persistence time', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-13T00:00:00.000Z'));
+    const persister = new EventPersister(eventsPath, emitter);
+
+    try {
+      await persister.persistDurably(routingEvent('child_revalidated', 'occurred-first'));
+      expect(JSON.parse((await readFile(eventsPath, 'utf8')).trim()).ts).toBe('2026-10-12T00:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects persistDurably with EventPersistError when the injected append fails', async () => {
+    const appendFailure = new Error('injected append failure');
+    const persister = new EventPersister(eventsPath, emitter, undefined, {
+      appendFile: () => { throw appendFailure; },
+    });
+
+    await expect(persister.persistDurably(routingEvent('routed_repair_phase', 'append-failure')))
+      .rejects.toMatchObject({ name: 'EventPersistError', filePath: eventsPath, cause: appendFailure });
+  });
+
+  it('continues to append non-routing events with equal payloads', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+
+    await expect(persister.persistDurably({ type: 'rate_limit', waitSeconds: 5 })).resolves.toBe('persisted');
+    await expect(persister.persistDurably({ type: 'rate_limit', waitSeconds: 5 })).resolves.toBe('persisted');
+
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
   });
 

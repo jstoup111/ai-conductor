@@ -19,11 +19,24 @@ import { loadConfig } from './config.js';
 import { kickbackBudgetFallbackLimit, prdAuditAppendCap, readPlanGrowthBudget } from './remediation-caps.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 import { applyCascadeAdjustment, MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCounts } from './restack/cascade-cap.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
 const GATES = new Set<string>(KICKBACK_BUDGET_GATES);
+const WHOLE_FEATURE_GATES = new Set(['prd_audit', 'architecture_review_as_built', 'manual_test']);
+
+function defaultsToExecutionChild(gate: string | undefined): boolean {
+  return gate !== undefined && !WHOLE_FEATURE_GATES.has(gate) && gate === 'build_review';
+}
+
+async function executionChildFor(worktree: string): Promise<ChildId | undefined> {
+  const cursor = await resolveActiveChildForCurrentFeature(worktree);
+  if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return undefined;
+  const execution = resolveExecutionChild(cursor, 'kickback-budget');
+  return 'target' in execution ? execution.target.child : undefined;
+}
 async function defaultsFor(worktree: string): Promise<Record<string, number>> {
   const loaded = await loadConfig(worktree);
   const config = loaded.ok ? loaded.config : {} as HarnessConfig;
@@ -166,7 +179,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       print(`kickback-budget: active child resolution refused (${cursor.kind}).`);
       return 1;
     }
-    const selectedChild = command.child ?? ((cursor.kind === 'active' || cursor.kind === 'repair-pending') ? String(cursor.child) : undefined);
+    // `inspect` has no gate selector, so retain its established region view;
+    // the resolver makes that view the routed host when a repair is active.
+    const selectedChild = command.child ?? (await executionChildFor(worktree))?.toString();
     const child = selectedChild === undefined ? undefined : parseChildId(selectedChild);
     if (selectedChild !== undefined && child === undefined) {
       print(`kickback-budget: invalid child id "${selectedChild}".`);
@@ -222,7 +237,10 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
   }
   if (!command.gate || !GATES.has(command.gate) || !command.rationale?.trim() || !isAcceptableOperatorRationale(command.rationale)) { print('kickback-budget: invalid gate or rationale.'); return 2; }
-  const child = command.child === undefined ? undefined : parseChildId(command.child);
+  const defaultChild = command.child === undefined && defaultsToExecutionChild(command.gate)
+    ? await executionChildFor(worktree)
+    : undefined;
+  const child = command.child === undefined ? defaultChild : parseChildId(command.child);
   if (command.child !== undefined && child === undefined) {
     print(`kickback-budget: invalid child id "${command.child}".`);
     return 1;
@@ -249,8 +267,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       print(`kickback-budget: active child resolution refused (${activeCursor.kind}).`);
       return 1;
     }
-    // Restack cap evidence belongs to the active child; --child names only the
-    // originating child in the durable cascade ref.
+    // Restack cap evidence belongs to the cursor range (normally the leaf);
+    // --child names only the originating child in the durable cascade ref.
+    // A routed host is an execution overlay and must not move this ledger.
     ledgerChild = activeCursor.child;
   }
   // Mutations reconcile only after D3's argument/authority refusals, which must

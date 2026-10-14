@@ -645,3 +645,46 @@ are kept from the design-time plan, so ids 9, 10 and 20–99 belong to the later
 - [ ] All negative path criteria are covered by at least one task.
 - [ ] Every task has a `Done when:` block of falsifiable checks, each on one physical line.
 - [ ] Dependencies are explicit and acyclic.
+
+### Task rem-prd-audit-refusal-9e34528a-5d56-4ec3-adbc-e8c2a0a6002f: In src/conductor/src/engine/routing/execution-child.ts resolveActiveExecutionChild, return {source:'refused', cursor} for a repair-pending cursor that has neither routedRepair nor revalidating, so conductor.ts (activateChildRegionStateForResume, resume, BUILD-region entry) halts via renderChildCursorRefusal ('child stack repair is pending for closed child …') as on base. Add tests to src/conductor/test/engine/routing/execution-child.test.ts showing that an un-overlaid repair-pending cursor resolves to 'refused', while repair-pending with routedRepair or revalidating still resolves to routed-host or revalidating. Add a test to src/conductor/test/engine/stacked-region-loop.test.ts showing that a flag-off stacked feature with an un-overlaid repair-pending cursor halts with the renderChildCursorRefusal message and never calls enterChildRegion.
+**Gate:** prd-audit
+**Rationale:** Removal-only rework that stays inside the recorded decision. I confirmed in src/conductor/src/engine/routing/execution-child.ts that resolveActiveExecutionChild maps a repair-pending cursor with neither routedRepair nor revalidating to source 'cursor'. That is the refused behavior. The fix narrows the resolver so this case returns {source:'refused', cursor}. conductor.ts then halts it again through renderChildCursorRefusal, as it did on the base. Repair-pending with routedRepair or revalidating keeps the routed-host and revalidating behavior from Task 14, which Story 7 covers. No new behavior is introduced. Confidence: 97%, verified by reading the source.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 9e34528a-5d56-4ec3-adbc-e8c2a0a6002f r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 9e34528a-5d56-4ec3-adbc-e8c2a0a6002f r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-9e34528a-5d56-4ec3-adbc-e8c2a0a6002f is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-2: In src/conductor/src/engine/conductor.ts, ensure that the --from start path (this.fromStep, ~6120), resume (~6162) and BUILD-region entry (~6932) all treat the resolver's 'refused' result for an un-overlaid repair-pending cursor as a halt via renderChildCursorRefusal, never as BUILD entry, and that activeChildRequiresClosure is false for it. Add a test to src/conductor/test/engine/stacked-region-loop.test.ts in which `--from build` with an un-overlaid repair-pending cursor halts before entering the region, and the same cursor carrying routedRepair child 1 still enters child 1's region.
+**Gate:** as-built
+**Rationale:** This is conforming implementation drift against adr-2026-10-12-routed-whole-feature-repair D18 (default-off must leave behavior unchanged). The architecture stays authoritative, so no architectural decision is needed. Its resolver half has the same root cause as refusal NC-1 and is fixed by rem-1. The remaining part is the --from path at conductor.ts:6120: it skips the stack preflight, so it must also reach the resolver's refusal before entering the BUILD region. Task 14 admits the change because it owns conductor region entry and both activators. Confidence: 95%, verified in execution-child.ts and the conductor.ts startIndex block.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 18
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 18 is satisfied by this task.
+- The repair for task rem-as-built-rem-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-3: In src/conductor/src/engine/restack/restack-refs-cleanup.ts, when durable child state exists and the routing probe is incomplete, leave the closed/c* refs out of the update-ref --stdin delete transaction (or skip the delete) and return incomplete. A later deleteFeatureConductorRefs call can then still find and delete the routing refs. Add a test to src/conductor/test/engine/restack/restack-refs-cleanup.test.ts: with closed/c1 and routes/r1 present and the routing cat-file probe failing, closed/c1 survives the first teardown, and a second teardown with a working probe deletes both closed/c1 and routes/r1.
+**Gate:** as-built
+**Rationale:** This is an implementation defect in the teardown that Task 4 owns. I confirmed it in src/conductor/src/engine/restack/restack-refs-cleanup.ts: when the routing probe is incomplete, `complete` is cleared, but the closure refs are still deleted in the same update-ref transaction. The closure refs are the evidence a later cleanup needs to decide that routing names are eligible, so a later cleanup skips routing and the refs are stranded permanently. The fix keeps the closure refs whenever the routing probe is incomplete, so a retry can still find the routing refs. This stays within ADR D6, so no architectural decision is needed. Confidence: 97%.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 6
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-4: In src/conductor/src/engine/routing/route-types.ts, make the outbox-entry validation shared by parseRouteRecord and parseRevalidationQueueRecord reject an entry whose inner event is missing a string eventId or occurredAt, or whose values do not match the envelope's eventId and occurredAt. In src/conductor/src/engine/routing/route-record-store.ts drainOutbox, persist the event carrying the envelope's eventId and occurredAt. Add tests to src/conductor/test/engine/routing/route-types.test.ts showing that a record with an inner event lacking eventId or occurredAt parses to undefined. Add tests to src/conductor/test/engine/routing/route-outbox.test.ts showing that a drained event in events.jsonl keeps the original eventId and occurredAt, and that a redelivered entry is suppressed by eventId.
+**Gate:** as-built
+**Rationale:** This is a parser and persistence defect against adr-2026-10-12-routed-whole-feature-repair D16. The outbox entry parser in route-types.ts requires only event.type on the inner event. route-record-store.ts then persists the inner event without guaranteeing its eventId and occurredAt, which defeats dedup by eventId (Task 7) and timestamp preservation in the drain (Task 8). Task 1 owns the OutboxEntry parser and Task 8 owns the drain, so both tasks admit the fix. No architectural decision is needed. Confidence: 95%, based on the reported locations and the shape of the Task 1 and Task 8 contracts.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 16
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 16 is satisfied by this task.
+- The repair for task rem-as-built-rem-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-5: In src/conductor/src/engine/task-cli.ts, add a read-only `status` verb to TaskDispatch and detectTaskCommand (with optional --child, and an update to the cli.ts `task <command>` help text). With no --child it uses the resolveExecutionChild target and reports the rows of the flat .pipeline/task-status.json filtered to that child's membership plus the active round's routed tasks. Add tests to src/conductor/test/engine/recovery-cli-child-default.sweepG3.test.ts: with host 1 `repairing`, `conduct task status` reports child 1's membership plus the routed tasks and not the leaf's; with no marker and no queue, it reports the cursor child's tasks.
+**Gate:** prd-audit
+**Rationale:** This is an unimplemented done-when, not a planning omission. Task 15's done-when tests explicitly require `conduct task status` with no --child to report the flat .pipeline/task-status.json rows, filtered to the execution child's membership plus the round's routed tasks. I confirmed in src/conductor/src/engine/task-cli.ts that the TaskDispatch union and detectTaskCommand handle only start, done and guide. Task 15 (files: engine/task-cli.ts and the recovery-cli-child-default test) admits adding the read-only `status` verb. The verb reuses the resolveExecutionChild default and introduces no per-child task-status file. Confidence: 85%. The plan assumed the verb already existed, but its done-when makes it in scope.
+**Criterion:** S7.2
+**Parent task:** 15
+**Done when:**
+- [test] S7.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-5 is committed and its targeted tests pass.

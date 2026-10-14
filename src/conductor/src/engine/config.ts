@@ -132,7 +132,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
   harness_self_host_build_auth: ['mode', 'token_path'],
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
-  stacked_prs: ['enabled', 'max_slices'],
+  stacked_prs: ['enabled', 'max_slices', 'route_whole_feature_fixes'],
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
@@ -1515,6 +1515,7 @@ export function validateConfig(
     if (block.enabled === undefined) {
       block.enabled = false;
     }
+    if (block.route_whole_feature_fixes === undefined) block.route_whole_feature_fixes = false;
     if (block.max_slices === undefined) {
       block.max_slices = 1;
     } else if ((block.max_slices as number) > 5) {
@@ -1523,6 +1524,7 @@ export function validateConfig(
       );
     }
   }
+  if (obj.stacked_prs === undefined) obj.stacked_prs = { route_whole_feature_fixes: false };
 
   // build_progress — intra-step build progress event cadence knobs.
   if (obj.otel !== undefined && isPlainObject(obj.otel)) {
@@ -2971,6 +2973,12 @@ function validateStackedPrsBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'stacked_prs.enabled must be a boolean',
+    };
+  }
+  if (obj.route_whole_feature_fixes !== undefined && typeof obj.route_whole_feature_fixes !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'stacked_prs.route_whole_feature_fixes must be a boolean',
     };
   }
   if (

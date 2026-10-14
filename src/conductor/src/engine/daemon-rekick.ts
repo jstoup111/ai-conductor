@@ -31,6 +31,7 @@ import {
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import { hasDurableChildState, resolveActiveChild } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 import { listExistingChildren } from './child-context.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
@@ -47,6 +48,8 @@ import {
   isUnreadableKickbackLedger,
   readKickbackLedger,
 } from './kickback-ledger.js';
+
+const WHOLE_FEATURE_KICKBACK_GATES = new Set(['prd_audit', 'architecture_review_as_built', 'manual_test']);
 
 /** What an automatic path decided about one worktree's live halt classification. */
 export interface HaltRetentionDecision {
@@ -259,14 +262,34 @@ export async function consumeResumeAuthorizations(
       }
       const path = deps.worktreePath(slug);
       const children = await listExistingChildren(path);
-      const child = children.length === 0 ? undefined : await (async () => {
+      const activeChild = children.length === 0 ? undefined : await (async () => {
         const activeChild = await (deps.resolveActiveChild ?? resolveActiveChild)(path, slug);
         if (activeChild.kind !== 'active' && activeChild.kind !== 'repair-pending') {
           throw new Error(`active child cursor is ${activeChild.kind}`);
         }
-        return activeChild.child;
+        return activeChild;
       })();
-      const ledger = await readKickbackLedger(path, child);
+      const flatLedger = await readKickbackLedger(path);
+      const execution = activeChild === undefined ? undefined : resolveExecutionChild(activeChild, slug);
+      const executionChild = execution !== undefined && 'target' in execution ? execution.target.child : undefined;
+      // A restack cap belongs to the cursor range (normally the leaf), even
+      // while a routed host temporarily owns the BUILD region.
+      const cursorChild = activeChild === undefined ? undefined : activeChild.child;
+      const executionLedger = executionChild === undefined ? flatLedger : await readKickbackLedger(path, executionChild);
+      const cursorLedger = cursorChild === undefined || cursorChild === executionChild
+        ? executionLedger
+        : await readKickbackLedger(path, cursorChild);
+      const haltGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
+      const liveGate = [flatLedger, executionLedger, cursorLedger].flatMap((ledger) => Object.entries(ledger.gates))
+        .find(([, entry]) => entry.capEvidence?.haltGeneration === haltGeneration)?.[0];
+      const ledger = liveGate === 'restack'
+        ? cursorLedger
+        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate)
+          ? executionLedger
+          : flatLedger;
+      const ledgerChild = liveGate === 'restack' ? cursorChild
+        : liveGate !== undefined && !WHOLE_FEATURE_KICKBACK_GATES.has(liveGate) ? executionChild
+          : undefined;
       if (isUnreadableKickbackLedger(ledger)) {
         throw new Error('kickback ledger is unreadable');
       }
@@ -308,7 +331,7 @@ export async function consumeResumeAuthorizations(
       // Repair-then-clear, then consume. A `partial` clear leaves the halt and
       // the authorization exactly as they were, so the next iteration retries.
       if ((await deps.clearHalt(slug)) === 'partial') continue;
-      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId, child)) {
+      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId, ledgerChild)) {
         await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }

@@ -1,14 +1,17 @@
-// Covers: task:29
+// Covers: task:29, task:rem-prd-audit-rem-5
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChildId } from '../../src/engine/child-context.js';
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 // Record every git invocation made through the production git runner, and every
 // restack entry-function call, without changing their behavior.
@@ -77,7 +80,7 @@ const authorizedGate = {
 };
 
 /** Two-child stack whose closed child 1 has operator commit X past its closure. */
-async function repairPendingFixture(): Promise<{ root: string; worktree: string }> {
+async function repairPendingFixture(withRepair = true): Promise<{ root: string; worktree: string }> {
   const root = await mkdtemp(join(tmpdir(), 'recovery-cli-sweep-'));
   roots.push(root);
   await git(root, ['init', '-q', '-b', 'main']);
@@ -92,11 +95,13 @@ async function repairPendingFixture(): Promise<{ root: string; worktree: string 
   await git(worktree, ['branch', 'feat/c1/feature', 'feat/daemon-feature']);
   const closure = (await git(worktree, ['rev-parse', 'HEAD'])).trim();
   await git(worktree, ['update-ref', 'refs/conductor/feature/closed/c1', closure]);
-  await git(worktree, ['checkout', '-q', 'feat/c1/feature']);
-  await writeFile(join(worktree, 'operator-change.txt'), 'X\n');
-  await git(worktree, ['add', 'operator-change.txt']);
-  await git(worktree, ['commit', '-qm', 'operator change X']);
-  await git(worktree, ['checkout', '-q', 'feat/daemon-feature']);
+  if (withRepair) {
+    await git(worktree, ['checkout', '-q', 'feat/c1/feature']);
+    await writeFile(join(worktree, 'operator-change.txt'), 'X\n');
+    await git(worktree, ['add', 'operator-change.txt']);
+    await git(worktree, ['commit', '-qm', 'operator change X']);
+    await git(worktree, ['checkout', '-q', 'feat/daemon-feature']);
+  }
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
   await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n');
   await writeCoverageBindingEnvelope(worktree, {
@@ -186,7 +191,7 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
       // rewind refusal for the closed child.
       const childOneBefore = await readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8');
       await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '1' }, worktree)).resolves.toBe(1);
-      expect(errors).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#2944)');
+      expect(errors).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#3203)');
       await expect(readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8')).resolves.toBe(childOneBefore);
     } finally {
       errors.mockRestore();
@@ -200,5 +205,46 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
     expect(recorded.restack).toEqual([]);
     const events = await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8').catch(() => '');
     expect(events.split('\n').filter((line) => line.includes('"type":"restack_'))).toEqual([]);
+  });
+
+  it('reports the routed host membership plus its active round tasks, and otherwise reports the cursor child rows', async () => {
+    vi.resetModules();
+    const { detectTaskCommand, dispatchTaskCommand } = await import('../../src/engine/task-cli.js');
+    const { worktree } = await repairPendingFixture();
+    const routeRound = parseRoundId('r1')!;
+    await writeFile(join(worktree, '.ai-conductor', 'config.yml'),
+      'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+    const writeRef = async (ref: string, value: unknown) => {
+      const blob = (await execa('git', ['hash-object', '-w', '--stdin'], { cwd: worktree, input: JSON.stringify(value) })).stdout.trim();
+      await git(worktree, ['update-ref', ref, blob]);
+    };
+    await writeRef(repairMarkerRefFor('feature'), { host: 1, roundId: routeRound });
+    await writeRef(routeRecordRefFor('feature', routeRound), {
+      roundId: routeRound, kind: 'audit', phase: 'open', items: [],
+      allocation: { 1: { remTaskIds: ['rem-r1'], blockBodies: ['### Task rem-r1\n'] } },
+      hosts: { 1: 'repairing' }, currentHostIndex: 0, receipt: {}, outbox: [],
+    });
+    await writeFile(join(worktree, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+      { id: 'T1', status: 'pending' }, { id: 'T3', status: 'pending' }, { id: 'rem-r1', status: 'in_progress' },
+    ] }));
+
+    const output: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line) => { output.push(String(line)); });
+    try {
+      await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'status'])!, worktree)).resolves.toBe(0);
+      expect(JSON.parse(output.join('\n')).map((row: { id: string }) => row.id)).toEqual(['T1', 'rem-r1']);
+    } finally {
+      log.mockRestore();
+    }
+
+    const cursorFixture = await repairPendingFixture(false);
+    const cursorOutput: string[] = [];
+    const cursorLog = vi.spyOn(console, 'log').mockImplementation((line) => { cursorOutput.push(String(line)); });
+    try {
+      await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'status'])!, cursorFixture.worktree)).resolves.toBe(0);
+      expect(JSON.parse(cursorOutput.join('\n')).map((row: { id: string }) => row.id)).toEqual(['T3']);
+    } finally {
+      cursorLog.mockRestore();
+    }
   });
 });

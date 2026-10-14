@@ -30,6 +30,7 @@ import type { StepName, ConductState, ConductorEvent } from '../../src/types/ind
 import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeState } from '../../src/engine/state.js';
 
 /**
@@ -267,6 +268,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_inapplicable_refused: 'not-audited-by-design',
   build_active_stall: 'not-audited-by-design',
   build_done_when_unverified: 'not-audited-by-design',
+  remediation_routed: 'not-audited-by-design',
+  remediation_rerouted: 'not-audited-by-design',
+  routed_repair_phase: 'not-audited-by-design',
+  child_revalidated: 'not-audited-by-design',
 };
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
@@ -963,6 +968,22 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_done_when_unverified: {
     type: 'build_done_when_unverified',
     checks: [{ taskId: '1', check: '[test] proves the outcome' }],
+  },
+  remediation_routed: {
+    type: 'remediation_routed', eventId: 'route-1', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, kind: 'audit', items: [], child: parseChildId(1)!,
+  },
+  remediation_rerouted: {
+    type: 'remediation_rerouted', eventId: 'route-2', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, from: parseChildId(1)!, to: parseChildId(2)!, evidence: 'test', child: parseChildId(2)!,
+  },
+  routed_repair_phase: {
+    type: 'routed_repair_phase', eventId: 'route-3', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, host: parseChildId(1)!, phase: 'repairing', credit: false, child: parseChildId(1)!,
+  },
+  child_revalidated: {
+    type: 'child_revalidated', eventId: 'route-4', occurredAt: '2030-01-01T00:00:00.000Z',
+    child: parseChildId(1)!, generation: 1, closureSha: parseCommitSha('a'.repeat(40))!, outcome: 'passed',
   },
   acceptance_red: {
     type: 'acceptance_red',

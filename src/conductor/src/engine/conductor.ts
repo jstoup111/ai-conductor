@@ -186,6 +186,8 @@ import {
   type ChildId,
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { isUnroutedRepairPending, resolveExecutionChild } from './routing/execution-child.js';
+import { routingEligible } from './routing/route-types.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
   advanceChildRegion,
@@ -2465,13 +2467,18 @@ export class Conductor {
     if (!stackConfigured && durableChildState === false) return true;
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-    if (cursor.kind === 'active') {
-      await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
+    if (isUnroutedRepairPending(cursor)) {
+      await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+      return false;
+    }
+    const execution = resolveExecutionChild(cursor, slug);
+    if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
+      await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
       return true;
     }
     if (cursor.kind === 'no-child') return true;
 
-    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+    await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
     return false;
   }
 
@@ -4541,6 +4548,15 @@ export class Conductor {
     }
     const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
     const routedFixes = buildStallSource ? fixes : admittedFixes;
+    // This is the single dark-launch decision point for an admitted repair
+    // lap.  The existing remediation route remains byte-for-byte authoritative
+    // on either result until the route writer/settler feature lands; making
+    // the decision here keeps an unsliced or flag-off feature out of the
+    // routing namespace without duplicating eligibility checks downstream.
+    if (routedFixes.length > 0 && this.featureSlug) {
+      const cursor = await this.resolveActiveChild(this.projectRoot, this.featureSlug);
+      void routingEligible(cursor, this.config);
+    }
     if (fixes.length > 0 && routedFixes.length === 0) {
       const rejectedAppendGapIds = fixes
         .filter((gap) => remediationDispositionAppendsToPlan(gap.disposition))
@@ -6155,10 +6171,15 @@ export class Conductor {
         const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
         if (slug) {
           const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-          if (cursor.kind === 'active') {
-            await this.activateChildRegionState(state, cursor.child, cursor.isLeaf);
-          } else if (cursor.kind !== 'no-child') {
+          if (isUnroutedRepairPending(cursor)) {
             await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+            return;
+          }
+          const execution = resolveExecutionChild(cursor, slug);
+          if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
+            await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
+          } else if (cursor.kind !== 'no-child') {
+            await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
             return;
           }
         }
@@ -6833,6 +6854,10 @@ export class Conductor {
     // every BUILD-region entry and after a non-leaf closure; it only avoids
     // re-emitting lifecycle events while the same child is already checked out.
     let activeChild: ActiveChildLifecycleTarget | undefined;
+    // Only the cursor's ordinary non-leaf region creates a new closure ref.
+    // Routed hosts and revalidation children already have one, so their region
+    // completion must continue through the tail without trying to close again.
+    let activeChildRequiresClosure = false;
     let parkedAtOperatorBoundary = false;
     const stopAtOperatorParkBoundary =
       async (
@@ -6920,8 +6945,13 @@ export class Conductor {
             const childCursorRelevant = this.config.stacked_prs?.enabled === true || durableChildState !== false;
             if (childCursorRelevant) {
             const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-            if (cursor.kind === 'active') {
-              const target: ActiveChildLifecycleTarget = cursor;
+            if (isUnroutedRepairPending(cursor)) {
+              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              return;
+            }
+            const execution = resolveExecutionChild(cursor, slug);
+            if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
+              const target: ActiveChildLifecycleTarget = execution.target;
               const entered = await this.enterChildRegion(
                 this.projectRoot,
                 slug,
@@ -6935,8 +6965,9 @@ export class Conductor {
               }
               await this.activateChildRegionState(state, target.child, target.isLeaf);
               activeChild = target;
+              activeChildRequiresClosure = execution.source === 'cursor';
             } else if (cursor.kind !== 'no-child') {
-              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor));
+              await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
             }
             }
@@ -14190,6 +14221,7 @@ export class Conductor {
           if (
             step.name === 'build_review' &&
             activeChild !== undefined &&
+            activeChildRequiresClosure &&
             !activeChild.isLeaf &&
             CHILD_REGION_STEPS.every((regionStep) => {
               const status = getStepStatus(state, regionStep);

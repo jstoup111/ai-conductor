@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { hasDurableChildState, resolveActiveChild, resolveSealedFirst } from '../child-cursor.js';
 import { childBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { HALT_MARKER } from '../halt-marker.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
+import { ConductorEventEmitter } from '../../ui/events.js';
 import { checkCascadeCap } from './cascade-cap.js';
 import { defaultTip, runRestack } from './restack-executor.js';
 import type { RestackResolver } from './restack-resolver.js';
@@ -14,6 +14,10 @@ import { emitRestackRefused } from './restack-events.js';
 import { readRestackJournal } from './restack-journal.js';
 import { haltRestack } from './restack-move.js';
 import { recoverRestackJournal } from './restack-recovery.js';
+import { loadConfig } from '../config.js';
+import { routingSettingOn } from '../routing/route-types.js';
+import { drainRoutingOutboxes } from '../routing/route-record-store.js';
+import { EventPersister } from '../event-persister.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
 export type StackPreflightResult =
@@ -102,6 +106,13 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   if (durable === 'git-error') return { kind: 'unavailable', detail: 'cannot inspect durable child state' };
   if (!durable) return { kind: recovery.kind === 'none' && secondRecovery.kind === 'none' ? 'no-stack' : 'recovered' };
 
+  const config = await loadConfig(options.worktree);
+  if (config.ok && routingSettingOn(config.config)) {
+    const persister = new EventPersister(join(options.worktree, '.pipeline', 'events.jsonl'), options.events ?? new ConductorEventEmitter());
+    const drained = await drainRoutingOutboxes(options.worktree, options.slug, (event) => persister.persistDurably(event), { git: options.git });
+    if (drained.kind !== 'drained') return { kind: 'unavailable', detail: `cannot drain routing outbox: ${drained.kind}` };
+  }
+
   const cursor = await resolveActiveChild(options.worktree, options.slug, { git: options.git });
   if (cursor.kind === 'no-child') return { kind: 'no-stack' };
   if (cursor.kind === 'divergent') {
@@ -112,6 +123,12 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     return cursor.kind === 'git-error' || cursor.kind === 'detached-head' || cursor.kind === 'envelope-missing'
       ? { kind: 'unavailable', detail: `cannot resolve stack cursor: ${cursor.kind}` }
       : { kind: 'clear' };
+  }
+
+  if (cursor.foreignRoundChildren?.length) {
+    const details = cursor.foreignRoundChildren.map((child) => `child ${child} round ${cursor.foreignRounds?.[child] ?? 'unknown'}`).join(', ');
+    await writeHaltMarker(options.worktree, `routing foreign-round commit: ${details}\n`, 'needs-human', options.events);
+    return { kind: 'halted' };
   }
 
   // Check every origin before creating a journal. runRestack repeats the

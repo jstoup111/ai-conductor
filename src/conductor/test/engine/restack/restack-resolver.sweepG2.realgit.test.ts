@@ -135,7 +135,7 @@ describe('resolveRestackConflict sweep (real local Git)', () => {
 
     const argv = await tracedArgv(trace);
     const rebaseStarts = argv.filter((args) => args[1] === 'rebase' && args.includes('-i'));
-    expect(rebaseStarts).toEqual([['git', 'rebase', '-i', '--onto', subject.newParent, subject.range.oldParent]]);
+    expect(rebaseStarts).toEqual([[expect.stringMatching(/(?:^|\/)git$/), 'rebase', '-i', '--onto', subject.newParent, subject.range.oldParent]]);
     expect(argv.some((args) => args.includes('--autostash') || args.includes('stash'))).toBe(false);
     expect(argv.some((args) => args[1] === 'rebase' && args.includes('--continue'))).toBe(true);
 

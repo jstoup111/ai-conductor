@@ -16,6 +16,7 @@ import {
 import { readFullSuiteEvidence } from './full-suite-evidence.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
 import { parseChildId, isRegionStep, type ChildId } from './child-context.js';
 import { readConductStateOverlay } from './conduct-state-store.js';
 import {
@@ -431,7 +432,7 @@ async function loadDashboardWorktreeState(
   if (!flat.present || flat.state === null) return flat;
 
   const cursor = await resolveActiveChild(wt, slug);
-  if (cursor.kind !== 'active') return flat;
+  if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return flat;
 
   const envelope = await readCoverageBindingEnvelope(wt, coverageBindingFilesystem);
   const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
@@ -441,8 +442,11 @@ async function loadDashboardWorktreeState(
     : [];
   if (positions.length < 2) return flat;
 
-  const activeChild = { child: cursor.child, total: positions.length };
-  const overlay = await readConductStateOverlay(wt, cursor.child);
+  const execution = resolveExecutionChild(cursor, slug);
+  if (!('target' in execution)) return flat;
+  const executionChild = execution.target.child;
+  const activeChild = { child: executionChild, total: positions.length };
+  const overlay = await readConductStateOverlay(wt, executionChild);
   if (overlay.ok) return { present: true, state: overlay.value, activeChild };
 
   // Do not leak a previous child's region progress when its active child's

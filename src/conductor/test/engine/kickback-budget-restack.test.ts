@@ -143,6 +143,14 @@ describe('restack kickback budget storage', () => {
       cause: 'feature-repair',
       git: makeGitRunner(subject.repo),
     })).resolves.toEqual({ kind: 'halted' });
+    await mkdir(join(subject.repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(subject.repo, '.ai-conductor', 'config.yml'), [
+      'stacked_prs:', '  enabled: true', '  route_whole_feature_fixes: true', '',
+    ].join('\n'));
+    const marker = (await makeGitRunner(subject.repo)(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({ host: 1, roundId: 'r1' }),
+    })).stdout.trim();
+    await makeGitRunner(subject.repo)(['update-ref', 'refs/conductor/demo/repairing', marker]);
 
     expect(await dispatchKickbackBudgetCommand(
       {
@@ -175,6 +183,9 @@ describe('restack kickback budget storage', () => {
           resumeAuthorization: { consumed: false },
         },
       },
+    });
+    await expect(readKickbackLedger(subject.repo, child(1))).resolves.not.toMatchObject({
+      gates: { restack: expect.anything() },
     });
   });
 

@@ -500,32 +500,32 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
     expect(recovered).toEqual([{ type: 'restack_recovered', opId: changedJournal.opId, fromState: 'planned' }]);
   });
   // Covers: task:24
-  it('finishes a ready crash with its journaled staging SHAs and no replay, including after worktree recreation and .pipeline loss, and rolls back a failed post-move verification', async () => {
-    for (const loss of ['none', 'recreated-worktree', 'deleted-pipeline'] as const) {
-      const subject = await stackFixture();
-      const crashed = await crashRestackAt(subject, (journal) => journal.state === 'ready');
-      const staged = await stagedValues(subject.git);
-      expect(await stackValues(subject.git)).toEqual(oldValues(crashed));
-      await abandonJournal(subject);
-      if (loss === 'recreated-worktree') {
-        await execFile('git', ['worktree', 'remove', '--force', subject.repo], { cwd: subject.main });
-        await execFile('git', ['worktree', 'add', '-q', subject.repo, LEAF], { cwd: subject.main });
-      }
-      if (loss === 'deleted-pipeline') await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
-      vi.mocked(replayChildRange).mockClear();
-      vi.mocked(verifyRestackMove).mockClear();
-
-      await expect(recoverPersisted(subject.repo)).resolves.toEqual({ kind: 'recovered', fromState: 'ready' });
-
-      expect(replayChildRange).not.toHaveBeenCalled();
-      expect(verifyRestackMove).toHaveBeenCalledTimes(1);
-      expect(await stackValues(subject.git)).toEqual(staged);
-      expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
-      expect(await restackedEvents(subject.repo)).toEqual([
-        expect.objectContaining({ type: 'restack_recovered', opId: crashed.opId, fromState: 'ready' }),
-      ]);
+  it.each(['none', 'recreated-worktree', 'deleted-pipeline'] as const)('finishes a ready crash with its journaled staging SHAs and no replay after %s', async (loss) => {
+    const subject = await stackFixture();
+    const crashed = await crashRestackAt(subject, (journal) => journal.state === 'ready');
+    const staged = await stagedValues(subject.git);
+    expect(await stackValues(subject.git)).toEqual(oldValues(crashed));
+    await abandonJournal(subject);
+    if (loss === 'recreated-worktree') {
+      await execFile('git', ['worktree', 'remove', '--force', subject.repo], { cwd: subject.main });
+      await execFile('git', ['worktree', 'add', '-q', subject.repo, LEAF], { cwd: subject.main });
     }
+    if (loss === 'deleted-pipeline') await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
+    vi.mocked(replayChildRange).mockClear();
+    vi.mocked(verifyRestackMove).mockClear();
 
+    await expect(recoverPersisted(subject.repo)).resolves.toEqual({ kind: 'recovered', fromState: 'ready' });
+
+    expect(replayChildRange).not.toHaveBeenCalled();
+    expect(verifyRestackMove).toHaveBeenCalledTimes(1);
+    expect(await stackValues(subject.git)).toEqual(staged);
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+    expect(await restackedEvents(subject.repo)).toEqual([
+      expect.objectContaining({ type: 'restack_recovered', opId: crashed.opId, fromState: 'ready' }),
+    ]);
+  });
+
+  it('rolls back a ready crash when post-move verification fails', async () => {
     // The recovered move is verified; a failed check rolls every ref back and halts.
     const failing = await stackFixture();
     const crashed = await crashRestackAt(failing, (journal) => journal.state === 'ready');
@@ -555,18 +555,18 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
   });
 
   // Covers: task:24, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29
-  it('recovers every interrupted journal state with one restack_recovered each, rolls back a moved stack that fails verification before syncing, and lets a live throw roll back in its finally', async () => {
-    await recoverMovedScenario();
-    await recoverSyncedScenario();
-    await recoverRollingBackScenario();
-    await recoverEventScenario('planned');
-    await recoverEventScenario('ready');
-    await recoverMovedVerificationFailureScenario();
-    await liveThrowScenario();
+  it.each([
+    ['a synced journal', recoverSyncedScenario],
+    ['a planned journal', () => recoverEventScenario('planned')],
+    ['a ready journal', () => recoverEventScenario('ready')],
+    ['a moved journal that fails verification before sync', recoverMovedVerificationFailureScenario],
+    ['a live throw that rolls back in its finally', liveThrowScenario],
+  ] as const)('recovers %s with its expected event and state transition', async (_name, scenario) => {
+    await scenario();
   });
 
   // Covers: task:24
-  it('removes leftover applied and halt-cleared aborted journals silently, keeps a committed outstanding halt’s journal, and ignores .pipeline throughout', async () => {
+  it('removes no journal or a leftover applied journal silently, ignoring .pipeline throughout', async () => {
     // No journal: nothing to report.
     const empty = await stackFixture();
     await expect(recoverPersisted(empty.repo)).resolves.toEqual({ kind: 'none' });
@@ -592,46 +592,51 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
     await expect(runRestack({ worktree: applied.repo, slug: 'demo', cause: 'base-refresh', newDefault: applied.advanced, git: makeGitRunner(applied.repo) }))
       .resolves.not.toMatchObject({ kind: 'refused' });
 
-    // Aborted journals: the committed halt record at the active branch tip decides, never .pipeline.
-    for (const record of ['halted', 'superseded'] as const) {
-      for (const pipeline of ['present', 'deleted'] as const) {
-        const subject = await stackFixture();
-        await crashRestackAt(subject, (journal) => journal.state === 'ready');
-        const read = await readRestackJournal(subject.repo, 'demo');
-        if (read.kind !== 'journal') throw new Error('expected journal');
-        const aborted: RestackJournal = { ...read.journal, owner: DEAD_OWNER, state: 'aborted' };
-        const abortedBlob = await writeRestackJournalBlob(subject.repo, aborted);
-        await subject.git(['update-ref', journalRefFor('demo'), abortedBlob, read.blob]);
-        await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
-        await writeFile(join(subject.repo, '.docs', 'halted', 'demo.md'), `# Halt: demo\n\nStatus: ${record}\n`);
-        await subject.git(['add', '.docs/halted/demo.md']);
-        await subject.git(['commit', '-qm', 'halt record: demo']);
-        await mkdir(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'), { recursive: true });
-        if (pipeline === 'present') {
-          // A contradictory live marker: recovery must not consult it.
-          if (record === 'superseded') await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'live halt\n');
-        } else {
-          await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
-        }
-        const staging = await stagingRefs(subject.git);
-        expect(staging).not.toBe('');
-        const refs = await stackValues(subject.git);
+  });
 
-        const result = await recoverPersisted(subject.repo);
+  // The committed halt record at the active branch tip decides an aborted
+  // journal's recovery, never the presence or absence of .pipeline.
+  it.each([
+    ['halted', 'present'],
+    ['halted', 'deleted'],
+    ['superseded', 'present'],
+    ['superseded', 'deleted'],
+  ] as const)('keeps or cleans an aborted journal from a %s halt with a %s pipeline', async (record, pipeline) => {
+    const subject = await stackFixture();
+    await crashRestackAt(subject, (journal) => journal.state === 'ready');
+    const read = await readRestackJournal(subject.repo, 'demo');
+    if (read.kind !== 'journal') throw new Error('expected journal');
+    const aborted: RestackJournal = { ...read.journal, owner: DEAD_OWNER, state: 'aborted' };
+    const abortedBlob = await writeRestackJournalBlob(subject.repo, aborted);
+    await subject.git(['update-ref', journalRefFor('demo'), abortedBlob, read.blob]);
+    await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'halted', 'demo.md'), `# Halt: demo\n\nStatus: ${record}\n`);
+    await subject.git(['add', '.docs/halted/demo.md']);
+    await subject.git(['commit', '-qm', 'halt record: demo']);
+    await mkdir(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'), { recursive: true });
+    if (pipeline === 'present') {
+      // A contradictory live marker: recovery must not consult it.
+      if (record === 'superseded') await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'live halt\n');
+    } else {
+      await rm(join(subject.repo, '.pipeline'), { recursive: true, force: true });
+    }
+    const staging = await stagingRefs(subject.git);
+    expect(staging).not.toBe('');
+    const refs = await stackValues(subject.git);
 
-        expect(await stackValues(subject.git)).toEqual(refs);
-        expect(await restackedEvents(subject.repo)).toEqual([]);
-        if (record === 'halted') {
-          expect(result).toEqual({ kind: 'none' });
-          expect(await readJournal(subject.repo)).toMatchObject({ state: 'aborted' });
-          expect(await stagingRefs(subject.git)).toBe(staging);
-        } else {
-          expect(result).toEqual({ kind: 'cleaned' });
-          expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
-          expect(await stagingRefs(subject.git)).toBe('');
-          await expect(readFile(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'))).rejects.toThrow();
-        }
-      }
+    const result = await recoverPersisted(subject.repo);
+
+    expect(await stackValues(subject.git)).toEqual(refs);
+    expect(await restackedEvents(subject.repo)).toEqual([]);
+    if (record === 'halted') {
+      expect(result).toEqual({ kind: 'none' });
+      expect(await readJournal(subject.repo)).toMatchObject({ state: 'aborted' });
+      expect(await stagingRefs(subject.git)).toBe(staging);
+    } else {
+      expect(result).toEqual({ kind: 'cleaned' });
+      expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+      expect(await stagingRefs(subject.git)).toBe('');
+      await expect(readFile(join(subject.repo, '.pipeline', 'restack', 'resolve', 'c2'))).rejects.toThrow();
     }
   });
 

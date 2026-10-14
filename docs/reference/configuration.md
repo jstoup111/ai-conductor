@@ -1478,17 +1478,26 @@ removal attempts; other `needs-remediation` causes remain sticky.
 Opts a project into stacked delivery of a sliced plan. Plan-slice grammar validation (the
 `plan-slices` land gate) runs regardless of this block; the checks below run only when `enabled` is
 `true`. An admitted plan builds
-[child by child](#child-by-child-build). Fix routing to the owning child and child publication
-remain reserved for the stacked child-plans chain (#2944–#2945).
+[child by child](#child-by-child-build). Child publication remains reserved for the stacked
+child-plans chain (#2945). Routing whole-feature fixes to the owning child is dark-launched behind
+`route_whole_feature_fixes`; the route writer lands with #3210–#3212.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
 | `stacked_prs.enabled` | boolean | Boolean, else hard error | `false` |
 | `stacked_prs.max_slices` | integer | Integer from 1 through 9, else hard error; a value above 5 loads with a review-size warning | `1` |
+| `stacked_prs.route_whole_feature_fixes` | boolean | Boolean, else hard error | `false` |
 
 `stacked_prs` must be an object. Unknown sub-keys and non-object values are hard errors. When the
 block is present, an omitted `enabled` resolves to `false` and an omitted `max_slices` resolves to
-`1`.
+`1`. An omitted `route_whole_feature_fixes` resolves to `false`, with or without the block.
+
+`route_whole_feature_fixes: true` takes effect only for a feature with durable child state. The
+engine then reads the feature's [routing refs](artifacts.md#worktree-and-branch-names), and the stack
+preflight drains pending route-record events into `events.jsonl` before resolving the active child.
+While a repair host is recorded, a closed child other than the host whose post-closure commits carry
+a `Round: r<n>` line halts `needs-human` with `routing foreign-round commit`. With the setting
+`false`, or for a feature without children, the engine never reads or writes a routing ref.
 
 When `enabled` is `true` and the plan declares a `## Slices` manifest, the `stacked-delivery` land
 gate at `engineer/land` refuses the plan unless all of these hold:
@@ -1543,6 +1552,9 @@ child, in declared order:
 - **Positions.** Sealed positions are recorded at `refs/conductor/<slug>/positions`. Once child state
   exists, a `coverage_binding` run that moves, adds, or removes a position refuses `needs-human`.
   This is the step's only remaining refusal.
+- **Execution child.** While a routed repair or a child revalidation is recorded, its host child runs
+  the BUILD region and is the default for [`--child`](cli.md#per-child-selection---child) and
+  `daemon status`. The active child keeps the restack range and restack cap evidence.
 - **Halts.** A halt record is committed to the active child's branch with a `Child:` line and is not
   pushed.
 

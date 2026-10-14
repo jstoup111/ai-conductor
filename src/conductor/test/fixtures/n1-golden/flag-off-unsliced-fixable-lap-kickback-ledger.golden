@@ -1,0 +1,29 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+{
+  "version": 1,
+  "gates": {
+    "prd_audit": {
+      "count": 0,
+      "cumulative": 0,
+      "treeHash": "04625b5fbb94ca5bf9aa3f75a52e925030fcd968",
+      "lastReason": "",
+      "priorVerdict": false,
+      "resolvedBefore": 3
+    }
+  },
+  "pendingRepair": {
+    "receiptId": "00000000-0000-4000-8000-000000000012",
+    "charges": {
+      "prd_audit": {
+        "laps": 1,
+        "growth": 1
+      }
+    },
+    "taskIds": [
+      "rem-prd-audit-rem-prd-audit-s1.1"
+    ],
+    "prdAuditCriteria": [
+      "S1.1"
+    ]
+  }
+}

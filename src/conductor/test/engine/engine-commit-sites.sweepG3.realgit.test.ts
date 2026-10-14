@@ -416,8 +416,7 @@ describe('engine commit sites sweep (real local Git)', () => {
   });
 
   // Covers: task:27
-  it("every enumerated commit site keeps today's git commit argv without durable child state, commits through the guarded helper with it, and is refused without moving HEAD in each fenced journal state", async () => {
-    for (const site of SITES) {
+  it.each(SITES)("$name keeps today's git commit argv without durable child state, commits through the guarded helper with it, and is refused without moving HEAD in each fenced journal state", async (site) => {
       // Flat feature: today's argv, unchanged.
       const flat = await featureRepo(false);
       gitCalls.length = 0;
@@ -448,6 +447,5 @@ describe('engine commit sites sweep (real local Git)', () => {
         expect(gitCalls.some((call) => call.args[0] === 'commit-tree'), `${site.name}: ${state} builds no commit`).toBe(false);
         expect(await git(fenced.worktree, ['rev-parse', 'HEAD']), `${site.name}: ${state} HEAD`).toBe(before);
       }
-    }
   });
 });
