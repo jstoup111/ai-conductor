@@ -81,7 +81,7 @@ describe('compose plan-review command surface', () => {
     ['same-provider', { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }],
     ['unknown-host', {}],
   ] as const)('reports a one-line %s independence notice to the compose operator', async (independence, env) => {
-    const { canonical, worktree, registryPath } = await fixture(); const errors: string[] = [];
+    const { worktree, registryPath } = await fixture(); const errors: string[] = [];
     await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'llm_provider: claude\n', 'utf8');
     const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
 
@@ -114,13 +114,18 @@ describe('compose plan-review command surface', () => {
 
   it('keeps the review artifact when the event ledger is unwritable before dispatch', async () => {
     const { canonical, worktree, registryPath } = await fixture(); const errors: string[] = [];
+    const calls: unknown[] = [];
     await writeFile(join(canonical, '.pipeline'), 'not a directory', 'utf8');
     const command = detectEngineerCommand(argv('plan-review', '--project', 'alpha', '--worktree', worktree))!;
     const code = await dispatchEngineer(command, {
       registryPath, printErr: (line) => errors.push(line), probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+      providerExecutor: (async (input: unknown) => {
+        calls.push(input);
+        return { success: true, finalStructuredResult: { findings: [] } };
+      }) as any,
     });
     expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
     await expect(readFile(join(worktree, '.docs/plan-review/active-feature.md'), 'utf8')).resolves.toContain('reviewerProvider');
     expect(errors.join('\n')).toContain('event ledger write failed');
   });
