@@ -719,6 +719,9 @@ export function makeRekickBuildPreVerify(
       projectRoot: worktreePath,
       planPath,
       featureDesc,
+      // The unverified Done-when nudge prompts a BUILD dispatch; it is not
+      // evidence. Matches the foreground `preVerifyRebaseGate`.
+      unverifiedDoneWhenNudgeSpent: true,
       ...(definition.name === 'test_suite'
         ? {
             fullSuiteInspect: async () => {
@@ -1022,6 +1025,7 @@ export async function resumeRebaseFirst(opts: {
           [],
           `completed BUILD evidence is unavailable after rebase: ${detail}; recover .pipeline task evidence before resuming`,
           opts.events,
+          'completed-rebase',
         );
         return 'halted';
       }
@@ -1031,6 +1035,7 @@ export async function resumeRebaseFirst(opts: {
           [],
           `completed BUILD evidence is unavailable after rebase: ${buildEvidence.reason ?? 'completion predicate did not confirm the recorded BUILD'}; recover .pipeline task evidence before resuming`,
           opts.events,
+          'completed-rebase',
         );
         return 'halted';
       }
