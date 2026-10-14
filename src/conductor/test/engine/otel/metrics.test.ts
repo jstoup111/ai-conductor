@@ -514,6 +514,22 @@ describe('Task 4: step-duration overflow and zero observations', () => {
 // ── T15: Duration histogram and retries counter ───────────────────────────────
 
 describe('T15: step duration histogram and retries counter', () => {
+  it('does not create a closeout histogram while processing a completed build review stream', async () => {
+    const vis = makeVisualizer(metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true });
+    await emitter.emit({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(getMetricNames(metricExporter)).not.toContain('conductor.pipeline.closeout.duration');
+  });
+
   it('conductor.step.duration histogram is recorded for each completed step', async () => {
     const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);

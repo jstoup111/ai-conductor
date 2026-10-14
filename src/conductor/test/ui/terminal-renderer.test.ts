@@ -89,6 +89,18 @@ describe('TerminalRenderer', () => {
     expect(output).toContain('FEATURE COMPLETE');
   });
 
+  it('prints no closeout obligation line for a completed build review stream', async () => {
+    await renderer.handle({ type: 'step_started', step: 'build', index: 0 });
+    await renderer.handle({ type: 'gate_verdict', step: 'build', satisfied: true });
+    await renderer.handle({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    });
+    await renderer.handle({ type: 'step_completed', step: 'build', status: 'done' });
+    await renderer.handle({ type: 'feature_complete' });
+
+    expect(stream.output()).not.toMatch(/\bcloseout\s+\w+/i);
+  });
+
   it('feature_complete banner includes feature description and PR url when provided', async () => {
     await renderer.handle({
       type: 'feature_complete',

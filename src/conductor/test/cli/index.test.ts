@@ -2,7 +2,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
-import { stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   parseArgs,
@@ -322,6 +323,57 @@ describe('CLI', () => {
   // The inline pipeline now runs under an explicit `inline` subcommand; detectInline
   // strips that token so parseArgs sees just the feature + flags.
   describe('detectInline', () => {
+    it('rejects the retired closeout-event command without changing its sibling ledger', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'retired-closeout-command-'));
+      const ledger = join(projectRoot, '.pipeline', 'pipeline-events.jsonl');
+      try {
+        await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+        await writeFile(ledger, '{"type":"kickback_budget_adjustment_authorized","adjustmentId":"kept"}\n');
+        const before = await readFile(ledger, 'utf8');
+
+        const result = await execa(
+          process.execPath,
+          ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'closeout-event', 'start', 'simplify'],
+          { cwd: projectRoot, reject: false, all: true },
+        );
+
+        expect(result.exitCode).not.toBe(0);
+        expect(result.all).toContain("error: unknown command 'closeout-event'");
+        expect(await readFile(ledger, 'utf8')).toBe(before);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a stale evaluator closeout invocation without appending either event ledger', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'retired-evaluator-closeout-'));
+      const pipelineDir = join(projectRoot, '.pipeline');
+      const siblingLedger = join(pipelineDir, 'pipeline-events.jsonl');
+      const canonicalLedger = join(pipelineDir, 'events.jsonl');
+      try {
+        await mkdir(pipelineDir, { recursive: true });
+        await writeFile(siblingLedger, '{"type":"pipeline_closeout_started","obligation":"evaluator","ts":10}\n');
+        await writeFile(canonicalLedger, '{"type":"step_started","step":"build","index":0}\n');
+        const [siblingBefore, canonicalBefore] = await Promise.all([
+          readFile(siblingLedger, 'utf8'), readFile(canonicalLedger, 'utf8'),
+        ]);
+
+        const result = await execa(
+          process.execPath,
+          ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'closeout-event', 'start', 'evaluator'],
+          { cwd: projectRoot, reject: false, all: true },
+        );
+
+        expect(result.exitCode).not.toBe(0);
+        expect(result.all).toContain("error: unknown command 'closeout-event'");
+        expect(result.all).not.toMatch(/uncaught|TypeError|ReferenceError/i);
+        await expect(Promise.all([readFile(siblingLedger, 'utf8'), readFile(canonicalLedger, 'utf8')]))
+          .resolves.toEqual([siblingBefore, canonicalBefore]);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+
     it('recognizes `inline` and strips it from argv', () => {
       const { isInline, rest } = detectInline(['node', 'conduct', 'inline', 'URL shortener']);
       expect(isInline).toBe(true);

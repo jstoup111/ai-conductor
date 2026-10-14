@@ -4671,7 +4671,7 @@ TIER: M`,
       }]);
     });
 
-    it('publishes an empty registered-rubric set as a reasoned PASS without dispatch', async () => {
+    it('publishes an empty registered-rubric set as a reasoned PASS when security and implementation quality opt out over the test-quality default', async () => {
       const provider = createMockProvider();
       const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -4681,7 +4681,6 @@ TIER: M`,
         config: {
           build_review: {
             rubrics: {
-              testQuality: { enabled: false },
               security: { enabled: false },
               implementationQuality: { enabled: false },
             },
@@ -4902,6 +4901,54 @@ TIER: M`,
       const prompts = invoke.mock.calls.map(([options]) => options.prompt);
       expect(prompts.join('\n')).toContain('# build-review-implementation-quality');
       expect(prompts.join('\n')).toContain('# build-review-security');
+      expect(prompts.join('\n')).not.toContain('Build Review Test Quality rubric');
+    });
+
+    it('dispatches only implementation quality when security is disabled and every other rubric uses its default', async () => {
+      await scopedPlan();
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const result = {
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+        };
+        return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
+      });
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: scopedGit(), planPath, providerKey: 'codex',
+        config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { security: { enabled: false } } } } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['codex'],
+        buildReviewPolicyCatalog: async ({ skill }) => [{
+          semanticName: skill, source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`,
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from(`# ${policy.semanticName}\n`) }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
+        ...currentBuildReviewProof(),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'feature' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['testQuality', 'security'] as const, infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          },
+        }),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+      });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      const prompts = invoke.mock.calls.map(([options]) => options.prompt).join('\n');
+      expect(prompts).toContain('# build-review-implementation-quality');
+      expect(prompts).not.toContain('# build-review-security');
     });
 
     it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {

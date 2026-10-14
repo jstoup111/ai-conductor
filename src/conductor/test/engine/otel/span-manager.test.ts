@@ -729,6 +729,23 @@ describe('Task 8: TokenUsage detail on step spans', () => {
 // ── T14: Span events — retries / gate verdicts / kickbacks ───────────────────
 
 describe('T14: span events for retries / gate verdicts / kickbacks', () => {
+  it('does not add a pipeline_closeout span event for a completed build review stream', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true });
+    await emitter.emit({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const build = spanExporter.getFinishedSpans().find((span) => span.name === 'build')!;
+    expect(build.events.map((event) => event.name)).not.toContain('pipeline_closeout');
+  });
+
   it('step_retry with a progress allowance adds both allowance fields to the retry event', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);

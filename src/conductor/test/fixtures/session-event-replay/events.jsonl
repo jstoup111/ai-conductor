@@ -1,0 +1,5 @@
+{"type":"session_command_refused","eventId":"event-1","sourceTime":"2026-10-02T12:00:00.000Z","dispatchId":"dispatch-1","provider":"codex","scope":{"kind":"project"},"subcommand":"finish-record"}
+{"type":"github_bypass_attempt","eventId":"attempt-1","sourceTime":"2026-10-02T12:01:00.000Z","dispatchId":"dispatch-1","provider":"codex","scope":{"kind":"project"},"operation":"issue-create"}
+{"type":"github_bypass_result","eventId":"result-1","sourceTime":"2026-10-02T12:01:01.000Z","dispatchId":"dispatch-1","provider":"codex","scope":{"kind":"project"},"attemptId":"attempt-1","outcome":"cli-succeeded"}
+{"type":"github_possible_bypass","eventId":"possible-1","sourceTime":"2026-10-02T12:02:00.000Z","dispatchId":"dispatch-1","provider":"codex","scope":{"kind":"project"},"operation":"pull-request-create"}
+{"type":"session_event_delivery_diagnostic","eventId":"diagnostic-1","sourceTime":"2026-10-02T12:03:00.000Z","dispatchId":"dispatch-1","provider":"codex","scope":{"kind":"project"},"code":"write-failed"}

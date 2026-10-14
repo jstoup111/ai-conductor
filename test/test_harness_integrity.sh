@@ -1200,6 +1200,45 @@ if [ -f "$_pipeline_skill" ]; then
   rm -f "$evaluator_fixture" "$closeout_fixture"
 fi
 
+# ── Evaluator claims remain advisory ─────────────────────────────────────────
+# Pipeline and batch evaluators are not a substitute for the fresh-context
+# code-review gate, nor a promised defect detector. Keep that boundary across
+# every shipped instruction surface that can describe the workflow.
+evaluator_claim_contract_holds() {
+  local evaluator_claim_file
+  local evaluator_claim_pattern
+
+  evaluator_claim_pattern='(pipeline|batch)[[:space:]-]+evaluator([[:space:]-]+verdict)?[[:space:][:print:]]+(satisfies|fulfills|meets)[[:space:][:print:]]+code[[:space:]-]+review[[:space:]-]+gate|code[[:space:]-]+review[[:space:]-]+gate[[:space:]]+(is[[:space:]]+)?satisfied[[:space:]]+by[[:space:][:print:]]+(pipeline|batch)[[:space:]-]+evaluator|((pipeline|batch)[[:space:]-]+evaluator)[[:space:]]+will[[:space:]]+(catch|detect|find)[[:space:]]+(a[n]?[[:space:]]+)?(defect|bug|issue))'
+
+  for evaluator_claim_file in "$@"; do
+    if grep -Ein "$evaluator_claim_pattern" "$evaluator_claim_file"; then
+      return 1
+    fi
+  done
+}
+
+evaluator_claim_files=(
+  "${HARNESS_DIR}"/skills/*/SKILL.md
+  "${HARNESS_DIR}"/agents/*.md
+  "${HARNESS_DIR}"/templates/*.template
+  "${HARNESS_DIR}/HARNESS.md"
+)
+if evaluator_claim_contract_holds "${evaluator_claim_files[@]}"; then
+  assert "instruction surfaces keep pipeline and batch evaluators advisory" 0
+else
+  assert "instruction surfaces must not claim pipeline or batch evaluators satisfy code review or catch defects" 1
+fi
+
+evaluator_claim_fixture="$(mktemp "${TMPDIR:-/tmp}/evaluator-claim.XXXXXX")"
+cp "${HARNESS_DIR}/skills/conduct/SKILL.md" "$evaluator_claim_fixture"
+printf '\npipeline evaluator satisfies code-review gate\n' >>"$evaluator_claim_fixture"
+if evaluator_claim_contract_holds "$evaluator_claim_fixture"; then
+  assert "evaluator-advisory predicate rejects a code-review-gate fixture" 1
+else
+  assert "evaluator-advisory predicate rejects a code-review-gate fixture" 0
+fi
+rm -f "$evaluator_claim_fixture"
+
 # ── 11. Issue-template YAML validity and blank-issues guard ─────────────────
 # Validates that all issue templates in .github/ISSUE_TEMPLATE/ contain valid YAML
 # and that blank_issues_enabled is not set to false (which would prevent users from

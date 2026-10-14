@@ -558,6 +558,23 @@ beforeEach(async () => {
   daemonDir = join(root, '.daemon');
 });
 
+describe('daemon event rendering', () => {
+  it('prints no closeout obligation line for a completed build review stream', () => {
+    const lines: string[] = [];
+    const log = (line: string) => lines.push(line);
+
+    renderDaemonEvent({ type: 'step_started', step: 'build', index: 0 }, log);
+    renderDaemonEvent({ type: 'gate_verdict', step: 'build', satisfied: true }, log);
+    renderDaemonEvent({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    }, log);
+    renderDaemonEvent({ type: 'step_completed', step: 'build', status: 'done' }, log);
+    renderDaemonEvent({ type: 'feature_complete' }, log);
+
+    expect(lines.join('\n')).not.toMatch(/\bcloseout\s+\w+/i);
+  });
+});
+
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });

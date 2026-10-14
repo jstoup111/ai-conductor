@@ -272,16 +272,17 @@ describe('engine/resolved-config', () => {
       expect(resolved.enabled).toBe(true);
     });
 
-    it('defaults implementation quality and security on with their registered efforts', () => {
-      const resolved = resolveBuildReviewConfig(undefined);
+    it('defaults an omitted security policy on at high effort, implementation quality on, and test quality off', () => {
+      const config: HarnessConfig = { build_review: { rubrics: {} } } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
       expect({
         testQuality: resolved.rubrics.testQuality.enabled,
-        security: resolved.rubrics.security.enabled,
-        implementationQuality: resolved.rubrics.implementationQuality,
+        security: { enabled: resolved.rubrics.security.enabled, effort: resolved.rubrics.security.effort },
+        implementationQuality: resolved.rubrics.implementationQuality.enabled,
       }).toEqual({
         testQuality: false,
-        security: true,
-        implementationQuality: expect.objectContaining({ enabled: true, effort: 'medium' }),
+        security: { enabled: true, effort: 'high' },
+        implementationQuality: true,
       });
     });
 
