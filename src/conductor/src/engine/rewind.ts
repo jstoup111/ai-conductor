@@ -390,6 +390,10 @@ export async function dispatchRewindCommand(
   const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
   const slug = head?.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
   const execution = resolveExecutionChild(cursor, slug ?? 'rewind');
+  if (execution.source === 'refused' && command.child === undefined) {
+    console.error(`rewind: active child resolution refused (${cursor.kind})`);
+    return 1;
+  }
   const executionChild = 'target' in execution ? execution.target.child : undefined;
   const requestedChild = command.child ?? (executionChild === undefined ? undefined : String(executionChild));
   if (requestedChild !== undefined) {

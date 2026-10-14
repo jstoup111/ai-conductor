@@ -186,7 +186,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
-import { resolveExecutionChild } from './routing/execution-child.js';
+import { isUnroutedRepairPending, resolveExecutionChild } from './routing/execution-child.js';
 import { routingEligible } from './routing/route-types.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
@@ -655,13 +655,6 @@ const PUBLICATION_REDISPATCH_BUDGET = 1;
 const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
-
-/** A cursor still needs stack preflight before it may dispatch BUILD work. */
-function isUnroutedRepairPending(
-  cursor: ActiveChildResolution,
-): cursor is Extract<ActiveChildResolution, { kind: 'repair-pending' }> {
-  return cursor.kind === 'repair-pending' && cursor.routedRepair === undefined && cursor.revalidating === undefined;
-}
 
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.

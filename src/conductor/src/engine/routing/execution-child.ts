@@ -8,6 +8,13 @@ export type ExecutionChildResolution =
   | { readonly source: 'refused'; readonly cursor: ActiveChildResolution }
   | { readonly source: 'cursor' | 'routed-host' | 'revalidating'; readonly target: ActiveChildLifecycleTarget; readonly roundId?: RoundId; readonly generation?: number };
 
+/** A repair requires stack preflight until routing or revalidation selects its host. */
+export function isUnroutedRepairPending(
+  cursor: ActiveChildResolution,
+): cursor is Extract<ActiveChildResolution, { kind: 'repair-pending' }> {
+  return cursor.kind === 'repair-pending' && cursor.routedRepair === undefined && cursor.revalidating === undefined;
+}
+
 /**
  * The child whose state and operator commands own the current execution.
  * Routing overlays the normal stack cursor without changing its range/leaf
@@ -32,7 +39,7 @@ function resolveActiveExecutionChild(
 ): ExecutionChildResolution {
   const routed = cursor.routedRepair;
   const revalidating = cursor.revalidating;
-  if (cursor.kind === 'repair-pending' && !routed && !revalidating) {
+  if (isUnroutedRepairPending(cursor)) {
     return { source: 'refused', cursor };
   }
   const child = routed?.child ?? revalidating?.child ?? cursor.child;
