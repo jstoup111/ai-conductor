@@ -1,4 +1,4 @@
-// Covers: task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-rem-validation-AB2
+// Covers: task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -167,10 +167,11 @@ describe('runPlanReview', () => {
         { id: 'bad', severity: 'blocking', lens: 'reachability', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'missing evidence', evidence: ['no location'] },
         { id: 'good', severity: 'significant', lens: 'feasibility', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'grounded', evidence: ['source.ts:1'] },
         { id: 'story-grounded', severity: 'significant', lens: 'reachability', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'grounded in the story artifact', evidence: ['.docs/stories/idea.md:3'] },
+        { id: 'adr-grounded', severity: 'significant', lens: 'dependency-order', artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: 'task 2', resolvesPrior: null, summary: 'grounded in the cited ADR artifact', evidence: ['.docs/decisions/adr-review.md:1', 'Dependency closure for task 1: none; task 2 is not reachable.'] },
       ] } })) as any,
     });
-    expect(artifact.findings.map((finding) => finding.id)).toEqual(['good', 'story-grounded']);
-    expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [{ id: 'good' }, { id: 'story-grounded' }] });
+    expect(artifact.findings.map((finding) => finding.id)).toEqual(['good', 'story-grounded', 'adr-grounded']);
+    expect(parsePlanReviewArtifact(await readFile(join(root, '.docs/plan-review/idea.md'), 'utf8'))).toMatchObject({ findings: [{ id: 'good' }, { id: 'story-grounded' }, { id: 'adr-grounded' }] });
   });
 
   // Covers: task:rem-prd-audit-R1-5
