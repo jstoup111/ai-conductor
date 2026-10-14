@@ -1,4 +1,4 @@
-// Covers: task:12, task:17
+// Covers: task:12, task:17, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -87,7 +87,18 @@ describe('runPlanReview', () => {
     expect(artifact.reviewerProvider).toBe('claude');
   });
 
-  it('drops invalid individual findings and writes the passing findings', async () => {
+  it('falls through a response containing a schema-invalid finding in a fresh provider session', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: ['codex', 'claude'] } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return calls.length === 1
+        ? { success: true, finalStructuredResult: { findings: [{}] } }
+        : { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex', 'claude']);
+    expect(artifact.reviewerProvider).toBe('claude');
+  });
+
+  it('drops schema-valid findings with insufficient evidence and writes the passing findings', async () => {
     const root = await fixture();
     const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
       providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [

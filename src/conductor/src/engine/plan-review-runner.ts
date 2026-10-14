@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 import { computeReviewedDigest, diffReviewedDigests, parsePlanReviewArtifact, renderPlanReviewArtifact, type PlanReviewArtifact } from './plan-review-artifact.js';
-import { PLAN_REVIEW_RESULT_SCHEMA, validatePlanReviewResult } from './plan-review-contract.js';
+import { PLAN_REVIEW_LENSES, PLAN_REVIEW_RESULT_SCHEMA, PLAN_REVIEW_SEVERITIES, validatePlanReviewResult } from './plan-review-contract.js';
 import { dependencyOrderCandidates, reachabilityCandidates, testImpactCandidates } from './plan-review-candidates.js';
 import { classifyIndependence, orderReviewerCandidates, resolveAuthoringHost } from './plan-review-provider.js';
 import type { ProviderRuntimeSet } from './provider-runtime.js';
@@ -11,6 +11,22 @@ import type { ProviderSessionStore } from './provider-session.js';
 import { executeProviderCandidates, type ExecuteProviderCandidatesInput } from './provider-execution.js';
 import { resolveIdeaFiles } from './engineer/spec-change-set.js';
 import { parseAdrDecisions } from './artifacts.js';
+
+function isSchemaValidFinding(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const finding = value as Record<string, unknown>;
+  const keys = ['id', 'severity', 'lens', 'artifact', 'reference', 'relatedReference', 'resolvesPrior', 'summary', 'evidence'];
+  return Object.keys(finding).length === keys.length && Object.keys(finding).every((key) => keys.includes(key)) &&
+    typeof finding.id === 'string' && finding.id.length > 0 &&
+    typeof finding.severity === 'string' && (PLAN_REVIEW_SEVERITIES as readonly string[]).includes(finding.severity) &&
+    typeof finding.lens === 'string' && (PLAN_REVIEW_LENSES as readonly string[]).includes(finding.lens) &&
+    typeof finding.artifact === 'string' && finding.artifact.length > 0 &&
+    typeof finding.reference === 'string' && finding.reference.length > 0 &&
+    (finding.relatedReference === null || typeof finding.relatedReference === 'string' && finding.relatedReference.length > 0) &&
+    (finding.resolvesPrior === null || typeof finding.resolvesPrior === 'string' && finding.resolvesPrior.length > 0) &&
+    typeof finding.summary === 'string' && finding.summary.length > 0 &&
+    Array.isArray(finding.evidence) && finding.evidence.length > 0 && finding.evidence.every((entry) => typeof entry === 'string' && entry.length > 0);
+}
 
 async function files(root: string, at = root): Promise<string[]> {
   const entries = await readdir(at, { withFileTypes: true });
@@ -122,7 +138,9 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
     if (!attempted.success || attempted.finalStructuredResult === undefined) continue;
     const raw = attempted.finalStructuredResult;
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || Object.keys(raw as Record<string, unknown>).length !== 1 || !Array.isArray((raw as { findings?: unknown }).findings)) continue;
-    findings = (raw as { findings: unknown[] }).findings.flatMap((finding) => {
+    const rawFindings = (raw as { findings: unknown[] }).findings;
+    if (!rawFindings.every(isSchemaValidFinding)) continue;
+    findings = rawFindings.flatMap((finding) => {
       const validation = validatePlanReviewResult({ findings: [finding] }, source);
       return validation.kind === 'accepted' ? validation.result.findings : [];
     });
