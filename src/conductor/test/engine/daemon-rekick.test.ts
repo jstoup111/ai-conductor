@@ -40,7 +40,6 @@ import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
-import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -130,7 +129,6 @@ describe('consumeResumeAuthorizations', () => {
       await expect(consumeResumeAuthorizations(base(worktree, {
         resolveActiveChild: async () => ({
           kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/feature', repairChildren: [1],
-          routedRepair: { child, roundId: parseRoundId('r1')! },
         }),
       }) as never)).resolves.toEqual(['feature']);
 

@@ -148,7 +148,7 @@ function refWritingCalls(calls: readonly string[][]): string[][] {
 
 describe('read-only CLI resolutions while stack repair is pending (sweep)', () => {
   // Covers: task:29
-  it('refuses un-overlaid repair-pending state without a ref write, journal write, restack entry or restack event', async () => {
+  it('reports child 2 from consumeResumeAuthorizations, kickback-budget inspect, task and the rewind refusal with no ref write, journal write, restack entry or restack event', async () => {
     // Test setup imports part of the engine graph; reload it so every consumer
     // binds the recording git runner and restack spies rather than cached originals.
     vi.resetModules();
@@ -170,9 +170,9 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
         readLiveHaltClass: async () => 'needs-human',
         readLiveHaltGeneration: async () => 'g1',
         clearHalt,
-      } as never)).resolves.toEqual([]);
-      expect(clearHalt).not.toHaveBeenCalled();
-      expect((await readKickbackLedger(worktree, 2 as ChildId)).gates.build_review?.resumeAuthorization?.consumed).toBe(false);
+      } as never)).resolves.toEqual(['feature']);
+      expect(clearHalt).toHaveBeenCalledTimes(1);
+      expect((await readKickbackLedger(worktree, 2 as ChildId)).gates.build_review?.resumeAuthorization?.consumed).toBe(true);
 
       // kickback-budget inspect with default-child resolution.
       const output: string[] = [];
@@ -180,13 +180,12 @@ describe('read-only CLI resolutions while stack repair is pending (sweep)', () =
         { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
         { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
       )).resolves.toBe(0);
-      expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature' });
-      expect(JSON.parse(output.join('\n')).child).toBeUndefined();
+      expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
 
-      // An un-overlaid repair-pending cursor remains refused for task commands.
+      // task: default child is child 2, so child 1's task is refused naming child 2.
       const taskStatusBefore = await readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8');
       await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'start', 'T1'])!, worktree)).resolves.toBe(1);
-      expect(errors).toHaveBeenCalledWith('[task-cli] active child resolution refused (repair-pending)');
+      expect(errors).toHaveBeenCalledWith('[task-cli] task T1 belongs to child 1, not child 2');
       await expect(readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8')).resolves.toBe(taskStatusBefore);
 
       // rewind refusal for the closed child.

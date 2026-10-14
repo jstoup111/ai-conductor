@@ -268,7 +268,7 @@ describe('restack cascade cap sweep (real local Git)', () => {
     expect(halt).toContain(reasonLine);
     const printed: string[] = [];
     expect(await dispatchKickbackBudgetCommand(
-      { kind: 'kickback-budget', action: 'inspect', feature: 'demo', child: '3', format: 'human' },
+      { kind: 'kickback-budget', action: 'inspect', feature: 'demo', format: 'human' },
       { cwd: subject.root, resolveMainRoot: async () => subject.root, print: (line: string) => { printed.push(line); } },
     )).toBe(0);
     expect(printed.join('\n')).toContain(budgetLine);

@@ -8,7 +8,11 @@ export type ExecutionChildResolution =
   | { readonly source: 'refused'; readonly cursor: ActiveChildResolution }
   | { readonly source: 'cursor' | 'routed-host' | 'revalidating'; readonly target: ActiveChildLifecycleTarget; readonly roundId?: RoundId; readonly generation?: number };
 
-/** A repair requires stack preflight until routing or revalidation selects its host. */
+/**
+ * A repair requires stack preflight until routing or revalidation selects its
+ * host. Only the conductor's BUILD-region entry refuses on it; read-only
+ * consumers keep the cursor child (adr-2026-10-10).
+ */
 export function isUnroutedRepairPending(
   cursor: ActiveChildResolution,
 ): cursor is Extract<ActiveChildResolution, { kind: 'repair-pending' }> {
@@ -39,9 +43,6 @@ function resolveActiveExecutionChild(
 ): ExecutionChildResolution {
   const routed = cursor.routedRepair;
   const revalidating = cursor.revalidating;
-  if (isUnroutedRepairPending(cursor)) {
-    return { source: 'refused', cursor };
-  }
   const child = routed?.child ?? revalidating?.child ?? cursor.child;
   const branch = child === cursor.position && cursor.isLeaf ? leafBranchFor(slug) : childBranchFor(slug, child);
   if (typeof branch !== 'string' && !branch.ok) return { source: 'refused', cursor };

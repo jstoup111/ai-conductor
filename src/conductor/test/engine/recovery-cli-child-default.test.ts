@@ -139,19 +139,18 @@ describe('recovery CLIs default to the active child', () => {
     expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
   });
 
-  it('refuses task and rewind defaults while repair is pending, while inspect remains feature-wide', async () => {
+  it('keeps read-only CLI default-child resolution on child 2 while repair is pending', async () => {
     const { root, worktree } = await stackedFixture(true);
     const refsBefore = await git(worktree, ['for-each-ref', '--format=%(refname) %(objectname)']);
     const eventsPath = join(worktree, '.pipeline', 'events.jsonl');
     const task = detectTaskCommand(['node', 'conduct', 'task', 'start', 'T1']);
     const taskStateBefore = await readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8');
     const childOneStateBefore = await readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8');
-    const childTwoStateBefore = await readFile(join(worktree, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8');
     const output: string[] = [];
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       await expect(dispatchTaskCommand(task!, worktree)).resolves.toBe(1);
-      expect(error).toHaveBeenCalledWith('[task-cli] active child resolution refused (repair-pending)');
+      expect(error).toHaveBeenCalledWith('[task-cli] task T1 belongs to child 1, not child 2');
       await expect(readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8')).resolves.toBe(taskStateBefore);
       await expect(dispatchKickbackBudgetCommand(
         { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
@@ -159,16 +158,14 @@ describe('recovery CLIs default to the active child', () => {
       )).resolves.toBe(0);
       await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, worktree, {
         preflightDerivedRecords: async () => {}, clearDerivedRecords: async () => {}, emit: async () => {},
-      })).resolves.toBe(1);
-      expect(error).toHaveBeenCalledWith('rewind: active child resolution refused (repair-pending)');
+      })).resolves.toBe(0);
       await expect(readFile(join(worktree, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8'))
         .resolves.toBe(childOneStateBefore);
       await expect(readFile(join(worktree, '.pipeline', 'children', '2', 'conduct-state.json'), 'utf8'))
-        .resolves.toBe(childTwoStateBefore);
+        .resolves.toContain('"build": "stale"');
       await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build', child: '1' }, worktree)).resolves.toBe(1);
       expect(error).toHaveBeenCalledWith('rewind: child 1 is closed and cannot be rewound (#3203)');
-      expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature' });
-      expect(JSON.parse(output.join('\n')).child).toBeUndefined();
+      expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
       expect(refsBefore).not.toContain('refs/conductor/feature/restack');
       await expect(git(worktree, ['for-each-ref', '--format=%(refname) %(objectname)'])).resolves.toBe(refsBefore);
       await expect(git(worktree, ['show-ref', '--verify', '--quiet', 'refs/conductor/feature/restack/journal']))
