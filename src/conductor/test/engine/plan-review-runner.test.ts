@@ -1,4 +1,4 @@
-// Covers: task:12, task:17, task:rem-as-built-rem-validation-AB2
+// Covers: task:12, task:17, task:rem-prd-audit-R2, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -79,11 +79,13 @@ describe('runPlanReview', () => {
   });
 
   it('falls through a schema-invalid response in a fresh provider session', async () => {
-    const root = await fixture(); const calls: any[] = [];
+    const root = await fixture(); const calls: any[] = []; const events: any[] = [];
     const artifact = await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: ['codex', 'claude'] } as any, runtimes: {} as any, sessions: {} as any,
       providerExecutor: (async (input: any) => { calls.push(input); return calls.length === 1 ? { success: true, finalStructuredResult: { nope: [] } } : { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+      emit: async (event) => { events.push(event); },
     });
     expect(calls.map((call) => call.configuredProviders[0])).toEqual(['codex', 'claude']);
+    expect(events.filter((event) => event.type === 'plan_review_dispatched').map((event) => event.reviewerProvider)).toEqual(['codex', 'claude']);
     expect(artifact.reviewerProvider).toBe('claude');
   });
 
