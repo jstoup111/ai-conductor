@@ -31,13 +31,11 @@ describe('resolveExecutionChild', () => {
     expect(resolveExecutionChild({ kind: 'no-child' }, 'demo')).toEqual({ source: 'none' });
   });
 
-  it('retains the cursor child while a repair is pending without an execution overlay', () => {
+  it('refuses a repair-pending cursor without an execution overlay', () => {
     const cursor = {
       kind: 'repair-pending' as const, child: c3, position: c3, isLeaf: true, branch: 'feat/demo', repairChildren: [c1],
     };
 
-    expect(resolveExecutionChild(cursor, 'demo')).toMatchObject({
-      source: 'cursor', target: { child: 3, position: 3, isLeaf: true, branch: 'feat/daemon-demo' },
-    });
+    expect(resolveExecutionChild(cursor, 'demo')).toEqual({ source: 'refused', cursor });
   });
 });
