@@ -94,14 +94,18 @@ export async function evaluateAdrAssumptionLedgers(
     const added = !basePaths.has(path);
     let changed = false;
     if (!added) {
-      const baseContent = await git(['show', `${resolved.sha}:${path}`]);
-      if (baseContent.exitCode !== 0) {
+      // Compare blob ids, not text: the git runner strips the final newline
+      // from stdout, so a `git show` comparison reports every untouched ADR
+      // as changed and drags legacy ledgers into validation.
+      const baseBlob = await git(['rev-parse', `${resolved.sha}:${path}`]);
+      if (baseBlob.exitCode !== 0) {
         return {
           kind: 'merge-base-unresolved',
           detail: `ADR assumption-ledger merge base could not be resolved from ${resolved.sha}.`,
         };
       }
-      changed = baseContent.stdout !== content;
+      const workingBlob = await git(['hash-object', '--', path]);
+      changed = workingBlob.exitCode !== 0 || workingBlob.stdout.trim() !== baseBlob.stdout.trim();
     }
 
     if (!added && (!changed || !ASSUMPTIONS_HEADING.test(stripFencedCodeBlocks(content)))) continue;

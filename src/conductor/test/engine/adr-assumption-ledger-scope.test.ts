@@ -50,6 +50,37 @@ describe('evaluateAdrAssumptionLedgers', () => {
     });
   });
 
+  it('does not parse an untouched pre-existing ADR whose legacy ledger header no longer validates', async () => {
+    await git('checkout', 'main');
+    await write(
+      '.docs/decisions/adr-2026-01-05-legacy-ledger.md',
+      '# ADR: Legacy ledger\n\n**Status:** APPROVED\n\n## Assumptions\n\n| Assumption | Confidence |\n|---|---|\n| legacy | high |\n',
+    );
+    await commitAll(repo, 'legacy ADR with old ledger header');
+    await git('checkout', 'feature');
+    await git('merge', '--ff-only', 'main');
+
+    await expect(evaluateAdrAssumptionLedgers({ worktreePath: repo, baseRef: 'main' })).resolves.toEqual({
+      kind: 'evaluated',
+      failures: [],
+    });
+  });
+
+  it('still validates a pre-existing ADR whose ledger section changes on the feature branch', async () => {
+    await write(
+      '.docs/decisions/adr-2026-01-01-legacy.md',
+      '# ADR: Legacy\n\n**Status:** APPROVED\n\n## Assumptions\n\n| Assumption | Confidence |\n|---|---|\n| changed | high |\n',
+    );
+    await commitAll(repo, 'add a malformed ledger to a legacy ADR');
+
+    const result = await evaluateAdrAssumptionLedgers({ worktreePath: repo, baseRef: 'main' });
+
+    expect(result).toMatchObject({
+      kind: 'evaluated',
+      failures: [{ path: '.docs/decisions/adr-2026-01-01-legacy.md', diagnostics: [{ rule: 'malformed-header' }] }],
+    });
+  });
+
   it('reports an uncommitted added ADR that lacks an assumptions section', async () => {
     await write('.docs/decisions/adr-2026-01-03-added.md', '# ADR: Added\n\n**Status:** APPROVED\n');
 
