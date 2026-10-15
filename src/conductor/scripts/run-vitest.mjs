@@ -31,12 +31,12 @@ const vitestArgs = process.argv.slice(2);
 const hasSelector = vitestArgs.some((argument) => argument !== 'run' && !argument.startsWith('-'));
 const hasShard = vitestArgs.some((argument) => argument === '--shard' || argument.startsWith('--shard='));
 // A full run retains all results in its coordinator until teardown. Running
-// thirty-two bounded shards releases that graph between children. The largest
-// sixteen-way shard still exceeds the worker ceiling on this suite. Explicit selectors
+// sixty-four bounded shards releases that graph between children. The largest
+// thirty-two-way shard still exceeds the worker ceiling on this suite. Explicit selectors
 // and CI's already-sharded runs must retain their caller-provided semantics.
 const invocations = hasSelector || hasShard
   ? [vitestArgs]
-  : Array.from({ length: 32 }, (_, index) => [...vitestArgs, `--shard=${index + 1}/32`]);
+  : Array.from({ length: 64 }, (_, index) => [...vitestArgs, `--shard=${index + 1}/64`]);
 const childEnvironment = {
   ...testEnvironment,
   AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,
