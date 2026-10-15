@@ -8,6 +8,7 @@ export interface HarvestTranscriptsOptions {
   readonly globs: readonly string[];
   readonly destination: string;
   readonly knownSecrets: Iterable<string>;
+  readonly sanitizeLine?: (line: string, knownSecrets: Iterable<string>) => string;
 }
 
 export interface CapturedTranscriptHarvest {
@@ -37,23 +38,40 @@ async function collectTranscriptPaths(
   home: string,
   current: string,
   globs: readonly string[],
-): Promise<string[]> {
+): Promise<{ readonly paths: string[]; readonly skipped: string[] }> {
   const stat = await lstat(current);
-  if (stat.isSymbolicLink()) return [];
-  if (stat.isFile()) return isAllowed(relativePosix(home, current), globs) ? [current] : [];
-  if (!stat.isDirectory()) return [];
+  const relativePath = relativePosix(home, current);
+  if (stat.isSymbolicLink()) {
+    return { paths: [], skipped: isAllowed(relativePath, globs) ? [relativePath] : [] };
+  }
+  if (stat.isFile()) return isAllowed(relativePath, globs) ? { paths: [current], skipped: [] } : { paths: [], skipped: [] };
+  if (!stat.isDirectory()) return { paths: [], skipped: [] };
 
   const paths: string[] = [];
+  const skipped: string[] = [];
   for (const entry of (await readdir(current)).sort()) {
-    paths.push(...await collectTranscriptPaths(home, join(current, entry), globs));
+    const collected = await collectTranscriptPaths(home, join(current, entry), globs);
+    paths.push(...collected.paths);
+    skipped.push(...collected.skipped);
   }
-  return paths;
+  return { paths, skipped };
 }
 
-function sanitizeFile(content: string, knownSecrets: Iterable<string>): { readonly content: string; readonly omittedLines: number } {
-  const lines = content.split('\n');
-  const sanitized = lines.map((line) => sanitizeTranscriptLine(line, knownSecrets));
-  return { content: sanitized.join('\n'), omittedLines: 0 };
+function sanitizeFile(
+  content: string,
+  knownSecrets: Iterable<string>,
+  sanitizeLine: (line: string, knownSecrets: Iterable<string>) => string,
+): { readonly content: string; readonly omittedLines: number } {
+  const sanitized: string[] = [];
+  let omittedLines = 0;
+  for (const line of content.split('\n')) {
+    try {
+      sanitized.push(sanitizeLine(line, knownSecrets));
+    } catch {
+      omittedLines += 1;
+    }
+  }
+  return { content: sanitized.join('\n'), omittedLines };
 }
 
 /**
@@ -64,13 +82,17 @@ function sanitizeFile(content: string, knownSecrets: Iterable<string>): { readon
 export async function harvestTranscripts(options: HarvestTranscriptsOptions): Promise<TranscriptHarvestResult> {
   try {
     await mkdir(options.destination, { recursive: true });
-    const paths = await collectTranscriptPaths(options.home, options.home, options.globs);
+    const collected = await collectTranscriptPaths(options.home, options.home, options.globs);
     let files = 0;
     let bytes = 0;
     let omittedLines = 0;
-    for (const source of paths) {
+    for (const source of collected.paths) {
       const relativePath = relativePosix(options.home, source);
-      const sanitized = sanitizeFile(await readFile(source, 'utf8'), options.knownSecrets);
+      const sanitized = sanitizeFile(
+        await readFile(source, 'utf8'),
+        options.knownSecrets,
+        options.sanitizeLine ?? sanitizeTranscriptLine,
+      );
       const target = join(options.destination, relativePath);
       await mkdir(join(target, '..'), { recursive: true });
       await writeFile(target, sanitized.content);
@@ -78,7 +100,7 @@ export async function harvestTranscripts(options: HarvestTranscriptsOptions): Pr
       bytes += Buffer.byteLength(sanitized.content);
       omittedLines += sanitized.omittedLines;
     }
-    return { kind: 'captured', files, bytes, skipped: [], omittedLines };
+    return { kind: 'captured', files, bytes, skipped: collected.skipped, omittedLines };
   } catch (error) {
     return { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
   }

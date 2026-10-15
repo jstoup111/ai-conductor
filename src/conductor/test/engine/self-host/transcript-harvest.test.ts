@@ -1,5 +1,5 @@
-// Covers: task:4
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+// Covers: task:4, task:5
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -60,6 +60,90 @@ describe('harvestTranscripts', () => {
         knownSecrets: [],
       })).resolves.toStrictEqual({ kind: 'captured', files: 0, bytes: 0, skipped: [], omittedLines: 0 });
       await expect(readdir(destination)).resolves.toStrictEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('skips an allowlisted transcript that is a symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transcript-harvest-symlink-file-'));
+    const home = join(root, 'home');
+    const destination = join(root, 'destination');
+    const outside = join(root, 'outside.jsonl');
+    await mkdir(join(home, 'projects', 'w'), { recursive: true });
+    await writeFile(outside, '{"token":"outside-secret"}\n');
+    await symlink(outside, join(home, 'projects', 'w', 'link.jsonl'));
+
+    try {
+      const result = await harvestTranscripts({
+        home,
+        globs: ['projects/**/*.jsonl'],
+        destination,
+        knownSecrets: [],
+      });
+
+      expect({ result, files: await readdir(destination, { recursive: true }) }).toStrictEqual({
+        result: { kind: 'captured', files: 0, bytes: 0, skipped: ['projects/w/link.jsonl'], omittedLines: 0 },
+        files: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not descend into a symlinked directory while harvesting', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transcript-harvest-symlink-directory-'));
+    const home = join(root, 'home');
+    const destination = join(root, 'destination');
+    const outside = join(root, 'outside');
+    await mkdir(home);
+    await mkdir(outside);
+    await writeFile(join(outside, 'x.jsonl'), '{"token":"outside-secret"}\n');
+    await symlink(outside, join(home, 'sessions'));
+
+    try {
+      const result = await harvestTranscripts({
+        home,
+        globs: ['sessions/**/*.jsonl'],
+        destination,
+        knownSecrets: [],
+      });
+
+      expect({ result, files: await readdir(destination, { recursive: true }) }).toStrictEqual({
+        result: { kind: 'captured', files: 0, bytes: 0, skipped: [], omittedLines: 0 },
+        files: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('omits only a transcript line whose sanitizer throws', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transcript-harvest-unsanitizable-line-'));
+    const home = join(root, 'home');
+    const destination = join(root, 'destination');
+    await mkdir(join(home, 'projects', 'w'), { recursive: true });
+    await writeFile(join(home, 'projects', 'w', 's.jsonl'), 'safe\nsecret=unredactable\nalso-safe\n');
+
+    try {
+      const result = await harvestTranscripts({
+        home,
+        globs: ['projects/**/*.jsonl'],
+        destination,
+        knownSecrets: [],
+        sanitizeLine: (line: string) => {
+          if (line === 'secret=unredactable') throw new Error('sanitizer fault');
+          return `sanitized:${line}`;
+        },
+      });
+
+      expect({
+        result,
+        content: await readFile(join(destination, 'projects', 'w', 's.jsonl'), 'utf8'),
+      }).toStrictEqual({
+        result: { kind: 'captured', files: 1, bytes: 45, skipped: [], omittedLines: 1 },
+        content: 'sanitized:safe\nsanitized:also-safe\nsanitized:',
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
