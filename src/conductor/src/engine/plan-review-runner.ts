@@ -96,10 +96,28 @@ function selectedDecisions(adrTexts: Readonly<Record<string, string>>, ids: read
   return selected;
 }
 
+/**
+ * A reviewer prompt above this size cannot be dispatched to the configured
+ * providers; refusing early names what is oversized instead of reporting that
+ * every reviewer failed.
+ */
+export const PLAN_REVIEW_MAX_PROMPT_CHARS = 400_000;
+
+/** The reviewer reads source itself, so reachability rows carry a path count, not the list. */
+function promptCandidates(candidates: readonly unknown[]): unknown[] {
+  return candidates.map((candidate) => {
+    if (candidate === null || typeof candidate !== 'object' || !('searchedPaths' in candidate)) return candidate;
+    const { searchedPaths, ...rest } = candidate as { searchedPaths: readonly string[] } & Record<string, unknown>;
+    return { ...rest, searchedPathCount: searchedPaths.length };
+  });
+}
+
 /** Render only the decision passages that are in scope for a first review round. */
 export interface RunPlanReviewInput {
   worktreePath: string; canonicalPath?: string; planStem: string; config: HarnessConfig; runtimes: ProviderRuntimeSet; sessions: ProviderSessionStore;
   env?: NodeJS.ProcessEnv; configuredProviders?: readonly string[]; emit?: (event: Extract<ConductorEvent, { type: 'plan_review_dispatched' | 'plan_review_completed' | 'plan_review_finding_accepted' }>) => Promise<void>; onNotice?: (notice: string) => void; providerExecutor?: typeof executeProviderCandidates;
+  /** Prompt budget; defaults to {@link PLAN_REVIEW_MAX_PROMPT_CHARS}. */
+  maxPromptChars?: number;
 }
 export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanReviewArtifact> {
   const previousPath = join(input.worktreePath, '.docs', 'plan-review', `${input.planStem}.md`);
@@ -126,7 +144,13 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const roundCandidates = changed
     ? rows.flat().filter((candidate: any) => changed.planTaskIds.includes(candidate.taskId))
     : rows.flat();
-  const prompt = `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${JSON.stringify(reviewDecisions)}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${JSON.stringify(roundCandidates)}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`;
+  const decisionsJson = JSON.stringify(reviewDecisions);
+  const candidatesJson = JSON.stringify(promptCandidates(roundCandidates));
+  const prompt = `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${decisionsJson}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${candidatesJson}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`;
+  const maxPromptChars = input.maxPromptChars ?? PLAN_REVIEW_MAX_PROMPT_CHARS;
+  if (prompt.length > maxPromptChars) {
+    throw new Error(`plan review prompt is too large: ${prompt.length} characters exceeds ${maxPromptChars} (plan ${reviewPlan.length}, stories ${reviewStories.length}, ADR decisions ${decisionsJson.length}, coherence ${source.coherenceText.length}, candidates ${candidatesJson.length})`);
+  }
   const executor = input.providerExecutor ?? executeProviderCandidates;
   let findings: readonly import('./plan-review-contract.js').PlanReviewFinding[] | undefined;
   let used: string | undefined;

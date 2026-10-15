@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { testImpactCandidates } from '../../src/engine/plan-review-candidates.js';
+import { TEST_IMPACT_TERM_FILE_LIMIT, testImpactCandidates } from '../../src/engine/plan-review-candidates.js';
 
 const roots: string[] = [];
 
@@ -86,5 +86,69 @@ describe('testImpactCandidates', () => {
         matchedTerm: 'land-spec.ts',
       }),
     );
+  });
+
+  it('ignores numeric and two-character backticked terms that cannot identify an impacted test', async () => {
+    const worktreePath = await fixture({
+      'src/conductor/test/engine/numbers.test.ts': "expect([1, 2, 'T1', 'r1']).toHaveLength(4);\n",
+    });
+    const planText = `# Plan
+
+### Task 1: Route hosts
+**Files likely touched:**
+- \`src/conductor/src/engine/routing/router.ts\`
+
+**Steps:**
+1. Route host \`1\`, then \`2\`, for task \`T1\` in round \`r1\`.
+`;
+
+    await expect(testImpactCandidates({ worktreePath, planText })).resolves.toEqual([]);
+  });
+
+  it('drops a term found in more test files than the specificity limit while keeping a specific term', async () => {
+    const common = Object.fromEntries(Array.from({ length: TEST_IMPACT_TERM_FILE_LIMIT + 1 }, (_, index) => [
+      `src/conductor/test/engine/common-${index}.test.ts`, "expect('prd_audit').toBeDefined();\n",
+    ]));
+    const worktreePath = await fixture({
+      ...common,
+      'src/conductor/test/engine/specific.test.ts': "expect('routeAdmittedRound').toBeDefined();\n",
+    });
+    const planText = `# Plan
+
+### Task 1: Route rounds
+**Files likely touched:**
+- \`src/conductor/src/engine/routing/router.ts\`
+
+**Steps:**
+1. Call \`routeAdmittedRound\` from the \`prd_audit\` gap loop.
+`;
+
+    const candidates = await testImpactCandidates({ worktreePath, planText });
+    expect(candidates).toEqual([expect.objectContaining({
+      taskId: '1',
+      testPath: 'src/conductor/test/engine/specific.test.ts',
+      matchedTerm: 'routeAdmittedRound',
+    })]);
+  });
+
+  it('returns at most maxCandidates rows, most specific terms first', async () => {
+    const worktreePath = await fixture({
+      'src/conductor/test/engine/a.test.ts': "expect('alphaTerm').toBeDefined();\nexpect('betaTerm').toBeDefined();\n",
+      'src/conductor/test/engine/b.test.ts': "expect('betaTerm').toBeDefined();\n",
+      'src/conductor/test/engine/c.test.ts': "expect('gammaTerm').toBeDefined();\n",
+    });
+    const planText = `# Plan
+
+### Task 1: Use terms
+**Files likely touched:**
+- \`src/conductor/src/engine/terms.ts\`
+
+**Steps:**
+1. Use \`betaTerm\`, \`alphaTerm\` and \`gammaTerm\`.
+`;
+
+    const candidates = await testImpactCandidates({ worktreePath, planText, maxCandidates: 2 });
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map((candidate) => candidate.matchedTerm)).not.toContain('betaTerm');
   });
 });
