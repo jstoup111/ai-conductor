@@ -4,6 +4,13 @@ import { parsePlanTaskBodies, parsePlanTaskTitles } from './plan-task-parse.js';
 import { selectPlanReviewAdrDecisionSections } from './plan-review-adr-scope.js';
 import type { PlanReviewFinding } from './plan-review-contract.js';
 
+/**
+ * Worktree-relative directory of the plan-review gate record. The record is land-time
+ * evidence only: land verifies it in the authoring worktree and never commits it, and
+ * the daemon treats a merged spec without one as `landed-before-plan-review`.
+ */
+export const PLAN_REVIEW_ARTIFACT_DIR = '.docs/plan-review';
+
 export type PlanReviewIndependence = 'cross-provider' | 'same-provider' | 'unknown-host';
 
 export interface PlanReviewDisposition {

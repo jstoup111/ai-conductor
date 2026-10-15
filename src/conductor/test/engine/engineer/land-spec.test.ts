@@ -474,6 +474,26 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
     expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBeforeSecondLand);
     expect(await git(['rev-list', '--count', 'HEAD'], dir)).toBe(countBeforeSecondLand);
   });
+  it('verifies the plan-review artifact but leaves it out of the landing commit', async () => {
+    const idea = 'dep bump';
+    const dir = await seedValidWorktree(idea);
+    const reviewPath = join(dir, '.docs', 'plan-review', 'dep-bump.md');
+    const reviewBefore = await readFile(reviewPath, 'utf8');
+
+    const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+    await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    const committed = await git(['show', '--name-only', '--format=', 'HEAD'], dir);
+    expect(committed).toContain('.docs/plans/dep-bump.md');
+    expect(committed).not.toContain('.docs/plan-review/');
+    expect(await git(['ls-files', '--', '.docs/plan-review'], dir)).toBe('');
+    expect(await readFile(reviewPath, 'utf8')).toBe(reviewBefore);
+
+    const head = await git(['rev-parse', 'HEAD'], dir);
+    await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(head);
+    expect(await git(['ls-files', '--', '.docs/plan-review'], dir)).toBe('');
+  });
 });
 
 describe('Task 4: landSpec keeps degraded DECIDE artifacts landable', () => {
@@ -2634,7 +2654,7 @@ describe('DECIDE amendments at land', () => {
 
     await expect(landSpec(target(), 'dep bump', dir, undefined, { gh })).resolves.toMatchObject({ branch: 'spec/dep-bump' });
     expect(await readFile(join(dir, '.docs', 'stories', 'previous-feature.md'), 'utf8')).toContain('Corrected accepted assertion.');
-    expect(await git(['status', '--porcelain'], dir)).toBe('');
+    expect(await git(['status', '--porcelain'], dir)).toBe('?? .docs/plan-review/');
   });
 
   it('does not let an existing amendment satisfy a missing current-feature story', async () => {

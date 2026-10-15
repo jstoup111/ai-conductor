@@ -63,6 +63,7 @@ import {
 } from './outcome-staging.js';
 import { runCoherenceGate } from './coherence-validator.js';
 import { runPlanReviewGate } from './plan-review-gate.js';
+import { PLAN_REVIEW_ARTIFACT_DIR } from '../plan-review-artifact.js';
 import { resolveIdeaFiles } from './spec-change-set.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import {
@@ -878,8 +879,9 @@ export async function landSpec(
   // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
   // this idea's artifacts, so the commit is idea-scoped and no foreign untracked file
   // can bleed in (FR-9). Commit in place on the worktree's branch — no checkout of the
-  // primary tree (FR-2).
-  await execFile('git', ['add', '.docs'], { cwd: worktreePath });
+  // primary tree (FR-2). The plan-review record was verified above and stays
+  // uncommitted: nothing downstream reads it from a merged spec.
+  await execFile('git', ['add', '--', '.docs', `:(exclude)${PLAN_REVIEW_ARTIFACT_DIR}`], { cwd: worktreePath });
   const hasStagedDocs = await execFile('git', ['diff', '--cached', '--quiet'], { cwd: worktreePath })
     .then(() => false)
     .catch((error: { code?: number }) => {
