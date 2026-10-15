@@ -5643,6 +5643,7 @@ export class Conductor {
   private async runSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    attempt: number,
     retryHint: string | undefined,
     verdictRunId?: string,
     /** The serial lifecycle scope that owns this provider invocation. */
@@ -5653,7 +5654,7 @@ export class Conductor {
     abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
+      return this.runAdmittedSelfBuildDispatch(name, state, attempt, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -5663,13 +5664,14 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
+      return this.runAdmittedSelfBuildDispatch(name, state, attempt, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
     });
   }
 
   private async runAdmittedSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    attempt: number,
     retryHint: string | undefined,
     /**
      * This dispatch's engine-minted verdict identity, for a SHIP-tail verdict
@@ -5788,6 +5790,7 @@ export class Conductor {
       if (usesProviderHome) {
         await this.discardOwnedStepRegionCapture(state, name);
         return this.stepRunner.run(name, state, {
+          attempt,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -5802,15 +5805,15 @@ export class Conductor {
       if (!runId || !featureSlug) {
         throw new Error('Self-host scratch provisioning requires the held runId and featureSlug.');
       }
-      const attempt = (this.legacyTranscriptAttempts.get(name) ?? 0) + 1;
-      this.legacyTranscriptAttempts.set(name, attempt);
+      const legacyAttempt = (this.legacyTranscriptAttempts.get(name) ?? 0) + 1;
+      this.legacyTranscriptAttempts.set(name, legacyAttempt);
       const sandbox = await this.guardrails.provisionSandbox({
         worktreeRoot: this.projectRoot,
         harnessRoot,
         repository: this.projectRoot,
         featureSlug,
         runId,
-        attempt,
+        attempt: legacyAttempt,
         step: name,
         events: this.events,
         injectedToken: daemonToken,
@@ -5824,6 +5827,7 @@ export class Conductor {
       try {
         await this.discardOwnedStepRegionCapture(state, name);
         return await this.stepRunner.run(name, state, {
+          attempt,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -6023,6 +6027,7 @@ export class Conductor {
     }
     try {
       return await this.stepRunner.run(name, state, {
+        attempt,
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
@@ -10836,6 +10841,7 @@ export class Conductor {
                           ? await this.runSelfBuildDispatch(
                               step.name,
                               state,
+                              attempt,
                               retryHint,
                               // D1 scope, self-host path: the verdict gate's
                               // lifecycle `attempt.id` and its sidecar stamp
