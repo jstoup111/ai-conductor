@@ -918,3 +918,22 @@ Governing review: `.docs/decisions/architecture-review-2026-10-14-admitted-whole
 **Done when:**
 - adr-2026-10-12-routed-whole-feature-repair decision 7 is satisfied by this task.
 - The repair for task rem-as-built-W13 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-refusal-51431839-5348-4d88-8273-9c808a3b7887: conductor.ts planRemediation: remove the halts.length>0 halt-disposition return and the fixes.length>0 && routedFixes.length===0 rejection from resolveStackedRoute and restore both, unchanged, at their original position after the leaf append/recordAppendedRemediationTaskIds/seed/commit/recordPendingRepair block, leaving only the routingEligible/routeAdmittedRound admission ahead of readRemediationGateAppendBudget/appendConductorRemediationTasks; add/adjust tests asserting an N=1 (or routing-off) feature with a halt gap or an unadmitted-fix plan produces the same ordering of append/commit calls and the same halt as main
+**Gate:** prd-audit
+**Rationale:** Removal-only rework within decision 51431839 r1. resolveStackedRoute, which runs unconditionally before append at conductor.ts:4394, now holds two checks that must move back. The first is the `halts.length > 0` halt-disposition check (around line 4598). The second is the `fixes.length > 0 && routedFixes.length === 0` rejection (around line 4719). Both return to their original position after the leaf append, record, seed and commit block. The pre-append resolver keeps only the routingEligible/routeAdmittedRound admission. This restores today's behaviour for N=1 and routing-off features (Story 5). No new behaviour is introduced.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 51431839-5348-4d88-8273-9c808a3b7887 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 51431839-5348-4d88-8273-9c808a3b7887 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-51431839-5348-4d88-8273-9c808a3b7887 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-W14: conductor.ts routing branch (+ as-built-routing.ts if needed): split a comma-canonicalised multi-task parentTask (e.g. 'T2,T3') into separate owner task ids before it reaches routeAdmittedRound/citedPathsFor, so deriveTaskBoundOwner resolves the earliest owning host instead of halting 'cannot derive an owner for T2,T3'; add a conductor-level planRemediation test driving an as-built REMEDIABLE finding whose plan-task reference cites 'T2,T3' end-to-end through the contract canonicalisation, asserting the stored routes/r1 item's owner/host is T2's child and no halt
+**Gate:** prd-audit
+**Rationale:** Verified (95%) by reading the code. as-built-contract.ts:447 canonicalises a multi-task plan-task reference to 'T2,T3'. as-built-routing.ts:27 copies that string into parentTask, and conductor.ts:4678 wraps it as the single owner ['T2,T3']. deriveTaskBoundOwner then finds no slice and halts. This is an implementation bug under approved Task 104 and ADR D2, which require each owning task to resolve to its earliest host. No architectural decision is needed.
+**Criterion:** S2.5
+**Parent task:** 104
+**Done when:**
+- [test] S2.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-W14 is committed and its targeted tests pass.
