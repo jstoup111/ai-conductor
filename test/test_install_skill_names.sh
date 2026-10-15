@@ -3,6 +3,7 @@ set -uo pipefail
 
 # Public installer coverage for frontmatter-keyed skill links. Each scenario
 # invokes bin/install against a copied checkout and isolated HOME.
+# Covers: task:9
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
