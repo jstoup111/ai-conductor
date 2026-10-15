@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { StepName } from '../../types/steps.js';
@@ -14,8 +14,13 @@ export type TranscriptRetentionOutcome =
   | 'halted'
   | 'needs-human';
 
+export const TRANSCRIPT_RETENTION_MAX_CAPTURES = 20;
+export const TRANSCRIPT_RETENTION_MAX_BYTES = 1_073_741_824;
+
 export interface TranscriptRetentionDependencies {
   readonly remove?: (path: string) => Promise<void>;
+  readonly maxCaptures?: number;
+  readonly maxBytes?: number;
 }
 
 type CapturedTranscript = {
@@ -29,6 +34,14 @@ type TranscriptEventRecord = {
   readonly step?: unknown;
   readonly path?: unknown;
   readonly interrupted?: unknown;
+  readonly ts?: unknown;
+};
+
+type RetainedCapture = {
+  readonly path: string;
+  readonly size: number;
+  readonly capturedAt: number;
+  readonly order: number;
 };
 
 /**
@@ -39,6 +52,8 @@ type TranscriptEventRecord = {
 export class TranscriptRetention {
   private readonly pending = new Map<StepName, string[]>();
   private readonly remove: (path: string) => Promise<void>;
+  private readonly maxCaptures: number;
+  private readonly maxBytes: number;
   private readonly capturedHandler: EventHandler;
   private readonly reconciliation: Promise<void>;
 
@@ -48,6 +63,8 @@ export class TranscriptRetention {
     dependencies: TranscriptRetentionDependencies = {},
   ) {
     this.remove = dependencies.remove ?? ((path) => rm(path, { recursive: true, force: true }));
+    this.maxCaptures = dependencies.maxCaptures ?? TRANSCRIPT_RETENTION_MAX_CAPTURES;
+    this.maxBytes = dependencies.maxBytes ?? TRANSCRIPT_RETENTION_MAX_BYTES;
     this.capturedHandler = (event) => {
       if (event.type !== 'provider_transcripts_captured') return;
       return this.capture({ step: event.step, path: event.path, interrupted: event.interrupted });
@@ -77,7 +94,7 @@ export class TranscriptRetention {
       case 'stalled':
       case 'halted':
       case 'needs-human':
-        await Promise.all(paths.map((path) => this.retain(path)));
+        for (const path of paths) await this.retain(path);
         return;
     }
     return assertNever(outcome);
@@ -124,13 +141,108 @@ export class TranscriptRetention {
       }
     }
 
-    await Promise.all([...captures.values()]
-      .filter((capture) => !settled.has(capture.path) && existsSync(join(this.worktreePath, capture.path)))
-      .map((capture) => this.retain(capture.path)));
+    for (const capture of captures.values()) {
+      if (!settled.has(capture.path) && existsSync(join(this.worktreePath, capture.path))) {
+        await this.retain(capture.path);
+      }
+    }
   }
 
   private async retain(path: string): Promise<void> {
     await this.events.emit({ type: 'provider_transcripts_retained', path });
+    await this.enforceCap();
+  }
+
+  private async enforceCap(): Promise<void> {
+    const captures = await this.listRetainedCaptures();
+    let totalBytes = captures.reduce((total, capture) => total + capture.size, 0);
+    while (captures.length > 1 && (captures.length > this.maxCaptures || totalBytes > this.maxBytes)) {
+      const capture = captures[0]!;
+      const reason = captures.length > this.maxCaptures ? 'count' : 'size';
+      try {
+        await this.remove(join(this.worktreePath, capture.path));
+        await this.events.emit({ type: 'provider_transcripts_evicted', path: capture.path, reason });
+      } catch (error) {
+        await this.events.emit({
+          type: 'provider_transcripts_retention_failed',
+          path: capture.path,
+          action: 'evict',
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      captures.shift();
+      totalBytes -= capture.size;
+    }
+  }
+
+  private async listRetainedCaptures(): Promise<RetainedCapture[]> {
+    const timestamps = this.retainedCaptureTimestamps();
+    const transcriptsPath = join(this.worktreePath, '.pipeline', 'transcripts');
+    let steps;
+    try {
+      steps = await readdir(transcriptsPath, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const captures: RetainedCapture[] = [];
+    for (const step of steps) {
+      if (!step.isDirectory()) continue;
+      let directories;
+      try {
+        directories = await readdir(join(transcriptsPath, step.name), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const directory of directories) {
+        if (!directory.isDirectory()) continue;
+        const path = join('.pipeline', 'transcripts', step.name, directory.name);
+        const absolutePath = join(this.worktreePath, path);
+        const metadata = await stat(absolutePath).catch(() => undefined);
+        if (metadata === undefined) continue;
+        const timestamp = timestamps.get(path);
+        captures.push({
+          path,
+          size: await directorySize(absolutePath),
+          capturedAt: timestamp?.timestamp ?? metadata.mtimeMs,
+          order: timestamp?.order ?? Number.MAX_SAFE_INTEGER,
+        });
+      }
+    }
+    return captures.sort((left, right) => (
+      left.capturedAt - right.capturedAt || left.order - right.order || left.path.localeCompare(right.path)
+    ));
+  }
+
+  private retainedCaptureTimestamps(): Map<string, { timestamp?: number; order: number }> {
+    const eventsPath = join(this.worktreePath, '.pipeline', 'events.jsonl');
+    let content: string;
+    try {
+      content = readFileSync(eventsPath, 'utf8');
+    } catch {
+      return new Map();
+    }
+    const captures = new Map<string, { timestamp?: number; order: number }>();
+    const retained = new Set<string>();
+    let order = 0;
+    for (const line of content.split('\n')) {
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line) as TranscriptEventRecord;
+        if (typeof event.path !== 'string') continue;
+        if (event.type === 'provider_transcripts_captured') {
+          const timestamp = typeof event.ts === 'string' ? Date.parse(event.ts) : Number.NaN;
+          captures.set(event.path, { ...(Number.isNaN(timestamp) ? {} : { timestamp }), order });
+          order += 1;
+        } else if (event.type === 'provider_transcripts_retained') {
+          retained.add(event.path);
+        }
+      } catch {
+        // A malformed historic row cannot order a capture; directory mtime is the fallback.
+      }
+    }
+    return new Map([...captures].filter(([path]) => retained.has(path)));
   }
 
   private async prune(path: string): Promise<void> {
@@ -146,6 +258,25 @@ export class TranscriptRetention {
       });
     }
   }
+}
+
+async function directorySize(path: string): Promise<number> {
+  let entries;
+  try {
+    entries = await readdir(path, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      total += await directorySize(entryPath);
+    } else if (entry.isFile()) {
+      total += (await stat(entryPath)).size;
+    }
+  }
+  return total;
 }
 
 function isStepName(value: unknown): value is StepName {
