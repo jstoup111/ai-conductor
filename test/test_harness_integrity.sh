@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Covers: task:4, task:8
+# Covers: task:3
 # BEGIN integrity failure reporting
 set -eEuo pipefail
 
@@ -467,10 +468,9 @@ else
 fi
 
 # ── 5b. SKILL.md pin agreement ──────────────────────────────────────────────
-# Consumes `bin/generate-model-table --pins` JSON and compares each
-# skills/*/SKILL.md `model:` pin against the engine-expected value. Exempt
-# skills (PIN_EXEMPT_SKILLS) pass without comparison; skills with no `model:`
-# line are skipped silently (inheriting from session/engine is legal).
+# Consumes `bin/generate-model-table --pins` JSON and compares SKILL.md
+# `model:` pins against engine expectations in both directions. Exempt skills
+# pass without comparison; skills with neither a pin nor an expectation pass.
 # Degrades to WARN (not FAIL) when src/conductor/node_modules is absent, since
 # the generator can't run without a local npm install — this is an
 # environment-availability skip, not a real integrity failure.
@@ -483,52 +483,16 @@ if [ ! -d "${HARNESS_DIR}/src/conductor/node_modules" ]; then
 elif ! command -v jq >/dev/null 2>&1; then
   warn_check "model-table pin check skipped — jq not installed" 1
 else
-  if [ -n "${HARNESS_INTEGRITY_TEST_PINS_JSON:-}" ]; then
-    pins_json=$HARNESS_INTEGRITY_TEST_PINS_JSON
-    pins_exit=0
-  else
-    set +e
-    pins_json=$("${HARNESS_DIR}/bin/generate-model-table" --pins 2>/dev/null)
-    pins_exit=$?
-    set -e
-  fi
-  pin_skills_dir="${HARNESS_INTEGRITY_TEST_SKILLS_DIR:-${HARNESS_DIR}/skills}"
-
-  if [ "$pins_exit" -ne 0 ] || ! echo "$pins_json" | jq -e . >/dev/null 2>&1; then
-    assert "bin/generate-model-table --pins produced parseable JSON" 1
-  else
-    for skill_file in "${pin_skills_dir}"/*/SKILL.md; do
-      [ -f "$skill_file" ] || continue
-      skill_name=$(basename "$(dirname "$skill_file")")
-
-      frontmatter=$(sed -n '2,/^---$/p' "$skill_file" | head -n -1)
-      pinned=$({ echo "$frontmatter" | grep -E '^model:' || true; } | head -1 | sed -E 's/^model:[[:space:]]*//' | tr -d '[:space:]')
-
-      if [ -z "$pinned" ]; then
-        continue
-      fi
-
-      entry=$(echo "$pins_json" | jq -c --arg s "$skill_name" '.[$s] // empty')
-
-      if [ -z "$entry" ]; then
-        assert "${skill_name} — pinned '${pinned}' but not present in --pins output (unmapped)" 1
-        continue
-      fi
-
-      is_exempt=$(echo "$entry" | jq -r '.exempt // false')
-      if [ "$is_exempt" = "true" ]; then
-        assert "${skill_name} — exempt from pin check" 0
-        continue
-      fi
-
-      expected=$(echo "$entry" | jq -r '.expected // empty')
-      if [ "$pinned" = "$expected" ]; then
-        assert "${skill_name} — pin '${pinned}' agrees with expected '${expected}'" 0
-      else
-        assert "${skill_name} — pin/expected disagreement: pinned='${pinned}' expected='${expected}'" 1
-      fi
-    done
-  fi
+  set +e
+  bash "${HARNESS_DIR}/test/check_skill_model_pins.sh"
+  pin_check_exit=$?
+  bash "${HARNESS_DIR}/test/test_skill_model_pins.sh"
+  pin_spec_exit=$?
+  set -e
+  assert "test/check_skill_model_pins.sh — expected-model pins agree in both directions" \
+    "$pin_check_exit"
+  assert "test/test_skill_model_pins.sh — expected-model pin fixture spec" \
+    "$pin_spec_exit"
 fi
 
 # ── 5d. operator_only frontmatter ↔ engine constant agreement ────────────────
