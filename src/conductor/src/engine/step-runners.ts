@@ -2543,6 +2543,7 @@ export class DefaultStepRunner implements StepRunner {
   async assessComplexity(): Promise<
     ComplexityTier | ComplexityAssessment | null
   > {
+    const conductSkillName = await resolveSkillName(this.skillNameRoot, 'conduct');
     if (!this.sessionStartedInitialized && this.pipelineDir) {
       this.sessionStarted = await this.fileExists(join(this.pipelineDir, 'session-created'));
       this.sessionStartedInitialized = true;
@@ -2568,7 +2569,7 @@ export class DefaultStepRunner implements StepRunner {
     const providerResult = await this.executeProviderAwareSkillOneShot(
       'complexity',
       {
-        prompt: '/conduct complexity',
+        prompt: `/${conductSkillName} complexity`,
         dangerouslySkipPermissions: true,
         systemPrompt,
         cwd: this.projectDir,
@@ -2591,7 +2592,7 @@ export class DefaultStepRunner implements StepRunner {
     // Walk the fallback ladder so a dead/out-of-credits configured model
     // (e.g. fable) degrades to the next available one instead of failing.
     const result = await this.modelAvailability.invokeWithLadder(this.provider, {
-      prompt: '/conduct complexity',
+      prompt: `/${conductSkillName} complexity`,
       sessionId: this.sessionId,
       resume: false,
       dangerouslySkipPermissions: true,
@@ -2632,6 +2633,7 @@ export class DefaultStepRunner implements StepRunner {
    * and fails closed on any failure; this method only reaches the provider.
    */
   async dispatchRebaseRegradeJudgement(prompt: string): Promise<{ success: boolean; output?: string }> {
+    const rebaseRegradeSkillName = await resolveSkillName(this.skillNameRoot, REBASE_REGRADE_SKILL);
     const resolved = this.resolvedConfigFor('rebase');
     const llmProvider = this.config?.steps?.rebase?.llm_provider
       ?? this.config?.llm_provider
@@ -2671,14 +2673,14 @@ export class DefaultStepRunner implements StepRunner {
           withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
           onAttempt: this.providerAttempt, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn,
           options,
-          optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation(REBASE_REGRADE_SKILL, providerKey)}\n\n${prompt}` }),
+          optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation(rebaseRegradeSkillName, providerKey)}\n\n${prompt}` }),
         }),
       );
       this.callCount++;
       return { success: dispatched.success, output: dispatched.output };
     }
     const dispatched = await this.provider.invoke({
-      prompt: `${renderAuxiliarySkillInvocation(REBASE_REGRADE_SKILL, this.providerKey)}\n\n${prompt}`,
+      prompt: `${renderAuxiliarySkillInvocation(rebaseRegradeSkillName, this.providerKey)}\n\n${prompt}`,
       sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir,
       model: policy.model, effort: policy.effort,
     });
@@ -2747,6 +2749,7 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   async resolveRebaseConflict(ctx: ResolutionContext): Promise<ResolutionAttempt> {
+    const rebaseSkillName = await resolveSkillName(this.skillNameRoot, 'rebase');
     const conflictList =
       ctx.conflicts.length > 0
         ? ctx.conflicts.join(', ')
@@ -2777,7 +2780,7 @@ export class DefaultStepRunner implements StepRunner {
     const providerResult = await this.executeProviderAwareSkillOneShot(
       'rebase',
       {
-        prompt: '/rebase',
+        prompt: `/${rebaseSkillName}`,
         dangerouslySkipPermissions: true,
         systemPrompt,
         cwd: ctx.projectRoot,
@@ -2800,7 +2803,7 @@ export class DefaultStepRunner implements StepRunner {
     // (rebase defaults to fable) degrades to the next available one — the
     // rebase resolver must not be blocked by one model's credit exhaustion.
     const result = await this.modelAvailability.invokeWithLadder(this.provider, {
-      prompt: '/rebase',
+      prompt: `/${rebaseSkillName}`,
       sessionId,
       resume: false,
       dangerouslySkipPermissions: true,
@@ -4453,6 +4456,7 @@ export class DefaultStepRunner implements StepRunner {
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
     lapGate?: BuildReviewLapGate,
   ): Promise<unknown> {
+    const resolvedSkillName = await resolveSkillName(this.skillNameRoot, branch.skillName);
     const materialized = inputs?.sourceMaterialization?.contextFor(branch.rubric).source;
     const candidateIdentity = (candidate: { providerKey: string; model: string; effort?: string }, effectiveBundleDigest?: string): BuildReviewCacheSemanticIdentity | undefined => {
       const skillDigest = engineIdentity?.skillDigests[branch.rubric];
@@ -4608,7 +4612,7 @@ export class DefaultStepRunner implements StepRunner {
               ...options,
               nativeSchema: getBuildReviewRubricDescriptor(branch.rubric).contract.output.jsonSchema,
               ...(customPolicyLap ? { readOnlyReview: true } : {}),
-              prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
+              prompt: `${renderAuxiliarySkillInvocation(resolvedSkillName, providerKey)}\n\n${prompt}`,
             }),
             ...(customPolicyLap ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
               if (lapGate?.hasOpened) return;
@@ -4623,11 +4627,11 @@ export class DefaultStepRunner implements StepRunner {
               );
               const builtinEntry = { id: branch.rubric, kind: 'builtin' as const, policy: branch.policy };
               const catalog = await this.buildReviewPolicyCatalog!({
-                provider: catalogProvider.id, entry: builtinEntry, skill: branch.skillName,
+                provider: catalogProvider.id, entry: builtinEntry, skill: resolvedSkillName,
                 ...(prepared === undefined ? {} : { preparedEnv: prepared.env, preparedExecutable: prepared.executable, preparedArgs: prepared.args }),
                 ...(prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: prepared.originalCatalogHome }),
               });
-              const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
+              const resolved = resolveInstalledReviewPolicyCatalog({ skill: resolvedSkillName }, catalog);
               if (resolved.kind === 'failure') return;
               const bundle = await this.buildReviewPolicyCapture(resolved.policy, { materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY) });
               await lapGate?.registerPolicy(bundle.materialPath, resolved.policy.packageRoot);
@@ -4667,7 +4671,7 @@ export class DefaultStepRunner implements StepRunner {
                   descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
                   prepareStructured: (value) => stampBuildReviewDispatchedCandidate(value, branch.rubric, projection),
                   options: {
-                    prompt: `${renderAuxiliarySkillInvocation(branch.skillName, context.candidate.providerKey)}\n\n${prompt}`,
+                    prompt: `${renderAuxiliarySkillInvocation(resolvedSkillName, context.candidate.providerKey)}\n\n${prompt}`,
                     cwd: materialized?.headPath ?? this.projectDir,
                     dangerouslySkipPermissions: true,
                     reviewDispatch: true,
@@ -4700,15 +4704,15 @@ export class DefaultStepRunner implements StepRunner {
                   const catalog = await this.buildReviewPolicyCatalog!({
                     provider: catalogProvider.id,
                     entry: builtinEntry,
-                    skill: branch.skillName,
+                    skill: resolvedSkillName,
                     ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
                     ...(context.prepared === undefined ? {} : { preparedExecutable: context.prepared.executable, preparedArgs: context.prepared.args }),
                     ...(context.prepared?.originalCatalogHome === undefined ? {} : { originalCatalogHome: context.prepared.originalCatalogHome }),
                     ...(context.abortSignal === undefined ? {} : { signal: context.abortSignal }),
                     ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
                   });
-                  const resolved = resolveInstalledReviewPolicyCatalog({ skill: branch.skillName }, catalog);
-                  if (resolved.kind === 'failure') throw new Error(`installed ${branch.skillName} policy is unavailable: ${resolved.failure.code}`);
+                  const resolved = resolveInstalledReviewPolicyCatalog({ skill: resolvedSkillName }, catalog);
+                  if (resolved.kind === 'failure') throw new Error(`installed ${resolvedSkillName} policy is unavailable: ${resolved.failure.code}`);
                   builtinPolicy = resolved.policy;
                   builtinBundle = await this.buildReviewPolicyCapture(builtinPolicy, {
                     materialParent: join(this.projectDir, BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY),
@@ -4824,7 +4828,7 @@ export class DefaultStepRunner implements StepRunner {
         descriptor: getBuildReviewRubricDescriptor(branch.rubric).contract,
         prepareStructured: (value) => stampBuildReviewDispatchedCandidate(value, branch.rubric, projection),
         options: {
-          prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
+          prompt: `${renderAuxiliarySkillInvocation(resolvedSkillName, this.providerKey)}\n\n${prompt}`,
           dangerouslySkipPermissions: true,
           cwd: this.projectDir,
           reviewDispatch: true,
@@ -5696,14 +5700,15 @@ export class DefaultStepRunner implements StepRunner {
     // coordinator selected this pass deterministically. The judgment pass is
     // never asked to author, and this pass is never asked to grade.
     if (step === 'finish' && finishProsePass === 'author') {
+      const prSkillName = await resolveSkillName(this.skillNameRoot, 'pr');
       if (revisionGuidance !== undefined) {
         prompt +=
           '\n\nFINISH PR PROSE REVISION — the retained pull request needs a focused reader-facing prose revision. ' +
           `The prior prose judge's objection is:\n> ${revisionGuidance}\n\n` +
           'Revise the retained PR title and body in place to address that objection. ' +
           FINISH_PROSE_DIFF_BUDGET +
-          `Then follow this repository's PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} ` +
-          'invokes it as `$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
+          `Then follow this repository's PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} ` +
+          `invokes it as \`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
           '`Closes` reference), leave every `ai-conductor:step` region and its markers unchanged, and make the prose specific to the ' +
           'delivered behavior. Change nothing else: do not create, push, merge, or ready a pull request, do not alter ' +
           'labels, shipment evidence, or completion files, and do not commit. The publication coordinator re-reads ' +
@@ -5717,8 +5722,8 @@ export class DefaultStepRunner implements StepRunner {
         'placeholder body, so there is no prose to judge yet. Write it. ' +
         FINISH_PROSE_DIFF_BUDGET +
         'Then rewrite the retained PR title and body in place following this repository\'s ' +
-          `PR authoring contract — the \`pr\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/pr\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
-        '`$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
+          `PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
+        `\`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
         '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
         'specific reader-facing content, and leave every `ai-conductor:step` region and its markers unchanged. Change ' +
         'nothing else: do not create, push, merge, or ready a pull request, do not alter labels, ' +
