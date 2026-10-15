@@ -4589,6 +4589,10 @@ export class Conductor {
       }
       | undefined
     > {
+    // A mixed or unresolvable work order belongs to the ordinary remediation
+    // path, which owns its existing halt detail. Do not admit a routed round
+    // for only the resolvable subset.
+    if (halts.length > 0) return undefined;
     // This is the single dark-launch decision point for an admitted repair
     // lap.  The existing remediation route remains byte-for-byte authoritative
     // on either result until the route writer/settler feature lands; making
@@ -4601,7 +4605,8 @@ export class Conductor {
       // budget receipt, restage, or routing-ref allocation beyond admission.
       if (routingEligible(cursor, this.config)) {
         const ordinaryTarget = earliestRemediationTarget(routedFixes, steps);
-        if (ordinaryTarget.unresolved.length === 0 && ordinaryTarget.target === 'build' && planPath) {
+        if (ordinaryTarget.unresolved.length > 0) return undefined;
+        if (ordinaryTarget.target === 'build' && planPath) {
           const envelope = await readCoverageBindingEnvelope(this.projectRoot, {
             readFile: (path) => readFile(path, 'utf8'), mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
             writeFile: (path, contents) => writeFile(path, contents, 'utf8'), rename,
