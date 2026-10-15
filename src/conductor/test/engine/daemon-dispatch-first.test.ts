@@ -1,6 +1,8 @@
 // Covers: task:4
+// Covers: task:5
 import { describe, expect, it } from 'vitest';
 import { runDaemon, type BacklogItem, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
+import { DaemonMaintenance } from '../../src/engine/daemon-maintenance.js';
 
 const done = (slug: string): FeatureOutcome => ({ slug, status: 'done' });
 
@@ -36,6 +38,63 @@ function depsFor(
 }
 
 describe('dispatch-first startup maintenance', () => {
+  it('reuses the startup base for rekick without a second refresh', async () => {
+    const log: string[] = [];
+    let startupRefreshes = 0;
+    const rekicks: string[] = [];
+
+    await runDaemon(depsFor(log, [{ slug: 'first' }], {
+      discoverBacklog: async ({ refresh }) => {
+        log.push(`discover:${refresh}`);
+        if (refresh) startupRefreshes++;
+        return refresh ? [{ slug: 'first' }] : [];
+      },
+      readPersistedBaseSha: async () => 'A',
+      resolveBaseSha: async ({ refresh }) => {
+        log.push(`base:${refresh}`);
+        return 'S';
+      },
+      rekickSweep: async (sha) => { rekicks.push(sha); },
+    }), { concurrency: 1, once: true, maxItems: 1 });
+
+    expect(startupRefreshes).toBe(1);
+    expect(rekicks).toEqual(['S']);
+    expect(log).toContain('base:false');
+    expect(log).not.toContain('base:true');
+  });
+
+  it('seeds a missing persisted base without a rekick sweep', async () => {
+    const log: string[] = [];
+    const rekicks: string[] = [];
+    const persisted: string[] = [];
+
+    await runDaemon(depsFor(log, [{ slug: 'first' }], {
+      readPersistedBaseSha: async () => null,
+      writePersistedBaseSha: async (sha) => { persisted.push(sha); },
+      resolveBaseSha: async ({ refresh }) => {
+        log.push(`base:${refresh}`);
+        return 'S';
+      },
+      rekickSweep: async (sha) => { rekicks.push(sha); },
+    }), { concurrency: 1, once: true, maxItems: 1 });
+
+    expect(rekicks).toEqual([]);
+    expect(persisted).toEqual(['S']);
+    expect(log).toContain('base:false');
+    expect(log).not.toContain('base:true');
+  });
+
+  it('starts the later refresh interval at the startup refresh', () => {
+    let now = 100;
+    const maintenance = new DaemonMaintenance(() => 0, () => false, 50, () => now);
+
+    maintenance.recordRefresh(now);
+    now = 149;
+    expect(maintenance.refreshStartable()).toBe(false);
+    now = 150;
+    expect(maintenance.refreshStartable()).toBe(true);
+  });
+
   it.each([1, 3])('claims before maintenance at width %i', async (concurrency) => {
     const log: string[] = [];
     let atFirstDispatch: string[] = [];

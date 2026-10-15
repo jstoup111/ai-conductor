@@ -141,6 +141,11 @@ export class DaemonMaintenance {
     return this.refreshDue() && this.permits('refresh');
   }
 
+  /** Records a completed refresh so later refreshes respect its interval. */
+  recordRefresh(at: number): void {
+    this.lastRefreshAt = at;
+  }
+
   /**
    * The origin refresh, rate-limited to the refresh interval. The dispatcher
    * runs it off its loop and folds the result (and its re-kick) into a later
@@ -153,7 +158,7 @@ export class DaemonMaintenance {
     try {
       return await this.run('refresh', refresh);
     } finally {
-      this.lastRefreshAt = this.now();
+      this.recordRefresh(this.now());
     }
   }
 

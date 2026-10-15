@@ -1128,15 +1128,20 @@ export async function runDaemon(
    * Re-evaluated at the same call sites as the fill-pool pause check, so
    * lifting the pause mid-run makes re-kick eligible again at the next call.
    */
-  const maybeRekick = async (refresh: boolean): Promise<void> => {
-    if (!deps.resolveBaseSha) return;
+  const maybeRekick = async (
+    refresh: boolean,
+    knownCurrent?: string | null,
+  ): Promise<void> => {
     if (await checkPaused()) return;
-    let current: string | null = null;
-    try {
-      current = await deps.resolveBaseSha({ refresh });
-    } catch (err) {
-      log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
-      return;
+    let current = knownCurrent;
+    if (current === undefined) {
+      if (!deps.resolveBaseSha) return;
+      try {
+        current = await deps.resolveBaseSha({ refresh });
+      } catch (err) {
+        log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
+        return;
+      }
     }
     if (!current) return; // unresolved → no advance this tick (FR-10)
     if (current === lastSeenSha) return; // no advance (PR #109 invariant preserved)
@@ -1218,7 +1223,7 @@ export async function runDaemon(
     ['startup-dashboard', async () => {
       if (!pausedAtBoot) await deps.renderStartupDashboard?.();
     }],
-    ['rekick', async () => maybeRekick(true)],
+    ['rekick', async () => maybeRekick(false, startupBaseSha)],
     ['resume-authorizations', async () => deps.consumeResumeAuthorizations?.()],
     ['reconcileHaltPrs', async () => deps.reconcileHaltPrs?.()],
     ['reconcileParkedFeatures', async () => deps.reconcileParkedFeatures?.({
@@ -1235,6 +1240,18 @@ export async function runDaemon(
   // resolved base through rekick and the refresh throttle; Task 4 only keeps
   // this refreshed discovery ahead of the first eligibility pass.
   const startupBacklog = await deps.discoverBacklog({ refresh: true });
+  maintenance.recordRefresh(now());
+  // The startup discovery has already refreshed origin. Resolve its local base
+  // once so the deferred rekick can use this exact boundary without fetching.
+  let startupBaseSha: string | null | undefined;
+  if (deps.resolveBaseSha) {
+    try {
+      startupBaseSha = await deps.resolveBaseSha({ refresh: false });
+    } catch (err) {
+      log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
+      startupBaseSha = null;
+    }
+  }
 
   // Stale-engine restart gate chain (Task 12, gates 1-4) — constant per run.
   const staleGatesArmed =
