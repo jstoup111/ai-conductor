@@ -149,7 +149,7 @@ vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
   };
 });
 
-import { Conductor, navigateBack, type StepRunner } from '../../src/engine/conductor.js';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { childBranchFor, leafBranchFor } from '../../src/engine/feature-branch-identity.js';
@@ -710,10 +710,6 @@ describe('Conductor residue routing judge binding', () => {
       expect.objectContaining({ type: 'routed_repair_phase', roundId: 'r1', phase: 'admitted' }),
       expect.objectContaining({ type: 'remediation_routed', roundId: 'r1' }),
     ]);
-
-    // Production callers invoke this immediately after `planRemediation`
-    // returns the route; the spine must be complete before that rewind.
-    navigateBack({ architecture_review_as_built: 'done' } as ConductState, 'build', ALL_STEPS);
   });
 
   // Covers: task:rem-as-built-W12
