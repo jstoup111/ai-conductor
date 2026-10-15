@@ -141,6 +141,7 @@ import {
 } from './provider-model-policy.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import { EventPersister } from './event-persister.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import { StepInFlightTicker } from './step-in-flight-ticker.js';
@@ -4738,7 +4739,13 @@ export class Conductor {
             if (created.kind !== 'created') return { kind: 'halt', haltClass: 'needs-human', detail: `routing record creation failed: ${created.kind}` };
             const firstHost = routed.hosts[0];
             if (firstHost === undefined) return { kind: 'halt', haltClass: 'needs-human', detail: 'routing produced no host' };
-            const admission = await admitRound(this.projectRoot, this.featureSlug, created.record, firstHost);
+            const routingEvents = new EventPersister(
+              join(this.projectRoot, '.pipeline', 'events.jsonl'),
+              this.events,
+            );
+            const admission = await admitRound(this.projectRoot, this.featureSlug, created.record, firstHost, {
+              persist: (event) => routingEvents.persistDurably(event),
+            });
             if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
             return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
           }

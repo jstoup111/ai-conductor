@@ -1,10 +1,23 @@
 import type { ChildId } from '../child-context.js';
 import { makeGitRunner } from '../rebase.js';
 import { remediationRoutedEvent, withOutboxEvent } from './routing-events.js';
-import { readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction, type RouteRecordStoreDependencies } from './route-record-store.js';
+import {
+  drainOutbox,
+  readRepairMarker,
+  readRouteRecord,
+  transitionHost,
+  writeRoutingTransaction,
+  type PersistOutboxEvent,
+  type RouteRecordStoreDependencies,
+} from './route-record-store.js';
 import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord } from './route-types.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string };
+
+/** Admission may deliver its durable route occurrences only after its marker transaction commits. */
+export type AdmitRoundDependencies = RouteRecordStoreDependencies & {
+  readonly persist?: PersistOutboxEvent;
+};
 
 /** Atomically records the first host marker and the corresponding event outbox. */
 export async function admitRound(
@@ -12,7 +25,7 @@ export async function admitRound(
   slug: string,
   record: RouteRecord,
   firstHost: ChildId,
-  dependencies: RouteRecordStoreDependencies = {},
+  dependencies: AdmitRoundDependencies = {},
 ): Promise<AdmitRoundResult> {
   const marker = await readRepairMarker(worktree, slug, dependencies);
   if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open; cannot admit ${record.roundId}` : 'routing marker is unreadable' };
@@ -28,7 +41,23 @@ export async function admitRound(
     { kind: 'update-record', previous: stored, record: next },
     { kind: 'create-marker', marker: { host: firstHost, roundId: record.roundId } },
   ], dependencies);
-  return wrote.kind === 'updated' ? { kind: 'admitted', record: next } : { kind: 'refused', detail: `routing admission refused: ${wrote.kind}` };
+  if (wrote.kind !== 'updated') return { kind: 'refused', detail: `routing admission refused: ${wrote.kind}` };
+
+  // The outbox is the transaction's durable handoff: do not return a BUILD
+  // route until every admission occurrence has reached the canonical spine.
+  // A failed or contested removal leaves the event envelope durable for the
+  // resume preflight to replay, but refuses this attempt to navigate early.
+  if (dependencies.persist !== undefined) {
+    const admitted = await readRouteRecord(worktree, slug, record.roundId, dependencies);
+    if (admitted.kind !== 'record') {
+      return { kind: 'refused', detail: 'routing admission record is unavailable after marker transaction' };
+    }
+    const drained = await drainOutbox(worktree, admitted, dependencies.persist, dependencies);
+    if (drained.kind !== 'drained') {
+      return { kind: 'refused', detail: `routing admission event delivery refused: ${drained.kind}` };
+    }
+  }
+  return { kind: 'admitted', record: next };
 }
 
 export type ReconcileRoundsResult =

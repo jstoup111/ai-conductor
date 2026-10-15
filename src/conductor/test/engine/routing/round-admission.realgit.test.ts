@@ -1,5 +1,5 @@
-// Covers: tasks:40,41,42,101,102
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+// Covers: tasks:40,41,42,101,102, task:rem-as-built-W13
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -11,6 +11,8 @@ import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTrans
 import { repairMarkerRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const c1 = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
@@ -46,11 +48,26 @@ describe('routed-round admission (real local Git)', () => {
       const created = await createRouteRecord(subject.repo, 'demo', input, { git });
       if (created.kind !== 'created') throw new Error(created.kind);
       expect(created.record).toMatchObject({ phase: 'prepared', hosts: { 1: 'pending' }, outbox: [] });
-      const admitted = await admitRound(subject.repo, 'demo', created.record, c1, { git });
+      const eventsPath = join(subject.repo, '.pipeline', 'events.jsonl');
+      const persister = new EventPersister(eventsPath, new ConductorEventEmitter());
+      const admitted = await admitRound(subject.repo, 'demo', created.record, c1, {
+        git,
+        persist: (event) => persister.persistDurably(event),
+      });
       expect(admitted).toMatchObject({ kind: 'admitted', record: { phase: 'open', hosts: { 1: 'admitted' } } });
       expect(await readRepairMarker(subject.repo, 'demo')).toMatchObject({ kind: 'marker', marker: { roundId, host: c1 } });
+      // `admitRound` does not return the route that its caller passes to
+      // navigateBack until both admission occurrences are in the spine.
+      expect((await readFile(eventsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+        expect.objectContaining({ type: 'routed_repair_phase', roundId, host: c1, phase: 'admitted', credit: false }),
+        expect.objectContaining({ type: 'remediation_routed', roundId }),
+      ]);
+      expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({
+        kind: 'record',
+        record: { outbox: [] },
+      });
       const writes = calls.filter((call) => call.args[0] === 'update-ref');
-      expect(writes).toHaveLength(2);
+      expect(writes).toHaveLength(4);
       expect(writes[1]?.input).toContain(`update ${repairMarkerRefFor('demo')}`);
       expect(writes[1]?.input).toContain('verify refs/conductor/demo/restack/journal ');
     } finally { await rm(subject.repo, { recursive: true, force: true }); }

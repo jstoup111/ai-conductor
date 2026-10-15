@@ -46,9 +46,19 @@ vi.mock('../../src/engine/routing/route-record-store.js', async (importOriginal)
 
 vi.mock('../../src/engine/routing/round-admission.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/routing/round-admission.js')>(),
-  admitRound: vi.fn(async (_worktree, _slug, record) => {
+  admitRound: vi.fn(async (_worktree, _slug, record, firstHost, dependencies) => {
     routingMutationSpy.calls.push('admit-marker');
-    return { kind: 'admitted' as const, record };
+    const admitted = {
+      ...record,
+      phase: 'open' as const,
+      hosts: { ...record.hosts, [firstHost]: 'admitted' as const },
+    };
+    if (dependencies?.persist) {
+      const events = await import('../../src/engine/routing/routing-events.js');
+      await dependencies.persist(events.routedRepairPhaseEvent(record.roundId, firstHost, 'admitted', false));
+      await dependencies.persist(events.remediationRoutedEvent(admitted));
+    }
+    return { kind: 'admitted' as const, record: admitted };
   }),
 }));
 
@@ -139,7 +149,7 @@ vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
   };
 });
 
-import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { Conductor, navigateBack, type StepRunner } from '../../src/engine/conductor.js';
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { childBranchFor, leafBranchFor } from '../../src/engine/feature-branch-identity.js';
@@ -653,8 +663,8 @@ describe('Conductor residue routing judge binding', () => {
     expect(outcome.hint).toContain(failRows[1]!);
   });
 
-  // Covers: task:rem-as-built-W12
-  it('creates and admits a routed round before any leaf-side repair writer runs', async () => {
+  // Covers: task:rem-as-built-W12, task:rem-as-built-W13
+  it('persists an admitted routed round before returning the build route that navigates back', async () => {
     await persistAsBuiltVerdict(projectRoot, {
       version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
       findings: [{
@@ -693,6 +703,17 @@ describe('Conductor residue routing judge binding', () => {
 
     expect(outcome).toMatchObject({ kind: 'route' });
     expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
+    expect((await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ type: 'routed_repair_phase', roundId: 'r1', phase: 'admitted' }),
+      expect.objectContaining({ type: 'remediation_routed', roundId: 'r1' }),
+    ]);
+
+    // Production callers invoke this immediately after `planRemediation`
+    // returns the route; the spine must be complete before that rewind.
+    navigateBack({ architecture_review_as_built: 'done' } as ConductState, 'build', ALL_STEPS);
   });
 
   // Covers: task:rem-as-built-W12
