@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
-import * as routeRecordStore from '../../../src/engine/routing/route-record-store.js';
+import { nextRoundId } from '../../../src/engine/routing/route-record-store.js';
 import {
   isLegalHostTransition,
   isLegalRoundPhaseTransition,
@@ -72,22 +72,22 @@ describe('routing transitions and round allocation', () => {
   it('allocates the next bounded route round without writing refs', async () => {
     const fixture = await createRepo();
     try {
-      const nextRoundId = (routeRecordStore as unknown as {
-        nextRoundId: (worktree: string, slug: string, dependencies?: { readonly git?: GitRunner }) => Promise<unknown>;
-      }).nextRoundId;
-      expect(await nextRoundId(fixture.repo, 'demo')).toBe('r1');
-
-      await writeRouteRef(fixture.git, 'r1');
-      await writeRouteRef(fixture.git, 'r2');
-      expect(await nextRoundId(fixture.repo, 'demo')).toBe('r3');
-
-      await writeRouteRef(fixture.git, 'r999');
       const calls: string[][] = [];
       const git: GitRunner = async (args, options) => {
         calls.push([...args]);
         return fixture.git(args, options);
       };
-      expect({ result: await nextRoundId(fixture.repo, 'demo', { git }), writes: calls.filter(([command]) => ['hash-object', 'update-ref'].includes(command)) }).toEqual({
+      const writes = () => calls.filter(([command]) => ['hash-object', 'update-ref'].includes(command));
+      expect({ result: await nextRoundId(fixture.repo, 'demo', { git }), writes: writes() }).toEqual({ result: 'r1', writes: [] });
+
+      await writeRouteRef(fixture.git, 'r1');
+      await writeRouteRef(fixture.git, 'r2');
+      calls.length = 0;
+      expect({ result: await nextRoundId(fixture.repo, 'demo', { git }), writes: writes() }).toEqual({ result: 'r3', writes: [] });
+
+      await writeRouteRef(fixture.git, 'r999');
+      calls.length = 0;
+      expect({ result: await nextRoundId(fixture.repo, 'demo', { git }), writes: writes() }).toEqual({
         result: { kind: 'round-limit' },
         writes: [],
       });
