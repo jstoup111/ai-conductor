@@ -22,6 +22,8 @@ import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
 import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { DaemonMaintenance, MaintenanceJob } from './daemon-maintenance.js';
+import { timeMaintenancePhase } from './maintenance-phase-timer.js';
+import type { RepairQueue, RepairRequest } from './repair-queue.js';
 import type { FeatureTerminalEffects } from './feature-executor.js';
 import { isOperatorActionHalt, type HaltDisposition } from './halt-marker.js';
 
@@ -206,6 +208,14 @@ export interface DaemonSweepContext {
 }
 
 export interface DaemonDeps {
+  /** Dispatcher-owned repairs compete with features for the same pool slots. */
+  repairQueue?: RepairQueue;
+  /** Executes a claim-time validated repair. */
+  runRepair?: (request: RepairRequest) => Promise<void>;
+  /** Resolves a repair slug into the existing feature priority band. */
+  repairPriority?: (slug: string | undefined) => string | undefined;
+  /** Optional event-spine projection for maintenance timing. */
+  emitMaintenancePhase?: (event: Extract<import('../types/events.js').ConductorEvent, { type: 'daemon_maintenance_phase' }>) => void | Promise<void>;
   /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
   onTick?: (snapshot: DaemonTickSnapshot) => void;
   /** Most recent real discovery pass, supplied by the production WorkSource. */
@@ -656,6 +666,7 @@ export interface DaemonResult {
 
 /** A runFeature promise tagged with its slug so a race can identify the winner. */
 type Tagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
+type RepairTagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
 
 /**
  * Task 1 (#651): the park check consulted immediately before every
@@ -914,7 +925,7 @@ export async function runDaemon(
     () => claims.list(),
     options.concurrency,
   );
-  const workers: Array<{ slug: string; tagged: Tagged }> = [];
+  const workers: Array<{ slug: string; tagged: Tagged | RepairTagged }> = [];
   // Keep one completion observer for the current worker set. A busy poll must
   // not race every timer tick directly against live workers: every losing race
   // leaves another reaction attached until that worker settles.
@@ -1014,6 +1025,36 @@ export async function runDaemon(
     return true;
   };
 
+  const repairClaim = (request: RepairRequest): string => `repair:${request.prUrl}`;
+  const repairBand = (request: RepairRequest): [number, string] => {
+    const band = deps.repairPriority?.(request.slug);
+    const rank = band && /^P[0-9]+$/i.test(band) ? Number(band.slice(1)) : Number.MAX_SAFE_INTEGER;
+    return [rank, request.prCreatedAt];
+  };
+  const startRepair = async (request: RepairRequest): Promise<boolean> => {
+    const claim = repairClaim(request);
+    if (!claims.claim(claim)) return false;
+    const tagged: RepairTagged = (async () => {
+      try {
+        if (deps.emitMaintenancePhase) {
+          await timeMaintenancePhase('repair', () => deps.runRepair?.(request) ?? Promise.resolve(), {
+            now,
+            emit: async (event) => deps.emitMaintenancePhase?.({ ...event, prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) }),
+          });
+        } else {
+          await deps.runRepair?.(request);
+        }
+        return { slug: claim, outcome: { slug: claim, status: 'done' } };
+      } catch (error) {
+        log(`[daemon] repair ${request.prUrl} error: ${error instanceof Error ? error.message : String(error)}`);
+        return { slug: claim, outcome: { slug: claim, status: 'error', reason: error instanceof Error ? error.message : String(error) } };
+      }
+    })();
+    workers.push({ slug: claim, tagged });
+    observeWorkerSet();
+    return true;
+  };
+
   // Task 1 (#651): park check immediately before every build-start, closing
   // the selection→dispatch race — pickEligible's selection-time check
   // (:137) can pass, then `await rebuildAndMaybeRestartForStaleEngine()`
@@ -1032,6 +1073,12 @@ export async function runDaemon(
     const workerIndex = workers.findIndex((worker) => worker.slug === slug);
     if (workerIndex >= 0) workers.splice(workerIndex, 1);
     observeWorkerSet();
+    // Repairs are pool work, not feature lifecycle work: they must free their
+    // reserved claim without consuming feature ceilings or terminal effects.
+    if (slug.startsWith('repair:')) {
+      maintenanceJob.trigger();
+      return;
+    }
     await deps.onFeatureTerminalEffects?.(outcome);
     // A terminal collection is a maintenance trigger, not an inline sweep:
     // a slow reconciler must never hold the slot-release path hostage.
@@ -1194,22 +1241,37 @@ export async function runDaemon(
   // the claim attempt.
   let pausedAtBoot = false;
   let startupDashboardPending = true;
+  const runPhase = async (phase: import('../types/events.js').MaintenancePhase, run: () => Promise<void>): Promise<void> => {
+    if (!deps.emitMaintenancePhase) return run();
+    await timeMaintenancePhase(phase, run, { now, emit: deps.emitMaintenancePhase });
+  };
   const maintenanceJob = new MaintenanceJob([
     ['startup-dashboard', async () => {
       if (!startupDashboardPending) return;
       startupDashboardPending = false;
-      if (!pausedAtBoot) await deps.renderStartupDashboard?.();
+      await runPhase('startup-dashboard', async () => {
+        if (!pausedAtBoot) await deps.renderStartupDashboard?.();
+      });
     }],
-    ['rekick', async () => maybeRekick(false, startupBaseSha)],
+    ['rekick', async () => {
+      // A pure scheduler caller with no re-kick hooks has no mutable base
+      // state to reconcile; avoid an extra pause-marker read in that mode.
+      if (!deps.rekickSweep && !deps.resolveBaseSha) {
+        // Telemetry still records the no-op phase; only legacy pure-core
+        // callers avoid an otherwise-observable pause read.
+        if (deps.emitMaintenancePhase) await runPhase('rekick', async () => {});
+        return;
+      }
+      await runPhase('rekick', () => maybeRekick(false, startupBaseSha));
+    }],
     ['resume-authorizations', async () => deps.consumeResumeAuthorizations?.()],
-    ['reconcileHaltPrs', async () => deps.reconcileHaltPrs?.()],
-    ['reconcileParkedFeatures', async () => deps.reconcileParkedFeatures?.({
-      disposeHaltWatcher: disposeWatcher,
-      isFeatureInFlight: (slug) => inFlight.has(slug),
+    ['reconcileHaltPrs', async () => runPhase('halt-pr-reconcile', async () => { await deps.reconcileHaltPrs?.(); })],
+    ['reconcileParkedFeatures', async () => runPhase('parked-reconcile', async () => {
+      await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight: (slug) => inFlight.has(slug) });
     })],
-    ['sweepProviderScratch', async () => deps.sweepProviderScratch?.()],
-    ['sweepMergeableLabels', async () => deps.sweepMergeableLabels?.({
-      isFeatureInFlight: (slug) => inFlight.has(slug),
+    ['sweepProviderScratch', async () => runPhase('provider-scratch', async () => { await deps.sweepProviderScratch?.(); })],
+    ['sweepMergeableLabels', async () => runPhase('mergeable-sweep', async () => {
+      await deps.sweepMergeableLabels?.({ isFeatureInFlight: (slug) => inFlight.has(slug) });
     })],
   ], log);
 
@@ -1217,8 +1279,15 @@ export async function runDaemon(
   // resolved base through rekick and the refresh throttle; Task 4 only keeps
   // this refreshed discovery ahead of the first eligibility pass.
   let startupBacklog: BacklogItem[] | undefined;
+  const firstClaimScanStartedAt = now();
   try {
-    startupBacklog = await deps.discoverBacklog({ refresh: true });
+    if (deps.emitMaintenancePhase) {
+      await timeMaintenancePhase('startup-refresh', async () => {
+        startupBacklog = await deps.discoverBacklog({ refresh: true });
+      }, { now, emit: deps.emitMaintenancePhase });
+    } else {
+      startupBacklog = await deps.discoverBacklog({ refresh: true });
+    }
     maintenance.recordRefresh(now());
   } catch (err) {
     log(`[daemon] startup origin refresh failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1385,6 +1454,7 @@ export async function runDaemon(
   // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
   let staleAlreadyHandledByPreflight = false;
   let firstFillPass = true;
+  let firstClaimEmitted = false;
   let startupMaintenanceTriggered = false;
   const triggerStartupMaintenance = (): void => {
     if (!firstFillPass) return;
@@ -1400,6 +1470,7 @@ export async function runDaemon(
     gh_version: false,
     episode_active: false,
   };
+  const deferredRepairEpisodes = new Set<string>();
 
   while (true) {
     if (deps.shouldStop?.()) {
@@ -1480,7 +1551,37 @@ export async function runDaemon(
       // before resume authorizations are consumed by background maintenance.
       // Subsequent fill passes retain the established authorization behavior.
       if (!firstFillPass) await deps.consumeResumeAuthorizations?.();
-      if (!paused && !episodeActive && !buildAuthMissing && !ghVersionBlocked) {
+      const dispatchBlocked = paused || episodeActive || buildAuthMissing || ghVersionBlocked;
+      if (dispatchBlocked && deps.repairQueue?.list().length && deps.emitMaintenancePhase) {
+        const reason = paused ? 'paused' : episodeActive ? 'episode' : buildAuthMissing ? 'build-auth' : 'gh-version';
+        for (const request of deps.repairQueue.list()) {
+          const key = `${reason}:${request.prUrl}`;
+          if (deferredRepairEpisodes.has(key)) continue;
+          deferredRepairEpisodes.add(key);
+          void deps.emitMaintenancePhase({ type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 0, outcome: 'deferred', prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) });
+        }
+      }
+      if (!dispatchBlocked) {
+        deferredRepairEpisodes.clear();
+        // Repairs always receive an available pool slot before a new feature.
+        // Sorting is stable by priority band, then oldest PR, independent of
+        // enqueue timing; removal happens only after a successful claim.
+        const repairs = deps.repairQueue?.list().slice().sort((a, b) => {
+          const [aRank, aCreated] = repairBand(a);
+          const [bRank, bCreated] = repairBand(b);
+          return aRank - bRank || aCreated.localeCompare(bCreated);
+        }) ?? [];
+        const repair = repairs[0];
+        if (repair && deps.repairQueue?.takeByUrl(repair.prUrl)) {
+          if (await startRepair(repair)) {
+            triggerStartupMaintenance();
+            idlePolls = 0;
+            continue;
+          }
+          // A duplicate claim is still live; leave the request available for
+          // a later pass instead of silently losing it.
+          deps.repairQueue.enqueue(repair);
+        }
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
         const parkedBeforeLocal = new Set(claims.listParked());
@@ -1528,6 +1629,10 @@ export async function runDaemon(
         }
         // Task 1 (#651): re-check park immediately before this dispatch — closes
         // the selection→dispatch race opened by the rebuild/restart await above.
+        if (deps.emitMaintenancePhase && !firstClaimEmitted) {
+          await deps.emitMaintenancePhase({ type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: now() - firstClaimScanStartedAt, outcome: 'completed', slug: next.slug });
+          firstClaimEmitted = true;
+        }
         const dispatched = await guardedDispatch(next);
         // Do not start the job until the guarded claim has either dispatched
         // or refused.  Calling trigger earlier would let its synchronous
