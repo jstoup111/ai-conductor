@@ -133,7 +133,7 @@ describe('run-vitest startup', () => {
 
     expect(result.exitCode).toBe(0);
     expect(observations.map((observation) => observation.argv)).toEqual(
-      Array.from({ length: 64 }, (_, index) => ['run', '--reporter=dot', `--shard=${index + 1}/64`]),
+      Array.from({ length: 128 }, (_, index) => ['run', '--reporter=dot', `--shard=${index + 1}/128`]),
     );
   });
 
