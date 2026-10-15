@@ -618,31 +618,23 @@ else
       ;;
   esac
 
-  # Fixture sub-test: prove --check CAN detect drift. Back up the committed
-  # artifact, corrupt the working copy in place, run --check (expect exit 1),
-  # then restore byte-for-byte — via trap so a failed assertion still restores.
-  docs_guard_hook_path="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
-  docs_guard_hook_backup="$(mktemp)"
-  cp "$docs_guard_hook_path" "$docs_guard_hook_backup"
-
-  _restore_docs_guard_hook() {
-    cp "$docs_guard_hook_backup" "$docs_guard_hook_path"
-    rm -f "$docs_guard_hook_backup"
-  }
-  trap _restore_docs_guard_hook EXIT
-
-  printf '\n# deliberately corrupted for drift-detection fixture test\n' >> "$docs_guard_hook_path"
-
   set +e
-  docs_guard_hook_fixture_output=$("${HARNESS_DIR}/bin/generate-docs-guard-hook" --check 2>&1)
-  docs_guard_hook_fixture_exit=$?
+  docs_guard_fixture_checker_output=$(bash "${HARNESS_DIR}/test/check_docs_guard_drift_fixture.sh" 2>&1)
+  docs_guard_fixture_checker_exit=$?
+  docs_guard_fixture_spec_output=$(bash "${HARNESS_DIR}/test/test_docs_guard_drift_fixture.sh" 2>&1)
+  docs_guard_fixture_spec_exit=$?
   set -e
+  if [ "$docs_guard_fixture_checker_exit" -ne 0 ]; then
+    echo "$docs_guard_fixture_checker_output" | sed 's/^/    /'
+  fi
+  if [ "$docs_guard_fixture_spec_exit" -ne 0 ]; then
+    echo "$docs_guard_fixture_spec_output" | sed 's/^/    /'
+  fi
 
-  _restore_docs_guard_hook
-  trap - EXIT
-
-  assert "bin/generate-docs-guard-hook --check — fixture: corrupted hook correctly detected as drift (exit 1)" \
-    "$([ "$docs_guard_hook_fixture_exit" -eq 1 ] && echo 0 || echo 1)"
+  assert "test/check_docs_guard_drift_fixture.sh — generator detects drift against a temporary copy" \
+    "$docs_guard_fixture_checker_exit"
+  assert "test/test_docs_guard_drift_fixture.sh — temporary-copy drift fixture preserves the tracked hook" \
+    "$docs_guard_fixture_spec_exit"
 fi
 
 # ── 6. Template references ──────────────────────────────────────────────────
