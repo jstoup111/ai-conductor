@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:6, task:10
+// Covers: task:1, task:2, task:3, task:6, task:7, task:10
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
