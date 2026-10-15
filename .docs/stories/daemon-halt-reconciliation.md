@@ -26,7 +26,8 @@ dispatch, so that on restart I immediately see what is parked, half-built, eligi
 - Given two worktrees with a live `.pipeline/HALT`, one worktree with a `conduct-state.json`
   and no HALT, three eligible merged specs, and nine `.daemon/processed/` entries, when the
   daemon starts, then it prints a dashboard with four groups — `HALTED (2)`, `IN-PROGRESS (1)`,
-  `ELIGIBLE (3)`, `PROCESSED (9)` — **before** the first `▶ start` dispatch line.
+  `ELIGIBLE (3)`, `PROCESSED (9)` — once at startup, as the first step of the background
+  maintenance job that begins after the first claim attempt (adr-2026-10-14-dispatch-first-daemon-maintenance D3).
 - Given a halted worktree, when the dashboard renders, then its line shows the slug and the
   first line / summary of the reason read from `.pipeline/HALT`.
 - Given an in-progress worktree whose `conduct-state.json` has `build: in_progress`, when the
@@ -45,7 +46,7 @@ dispatch, so that on restart I immediately see what is parked, half-built, eligi
 
 ### Done When
 - [ ] Startup emits a four-group dashboard with correct per-group counts and member lines.
-- [ ] Dashboard is printed before any dispatch occurs (ordering asserted in a test).
+- [ ] Dashboard is printed once at startup, after the first claim attempt and before the startup re-kick (ordering asserted in a test).
 - [ ] Each group's membership rule (halted > processed > in-progress > eligible precedence) is
       covered by a test with an overlapping slug.
 - [ ] Dashboard text appears on both stdout and the log sink.

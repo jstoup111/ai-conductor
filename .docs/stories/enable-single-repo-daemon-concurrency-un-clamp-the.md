@@ -37,15 +37,15 @@ opt in are untouched.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given effective concurrency 1, when the daemon runs a backlog of features, then dispatch order, gate evaluation points (refresh, sweeps, stale-engine, restart), and log output shape match the pre-change daemon.
-- Given the existing daemon test corpus, when it runs against the refactored daemon at concurrency 1, then it passes without semantic edits (mechanical renames allowed).
+- Given effective concurrency 1, when the daemon runs a backlog of features with no repairs queued, then feature claim order, gate evaluation, and their log output match the pre-change daemon; maintenance runs in the background job of adr-2026-10-14-dispatch-first-daemon-maintenance.
+- Given the existing daemon test corpus, when it runs against the refactored daemon at concurrency 1, then it passes without semantic edits other than those for maintenance placement and pooled repairs (mechanical renames allowed).
 
 #### Negative Paths
 - Given effective concurrency 1 and one feature in flight, when a stale engine is detected or a restart is queued, then it fires only after that feature finishes — exactly the pre-change idle-boundary timing.
-- Given effective concurrency 1, when discovery would refresh mid-build, then no fetch or root fast-forward occurs while the single feature is in flight (pre-change quiescent behavior preserved at the default).
+- Given effective concurrency 1 and one feature in flight, when an origin refresh runs, then it fetches and fast-forwards the root without moving that feature's pinned base, as at higher widths.
 
 ### Done When
-- [ ] The full existing daemon test suite passes at the default without semantic changes.
+- [ ] The full existing daemon test suite passes at the default without semantic changes other than maintenance placement and pooled repairs.
 - [ ] A serial-equivalence test pins the N=1 scheduling order of dispatch, refresh, sweep, and stale-engine checks.
 
 ## Story 3: Dispatch crosses the seam as a serializable work order with a document manifest
