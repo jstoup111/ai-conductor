@@ -146,6 +146,14 @@ export const EVENT_SINKS = {
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_retained: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_failed: { render: true, persist: true, audit: false, otel: false },
+  // Transcript lifecycle occurrences stay on the shared spine. Later tasks own
+  // harvesting, retention, and reader projections; this task only persists them.
+  provider_transcripts_captured: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_harvest_failed: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_retained: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_pruned: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_evicted: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_retention_failed: { render: false, persist: true, audit: false, otel: false },
   feature_usage_total: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   feature_cost_snapshot: { render: false, persist: false, audit: false, otel: true, otelTrace: false },
   provider_fallback: { render: true, persist: true, audit: false, otel: false },

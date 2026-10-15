@@ -1043,6 +1043,55 @@ type ConductorEventBody =
       reason: string;
     }
   | {
+      /** Allowlisted provider transcripts were captured before a scratch home was retired. */
+      type: 'provider_transcripts_captured';
+      step: StepName;
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      files: number;
+      bytes: number;
+      interrupted: boolean;
+      skipped: number;
+      omittedLines: number;
+    }
+  | {
+      /** Provider transcript capture failed, but scratch-home retirement continued. */
+      type: 'provider_transcripts_harvest_failed';
+      step: StepName;
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      error: string;
+    }
+  | {
+      /** A captured provider transcript was retained after its step verdict settled. */
+      type: 'provider_transcripts_retained';
+      path: string;
+    }
+  | {
+      /** A captured provider transcript was pruned after successful step progress. */
+      type: 'provider_transcripts_pruned';
+      path: string;
+    }
+  | {
+      /** A retained provider transcript was evicted to satisfy a retention cap. */
+      type: 'provider_transcripts_evicted';
+      path: string;
+      reason: 'count' | 'size';
+    }
+  | {
+      /** A provider transcript retention cleanup action failed. */
+      type: 'provider_transcripts_retention_failed';
+      path: string;
+      action: 'prune' | 'evict';
+      error: string;
+    }
+  | {
       /**
        * Whole-feature provider usage, emitted once when `finish` completes.
        *
