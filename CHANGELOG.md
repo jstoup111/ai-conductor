@@ -36,6 +36,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon operators gain shipped-PR readiness monitoring and status visibility. ([implementation PR #3149](https://github.com/jstoup111/ai-conductor/pull/3149)).
 - Users receive enforced ADR assumption ledgers before DECIDE work can proceed. ([implementation PR #3136](https://github.com/jstoup111/ai-conductor/pull/3136)).
 - Operators can inspect task progress for the active or routed child without changing state. ([implementation PR #3219](https://github.com/jstoup111/ai-conductor/pull/3219)).
+- Engineers receive a plan-review gate that identifies defects before implementation begins. ([implementation PR #3207](https://github.com/jstoup111/ai-conductor/pull/3207)).
 
 ### Changed
 
