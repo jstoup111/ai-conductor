@@ -25,6 +25,9 @@ export interface TranscriptRetentionDependencies {
 
 type CapturedTranscript = {
   readonly step: StepName;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly member?: string;
   readonly path: string;
   readonly interrupted: boolean;
 };
@@ -34,6 +37,9 @@ type TranscriptEventRecord = {
   readonly step?: unknown;
   readonly path?: unknown;
   readonly interrupted?: unknown;
+  readonly runId?: unknown;
+  readonly attempt?: unknown;
+  readonly member?: unknown;
   readonly ts?: unknown;
 };
 
@@ -50,7 +56,7 @@ type RetainedCapture = {
  * no retention state is written beside the captures.
  */
 export class TranscriptRetention {
-  private readonly pending = new Map<StepName, string[]>();
+  private readonly pending = new Map<string, string[]>();
   private readonly remove: (path: string) => Promise<void>;
   private readonly maxCaptures: number;
   private readonly maxBytes: number;
@@ -67,7 +73,14 @@ export class TranscriptRetention {
     this.maxBytes = dependencies.maxBytes ?? TRANSCRIPT_RETENTION_MAX_BYTES;
     this.capturedHandler = (event) => {
       if (event.type !== 'provider_transcripts_captured') return;
-      return this.capture({ step: event.step, path: event.path, interrupted: event.interrupted });
+      return this.capture({
+        step: event.step,
+        runId: event.runId,
+        attempt: event.attempt,
+        ...(event.member === undefined ? {} : { member: event.member }),
+        path: event.path,
+        interrupted: event.interrupted,
+      });
     };
     this.events.on('provider_transcripts_captured', this.capturedHandler);
     this.reconciliation = this.reconcile();
@@ -83,8 +96,31 @@ export class TranscriptRetention {
   }
 
   async settle(step: StepName, outcome: TranscriptRetentionOutcome): Promise<void> {
-    const paths = this.pending.get(step) ?? [];
-    this.pending.delete(step);
+    const keys = [...this.pending.keys()].filter((key) => key.startsWith(`${step}\u0000`));
+    await this.settleKeys(keys, outcome);
+  }
+
+  /** Settle exactly one provider attempt without affecting a later retry. */
+  async settleAttempt(
+    identity: Pick<CapturedTranscript, 'step' | 'runId' | 'attempt' | 'member'>,
+    outcome: TranscriptRetentionOutcome,
+  ): Promise<void> {
+    await this.settleKeys([captureKey(identity)], outcome);
+  }
+
+  /** Settle the most recently captured attempt for a step at an in-step retry boundary. */
+  async settleLatestAttempt(step: StepName, outcome: TranscriptRetentionOutcome): Promise<void> {
+    const keys = [...this.pending.keys()].filter((key) => key.startsWith(`${step}\u0000`));
+    const latest = keys.at(-1);
+    if (latest !== undefined) await this.settleKeys([latest], outcome);
+  }
+
+  private async settleKeys(keys: readonly string[], outcome: TranscriptRetentionOutcome): Promise<void> {
+    const paths = keys.flatMap((key) => {
+      const captured = this.pending.get(key) ?? [];
+      this.pending.delete(key);
+      return captured;
+    });
     switch (outcome) {
       case 'succeeded-with-progress':
         await Promise.all(paths.map((path) => this.prune(path)));
@@ -105,9 +141,10 @@ export class TranscriptRetention {
       await this.retain(capture.path);
       return;
     }
-    const paths = this.pending.get(capture.step) ?? [];
+    const key = captureKey(capture);
+    const paths = this.pending.get(key) ?? [];
     paths.push(capture.path);
-    this.pending.set(capture.step, paths);
+    this.pending.set(key, paths);
   }
 
   private async reconcile(): Promise<void> {
@@ -131,7 +168,14 @@ export class TranscriptRetention {
       }
       if (typeof event.path !== 'string') continue;
       if (event.type === 'provider_transcripts_captured' && isStepName(event.step)) {
-        captures.set(event.path, { step: event.step, path: event.path, interrupted: event.interrupted === true });
+        captures.set(event.path, {
+          step: event.step,
+          runId: typeof event.runId === 'string' ? event.runId : 'unknown',
+          attempt: typeof event.attempt === 'number' ? event.attempt : 0,
+          ...(typeof event.member === 'string' ? { member: event.member } : {}),
+          path: event.path,
+          interrupted: event.interrupted === true,
+        });
       } else if (
         event.type === 'provider_transcripts_retained'
         || event.type === 'provider_transcripts_pruned'
@@ -202,6 +246,9 @@ export class TranscriptRetention {
         const metadata = await stat(absolutePath).catch(() => undefined);
         if (metadata === undefined) continue;
         const timestamp = timestamps.get(path);
+        // The cap applies only to captures already retained by a terminal
+        // verdict. Pending attempts remain recoverable until their own verdict.
+        if (timestamp === undefined) continue;
         captures.push({
           path,
           size: await directorySize(absolutePath),
@@ -281,6 +328,10 @@ async function directorySize(path: string): Promise<number> {
 
 function isStepName(value: unknown): value is StepName {
   return typeof value === 'string';
+}
+
+function captureKey(identity: Pick<CapturedTranscript, 'step' | 'runId' | 'attempt' | 'member'>): string {
+  return [identity.step, identity.runId, identity.attempt, identity.member ?? ''].join('\u0000');
 }
 
 function assertNever(value: never): never {
