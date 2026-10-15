@@ -918,27 +918,106 @@ export async function sweepMergeableLabels({
       }
     };
 
-    // Task 13: enqueue every eligible conflict; dispatch owns claim-time
-    // counters and execution, so this intentionally changes neither field.
+    // Daemon calls hand work to its pool.  Standalone callers predate that
+    // queue and retain the synchronous, bounded dispatch contract below.
     if (autoresolve?.enabled) {
-      for (const { entry, state } of conflictingCandidates) {
-        const elig = await autoresolve.isEligible(entry, state);
-        if (!elig.eligible) continue;
-        const queuedAt = now().toISOString();
-        const request = { kind: 'autoresolve' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
-        enqueue(request, async () => { await autoresolve.dispatch(entry); });
+      if (repairQueue) {
+        for (const { entry, state } of conflictingCandidates) {
+          const elig = await autoresolve.isEligible(entry, state);
+          if (!elig.eligible) continue;
+          const queuedAt = now().toISOString();
+          const request = { kind: 'autoresolve' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
+          enqueue(request, async () => { await autoresolve.dispatch(entry); });
+        }
+      } else {
+        let dispatched = false;
+        for (const { entry, state } of conflictingCandidates) {
+          const entryGh = runnerForEntry(gh, entry, operations);
+          const eligibility = await autoresolve.isEligible(entry, state);
+          if (!eligibility.eligible) continue;
+          if (dispatched) {
+            log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+            continue;
+          }
+          dispatched = true;
+          const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+          const current = idx >= 0 ? survivors[idx] : entry;
+          const updated: WatchEntry = {
+            ...current,
+            resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
+            lastResolveAt: (autoresolve.now ? autoresolve.now() : new Date()).toISOString(),
+          };
+          if (idx >= 0) survivors[idx] = updated;
+          const result = await autoresolve.dispatch(updated);
+          if (result?.kind === 'refreshed') {
+            survivors[idx] = { ...updated, resolveAttempts: 0 };
+          } else if (result?.kind === 'escalated') {
+            survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
+          } else if (result?.kind === 'published-stack') {
+            survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
+          } else if (result?.kind === 'setup-stop') {
+            survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
+            try {
+              await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+              await upsertComment(entryGh, entry.repoCwd, entry.prUrl, '<!-- conductor:rebase-setup -->', '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.', log);
+            } catch (err) {
+              log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
+            }
+          }
+        }
       }
     }
 
-    // Task 13: a failed startup preflight leaves ciFix absent, so it cannot
-    // enqueue a CI repair. Counters are intentionally untouched here.
     if (ciFix?.enabled) {
-      for (const { entry, state } of failedCandidates) {
-        const elig = await ciFix.isEligible(entry, state);
-        if (!elig.eligible) continue;
-        const queuedAt = now().toISOString();
-        const request = { kind: 'ci-fix' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
-        enqueue(request, async () => { await ciFix.dispatch(entry, state); });
+      if (repairQueue) {
+        for (const { entry, state } of failedCandidates) {
+          const elig = await ciFix.isEligible(entry, state);
+          if (!elig.eligible) continue;
+          const queuedAt = now().toISOString();
+          const request = { kind: 'ci-fix' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
+          enqueue(request, async () => { await ciFix.dispatch(entry, state); });
+        }
+      } else {
+        let dispatched = false;
+        for (const { entry, state } of failedCandidates) {
+          const entryGh = runnerForEntry(gh, entry, operations);
+          const eligibility = await ciFix.isEligible(entry, state);
+          if (!eligibility.eligible) continue;
+          if (dispatched) {
+            log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+            continue;
+          }
+          dispatched = true;
+          const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+          const current = idx >= 0 ? survivors[idx] : entry;
+          const updated: WatchEntry = {
+            ...current,
+            ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
+            lastCiFixAt: (ciFix.now ? ciFix.now() : new Date()).toISOString(),
+            ciFailureDetected: true,
+          };
+          if (idx >= 0) survivors[idx] = updated;
+          try {
+            const result = await ciFix.dispatch(updated, state);
+            if (result?.kind === 'needs-human') {
+              survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
+              try {
+                await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+                await upsertComment(entryGh, entry.repoCwd, entry.prUrl, '<!-- conductor:ci-fix-setup -->', '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.', log);
+              } catch (err) {
+                log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
+              }
+            } else if (result?.kind === 'not-started' || result?.kind === 'branch-gone') {
+              survivors[idx] = {
+                ...current,
+                ciFixAttempts: entry.ciFixAttempts,
+                ...(entry.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: entry.lastCiFixAt }),
+              };
+            }
+          } catch (err) {
+            log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
+          }
+        }
       }
     }
 

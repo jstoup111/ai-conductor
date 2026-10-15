@@ -1262,7 +1262,12 @@ export async function runDaemon(
         if (deps.emitMaintenancePhase) await runPhase('rekick', async () => {});
         return;
       }
-      await runPhase('rekick', () => maybeRekick(false, startupBaseSha));
+      // The startup discovery's base is valid for exactly one deferred
+      // reconciliation pass.  Reusing it on every coalesced maintenance pass
+      // would move `lastSeenSha` backwards after a later live advance.
+      const knownStartupBase = startupBaseSha;
+      startupBaseSha = undefined;
+      await runPhase('rekick', () => maybeRekick(false, knownStartupBase));
     }],
     ['resume-authorizations', async () => deps.consumeResumeAuthorizations?.()],
     ['reconcileHaltPrs', async () => runPhase('halt-pr-reconcile', async () => { await deps.reconcileHaltPrs?.(); })],
@@ -1280,17 +1285,23 @@ export async function runDaemon(
   // this refreshed discovery ahead of the first eligibility pass.
   let startupBacklog: BacklogItem[] | undefined;
   const firstClaimScanStartedAt = now();
-  try {
-    if (deps.emitMaintenancePhase) {
-      await timeMaintenancePhase('startup-refresh', async () => {
+  // Pause is a claim gate, not maintenance.  Check it before startup discovery:
+  // discovery can invoke consumer-owned work-source hooks, which must not run
+  // while an operator has paused the daemon.
+  pausedAtBoot = await checkPaused();
+  if (!pausedAtBoot) {
+    try {
+      if (deps.emitMaintenancePhase) {
+        await timeMaintenancePhase('startup-refresh', async () => {
+          startupBacklog = await deps.discoverBacklog({ refresh: true });
+        }, { now, emit: deps.emitMaintenancePhase });
+      } else {
         startupBacklog = await deps.discoverBacklog({ refresh: true });
-      }, { now, emit: deps.emitMaintenancePhase });
-    } else {
-      startupBacklog = await deps.discoverBacklog({ refresh: true });
+      }
+      maintenance.recordRefresh(now());
+    } catch (err) {
+      log(`[daemon] startup origin refresh failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-    maintenance.recordRefresh(now());
-  } catch (err) {
-    log(`[daemon] startup origin refresh failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   // The startup discovery has already refreshed origin. Resolve its local base
   // once so the deferred rekick can use this exact boundary without fetching.
