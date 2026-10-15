@@ -11,7 +11,7 @@ As a daemon operator, I want the parked-feature reconciliation pass wired like t
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a daemon booted with a `reconcileParkedFeatures` dep, when startup completes, then the sweep has run once before the first idle sleep, and it runs again on each idle poll tick.
+- Given a daemon booted with a `reconcileParkedFeatures` dep, when startup completes, then the sweep runs once in the background maintenance job after the first claim attempt, and it runs again on each idle and busy poll tick, subject to the unchanged-input skip.
 - Given two consecutive ticks with identical outcomes for every parked slug, when the second tick's sweep completes, then no repeat per-slug lines and no repeat summary line are written to the daemon log (outcome-cache suppression).
 
 #### Negative Paths
@@ -22,7 +22,7 @@ As a daemon operator, I want the parked-feature reconciliation pass wired like t
 ### Done When
 - [ ] `daemon.ts` declares an optional `reconcileParkedFeatures?: () => Promise<void>` dep and `sweepBestEffort()` invokes it at startup and per idle tick, alongside `reconcileHaltPrs`.
 - [ ] `daemon-cli.ts` binds the dep with a per-run outcome cache, mirroring the `haltPrSweepCache` wiring.
-- [ ] A wiring test in the shape of `daemon-halt-reconciliation.test.ts` proves: startup invocation before first dispatch, once-per-tick, throw swallowed, absent dep = no-op.
+- [ ] A wiring test in the shape of `daemon-halt-reconciliation.test.ts` proves: startup invocation in the background job after the first claim attempt, once-per-tick, throw swallowed, absent dep = no-op.
 
 ## Story S2: Fully-merged parked feature is auto-reconciled by default
 

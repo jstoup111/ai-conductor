@@ -120,6 +120,13 @@ expression stops being the universal guard; each shared operation declares its p
   sweep context already carries `isFeatureInFlight` and per-op predicates skip in-flight
   slugs. Reap-gate fetch discipline (`adr-2026-07-29-defer-feature-worktree-reap…` D3
   explicit fetch) is unchanged.
+
+  > **Amended 2026-10-14 by #1174:** Periodic sweeps run as one single-flight background
+  > maintenance job that the dispatch loop never awaits, at every width including 1. At startup
+  > the job begins only after the first claim attempt. Mutating sweeps, now including halt-PR
+  > reconciliation, skip in-flight slugs. CI-fix and autoresolve sessions are no longer awaited
+  > inside the sweep. They become pooled repairs that reserve a `WorkClaims` slot and take free
+  > slots before new feature claims. See adr-2026-10-14-dispatch-first-daemon-maintenance D1–D5.
 - *Pause and rate-limit episode:* gate the dispatcher's claim loop (no new claims), never
   individual executors — consistent with `adr-2026-07-04-durable-pause-marker` and
   `adr-2026-07-05-daemon-rate-limit-episode-coordinator` D2 (in-flight untouched).
@@ -143,6 +150,11 @@ declaration in the config-key consumer registry
 `--concurrency` CLI flag remains: an explicitly passed flag wins, otherwise the config key
 applies, otherwise the default of 1. At the resolved value 1, dispatch ordering, gate
 evaluation, and log output are byte-for-byte today's serial daemon.
+
+> **Amended 2026-10-14 by #1174:** At width 1, feature claim ordering, gate evaluation, and their
+> log output stay unchanged. Maintenance placement does not: best-effort maintenance runs after
+> the first claim in a background job. A pooled repair may also occupy the single slot ahead of a
+> new feature. See adr-2026-10-14-dispatch-first-daemon-maintenance D8.
 
 **D8 — Central slug attribution for the remaining unattributed sinks.** The per-feature
 scoped buses and loggers stay the attribution mechanism; the residual unattributed sinks —

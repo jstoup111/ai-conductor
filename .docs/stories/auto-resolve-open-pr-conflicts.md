@@ -40,9 +40,9 @@ PR has become conflicting and start auto-resolution, so parked PRs stop waiting 
 ### Done When
 - [ ] Unit tests with an injected gh runner cover: conflicting→dispatch, disabled→no-op,
       merged/closed→prune-no-dispatch, unknown→skip.
-- [ ] Resolution is invoked only after the label pass over all watch entries completes, and at
-      most one PR is resolved per tick (assert a second conflicting PR in the same tick is
-      deferred, with a log line).
+- [ ] Resolution requests are queued only after the label pass over all watch entries completes,
+      and every conflicting PR in a tick gets one queued pooled repair (assert two conflicting
+      PRs in the same tick produce two requests, per adr-2026-10-14-dispatch-first-daemon-maintenance D5).
 
 ---
 
@@ -119,12 +119,12 @@ and the daemon's build worktrees are never disturbed.
   primary checkout and all other worktrees are untouched, the failure is logged, and the
   attempt counts toward the cap (no infinite retry on a broken environment).
 - Given the resolution worktree exists mid-attempt, when another sweep tick fires (long suite
-  run), then no second resolution starts for any PR while one is in flight (serial guard).
+  run), then no second resolution starts for that PR while its repair is running.
 
 ### Done When
 - [ ] Tests with injected git/worktree runners cover: create-at-tip, namespace prep before
       suite, teardown on success, teardown on failure, stale-leftover recreate,
-      retained-idle coexistence, active-feature-run skip, in-flight resolution serial guard.
+      retained-idle coexistence, active-feature-run skip, one running resolution per PR.
 - [ ] A real-binary smoke exercises worktree add/remove against a scratch git repo.
 
 ---
