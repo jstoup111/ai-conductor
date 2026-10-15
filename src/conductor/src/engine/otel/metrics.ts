@@ -17,7 +17,6 @@
 import type { Attributes, Meter, Counter, Gauge, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
-import { closeoutDurationMs } from '../closeout-trust.js';
 import type { RunOutcome } from './span-manager.js';
 import { classifyMetering } from '../metering.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
@@ -200,12 +199,6 @@ export class MetricsRecorder {
     }));
   }
 
-  onPipelineCloseout(event: Extract<ConductorEvent, { type: 'pipeline_closeout' }>): void {
-    const durationMs = closeoutDurationMs(event);
-    if (durationMs === undefined) return;
-    this.instruments.closeoutDurationHistogram.record(durationMs, this.withIdentity({ obligation: event.obligation }));
-  }
-
   onRunClose(outcome: RunOutcome, tier?: string): void {
     const attrs = tier === undefined ? { outcome } : { outcome, tier };
     this.instruments.runOutcomesCounter.add(1, this.withIdentity(attrs));
@@ -289,7 +282,7 @@ interface MetricInstruments {
   memorySetupCounter: Counter;
   durationHistogram: Histogram; retriesCounter: Counter; stepOutcomesCounter: Counter; dispatchesCounter: Counter;
   featureCostGauge: Gauge; featureStepCostGauge: Gauge; featureStepTokensGauge: Gauge;
-  closeoutDurationHistogram: Histogram; runOutcomesCounter: Counter;
+  runOutcomesCounter: Counter;
   daemonBacklogGauge: Gauge; daemonOldestAgeGauge: Gauge; daemonSlotsGauge: Gauge; daemonInflightGauge: Gauge;
   daemonUpGauge: Gauge; daemonBlockedGauge: Gauge; daemonPollHistogram: Histogram; daemonStallsCounter: Counter;
   featureDispatchesCounter: Counter; featureHaltsCounter: Counter; featureShippedCounter: Counter;
@@ -310,7 +303,6 @@ function createInstruments(meter: Meter): MetricInstruments {
     featureCostGauge: gauge('conductor.feature.cost', 'Authoritative shipped-record cost for a conductor feature', 'usd'),
     featureStepCostGauge: gauge('conductor.feature.step.cost', 'Authoritative cumulative feature cost by dimension', 'usd'),
     featureStepTokensGauge: gauge('conductor.feature.step.tokens', 'Authoritative cumulative feature tokens by dimension'),
-    closeoutDurationHistogram: histogram('conductor.pipeline.closeout.duration', 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
     runOutcomesCounter: counter('conductor.run.outcomes', 'Number of conductor runs by terminal outcome'),
     daemonBacklogGauge: gauge('conductor.daemon.backlog', 'Backlog entries by state'),
     daemonOldestAgeGauge: gauge('conductor.daemon.backlog.oldest_age', 'Oldest backlog age by state', 's'),

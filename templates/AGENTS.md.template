@@ -24,9 +24,9 @@ Use the harness agent personas when their specialized review or implementation r
 - **Context:** Receives only files relevant to current task
 - **Statuses:** DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT, NEEDS_DRILL_DOWN, BLOCKED
 
-### Evaluator
+### Evaluator (`/code-review` reviewer)
 - **Prompt:** `agents/evaluator.md`
-- **Role:** Reviews code with calibrated skepticism
+- **Role:** `/code-review` reviewer with calibrated skepticism
 - **Context:** Fresh context reset — no shared state with generator
 - **Stages:** Spec compliance → Code quality → Domain integrity
 
@@ -52,11 +52,4 @@ Generator produces code
   → Evaluator reviews with fresh context
   → Generator fixes (if needed)
   → Evaluator re-reviews
-```
-
-### Pipeline (Autonomy-Based)
-```
-Conservative: Human approves → Generator → Evaluator → Human reviews
-Standard:     Generator → Evaluator → auto-continue (escalate on 3 rework failures)
-Full:         Parallel Generators → Evaluators → auto-merge on green
 ```

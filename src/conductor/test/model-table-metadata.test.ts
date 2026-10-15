@@ -243,7 +243,7 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
           effort: 'inherits effort from the Codex session or spawned-agent configuration',
         },
       },
-      why: expect.stringMatching(/single risk-domain criterion/i),
+      why: expect.stringMatching(/code-review.*risk-domain criterion/i),
     });
   });
 

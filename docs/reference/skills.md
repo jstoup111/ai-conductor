@@ -509,23 +509,20 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Inputs** — the plan's task dependency graph, file sets, and dependency lines;
   `.pipeline/task-status.json`; story acceptance criteria; prior batch reviews; ADRs and the approved
   PRD for the design-conformance check.
-- **Outputs** — `.pipeline/audit-trail/batch-N/review.json` and the batch simplification
-  records; `.pipeline/progress.log`; `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and
-  `.pipeline/HALT` on a stall; at least one `.memory/` entry per batch; a `pipeline_closeout` record in
-  `.pipeline/pipeline-events.jsonl` per completed evaluator gate, bracketed by `ai-conductor
-  closeout-event start evaluator` before dispatch and `ai-conductor closeout-event end evaluator` after. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
+- **Outputs** — the batch simplification records; `.pipeline/progress.log`;
+  `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and `.pipeline/HALT` on a stall; at
+  least one `.memory/` entry per batch. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
   hooks and must not be hand-edited.
 - **Read-only SHIP verdicts** — BUILD sessions, including remediation retries and every implementer
   dispatch, may read but never write, delete, rename, or recreate the SHIP validator verdict artifacts
   (`prd-audit.md`/`.json`, `architecture-review-as-built.md`/`.json`) or their code-stamp sidecars. Only the
   validator's next dispatch produces a new verdict; a fixed finding is proven through
   [`ai-conductor task done <id> --done-when <n>=<evidence>`](cli.md#ai-conductor-task).
-- **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
-  `review.json` halts and re-dispatches. A missing, malformed, or non-matching `evaluator`
-  `pipeline_closeout` record is an independent second hard gate (waived for a batch already in flight
-  before the closeout-event emitter shipped) — see [`ai-conductor closeout-event`](cli.md#ai-conductor-closeout-event).
-  `BLOCK` halts and escalates; `REQUEST_CHANGES` triggers rework against a three-cycle budget. Two
-  consecutive zero-completion attempts trip a circuit breaker.
+- **Gate role** — blocking. Each batch boundary requires the supplied `BATCH_AFFECTED_TESTS` results
+  with no unexpected failure, the linter, a `simplify` pass, and a `.memory/` entry; it dispatches no
+  evaluator. A failing gate triggers rework against a three-cycle budget, then escalates. Two
+  consecutive zero-completion attempts trip a circuit breaker. Post-build review belongs to the
+  engine's `build_review` step.
 - **Declared replication copy task** — on a plan with a resolved `**Pattern-source:**` /
   `**Rename-map:**` declaration, exactly one task is the mechanical, zero-LLM copy: it writes only the
   targets its `**Files:**` declaration lists, fails closed naming an undeclared target or an unreadable
@@ -539,7 +536,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   Codex uses multiple `collaboration.spawn_agent` calls in one response. Conservative, dependent
   tasks, and overlapping-file tasks stay sequential. A selected host without native fan-out stops
   with an actionable capability diagnostic instead of silently serializing Standard or Full.
-- **Dispatches** — `agents/evaluator.md`, `agents/generator.md`, `agents/worktree-manager.md`.
+- **Dispatches** — `agents/generator.md`, `agents/worktree-manager.md`.
 
 ### tdd
 
@@ -590,8 +587,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.
-- **Engine step** — none. The pipeline evaluator satisfies this gate at batch boundaries. The engine's
-  `build_review` step is a separate, engine-native grader, not this skill.
+- **Engine step** — none. The engine's `build_review` step is a separate, engine-native post-build
+  grader, not this skill.
 - **Inputs** — `git diff <batch-start-commit>..HEAD`, scoped to the batch rather than the full branch;
   the story and acceptance criterion; the plan task; affected-test results; the tech-context review
   checklist.

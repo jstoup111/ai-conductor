@@ -729,6 +729,23 @@ describe('Task 8: TokenUsage detail on step spans', () => {
 // ── T14: Span events — retries / gate verdicts / kickbacks ───────────────────
 
 describe('T14: span events for retries / gate verdicts / kickbacks', () => {
+  it('does not add a pipeline_closeout span event for a completed build review stream', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'gate_verdict', step: 'build', satisfied: true });
+    await emitter.emit({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const build = spanExporter.getFinishedSpans().find((span) => span.name === 'build')!;
+    expect(build.events.map((event) => event.name)).not.toContain('pipeline_closeout');
+  });
+
   it('step_retry with a progress allowance adds both allowance fields to the retry event', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
@@ -846,60 +863,6 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
     const retryEvents = span.events.filter((e) => e.name === 'retry');
     expect(retryEvents).toHaveLength(2);
     expect(span.attributes['conductor.retry.count']).toBe(2);
-  });
-});
-
-// ── Task 19: pipeline closeout span events ──────────────────────────────────
-
-describe('Task 19: pipeline_closeout span event', () => {
-  it('falls back to the active run span when no build step span is open', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
-    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-    await emitter.emit({
-      type: 'pipeline_closeout',
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      ts: 1_788_045_067_790,
-    });
-    await emitter.emit({ type: 'feature_complete' });
-    await vis.stop();
-
-    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
-    const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
-    expect(closeout?.attributes).toMatchObject({
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      durationMs: 120_000,
-    });
-  });
-
-  it('keeps untrusted closeout timing attributes without a duration', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({
-      type: 'pipeline_closeout',
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584_758_500,
-      endedAt: 1_788_045_067_588_425_500,
-      ts: 1_788_045_067_588_425_500,
-    });
-    await emitter.emit({ type: 'feature_complete' });
-    await vis.stop();
-
-    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
-    const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
-    expect(closeout?.attributes).toMatchObject({
-      obligation: 'summary',
-      startedAt: 1_788_044_947_584_758_500,
-      endedAt: 1_788_045_067_588_425_500,
-    });
-    expect(closeout?.attributes).not.toHaveProperty('durationMs');
   });
 });
 

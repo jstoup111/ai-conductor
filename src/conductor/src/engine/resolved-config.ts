@@ -833,7 +833,7 @@ const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'hi
  */
 const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
   testQuality: false,
-  security: false,
+  security: true,
   implementationQuality: true,
 };
 

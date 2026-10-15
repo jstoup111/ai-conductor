@@ -282,7 +282,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Check the frozen input.', llm_provider: 'claude' },
           portableTwo: { enabled: true, skill: 'portable-two-policy', question: 'Check the frozen input again.', llm_provider: 'claude' },
@@ -352,7 +352,7 @@ describe('DefaultStepRunner', () => {
       llm_provider: 'claude',
       build_review: {
         enabled: true,
-        rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } },
+        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           portable: {
             enabled: true, skill: 'portable-policy', question: 'Check the frozen input.',
@@ -4524,7 +4524,7 @@ TIER: M`,
           pipelineDir: join(featureRoot, '.pipeline'),
           config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } },
+            rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } },
           } } as HarnessConfig,
           buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
         });
@@ -4627,7 +4627,7 @@ TIER: M`,
         gitRunner: scopedTestGit(), planPath, events,
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 }, implementationQuality: { enabled: false } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
           suppressedFindingId = projectBuildReviewAggregateSources(aggregate as never)![0]!.findingId;
@@ -4671,7 +4671,7 @@ TIER: M`,
       }]);
     });
 
-    it('publishes an empty registered-rubric set as a reasoned PASS without dispatch', async () => {
+    it('publishes an empty registered-rubric set as a reasoned PASS when security and implementation quality opt out over the test-quality default', async () => {
       const provider = createMockProvider();
       const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -4681,7 +4681,7 @@ TIER: M`,
         config: {
           build_review: {
             rubrics: {
-              testQuality: { enabled: false },
+              security: { enabled: false },
               implementationQuality: { enabled: false },
             },
           },
@@ -4806,7 +4806,7 @@ TIER: M`,
         name: 'test-quality is enabled explicitly',
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         expectedInvokeCalls: 1,
       },
@@ -4816,7 +4816,7 @@ TIER: M`,
           test_suite: { scoped_command: 'true' },
           build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true, model: 'opus' }, implementationQuality: { enabled: false } },
+            rubrics: { testQuality: { enabled: true, model: 'opus' }, security: { enabled: false }, implementationQuality: { enabled: false } },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
@@ -4848,7 +4848,7 @@ TIER: M`,
       expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
     });
 
-    it('dispatches implementation quality as the only default rubric', async () => {
+    it('dispatches implementation quality and security as the default rubrics', async () => {
       await scopedPlan();
       const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
@@ -4866,14 +4866,14 @@ TIER: M`,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
         sessionStore: new ProviderSessionStore(),
         configuredProviders: ['codex'],
-        buildReviewPolicyCatalog: async () => [{
-          semanticName: 'build-review-implementation-quality', source: 'project', installationOrigin: '/fixture/project',
-          canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
+        buildReviewPolicyCatalog: async ({ skill }) => [{
+          semanticName: skill, source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`,
           declaredDependencies: [], availability: 'available',
         }],
         buildReviewPolicyCapture: async (policy) => ({
           policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
-          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review implementation quality\n') }],
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from(`# ${policy.semanticName}\n`) }],
           metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
           digest: `sha256-v1:${'a'.repeat(64)}`,
         }),
@@ -4887,7 +4887,7 @@ TIER: M`,
             acceptedFindingIds: [],
             unresolvedFindingIds: [],
             suppressedFindingIds: [],
-            skippedRubrics: ['testQuality', 'security'] as const,
+            skippedRubrics: ['testQuality'] as const,
             infrastructureFailureRubrics: [],
             uncoveredInfrastructureFailureRubrics: [],
           },
@@ -4897,8 +4897,58 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
       expect(result.success, result.output).toBe(true);
 
-      expect(invoke).toHaveBeenCalledOnce();
-      expect(invoke.mock.calls[0]![0].prompt).toContain('# Build review implementation quality');
+      expect(invoke).toHaveBeenCalledTimes(2);
+      const prompts = invoke.mock.calls.map(([options]) => options.prompt);
+      expect(prompts.join('\n')).toContain('# build-review-implementation-quality');
+      expect(prompts.join('\n')).toContain('# build-review-security');
+      expect(prompts.join('\n')).not.toContain('Build Review Test Quality rubric');
+    });
+
+    it('dispatches only implementation quality when security is disabled and every other rubric uses its default', async () => {
+      await scopedPlan();
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const result = {
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+        };
+        return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
+      });
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: scopedGit(), planPath, providerKey: 'codex',
+        config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { security: { enabled: false } } } } as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['codex'],
+        buildReviewPolicyCatalog: async ({ skill }) => [{
+          semanticName: skill, source: 'project', installationOrigin: '/fixture/project',
+          canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`,
+          declaredDependencies: [], availability: 'available',
+        }],
+        buildReviewPolicyCapture: async (policy) => ({
+          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from(`# ${policy.semanticName}\n`) }],
+          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          digest: `sha256-v1:${'a'.repeat(64)}`,
+        }),
+        ...currentBuildReviewProof(),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'feature' },
+          effective: {
+            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: ['testQuality', 'security'] as const, infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          },
+        }),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+      });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      const prompts = invoke.mock.calls.map(([options]) => options.prompt).join('\n');
+      expect(prompts).toContain('# build-review-implementation-quality');
+      expect(prompts).not.toContain('# build-review-security');
     });
 
     it('persists the exact dispatched rubric prompt beside the lap artifact for offline replay', async () => {
@@ -4909,7 +4959,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
@@ -5094,7 +5144,7 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
@@ -5156,7 +5206,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }
@@ -5286,7 +5336,7 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, implementationQuality: { enabled: false } } },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
         } as HarnessConfig,
       };
     }

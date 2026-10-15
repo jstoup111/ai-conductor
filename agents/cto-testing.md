@@ -21,7 +21,7 @@ You will NOT need to:
 - Read files not included in your prompt context
 - Produce user stories or implementation plans
 - Review architectural decisions (that is cto-architecture's responsibility)
-- Review code style or domain integrity (those are the evaluator's and domain reviewer's jobs)
+- Review code style or domain integrity (those belong to build_review, `/code-review`, and the domain reviewer)
 
 Output destination: `.pipeline/assessment/cto-testing.md`
 

@@ -482,36 +482,6 @@ describe('daemon state-store command boundary (Task 17)', () => {
   });
 });
 
-describe('daemon closeout rendering', () => {
-  // Covers: task:3
-  it('renders trusted closeout duration', () => {
-    const lines: string[] = [];
-
-    renderDaemonEvent({
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 1_788_044_947_584,
-      endedAt: 1_788_045_067_584,
-      ts: 1_788_045_067_790,
-    }, (line) => lines.push(line));
-
-    expect(lines).toEqual(['· ✓ closeout evaluator (120000ms)']);
-  });
-
-  it('renders unavailable closeout duration', () => {
-    const lines: string[] = [];
-
-    renderDaemonEvent({
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 1_788_012_400_000,
-      endedAt: 178_801_157_372_296_540,
-      ts: 1_788_012_400_000,
-    }, (line) => lines.push(line));
-
-    expect(lines).toEqual(['· ✓ closeout evaluator (duration unavailable)']);
-  });
-});
 
 describe('protected artifact rotation rendering', () => {
   // Covers: task:9
@@ -586,6 +556,23 @@ let root: string;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'daemon-cli-gated-snapshot-'));
   daemonDir = join(root, '.daemon');
+});
+
+describe('daemon event rendering', () => {
+  it('prints no closeout obligation line for a completed build review stream', () => {
+    const lines: string[] = [];
+    const log = (line: string) => lines.push(line);
+
+    renderDaemonEvent({ type: 'step_started', step: 'build', index: 0 }, log);
+    renderDaemonEvent({ type: 'gate_verdict', step: 'build', satisfied: true }, log);
+    renderDaemonEvent({
+      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    }, log);
+    renderDaemonEvent({ type: 'step_completed', step: 'build', status: 'done' }, log);
+    renderDaemonEvent({ type: 'feature_complete' }, log);
+
+    expect(lines.join('\n')).not.toMatch(/\bcloseout\s+\w+/i);
+  });
 });
 
 afterEach(async () => {

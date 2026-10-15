@@ -391,9 +391,6 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'build_stall':
         this.spanManager.onBuildStall(event);
         break;
-      case 'pipeline_closeout':
-        this.spanManager.onPipelineCloseout(event);
-        break;
     }
   }
 

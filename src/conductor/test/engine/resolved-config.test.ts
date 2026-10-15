@@ -272,24 +272,25 @@ describe('engine/resolved-config', () => {
       expect(resolved.enabled).toBe(true);
     });
 
-    it('defaults implementation quality on at medium effort while the existing rubrics remain off', () => {
-      const resolved = resolveBuildReviewConfig(undefined);
+    it('defaults an omitted security policy on at high effort, implementation quality on, and test quality off', () => {
+      const config: HarnessConfig = { build_review: { rubrics: {} } } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
       expect({
         testQuality: resolved.rubrics.testQuality.enabled,
-        security: resolved.rubrics.security.enabled,
-        implementationQuality: resolved.rubrics.implementationQuality,
+        security: { enabled: resolved.rubrics.security.enabled, effort: resolved.rubrics.security.effort },
+        implementationQuality: resolved.rubrics.implementationQuality.enabled,
       }).toEqual({
         testQuality: false,
-        security: false,
-        implementationQuality: expect.objectContaining({ enabled: true, effort: 'medium' }),
+        security: { enabled: true, effort: 'high' },
+        implementationQuality: true,
       });
     });
 
-    it('materializes the default-off security policy with its high effort and no confidence floor', () => {
+    it('materializes the default-on security policy with its high effort and no confidence floor', () => {
       const resolved = resolveBuildReviewConfig(undefined);
 
       expect(resolved.rubrics.security).toMatchObject({
-        enabled: false,
+        enabled: true,
         effort: 'high',
         min_confidence: 0,
       });
@@ -396,7 +397,7 @@ describe('engine/resolved-config', () => {
         maxParallel: resolved.maxParallel,
         rubrics: resolved.rubrics,
       }).toEqual({
-        maxParallel: 1,
+        maxParallel: 2,
         rubrics: {
           testQuality: {
             enabled: false,
@@ -410,7 +411,7 @@ describe('engine/resolved-config', () => {
             min_confidence: 0,
           },
           security: {
-            enabled: false,
+            enabled: true,
             max_projection_bytes: 1_048_576,
             llm_provider: ['claude', 'codex'],
             model: 'opus',
@@ -524,7 +525,7 @@ describe('engine/resolved-config', () => {
       const kotlinPolicy = resolved.catalog.find(({ id }) => id === 'kotlinPolicy');
       const testQuality = resolved.catalog.find(({ id }) => id === 'testQuality');
 
-      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'implementationQuality', 'kotlinPolicy']);
+      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'security', 'implementationQuality', 'kotlinPolicy']);
       expect(testQuality).toMatchObject({
         id: 'testQuality',
         kind: 'builtin',
@@ -600,7 +601,7 @@ describe('engine/resolved-config', () => {
         catalog: readonly { id: string }[];
       };
 
-      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['testQuality', 'implementationQuality']);
+      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['testQuality', 'security', 'implementationQuality']);
       expect(disabledGate.catalog).toEqual([]);
     });
 
@@ -633,7 +634,7 @@ describe('engine/resolved-config', () => {
         catalog: readonly EffectiveReviewCatalogMember[];
       };
 
-      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['implementationQuality']);
+      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['security', 'implementationQuality']);
       expect(disabledGate.catalog).toEqual([]);
 
       const preflight = vi.fn(async () => { throw new Error('preflight must not run'); });

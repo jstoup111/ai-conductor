@@ -264,7 +264,7 @@ When a task **replaces or supersedes existing behavior** (the plan says "replace
 PRODUCTION entry point actually calls it. A unit test that invokes the new function
 *directly* passes even while the live path still calls the old one — the new primitive
 ships orphaned (zero production callers). This class escaped into ~5 consecutive Phase-9
-features; it is caught late by the fresh-context evaluator, not the suite.
+features; it is caught late by build_review's `implementationQuality` rubric or `/code-review`, not the suite.
 
 **Rule:** for any replacement task, assign **≥1 behavioral test at the lowest sufficient layer**
 that drives the real production entry point (the command / handler / route / loop a user or caller
@@ -286,7 +286,7 @@ Any spec covering a **path, prefix, or canonical-root guard** (an allow/deny che
 filesystem path or string prefix) MUST include explicit boundary-value cases. Off-by-one
 normalization bugs in these guards fail *closed* (reject everything) or *open* (accept a
 sibling) and are invisible to happy-path tests — this exact gap shipped a fail-closed
-trailing-slash bug caught only by the evaluator.
+trailing-slash bug caught only by build_review or `/code-review`.
 
 Generate a negative/boundary case for EACH row:
 
@@ -311,7 +311,7 @@ derivation*, which the derivation's own unit test cannot reach. This class shipp
 bugs in three consecutive phases — a token-in-URL redaction invoked at a sibling call site with a
 real token; a rebase predicate evaluated against a real in-progress tree instead of the clean
 injected one; an injected project name that masked the real derivation — each caught only by the
-fresh-context evaluator, never by the suite.
+fresh-context build_review or `/code-review`, never by the suite.
 
 **Rule:** for each such derivation, enumerate **EVERY production call site** that invokes it, and
 assign a failing behavioral test **per call site** at the lowest sufficient layer that:

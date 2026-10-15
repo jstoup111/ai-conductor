@@ -253,7 +253,7 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: ExtraModelTableRowInput[] = [
     claudeModel:
       'sonnet (default) / fable (concurrency, state mutation, security, auth, money)',
     claudeEffort: '',
-    why: 'A single risk-domain criterion protects higher-stakes batches from weaker evaluation.',
+    why: '`/code-review` dispatches this evaluator; its risk-domain criterion protects higher-stakes reviews from weaker evaluation.',
   },
   {
     name: 'code-review',

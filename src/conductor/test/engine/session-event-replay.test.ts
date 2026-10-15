@@ -27,11 +27,37 @@ const occurrence = {
   dispatchId: 'dispatch-1', provider: 'codex', scope: { kind: 'project' }, subcommand: 'finish-record',
 } as const;
 
+const replayFixtureDirectory = join(import.meta.dirname, '..', 'fixtures', 'session-event-replay');
+
 async function canonicalOccurrences(path: string): Promise<Array<{ eventId?: unknown }>> {
   return (await readFile(path, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 }
 
 describe('session event canonical replay', () => {
+  it('replays the committed no-closeout ledger exactly as its pre-retirement output fixture', async () => {
+    const { root, producer } = await fixture();
+    const [input, expectedOutput] = await Promise.all([
+      readFile(join(replayFixtureDirectory, 'events.jsonl'), 'utf8'),
+      readFile(join(replayFixtureDirectory, 'expected-output.json'), 'utf8'),
+    ]);
+    await writeFile(producer, input);
+    const events = new ConductorEventEmitter();
+    const replayed: unknown[] = [];
+    for (const type of [
+      'session_command_refused',
+      'github_bypass_attempt',
+      'github_bypass_result',
+      'github_possible_bypass',
+      'session_event_delivery_diagnostic',
+    ] as const) {
+      events.on(type, (event) => { replayed.push(event); });
+    }
+
+    await new CloseoutEventTail({ projectRoot: root, events }).poll();
+
+    expect(replayed).toStrictEqual(JSON.parse(expectedOutput));
+  });
+
   it('replays a persisted producer occurrence after restart without duplicating its canonical record', async () => {
     const { root, producer, canonical } = await fixture();
     await writeFile(producer, `${JSON.stringify(occurrence)}\n`);

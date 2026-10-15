@@ -126,7 +126,7 @@ describe('custom build-review policy event spine', () => {
         if (args[0] === 'show') return { exitCode: 0, stdout: 'export const value = 0;\n', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       },
-      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } }, custom_rubrics: {
         portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', llm_provider: 'claude' },
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),

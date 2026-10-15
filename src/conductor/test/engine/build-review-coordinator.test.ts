@@ -30,6 +30,8 @@ import type {
   ResolvedBuildReviewConfig,
   ResolvedBuildReviewRubricPolicy,
 } from "../../src/engine/resolved-config.js";
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { EventPersister } from "../../src/engine/event-persister.js";
 import { ConductorEventEmitter } from "../../src/ui/events.js";
 
@@ -156,6 +158,44 @@ describe("build-review coordinator: registered dispatch", () => {
         disabledImplementationQualityBranch,
       ],
     });
+  });
+
+  it('matches explicit security enablement: default security skips non-leaf children and judges the whole-feature snapshot once at the leaf', async () => {
+    const defaultConfig = resolveBuildReviewConfig({} as HarnessConfig);
+    const explicitConfig = resolveBuildReviewConfig({
+      build_review: { rubrics: { security: { enabled: true } } },
+    } as HarnessConfig);
+    const runChildren = async (resolved: ResolvedBuildReviewConfig) => {
+      const dispatchModel = vi.fn(async (_branch, _projection) => ({ findings: [] }));
+      const nonLeaf = await coordinateBuildReviewRubrics(coordinationInput(false, {
+        config: resolved, securityLeafOnly: true, dispatchModel,
+        engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: {
+          security: { kind: 'resolved', digest: 'sha256:security-skill' },
+          implementationQuality: { kind: 'resolved', digest: 'sha256:implementation-quality-skill' },
+        } },
+      }));
+      const leaf = await coordinateBuildReviewRubrics(coordinationInput(false, {
+        config: resolved, securityLeafOnly: false, dispatchModel,
+        engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: {
+          security: { kind: 'resolved', digest: 'sha256:security-skill' },
+          implementationQuality: { kind: 'resolved', digest: 'sha256:implementation-quality-skill' },
+        } },
+      }));
+      return { nonLeaf, leaf, dispatchModel };
+    };
+
+    const defaults = await runChildren(defaultConfig);
+    const explicit = await runChildren(explicitConfig);
+
+    expect(securityBranch(defaults.nonLeaf)).toEqual({ kind: 'skipped', rubric: 'security', reason: 'leaf-only' });
+    const defaultSecurityCalls = defaults.dispatchModel.mock.calls.filter(([branch]) => branch.rubric === 'security');
+    expect(defaultSecurityCalls).toHaveLength(1);
+    expect(defaultSecurityCalls[0]?.[1]).toMatchObject({
+      rubric: 'security', snapshotDigest: inputs().sourceSnapshot.digest,
+    });
+    expect(securityBranch(defaults.leaf)).toMatchObject({ kind: 'dispatched', rubric: 'security', result: { verdict: 'PASS' } });
+    expect(defaults.nonLeaf).toEqual(explicit.nonLeaf);
+    expect(defaults.leaf).toEqual(explicit.leaf);
   });
 
   it('keeps setup-only provider exhaustion as infrastructure without accepting findings or retrying', async () => {

@@ -3247,14 +3247,14 @@ steps:
 
     it.each([
       [
-        { enabled: 'yes' },
+        { enabled: 'no' },
         'build_review.rubrics.security.enabled must be a boolean',
       ],
       [
         { effort: 'extreme' },
         'build_review.rubrics.security.effort must be low|medium|high|xhigh|max',
       ],
-    ])('rejects invalid security rubric policy %#', (security, message) => {
+    ])('rejects invalid security rubric policy %# before any build-review lap can be configured', (security, message) => {
       expect(validateConfig({ build_review: { rubrics: { security } } })).toEqual({
         ok: false,
         error: { type: 'validation_error', message },

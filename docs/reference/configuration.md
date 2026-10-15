@@ -950,8 +950,7 @@ metrics projection records the authoritative invoked dispatch. `unattributed_pro
 from both OTel consumers. Missing visualizer handlers at runtime report the event type through its warning callback.
 Production visualizers continue exporting traces with their per-run meter disabled.
 
-The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
-duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
+The `conductor.step.duration` histogram uses explicit duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
 
 Each started execution that reaches a terminal event contributes one
 `conductor.step.outcomes` counter point. Its `outcome` is `success`, `failure`, `interrupted`, or

@@ -25,7 +25,7 @@ Parse plan, extract task →  Receive task context    →     Full TDD cycle
                             Dispatch subagent       →     RED → DOMAIN → GREEN
                             Verify result           ←     → DOMAIN → COMMIT
 Check task-status.json  ←   Report PASS/FAIL              (context discarded)
-Next task or evaluator
+Next task
 ```
 
 **Key constraint:** The selected host agent MUST dispatch implementers through its available
@@ -237,8 +237,8 @@ If any production caller remains, the new code shipped **orphaned** — the live
 the OLD behavior while green unit tests pass against the new function (the orphaned-primitive
 escape that recurred across ~5 consecutive Phase-9 features, each caught late by the
 fresh-context evaluator). Report the task FAIL with the surviving call sites; do NOT mark it
-complete. This is a cheap mechanical gate that runs **before** the expensive batch-evaluator
-dispatch, so the class fails fast. Pair it with the real-entry-point acceptance test required by
+complete. This is a cheap mechanical gate that runs before the next batch advances, so the class
+fails fast. Pair it with the real-entry-point acceptance test required by
 `/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
 the old one is gone.
 
@@ -316,7 +316,7 @@ this preserves file cache and avoids redundant reads.
 **Scope discipline:** Implementers MUST only modify lines directly related to their assigned task.
 Changes to unrelated code in the same file (e.g., changing a CI command while fixing a service
 definition, or "improving" a method signature while adding a validation) are scope violations.
-The evaluator should flag scope violations as IMPORTANT severity.
+`prd_audit`'s "nothing more" acceptance check owns those violations.
 
 **Scoped VERIFY (step 3):** Inspect the implementer's scoped evidence without routine reruns.
 Missing evidence or a concrete suspected defect may require a minimal targeted check, never a suite.
@@ -355,132 +355,11 @@ through `ai-conductor scoped-run <selectors...>`, then commit and leave the aggr
 `BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set and retain
 the supplied results. Do not rerun the union routinely. A concrete task-interaction risk or
 changed behavior may justify a minimal targeted check through `ai-conductor scoped-run <selectors...>`.
-The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.
 When `BATCH_AFFECTED_TESTS` cannot be determined with confidence, record that in the REPORT and defer aggregate proof to the engine's dedicated aggregate gate — the build session never runs the full test suite.
 
 **REPORT requirement (step 6):** The task's step 6 REPORT must list the files included in the
 scoped test set (or, if a fallback trigger fired, state the trigger, the tests actually run, and the deferred aggregate proof).
 This provides audit-trail visibility into the scoping decision.
-
-### Quality Gates
-
-**HARD GATE: Evaluator dispatch is mandatory at required batch boundaries.**
-
-**Rate limit cooldown: sleep 15 seconds before dispatching the evaluator** to avoid stacking
-on top of the just-completed TDD agent's API usage.
-
-At batch boundaries, dispatch an evaluator through the selected host's available subagent facility (see the model table below for the right
-model per tier and batch position) with **fresh, scoped context** (no shared state with the
-generator). The evaluator dispatch prompt's FIRST LINE MUST be exactly `Task: none` — the
-host-native attribution mechanism (the Claude Code session hook on Agent-tool dispatches) enforces
-this marker; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
-- The **git diff** for this batch only (not the full codebase)
-- The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
-- The named **`BATCH_AFFECTED_TESTS` union and its result summary** (pass/fail counts + failure
-  snippets, not full verbose output), plus any scope uncertainty deferred to `test_suite`
-- The tech-context review checklist if loaded in session
-- The same focused **current-HEAD pattern basis** supplied to each affected task's implementer:
-  current-checkout paths, stable symbol or role hints, and the relevant semantic traits. The
-  evaluator reads those files at current HEAD and applies the same staleness rule: locate and
-  verify a moved exemplar's semantic equivalent; if none can be verified and the review approach
-  would materially change, return `NEEDS_CONTEXT` rather than guessing, relying on obsolete code,
-  or widening the review scope.
-- **Prior known issues** (batch 2+) — collect findings from previous `audit-trail/batch-*/review.json`
-  files and pass as a deduplicated list. This prevents the evaluator from re-raising the same
-  finding across batches. Findings that appear in 2+ consecutive reviews auto-escalate in severity.
-
-Do NOT send full story files, full plan files, or unrelated source files. The evaluator
-runs the full 3-stage review from the `code-review` skill on this scoped context.
-
-Immediately before dispatching the evaluator, run `ai-conductor closeout-event start evaluator`.
-
-**Evaluator frequency + model scaling by complexity tier:**
-
-| Tier | Intermediate batches | Final batch | Intermediate model | Final model |
-|------|---------------------|-------------|--------------------|-------------|
-| **Small** | Skipped | Always | — | Sonnet |
-| **Medium** | Every 8 tasks | Always | **Sonnet** | **Opus** |
-| **Large (>15 tasks)** | Every 4 tasks | Always | Sonnet | Opus |
-
-**Risk-domain override:** A batch involving concurrency, state mutation, security, auth, or money elevates that batch's evaluator to Claude Code Fable, the top Claude tier, regardless of its tier row.
-
-Rationale: intermediate-batch reviews check compliance against a narrow diff + a handful
-of acceptance criteria — a task Sonnet handles well. The final batch review evaluates
-cross-batch integration and the full architectural picture, which is where Opus's deeper
-reasoning pays off. A review of the 2026-04-17 Medium run (31 tasks, 7 batches) showed all
-4 intermediate evaluators could have run on Sonnet without verdict drift — they were the
-largest single token line item in that run.
-
-Pre-batch verification (`BATCH_AFFECTED_TESTS` or its indeterminate-scope fallback, linter,
-`/simplify`) still runs at EVERY boundary regardless of tier.
-
-**Evaluator diff scope:** Always scope the evaluator to the **current batch's diff only**
-(`git diff <batch-start-commit>..HEAD`), not the full branch diff. For the final batch,
-add a lightweight integration check (full branch stat summary) but do NOT re-review earlier
-batches line by line — they already passed their own evaluator gate.
-
-**Enforcement — orchestrator writes, not the evaluator.** After the evaluator
-returns, the orchestrator (not the evaluator) MUST perform these actions
-atomically before advancing one single token further:
-
-1. `mkdir -p .pipeline/audit-trail/batch-N`
-2. Write the full evaluator return (verdict, findings, severity, diff scope) to
-   `.pipeline/audit-trail/batch-N/review.json`
-3. Stat-check `test -s .pipeline/audit-trail/batch-N/review.json` — non-empty file must
-   exist before the next batch starts
-4. Record the completed `evaluator` closeout obligation with
-   `ai-conductor closeout-event end evaluator`, then verify that
-   `.pipeline/pipeline-events.jsonl` contains a parseable `pipeline_closeout` record whose
-   `obligation` is exactly `evaluator`. An event for another obligation does not satisfy this check.
-
-A missing or empty `review.json` remains an independent hard gate: the pipeline MUST halt and
-dispatch the evaluator again rather than advancing. A missing, malformed, or non-matching
-closeout record is a second hard gate: the pipeline MUST halt with
-`Batch N blocked: missing recorded closeout event for evaluator` and record the matching event
-before advancing. If `end` is refused because no start is open, halt with that message; recover by
-running `start`, re-dispatching the evaluator, and running `end` — never record a back-to-back
-start and end. Do NOT trust "the evaluator ran successfully in the transcript" as evidence —
-only the required files on disk count. Past runs have silently bypassed 4+ evaluator gates
-because the subagent result was summarized back to the orchestrator but the write step was
-skipped; the file checks are the only reliable safeguard.
-
-Evaluate both gates independently: a valid evaluator closeout record cannot cure an empty
-`review.json`, and a non-empty review cannot cure an absent or mismatched evaluator record.
-
-This closeout-event gate applies only to pipeline sessions started after the closeout-event
-emitter is available. A build already in flight when that emitter ships is exempt: do not
-retroactively block it for an event that its running session had no way to write. The existing
-`review.json` gate still applies to every session.
-
-The evaluator runs:
-
-1. **Spec compliance** — Does every acceptance criterion (happy + negative) have concrete
-   sufficient behavioral proof at the lowest suitable layer? Compatible criteria may share
-   coverage; do not require one new test per criterion.
-2. **Code quality** — Clear, readable, no duplication, no complexity violations, stack-specific checks?
-3. **Domain integrity** — Domain types used, boundaries respected, naming correct?
-
-The evaluator also runs a **security check** at each batch boundary:
-- Are new endpoints authenticated?
-- Do new inputs have validation?
-- Are tokens/sessions expiring?
-- Run Brakeman incrementally on changed files
-
-The pipeline **cannot proceed** past a batch boundary without an evaluator verdict:
-
-| Verdict | Action |
-|---------|--------|
-| APPROVE | Proceed to next batch |
-| REQUEST_CHANGES | Fix and re-review (counts toward rework budget) |
-| BLOCK | Halt. Escalate to user. |
-
-Skipping the evaluator is what allows duplication, missing specs, and security gaps to compound
-across an entire pipeline run. This is the harness's strongest quality mechanism — never skip it.
-
-**Code-review gate satisfaction:** The final batch evaluator verdict satisfies the code-review
-gate (Step 10 in `/conduct`). After the final batch evaluator returns APPROVE, write a marker
-file at `.pipeline/audit-trail/code-review-satisfied.md` containing the verdict date and batch
-number. When pipeline is used, a separate `/code-review` dispatch is not needed.
 
 ### Halt-and-Escalate (Explicit User-Input Required)
 
@@ -610,7 +489,7 @@ If stories in `.docs/stories/` have been modified since the plan was created:
 
 ### State Management
 
-Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `review.json`, `rework-N.json`, `commit.txt`, plus `summary.json` for final pipeline metrics).
+Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `rework-N.json`, `commit.txt`, plus `summary.json` for final pipeline metrics).
 
 ### Parallel Execution (Standard and Full Autonomy)
 
@@ -737,7 +616,6 @@ Required fields (all numeric unless noted):
   "tasks_completed": 0,
   "tasks_skipped": 0,
   "batches_total": 0,
-  "batches_with_evaluator": 0,
   "rework_cycles_used": 0,
   "human_interventions": 0,
   "started_at": "<ISO-8601>",

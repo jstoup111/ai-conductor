@@ -52,7 +52,7 @@ Step 9:  /conflict-check        → DECIDE (skipped for Small; root-routes kickb
 Step 10: /plan                  → DECIDE (technical implementation plan, grounded in the architecture + stories)
 Step 10b: /coherence-check       → DECIDE (Medium/Large traceability gate after plan)
 Step 11: /writing-system-tests  → BUILD (skipped for Small)
-Step 12: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
+Step 12: /pipeline or /tdd      → BUILD (task completion and affected-test results; engine build_review is post-build review)
 Step 13: Engine-native configured-verifier gate → BUILD (repository-configured aggregate verification)
        ── CHECKPOINT ──         → User reviews build output, can go back or continue
 Step 14: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
@@ -88,7 +88,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 8b. diagrams | Architecture diagrams exist | Check `.docs/architecture/*.md` exist, or check state is "skipped" |
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier). **All ADRs must be APPROVED** (no DRAFT ADRs remaining). | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped". Grep `.docs/decisions/adr-*.md` for `Status: DRAFT` — if any DRAFT ADRs exist, this step is pending. |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
-| 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` and the affected-test result set. Pipeline evaluator satisfies code-review gate. |
+| 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` and the affected-test result set. The engine's `build_review` step is the post-build review authority. |
 | 12. Engine-native configured-verifier gate | Current PASS evidence exists from the repository-configured aggregate verifier | Check `.pipeline/test-suite-evidence.json`; missing, stale, or failing evidence means this BUILD gate is pending. |
 | 13. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
 | 14. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
