@@ -1,3 +1,4 @@
+// Covers: task:7
 /**
  * RED acceptance specs for
  * `.docs/stories/live-daemon-e2e-build-step-never-runs-a-real-agent.md`.
@@ -26,6 +27,7 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const SOURCE_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const LIVE_RUN_BODY_PATH = join(
   CONDUCTOR_ROOT,
   'test/fixtures/live-e2e-run-body.ts',
@@ -168,6 +170,7 @@ describe('live daemon E2E command resolution (#1311)', () => {
       dispatchableStepCommands: ((providerKey: string) => readonly { step: string; skillName: string; rendered: string }[]) & {
         assertResolves: (
           homeDir: string,
+          sourceRoot: string,
           providerKey?: string,
           dependencies?: { access?: (path: string) => Promise<void> },
         ) => Promise<void>;
@@ -193,14 +196,14 @@ describe('live daemon E2E command resolution (#1311)', () => {
     // A home holding every registry skill passes preflight; a home missing one
     // fails it, naming the unresolved skill.
     const resolvedPaths: string[] = [];
-    await dispatchableStepCommands.assertResolves('/provisioned-home', 'claude', {
+    await dispatchableStepCommands.assertResolves('/provisioned-home', SOURCE_ROOT, 'claude', {
       access: async (path: string) => { resolvedPaths.push(path); },
     });
     expect(resolvedPaths).toEqual(commands.map(
       (command) => join('/provisioned-home', 'skills', command.skillName, 'SKILL.md'),
     ));
     const missing = commands[0].skillName;
-    await expect(dispatchableStepCommands.assertResolves('/provisioned-home', 'claude', {
+    await expect(dispatchableStepCommands.assertResolves('/provisioned-home', SOURCE_ROOT, 'claude', {
       access: async (path: string) => {
         if (path.includes(join('skills', missing))) throw new Error('ENOENT');
       },
@@ -214,7 +217,7 @@ describe('live daemon E2E command resolution (#1311)', () => {
       { homeDir: '/provisioned-home' },
       dispatch,
       'claude',
-      async (homeDir, providerKey) => { order.push(`preflight:${homeDir}:${providerKey}`); },
+      async (homeDir, _sourceRoot, providerKey) => { order.push(`preflight:${homeDir}:${providerKey}`); },
     )).resolves.toBe('dispatched');
     expect(order).toEqual(['preflight:/provisioned-home:claude', 'dispatch']);
 

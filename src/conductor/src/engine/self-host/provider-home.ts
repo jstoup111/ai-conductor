@@ -14,6 +14,7 @@ import {
 import { isProviderSetupUnavailableError } from '../provider-setup-failure.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
+import { resolveSkillName } from '../skill-names.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 
 export type SelfHostProvider = ProviderWith<'selfHost'>;
@@ -29,6 +30,7 @@ export interface ProviderHomeFs {
    * the files they point at, or the copy would carry links back into the worktree.
    */
   cp(source: string, destination: string): Promise<void>;
+  readdir(path: string): Promise<string[]>;
   rm(path: string, opts: { recursive?: boolean; force?: boolean }): Promise<void>;
   pathExists(path: string): Promise<boolean>;
 }
@@ -38,6 +40,7 @@ export const realProviderHomeFs: ProviderHomeFs = {
   mkdir: async (path) => { await fsp.mkdir(path, { recursive: true }); },
   symlink: (target, path) => fsp.symlink(target, path),
   cp: (source, destination) => fsp.cp(source, destination, { recursive: true, dereference: true }),
+  readdir: (path) => fsp.readdir(path),
   rm: (path, opts) => fsp.rm(path, opts),
   pathExists: (path) => fsp.access(path).then(() => true, () => false),
 };
@@ -194,8 +197,6 @@ export async function provisionProviderHome(
       // asset, including its bundled executable helpers, keeps discovery in
       // sync with whatever is currently checked out without exposing the
       // worktree path itself.
-      await fs.cp(target, join(homeDir, asset));
-
       // Operator-only skills exist to debug a run from the outside; a
       // dispatched step that loads one reads its own in-flight state as
       // evidence of failure. Claude gets this via a `skillOverrides` entry in
@@ -204,9 +205,22 @@ export async function provisionProviderHome(
       // (never the worktree) is therefore both provider-neutral and stronger
       // than an override: neither provider has an artifact to load at all.
       if (asset === 'skills') {
-        for (const skill of OPERATOR_ONLY_SKILLS) {
-          await fs.rm(join(homeDir, asset, skill), { recursive: true, force: true });
+        const destination = join(homeDir, asset);
+        await fs.mkdir(destination);
+        for (const directory of await fs.readdir(target)) {
+          // Operator-only identity is an engine contract, so it remains keyed
+          // by the source directory even when the host-visible name differs.
+          if (OPERATOR_ONLY_SKILLS.includes(directory)) continue;
+
+          const source = join(target, directory);
+          const hasSkillFile = await fs.pathExists(join(source, 'SKILL.md'));
+          const name = hasSkillFile
+            ? await resolveSkillName(options.worktreeRoot, directory)
+            : directory;
+          await fs.cp(source, join(destination, name));
         }
+      } else {
+        await fs.cp(target, join(homeDir, asset));
       }
     }
     if (provider.selfHostShape.agentsSkillsLink) {

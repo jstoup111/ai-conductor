@@ -4,6 +4,7 @@ import {
   STEP_SKILL_INVOCATIONS,
   renderSkillInvocation,
 } from '../../src/engine/skill-invocation.js';
+import { resolveSkillName } from '../../src/engine/skill-names.js';
 import type { StepName } from '../../src/types/index.js';
 
 /** A registry-derived command the live smoke may resolve from its isolated home. */
@@ -39,12 +40,25 @@ function deriveDispatchableStepCommands(providerKey: string): readonly Dispatcha
 /** Verify that every registry-derived command resolves from the isolated home. */
 async function assertStepCommandsResolve(
   homeDir: string,
+  sourceRoot: string,
   providerKey = 'claude',
   dependencies: StepCommandPreflightDependencies = {},
 ): Promise<void> {
   const skillsDir = join(homeDir, 'skills');
   const accessFile = dependencies.access ?? access;
-  const unresolved = (await Promise.all(deriveDispatchableStepCommands(providerKey).map(async (command) => {
+  const commands = await Promise.all(deriveDispatchableStepCommands(providerKey).map(async (command) => {
+    const skillName = await resolveSkillName(sourceRoot, command.skillName);
+    return {
+      ...command,
+      skillName,
+      rendered: renderSkillInvocation(
+        STEP_SKILL_INVOCATIONS[command.step]!,
+        providerKey,
+        skillName,
+      ),
+    };
+  }));
+  const unresolved = (await Promise.all(commands.map(async (command) => {
     try {
       await accessFile(join(skillsDir, command.skillName, 'SKILL.md'));
       return undefined;
