@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-10-14
+## [1.7.0] - 2026-10-15
 
 ### Added
 
@@ -49,6 +49,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can restack descendant branches after changing a closed stacked child. ([implementation PR #3169](https://github.com/jstoup111/ai-conductor/pull/3169)).
 - Plans of 30 or more tasks are now refused at spec land unless they carry a `**Scope-exception:**` declaration (previously 41). ([implementation PR #3201](https://github.com/jstoup111/ai-conductor/pull/3201)).
 - Daemon operators see plan-growth budgets based on the resolved plan and clear unresolved-plan state. ([implementation PR #3143](https://github.com/jstoup111/ai-conductor/pull/3143)).
+- Build pipelines now rely on build review while retiring batch evaluators and closeout telemetry. ([implementation PR #3224](https://github.com/jstoup111/ai-conductor/pull/3224)).
 
 ### Removed
 
@@ -134,6 +135,10 @@ ai-conductor kickback-budget raise --feature "$FEATURE_SLUG" --gate restack --ch
 
 ```bash migration
 bin/migrate
+```
+
+```bash migration
+printf '%s\n' 'ai-conductor closeout-event is retired; no consumer action is required.'
 ```
 
 ## [1.6.0] - 2026-10-06
