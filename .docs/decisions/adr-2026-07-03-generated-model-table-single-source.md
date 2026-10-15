@@ -55,6 +55,16 @@ has no table row, and `architecture_review_as_built` exists only as prose inside
      (exit 0 for the section) — consumer checkouts without `npm install` must never see a false
      integrity failure. The existing presence-only check 5 remains and still runs everywhere.
 
+   > **Amended 2026-10-14 by #1014:** The Degradation clause is superseded. When
+   > `src/conductor/node_modules` is absent (or, for 5b, `jq` is absent), checks 5a and 5b now
+   > FAIL with a message naming the missing prerequisite and the `npm ci` remedy, rather than
+   > WARN and skip. The clause's premise no longer holds: no consumer install or `bin/` path
+   > invokes `test/test_harness_integrity.sh`, which runs only in this repository, where CI runs
+   > `npm ci` first and dispatched builds run `npm test` in `src/conductor` before the suite. A
+   > silent skip let a fresh clone report green while the drift gates never executed. Also per
+   > #1014, 5b additionally fails when a non-exempt skill with an expected model carries no
+   > `model:` pin, and check 5 itself fails closed on a skill with no model-table row.
+
 5. **Table shape:** every engine step gets its own generated row (Model, Effort, Why), with
    tier-override suffixes rendered from `DEFAULT_STEP_TIER_OVERRIDES` (e.g. `sonnet (S/M),
    fable (L)`); `complexity` and `architecture_review_as_built` become explicit rows. Extra
