@@ -118,7 +118,8 @@ unset reference_document
 # but a leading opening delimiter must have a closing delimiter so malformed
 # skill metadata cannot silently install under a misleading catalog name.
 skill_frontmatter_name() {
-  local skill_file=$1 fallback_name=$2 line declared_name=''
+  local skill_file=$1 fallback_name=$2 line declared_name='' content remainder character
+  local index closed
 
   if ! IFS= read -r line < "$skill_file"; then
     printf '%s\n' "$fallback_name"
@@ -141,15 +142,36 @@ skill_frontmatter_name() {
       declared_name="${declared_name#"${declared_name%%[![:space:]]*}"}"
       declared_name="${declared_name%"${declared_name##*[![:space:]]}"}"
       case "$declared_name" in
-        \"*\")
-          declared_name=${declared_name#\"}
-          declared_name=${declared_name%\"}
-          declared_name=${declared_name//\\\"/\"}
-          ;;
-        \'*\')
-          declared_name=${declared_name#\'}
-          declared_name=${declared_name%\'}
-          declared_name=${declared_name//\'\'/\'}
+        \"*|\'*)
+          content=''
+          closed=0
+          for ((index = 1; index < ${#declared_name}; index++)); do
+            character=${declared_name:index:1}
+            if [ "${declared_name:0:1}" = '"' ] && [ "$character" = '\\' ] \
+              && [ "${declared_name:index+1:1}" = '"' ]; then
+              content+='"'
+              ((index++))
+            elif [ "${declared_name:0:1}" = "'" ] && [ "$character" = "'" ] \
+              && [ "${declared_name:index+1:1}" = "'" ]; then
+              content+="'"
+              ((index++))
+            elif [ "$character" = "${declared_name:0:1}" ]; then
+              remainder=${declared_name:index+1}
+              if [ -z "$remainder" ] \
+                || [[ "$remainder" =~ ^[[:space:]]+$ ]] \
+                || [[ "$remainder" =~ ^[[:space:]]+\# ]]; then
+                declared_name=$content
+                closed=1
+              fi
+              break
+            else
+              content+=$character
+            fi
+          done
+          if [ "$closed" -eq 0 ]; then
+            fail "Invalid quoted skill frontmatter name: ${skill_file}" >&2
+            return 1
+          fi
           ;;
         *)
           declared_name=${declared_name%% \#*}

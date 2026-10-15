@@ -47,14 +47,16 @@ async function renamedSkillRoot(): Promise<string> {
 }
 
 describe('DefaultStepRunner skill-name root', () => {
-  it.each([
-    ['claude', '/'],
-    ['codex', '$'],
-  ] as const)('keeps resolved built-in names in %s candidate overrides, including one-shot gates', async (providerKey, prefix) => {
+  it.each(['claude', 'codex'] as const)('keeps resolved built-in names in %s candidate overrides, including one-shot gates', async (providerKey) => {
     const root = await renamedSkillRoot();
-    const candidatePrompts: string[] = [];
+    const candidatePrompts: Array<{ claude: string; codex: string }> = [];
     const candidateExecutor: NonNullable<StepRunnerOptions['providerExecutor']> = async (input) => {
-      candidatePrompts.push(input.optionsForCandidate?.(providerKey)?.prompt ?? input.options.prompt);
+      expect(input.optionsForCandidate).toBeTypeOf('function');
+      const optionsForCandidate = input.optionsForCandidate!;
+      candidatePrompts.push({
+        claude: optionsForCandidate('claude').prompt,
+        codex: optionsForCandidate('codex').prompt,
+      });
       return {
         success: true, output: 'MODELS: 0\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S', exitCode: 0,
         preferredProvider: 'claude', actualProvider: providerKey, attempts: [],
@@ -79,7 +81,10 @@ describe('DefaultStepRunner skill-name root', () => {
     await runner.run('explore', {});
     await runner.assessComplexity();
 
-    expect(candidatePrompts).toEqual(expect.arrayContaining([`${prefix}ac-explore`, `${prefix}ac-conduct complexity`]));
+    expect(candidatePrompts).toEqual(expect.arrayContaining([
+      { claude: '/ac-explore', codex: '$ac-explore' },
+      { claude: '/ac-conduct complexity', codex: '$ac-conduct complexity' },
+    ]));
   });
 
   it('renders a built-in invocation from the served skill frontmatter', async () => {

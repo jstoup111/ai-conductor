@@ -1698,6 +1698,7 @@ export class DefaultStepRunner implements StepRunner {
           false,
           undefined,
           customSkill,
+          'skill',
           resolvedSkillName,
         );
       }
@@ -1740,6 +1741,7 @@ export class DefaultStepRunner implements StepRunner {
         true,
         interactive,
         customSkill,
+        'skill',
         resolvedSkillName,
       );
     }

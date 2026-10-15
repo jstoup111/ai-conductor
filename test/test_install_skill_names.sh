@@ -123,13 +123,15 @@ else
   fail 'frontmatter-named Codex link resolves to its source directory'
 fi
 
-for syntax in double single comment; do
+for syntax in double single comment double-comment single-comment; do
   SCALAR_CHECKOUT="$TMP_ROOT/${syntax}-checkout"
   copy_checkout "$SCALAR_CHECKOUT"
   case "$syntax" in
     double) sed -i 's/^name: plan$/name: "ac-plan"/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
     single) sed -i "s/^name: plan$/name: 'ac-plan'/" "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
     comment) sed -i 's/^name: plan$/name: ac-plan # comment/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+    double-comment) sed -i 's/^name: plan$/name: "ac-plan" # comment/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+    single-comment) sed -i "s/^name: plan$/name: 'ac-plan' # comment/" "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
   esac
   SCALAR_HOME="$TMP_ROOT/${syntax}-home"
   if run_install "$SCALAR_CHECKOUT" "$SCALAR_HOME" --providers claude,codex >"$TMP_ROOT/${syntax}.out" 2>&1; then
