@@ -147,7 +147,7 @@ skill_frontmatter_name() {
           closed=0
           for ((index = 1; index < ${#declared_name}; index++)); do
             character=${declared_name:index:1}
-            if [ "${declared_name:0:1}" = '"' ] && [ "$character" = '\\' ] \
+            if [ "${declared_name:0:1}" = '"' ] && [ "$character" = $'\\' ] \
               && [ "${declared_name:index+1:1}" = '"' ]; then
               content+='"'
               ((index++))

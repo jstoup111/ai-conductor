@@ -123,7 +123,7 @@ else
   fail 'frontmatter-named Codex link resolves to its source directory'
 fi
 
-for syntax in double single comment double-comment single-comment; do
+for syntax in double single comment double-comment single-comment double-escaped double-escaped-comment; do
   SCALAR_CHECKOUT="$TMP_ROOT/${syntax}-checkout"
   copy_checkout "$SCALAR_CHECKOUT"
   case "$syntax" in
@@ -132,14 +132,20 @@ for syntax in double single comment double-comment single-comment; do
     comment) sed -i 's/^name: plan$/name: ac-plan # comment/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
     double-comment) sed -i 's/^name: plan$/name: "ac-plan" # comment/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
     single-comment) sed -i "s/^name: plan$/name: 'ac-plan' # comment/" "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+    double-escaped) sed -i 's/^name: plan$/name: "ac-\\"plan"/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+    double-escaped-comment) sed -i 's/^name: plan$/name: "ac-\\"plan" # comment/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+  esac
+  scalar_name=ac-plan
+  case "$syntax" in
+    double-escaped|double-escaped-comment) scalar_name='ac-"plan' ;;
   esac
   SCALAR_HOME="$TMP_ROOT/${syntax}-home"
   if run_install "$SCALAR_CHECKOUT" "$SCALAR_HOME" --providers claude,codex >"$TMP_ROOT/${syntax}.out" 2>&1; then
-    check "${syntax} frontmatter scalar links ac-plan in both catalogs" \
-      bash -c 'test "$(readlink -f "$1/.claude/skills/ac-plan")" = "$2/skills/plan" && test "$(readlink -f "$1/.agents/skills/ac-plan")" = "$2/skills/plan"' \
-      _ "$SCALAR_HOME" "$SCALAR_CHECKOUT"
+    check "${syntax} frontmatter scalar links ${scalar_name} in both catalogs" \
+      bash -c 'test "$(readlink -f "$1/.claude/skills/$3")" = "$2/skills/plan" && test "$(readlink -f "$1/.agents/skills/$3")" = "$2/skills/plan"' \
+      _ "$SCALAR_HOME" "$SCALAR_CHECKOUT" "$scalar_name"
   else
-    fail "${syntax} frontmatter scalar links ac-plan in both catalogs"
+    fail "${syntax} frontmatter scalar links ${scalar_name} in both catalogs"
   fi
 done
 
