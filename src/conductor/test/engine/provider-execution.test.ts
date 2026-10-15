@@ -615,7 +615,7 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      { runId: 'R', attempt: 0, member: 'security' },
+      { runId: 'R', attempt: 1, member: 'security' },
     );
   });
 
@@ -1812,7 +1812,7 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      expect.objectContaining({ attempt: 0 }),
+      expect.objectContaining({ attempt: 1 }),
     );
     expect(claude.invoke).not.toHaveBeenCalled();
     expect(teardown).toHaveBeenCalledOnce();
