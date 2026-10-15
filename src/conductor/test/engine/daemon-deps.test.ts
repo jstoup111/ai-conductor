@@ -55,6 +55,7 @@ import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { leafBranchFor } from '../../src/engine/feature-branch-identity.js';
 import { buildWorkOrder } from '../../src/engine/work-order.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { resolveHarnessRoot } from '../../src/engine/install-freshness.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -269,6 +270,47 @@ describe('engine/daemon-deps', () => {
       join(dir, 'feature'),
       undefined,
       expect.objectContaining({ baseSha: 'base-sha', events, dispatchStart: true, dispatchStartTimeoutSeconds: 7 }),
+    );
+  });
+
+  it('passes the engine harness skill-name root into worktree preparation', async () => {
+    vi.mocked(prepareWorktree).mockResolvedValue(undefined);
+    vi.mocked(execa).mockResolvedValue({ stdout: 'base-sha' } as Awaited<ReturnType<typeof execa>>);
+    const d = makeFeatureRunnerDeps({
+      projectRoot: dir,
+      worktreeBase: join(dir, '.worktrees'),
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+    });
+
+    await d.prepareWorktree!({ path: join(dir, 'feature'), branch: 'feat/feature' });
+
+    expect(prepareWorktree).toHaveBeenCalledWith(
+      join(dir, 'feature'),
+      undefined,
+      expect.objectContaining({ skillNameRoot: await resolveHarnessRoot() }),
+    );
+  });
+
+  it('passes the feature worktree as the skill-name root for a self-host daemon', async () => {
+    vi.mocked(prepareWorktree).mockResolvedValue(undefined);
+    vi.mocked(execa).mockResolvedValue({ stdout: 'base-sha' } as Awaited<ReturnType<typeof execa>>);
+    const harnessRoot = await resolveHarnessRoot();
+    expect(harnessRoot).not.toBeNull();
+    const featurePath = join(dir, 'feature');
+    const d = makeFeatureRunnerDeps({
+      projectRoot: harnessRoot!,
+      worktreeBase: join(dir, '.worktrees'),
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+    });
+
+    await d.prepareWorktree!({ path: featurePath, branch: 'feat/feature' });
+
+    expect(prepareWorktree).toHaveBeenCalledWith(
+      featurePath,
+      undefined,
+      expect.objectContaining({ skillNameRoot: featurePath }),
     );
   });
 

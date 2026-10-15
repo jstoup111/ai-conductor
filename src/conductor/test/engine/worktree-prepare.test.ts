@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:6
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -719,6 +719,30 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
     await prepareWorktree(dir);
     const env = await readFile(join(dir, '.env'), 'utf-8');
     expect(env).toContain(`${NAMESPACE_VAR}=${sanitizeNamespace(dir.split('/').pop()!)}`);
+  });
+
+  it('keys operator-only skill suppression by its frontmatter name while preserving operator overrides', async () => {
+    const skillNameRoot = await mkdtemp(join(tmpdir(), 'wt-prepare-skill-names-'));
+    try {
+      const skillPath = join(skillNameRoot, 'skills', 'daemon-triage');
+      await mkdir(skillPath, { recursive: true });
+      await writeFile(join(skillPath, 'SKILL.md'), '---\nname: ac-daemon-triage\n---\n', 'utf-8');
+      await mkdir(join(dir, '.claude'), { recursive: true });
+      await writeFile(join(dir, '.claude', 'settings.local.json'), JSON.stringify({
+        skillOverrides: { 'another-skill': 'on', 'ac-daemon-triage': 'on' },
+      }), 'utf-8');
+
+      await prepareWorktree(dir, undefined, { skillNameRoot });
+
+      const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+      expect(settings.skillOverrides).toMatchObject({
+        'another-skill': 'on',
+        'ac-daemon-triage': 'off',
+      });
+      expect(settings.skillOverrides).not.toHaveProperty('daemon-triage');
+    } finally {
+      await rm(skillNameRoot, { recursive: true, force: true });
+    }
   });
 
   it('preserves existing .env entries and replaces (not duplicates) the namespace line', async () => {
