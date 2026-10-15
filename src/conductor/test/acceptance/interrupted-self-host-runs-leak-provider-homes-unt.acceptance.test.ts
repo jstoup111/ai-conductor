@@ -38,6 +38,7 @@ import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/d
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 import { provisionSandboxBuildEnv } from '../../src/engine/self-host/sandbox-build-env.js';
 import { sweepFeatureWorktreeScratch } from '../../src/engine/self-host/provider-scratch.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCb);
 const roots: string[] = [];
@@ -187,7 +188,7 @@ describe('Concrete worktree daemon sweep', () => {
     const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2 });
     const leasePath = join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json');
     const lease = JSON.parse(await readFile(leasePath, 'utf8')); lease.ownerPid = 99999999; await writeFile(leasePath, `${JSON.stringify(lease)}\n`);
-    await sweepFeatureWorktreeScratch({ worktreeBase: join(root, '.worktrees'), events: { emit: async () => {} } as never, log: () => {} });
+    await sweepFeatureWorktreeScratch({ worktreeBase: join(root, '.worktrees'), events: new ConductorEventEmitter(), log: () => {} });
     expect(await exists(home.homeDir)).toBe(false);
     expect(await exists(durable)).toBe(true);
   });
