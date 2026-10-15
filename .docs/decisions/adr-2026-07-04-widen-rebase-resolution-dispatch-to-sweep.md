@@ -46,4 +46,8 @@ same configured cap (default 3).
 - ADR-001's principle survives: prompts resolve conflicts, engines decide everything else.
 - The sweep gains a minutes-scale work item; bounded to one resolution per tick, after the
   label pass (review Condition 3).
+  > **Amended 2026-10-14 by #1174:** The sweep no longer runs the resolution inline or limits it
+  > to one per tick. It queues the work as a pooled repair that takes a free `daemon_concurrency`
+  > slot ahead of new feature claims, at most one per pull request at a time. See
+  > adr-2026-10-14-dispatch-first-daemon-maintenance D5.
 - Any future third dispatch site requires another amending ADR.
