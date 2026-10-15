@@ -36,7 +36,8 @@ export interface AdmittedRoutingItem {
    * authorized its admission.
    */
   readonly ownerTaskIds?: readonly string[];
-  readonly citedPaths?: readonly string[];
+  /** Immutable path citations admitted from the work order and its owner. */
+  readonly citedPaths: readonly string[];
   readonly existingTask?: boolean;
 }
 
@@ -125,11 +126,11 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
       planText: input.planText, appendedChildren: input.appendedChildren, declaredPositions: input.declaredPositions,
     });
     if (ownership.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: ownership.detail };
-    const paths = await classifyCitedPaths(source.citedPaths ?? [], input.leafTip, input.git);
+    const paths = await classifyCitedPaths(source.citedPaths, input.leafTip, input.git);
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: ownership.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: ownership.owner as ChildId, host: host.host, reason: ownership.reason, fallback: [], ...(source.existingTask ? { restage: false } : {}) } });
+    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: ownership.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : ownership.reason, fallback: [], ...(source.existingTask ? { restage: false } : {}) } });
   }
 
   const judged = await runResidueRoutingCall({ items: residue.map(residueJudgeItem), declaredPositions: input.declaredPositions, judge: input.judge });
@@ -137,11 +138,11 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   for (const answer of judged.answers) {
     const source = residue.find((item) => item.id === answer.itemId)!;
     const owner = resolveResidueOwner(answer);
-    const paths = await classifyCitedPaths(source.citedPaths ?? [], input.leafTip, input.git);
+    const paths = await classifyCitedPaths(source.citedPaths, input.leafTip, input.git);
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: owner.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: owner.owner as ChildId, host: host.host, reason: owner.reason, rationale: owner.rationale, fallback: [], ...(source.existingTask ? { restage: false } : {}) } });
+    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: owner.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : owner.reason, rationale: owner.rationale, fallback: [], ...(source.existingTask ? { restage: false } : {}) } });
   }
 
   if (resolved.length === 0) return { kind: 'halt', haltClass: 'needs-human', detail: 'No admitted work can be routed' };

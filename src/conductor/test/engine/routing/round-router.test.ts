@@ -33,8 +33,8 @@ describe('routeAdmittedRound', () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
       ...input([
-        { id: 'one', gap: gap('one', 'T1'), gateSource: 'prd-audit', ownerTaskIds: ['T1'], provenance: { kind: 'task-bound' } },
-        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', ownerTaskIds: ['T3'], provenance: { kind: 'task-bound' } },
+        { id: 'one', gap: gap('one', 'T1'), gateSource: 'prd-audit', ownerTaskIds: ['T1'], citedPaths: [], provenance: { kind: 'task-bound' } },
+        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', ownerTaskIds: ['T3'], citedPaths: [], provenance: { kind: 'task-bound' } },
       ]), judge,
     });
     expect(routed).toMatchObject({ kind: 'routed', hosts: [1, 3] });
@@ -54,6 +54,7 @@ describe('routeAdmittedRound', () => {
         gap: gap('repair-for-one', 'rem-prd-audit-T2'),
         gateSource: 'prd-audit',
         ownerTaskIds: ['T1'],
+        citedPaths: [],
         provenance: { kind: 'task-bound' },
       }]),
     });
@@ -67,12 +68,12 @@ describe('routeAdmittedRound', () => {
 
   it('halts before allocation when task ownership or a tree is unavailable', async () => {
     const missingBinding = await routeAdmittedRound({
-      ...input([{ id: 'unbound', gap: gap('unbound', 'T1'), gateSource: 'prd-audit', provenance: { kind: 'task-bound' } }]),
+      ...input([{ id: 'unbound', gap: gap('unbound', 'T1'), gateSource: 'prd-audit', citedPaths: [], provenance: { kind: 'task-bound' } }]),
     });
     expect(missingBinding).toMatchObject({ kind: 'halt', detail: expect.stringContaining('admitted owner-task binding') });
 
     const missingOwner = await routeAdmittedRound({
-      ...input([{ id: 'missing', gap: gap('missing', 'T9'), gateSource: 'prd-audit', ownerTaskIds: ['T9'], provenance: { kind: 'task-bound' } }]),
+      ...input([{ id: 'missing', gap: gap('missing', 'T9'), gateSource: 'prd-audit', ownerTaskIds: ['T9'], citedPaths: [], provenance: { kind: 'task-bound' } }]),
     });
     expect(missingOwner).toMatchObject({ kind: 'halt', detail: expect.stringContaining('T9') });
 
@@ -89,7 +90,7 @@ describe('routeAdmittedRound', () => {
     const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({ success: true, output: 'not JSON' }));
     const routed = await routeAdmittedRound({
       ...input([{
-        id: 'adr-d2', gap: gap('adr-d2', 'unused'), gateSource: 'as-built',
+        id: 'adr-d2', gap: gap('adr-d2', 'unused'), gateSource: 'as-built', citedPaths: [],
         provenance: { kind: 'as-built', reference: { kind: 'adr-decision', stem: 'adr-d2', decision: 2 }, summary: 'ADR-only finding' },
       }]), judge,
     });
@@ -101,8 +102,8 @@ describe('routeAdmittedRound', () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
       ...input([
-        { id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit', ownerTaskIds: ['T2'], provenance: { kind: 'task-bound' } },
-        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', ownerTaskIds: ['T3'], existingTask: true, provenance: { kind: 'task-bound' } },
+        { id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit', ownerTaskIds: ['T2'], citedPaths: [], provenance: { kind: 'task-bound' } },
+        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', ownerTaskIds: ['T3'], citedPaths: [], existingTask: true, provenance: { kind: 'task-bound' } },
       ]),
       judge, consolidatedManualTestFail: ['manual_test: FAIL row one', 'manual_test: FAIL row two'],
     });
@@ -131,14 +132,14 @@ describe('routeAdmittedRound', () => {
     const routed = await routeAdmittedRound({
       ...input([
         {
-          id: 'adr-d1', gap: gap('adr-d1', 'repair-adr'), gateSource: 'as-built',
+          id: 'adr-d1', gap: gap('adr-d1', 'repair-adr'), gateSource: 'as-built', citedPaths: [],
           provenance: {
             kind: 'as-built',
             reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 1 },
             summary: 'The ADR is not wired.',
           },
         },
-        { id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit', ownerTaskIds: ['T2'], provenance: { kind: 'task-bound' } },
+        { id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit', ownerTaskIds: ['T2'], citedPaths: [], provenance: { kind: 'task-bound' } },
       ]),
       judge, consolidatedManualTestFail: failRows,
     });
@@ -177,7 +178,7 @@ describe('routeAdmittedRound', () => {
     };
     const routed = await routeAdmittedRound({
       ...input([{
-        id: 'refusal-dec-1', gap: refusalGap, gateSource: 'prd-audit',
+        id: 'refusal-dec-1', gap: refusalGap, gateSource: 'prd-audit', citedPaths: [],
         provenance: { kind: 'refusal-rework', governingEvidence: refusalGap.governingClause },
       }]), judge,
     });
@@ -211,7 +212,7 @@ describe('routeAdmittedRound', () => {
     const asBuiltGap = { ...gap('as-built-1', 'wire-boundary'), rationale: 'Wire the boundary.' };
     const routed = await routeAdmittedRound({
       ...input([{
-        id: 'as-built-1', gap: asBuiltGap, gateSource: 'as-built',
+        id: 'as-built-1', gap: asBuiltGap, gateSource: 'as-built', citedPaths: [],
         provenance: {
           kind: 'as-built', reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 3 },
           summary: 'The boundary is not wired.',

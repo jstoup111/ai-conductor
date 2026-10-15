@@ -1,4 +1,4 @@
-// Covers: task:22
+// Covers: task:22, task:rem-prd-audit-W5
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -140,5 +140,18 @@ describe('cannot-host (real local Git)', () => {
     })).toMatchObject({ kind: 'halt', detail: expect.stringContaining('2') });
     expect(await classifyCitedPaths(['src/b.ts'], 'feat/daemon-missing', stack.git))
       .toMatchObject({ kind: 'halt', detail: expect.stringContaining('feat/daemon-missing') });
+  });
+
+  it('refuses the leaf fallback when a prerequisite disappears before host selection', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    const selected = await selectHost({
+      owner: child(1), inputs: ['src/missing.ts'], positions: [child(1), child(2), child(3)], leafTip, git: stack.git,
+    });
+
+    expect(selected).toEqual({
+      kind: 'halt',
+      detail: 'leaf branch feat/daemon-demo is missing prerequisite path: src/missing.ts',
+    });
   });
 });

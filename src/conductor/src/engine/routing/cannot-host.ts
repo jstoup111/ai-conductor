@@ -81,5 +81,16 @@ export async function selectHost(options: SelectHostOptions): Promise<HostSelect
       return { host: candidate, reason: 'prerequisite-paths' };
     }
   }
+  const atLeaf = await containsEveryPath(git, leafTip, inputs);
+  if (atLeaf === undefined) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
+  if (!atLeaf) {
+    const missing: string[] = [];
+    for (const path of inputs) {
+      const exists = await hasPath(git, leafTip, path);
+      if (exists === undefined) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
+      if (!exists) missing.push(path);
+    }
+    return { kind: 'halt', detail: `leaf branch ${leafTip} is missing prerequisite path${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}` };
+  }
   return { host: leaf, reason: 'prerequisite-paths' };
 }

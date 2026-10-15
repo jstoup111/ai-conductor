@@ -281,7 +281,7 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
-import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskPaths } from './plan-task-parse.js';
 import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
@@ -642,6 +642,41 @@ export type { AsBuiltGoverningClauseResolution } from './as-built-routing.js';
  * user is pushed toward `interactive`, `back`, or `quit` instead.
  */
 export const MAX_RECOVERY_RETRIES = 2;
+
+const CITED_PATH_LINE_SUFFIX = /(?::\d+(?:-\d+)?|#L\d+)$/i;
+const CITED_PATH_FILE = /(?:^|\/)[^/\s]+\.[^/\s.]+$/;
+
+/**
+ * Extract repository paths from the already-admitted work-order context.  The
+ * host selector alone decides whether a cited path is an input or an output;
+ * this seam deliberately preserves every path-shaped citation without trying
+ * to infer whether the repair will edit it.
+ */
+function citedRepositoryPaths(text: string): string[] {
+  const paths: string[] = [];
+  // Done-when criteria commonly put the path in a code span. Preserve that
+  // token as a unit before the prose scan, so punctuation around the span
+  // cannot make a prerequisite citation disappear.
+  const tokens = [
+    ...[...text.matchAll(/`([^`]+)`/g)].map((match) => match[1]!),
+    ...text.split(/\s+/),
+  ];
+  for (const rawToken of tokens) {
+    const path = rawToken
+      .replace(/^[`"']+|[`"'),.;:!?]+$/g, '')
+      .replace(/^\.\//, '')
+      .replace(CITED_PATH_LINE_SUFFIX, '');
+    if (
+      path === '' ||
+      path.startsWith('/') ||
+      path.startsWith('../') ||
+      (!path.includes('/') && !CITED_PATH_FILE.test(path)) ||
+      paths.includes(path)
+    ) continue;
+    paths.push(path);
+  }
+  return paths;
+}
 
 // ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
 /** Bound message-derived reset deadlines so a malformed provider response cannot wedge a run. */
@@ -3973,7 +4008,7 @@ export class Conductor {
     const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined;
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
-    const prdAuditFindings = new Map<string, { criterion: string; parentTask: string }>();
+    const prdAuditFindings = new Map<string, { criterion: string; parentTask: string; evidence: string }>();
     // Both appended and existing-task repairs retain the criteria that
     // authorized them. The pending receipt is the only durable context at a
     // later BUILD-boundary cap halt, so keep this derivation shared.
@@ -4001,6 +4036,7 @@ export class Conductor {
         const boundFinding = {
           criterion: judgment.criterionId,
           parentTask: judgment.ownerTaskId,
+          evidence: judgment.evidence,
         };
         // Only an active criterion owns repair admission. Requirement
         // associations remain traceability evidence; they never authorize an
@@ -4625,10 +4661,25 @@ export class Conductor {
             const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
             if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
             const planText = activePlanText || await readFile(planPath, 'utf8');
+            const taskDoneWhen = parsePlanTaskDoneWhen(planText);
+            const taskPaths = parsePlanTaskPaths(planText);
+            const citedPathsFor = (
+              ownerTaskIds: readonly string[] | undefined,
+              evidence: readonly string[],
+              workOrder: readonly string[],
+            ): string[] => {
+              const paths = [...new Set((ownerTaskIds ?? []).flatMap((taskId) => Array.from(taskPaths.get(taskId) ?? [])))];
+              const ownerDoneWhen = (ownerTaskIds ?? []).flatMap((taskId) => taskDoneWhen.get(taskId) ?? []);
+              for (const text of [...ownerDoneWhen, ...evidence, ...workOrder]) {
+                for (const path of citedRepositoryPaths(text)) if (!paths.includes(path)) paths.push(path);
+              }
+              return paths;
+            };
             const routed = await routeAdmittedRound({
               admitted: routedFixes.map((gap) => {
                 const routedGap = gap as CriterionBoundRemediationGap;
                 const asBuiltFinding = asBuiltFindings.get(gap.id);
+                const prdAuditFinding = prdAuditFindings.get(gap.id.toUpperCase());
                 const provenance = refusalCriteriaByGapId.has(gap.id)
                   ? {
                     kind: 'refusal-rework' as const,
@@ -4643,13 +4694,22 @@ export class Conductor {
                       reference: asBuiltFinding.reference,
                       summary: asBuiltRecordedFindings.get(gap.id)?.summary ?? gap.rationale,
                 };
+                const ownerTaskIds = gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+                  ? resolvedExistingTaskIdsByGapId.get(gap.id)
+                  : routedGap.parentTask === undefined
+                    ? undefined
+                    : [String(routedGap.parentTask)];
+                const findingEvidence = refusalCriteriaByGapId.has(gap.id)
+                  ? [routedGap.governingClause ?? routedGap.criterion ?? gap.id]
+                  : asBuiltFinding === undefined
+                    ? prdAuditFinding === undefined ? [] : [prdAuditFinding.evidence]
+                    : [asBuiltRecordedFindings.get(gap.id)?.summary ?? gap.rationale];
                 return {
                   id: gap.id, gap: routedGap, gateSource: routedGap.gateSource ?? PRD_AUDIT_REMEDIATION_GATE_SOURCE,
-                  ownerTaskIds: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
-                    ? resolvedExistingTaskIdsByGapId.get(gap.id)
-                    : routedGap.parentTask === undefined
-                      ? undefined
-                      : [String(routedGap.parentTask)],
+                  ownerTaskIds,
+                  citedPaths: citedPathsFor(ownerTaskIds, findingEvidence, [
+                    routedGap.criterion ?? '', routedGap.rationale, ...routedGap.tasks.map((task) => task.title),
+                  ]),
                   existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
                   provenance,
                 };

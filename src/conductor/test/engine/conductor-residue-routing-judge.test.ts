@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-W1, task:rem-prd-audit-W2, task:rem-prd-audit-W4
+// Covers: task:rem-prd-audit-W1, task:rem-prd-audit-W2, task:rem-prd-audit-W4, task:rem-prd-audit-W5
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -8,8 +8,10 @@ import { join } from 'node:path';
 const routingMutationSpy = vi.hoisted(() => ({
   calls: [] as string[],
   ownerTaskIds: [] as Array<readonly string[] | undefined>,
+  citedPaths: [] as Array<readonly string[] | undefined>,
+  routedItems: [] as Array<{ readonly host: number; readonly reason: string }>,
   consolidatedManualTestFail: undefined as readonly string[] | undefined,
-  routeResult: undefined as unknown,
+  routeResult: undefined as Awaited<ReturnType<typeof import('../../src/engine/routing/round-router.js').routeAdmittedRound>> | undefined,
 }));
 
 vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => ({
@@ -55,8 +57,13 @@ vi.mock('../../src/engine/routing/round-router.js', async (importOriginal) => {
     routeAdmittedRound: vi.fn(async (...args: Parameters<typeof actual.routeAdmittedRound>) => {
       routingMutationSpy.calls.push('route');
       routingMutationSpy.ownerTaskIds = args[0].admitted.map((item) => item.ownerTaskIds);
+      routingMutationSpy.citedPaths = args[0].admitted.map((item) => item.citedPaths);
       routingMutationSpy.consolidatedManualTestFail = args[0].consolidatedManualTestFail;
-      return routingMutationSpy.routeResult ?? actual.routeAdmittedRound(...args);
+      const result = routingMutationSpy.routeResult ?? await actual.routeAdmittedRound(...args);
+      routingMutationSpy.routedItems = result.kind === 'routed'
+        ? result.items.map(({ host, reason }) => ({ host, reason }))
+        : [];
+      return result;
     }),
   };
 });
@@ -129,7 +136,11 @@ vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { childBranchFor, leafBranchFor } from '../../src/engine/feature-branch-identity.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import { closureRefFor } from '../../src/engine/routing/routing-refs.js';
 import { persistFixtureRemediationPlan, persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -251,6 +262,8 @@ describe('Conductor residue routing judge binding', () => {
   beforeEach(async () => {
     routingMutationSpy.calls = [];
     routingMutationSpy.ownerTaskIds = [];
+    routingMutationSpy.citedPaths = [];
+    routingMutationSpy.routedItems = [];
     routingMutationSpy.consolidatedManualTestFail = undefined;
     routingMutationSpy.routeResult = undefined;
     projectRoot = await mkdtemp(join(tmpdir(), 'conductor-residue-routing-judge-'));
@@ -418,6 +431,81 @@ describe('Conductor residue routing judge binding', () => {
 
     expect(outcome).toMatchObject({ kind: 'route' });
     expect(routingMutationSpy.ownerTaskIds).toEqual([['first']]);
+    expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
+  });
+
+  it('routes a T1 repair citing a child-2 prerequisite to host 2', async () => {
+    await initTestRepo(projectRoot);
+    const git = makeGitRunner(projectRoot);
+    const mustSucceed = async (args: string[]) => {
+      const result = await git(args);
+      if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+    };
+    const first = parseChildId(1)!;
+    const second = parseChildId(2)!;
+    const childBranch = (position: typeof first) => {
+      const result = childBranchFor('demo', position);
+      if (!result.ok) throw new Error(result.reason);
+      return result.branch;
+    };
+
+    await mkdir(join(projectRoot, 'src'), { recursive: true });
+    await writeFile(join(projectRoot, 'src', 'owner.ts'), 'export const owner = true;\n');
+    await mustSucceed(['add', '.']);
+    await mustSucceed(['commit', '-qm', 'base']);
+    await mustSucceed(['checkout', '-qb', childBranch(first)]);
+    await mustSucceed(['update-ref', closureRefFor('demo', first), 'HEAD']);
+    await mustSucceed(['checkout', '-qb', childBranch(second)]);
+    await writeFile(join(projectRoot, 'src', 'child-two.ts'), 'export const childTwo = true;\n');
+    await mustSucceed(['add', 'src/child-two.ts']);
+    await mustSucceed(['commit', '-qm', 'child two']);
+    await mustSucceed(['update-ref', closureRefFor('demo', second), 'HEAD']);
+    await mustSucceed(['checkout', '-qb', leafBranchFor('demo')]);
+
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task first: authored work\n\n**Files:** src/owner.ts\n\n**Done when:**\n- [test] `src/child-two.ts` is available to the repair.\n',
+      'utf8',
+    );
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: 'first' },
+        summary: 'src/child-two.ts is needed by the authored repair.',
+      }],
+      violations: 'The task-bound implementation is incomplete.',
+      resolution: 'Repair the task boundary.',
+    }, { attemptId: 'fixture-child-two', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltTaskBoundRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: leafBranchFor('demo'), nextChild: undefined,
+        }),
+      },
+    });
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'as-built T1 repair needs the child-2 prerequisite',
+      { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route' });
+    expect(routingMutationSpy.ownerTaskIds).toEqual([['first']]);
+    expect(routingMutationSpy.citedPaths).toEqual([expect.arrayContaining(['src/child-two.ts', 'src/owner.ts'])]);
+    expect(routingMutationSpy.routedItems).toEqual([{ host: 2, reason: 'prerequisite-paths' }]);
     expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
   });
 
