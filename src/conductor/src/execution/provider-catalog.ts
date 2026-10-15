@@ -73,6 +73,9 @@ export interface ProviderModelCatalog {
 export interface SelfHostShape {
   readonly isolation: 'claude-config-sandbox' | 'provider-home';
   readonly selectedAuthPath: string;
+  readonly transcripts: {
+    readonly globs: readonly string[];
+  };
   readonly claudeBuildPreflights: boolean;
   readonly agentsSkillsLink: boolean;
   readonly scrubVariables: readonly string[];
@@ -174,6 +177,7 @@ export const BUILT_IN_PROVIDERS = [
     selfHostShape: {
       isolation: 'claude-config-sandbox',
       selectedAuthPath: '.credentials.json',
+      transcripts: { globs: ['projects/**/*.jsonl'] },
       claudeBuildPreflights: true,
       agentsSkillsLink: false,
       scrubVariables: ['CLAUDE_CODE_OAUTH_TOKEN'],
@@ -228,6 +232,7 @@ export const BUILT_IN_PROVIDERS = [
     selfHostShape: {
       isolation: 'provider-home',
       selectedAuthPath: 'auth.json',
+      transcripts: { globs: ['sessions/**/*.jsonl'] },
       claudeBuildPreflights: false,
       agentsSkillsLink: true,
       scrubVariables: [],
@@ -272,6 +277,7 @@ export const BUILT_IN_PROVIDERS = [
     selfHostShape: {
       isolation: 'provider-home',
       selectedAuthPath: 'auth.json',
+      transcripts: { globs: ['sessions/**/*.jsonl'] },
       claudeBuildPreflights: false,
       agentsSkillsLink: false,
       scrubVariables: ['PI_CODING_AGENT_SESSION_DIR'],
@@ -279,6 +285,21 @@ export const BUILT_IN_PROVIDERS = [
     diagnosticEnvelopes: [],
   },
 ] as const satisfies readonly BuiltInProviderDescriptor[];
+
+export function validateProviderCatalog(providers: readonly BuiltInProviderDescriptor[]): void {
+  for (const provider of providers) {
+    if (
+      provider.capabilities.selfHost === true
+      && provider.selfHostShape?.transcripts.globs.length === 0
+    ) {
+      throw new Error(
+        `self-host provider ${provider.id}: transcripts.globs transcript allowlist is empty`,
+      );
+    }
+  }
+}
+
+validateProviderCatalog(BUILT_IN_PROVIDERS);
 
 export type BuiltInProviderId = (typeof BUILT_IN_PROVIDERS)[number]['id'];
 
