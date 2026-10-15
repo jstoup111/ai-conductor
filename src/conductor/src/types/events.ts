@@ -92,6 +92,21 @@ export type DispatchKind = 'initial' | 'resume' | 'rekick';
 export type DispatchBlockReason = 'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active';
 export type FeatureDispatchOutcome = 'complete' | 'halted' | 'terminated';
 
+/** Closed daemon-maintenance phases so the persisted timing vocabulary remains bounded. */
+export type MaintenancePhase =
+  | 'startup-refresh'
+  | 'first-claim'
+  | 'rekick'
+  | 'startup-dashboard'
+  | 'halt-pr-reconcile'
+  | 'parked-reconcile'
+  | 'provider-scratch'
+  | 'mergeable-sweep'
+  | 'repair';
+
+/** Terminal outcome of one daemon-maintenance phase occurrence. */
+export type MaintenancePhaseOutcome = 'completed' | 'skipped-unchanged' | 'failed' | 'deferred';
+
 /** Closed outcomes for the daemon's bounded setup repair session. */
 export type SetupRepairDisposition =
   | 'engine-committed'
@@ -468,6 +483,17 @@ type ConductorEventBody =
       code: number | null;
       signal: string | null;
       at: string;
+    }
+  | {
+      /** Duration and result of a daemon maintenance occurrence on the canonical event spine. */
+      type: 'daemon_maintenance_phase';
+      phase: MaintenancePhase;
+      durationMs: number;
+      outcome: MaintenancePhaseOutcome;
+      prUrl?: string;
+      slug?: string;
+      /** Optional phase-specific counts, including retained/refusal counts for skipped parked sweeps. */
+      summary?: Record<string, number>;
     }
   | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
   | {
