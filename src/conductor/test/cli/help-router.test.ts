@@ -46,15 +46,26 @@ afterEach(async () => {
 
 describe('per-command help router', () => {
   // Covers: task:5
-  it('returns Commander help for register, create, and memory setup, with -h as an alias', () => {
+  it('routes help wherever it appears before an option terminator and ignores positionals', () => {
     const expected = commandHelp(['register']);
 
     expect(routeSubcommandHelp(['node', 'bin', 'register', '--help'])).toBe(expected);
     expect(routeSubcommandHelp(['node', 'bin', 'register', '-h'])).toBe(expected);
+    expect(routeSubcommandHelp(['node', 'bin', 'register', '/tmp', '--help'])).toBe(expected);
+    expect(routeSubcommandHelp(['node', 'bin', 'register', '--help', '/tmp'])).toBe(expected);
+    expect(routeSubcommandHelp(['node', 'bin', 'create', 'demo', '--help']))
+      .toBe(commandHelp(['create']));
     expect(routeSubcommandHelp(['node', 'bin', 'create', '-h']))
       .toBe(commandHelp(['create']));
+    expect(routeSubcommandHelp(['node', 'bin', 'brain', 'start', '--help']))
+      .toBe(commandHelp(['brain', 'start']));
+    expect(routeSubcommandHelp(['node', 'bin', 'config', 'init', '-h']))
+      .toBe(commandHelp(['config', 'init']));
+    expect(routeSubcommandHelp(['node', 'bin', 'memory', '--help']))
+      .toBe(commandHelp(['memory']));
     expect(routeSubcommandHelp(['node', 'bin', 'memory', 'setup', '-h']))
       .toBe(commandHelp(['memory', 'setup']));
+    expect(routeSubcommandHelp(['node', 'bin', 'register', '--', '--help'])).toBeNull();
   });
 
   // Covers: task:5
@@ -110,6 +121,19 @@ describe('per-command help router', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.startsWith('Usage: ai-conductor create')).toBe(true);
     await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 30_000);
+
+  // Covers: task:5
+  it('prints help through the CLI entry before create or brain dispatches', async () => {
+    const [create, brain] = await Promise.all([
+      runCli(['create', 'demo', '--help']),
+      runCli(['brain', 'start', '--help']),
+    ]);
+
+    expect(create).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(create.stdout).toBe(commandHelp(['create']));
+    expect(brain).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(brain.stdout).toBe(commandHelp(['brain', 'start']));
   }, 30_000);
 
   // Covers: task:5

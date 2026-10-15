@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createProgram, renderDaemonHelp } from '../../src/cli.js';
 import {
   DEFAULT_IDLE_POLL_SECONDS,
-  RUNTIME_FALLBACK_FLAGS,
-  defaultMismatches,
 } from '../../src/cli-defaults.js';
+import { RUNTIME_FALLBACK_FLAGS, defaultMismatches } from './support/cli-defaults-parity.js';
 import { detectDaemonCommand } from '../../src/engine/daemon-command.js';
 import { buildDaemonModeOptions } from '../../src/index.js';
 

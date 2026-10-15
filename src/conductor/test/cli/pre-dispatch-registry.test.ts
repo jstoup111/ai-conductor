@@ -2,10 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  diffDetectorSets,
   PRE_DISPATCH_COMMANDS,
-  undeclaredRegistryCommands,
 } from '../../src/cli-pre-dispatch.js';
+import { diffDetectorSets, undeclaredRegistryCommands } from './support/cli-catalog-checks.js';
 import { createProgram } from '../../src/cli.js';
 
 describe('pre-dispatch command registry', () => {

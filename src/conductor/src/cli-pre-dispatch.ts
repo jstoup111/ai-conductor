@@ -1,4 +1,4 @@
-import { type Command } from 'commander';
+import type { Command } from 'commander';
 import { createProgram } from './cli.js';
 
 /**
@@ -66,81 +66,6 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectDaemonCommand', commandPath: ['daemon'], helpOwner: 'self' },
 ] as const satisfies readonly PreDispatchCommand[];
 
-function dispatcherBody(sourceText: string, name: string): string {
-  const declaration = new RegExp(`(?:export\\s+)?async\\s+function\\s+${name}\\s*\\(`).exec(sourceText);
-  if (!declaration || declaration.index === undefined) return '';
-
-  const parameterStart = sourceText.indexOf('(', declaration.index);
-  if (parameterStart < 0) return '';
-
-  let parameterDepth = 0;
-  let parameterEnd = -1;
-  for (let index = parameterStart; index < sourceText.length; index += 1) {
-    if (sourceText[index] === '(') parameterDepth += 1;
-    if (sourceText[index] === ')') {
-      parameterDepth -= 1;
-      if (parameterDepth === 0) {
-        parameterEnd = index;
-        break;
-      }
-    }
-  }
-  if (parameterEnd < 0) return '';
-
-  const start = sourceText.indexOf('{', parameterEnd);
-  if (start < 0) return '';
-
-  let depth = 0;
-  for (let index = start; index < sourceText.length; index += 1) {
-    if (sourceText[index] === '{') depth += 1;
-    if (sourceText[index] === '}') {
-      depth -= 1;
-      if (depth === 0) return sourceText.slice(start, index + 1);
-    }
-  }
-  return '';
-}
-
-function dispatchedDetectors(sourceText: string): string[] {
-  const source = [
-    dispatcherBody(sourceText, 'dispatchNonDispatchingCliCommand'),
-    dispatcherBody(sourceText, 'dispatchCliCommand'),
-  ].join('\n');
-  const detectors = new Set<string>();
-  const detectorCall = /\b(?:detect[A-Za-z]+Command|monitorCli\.detectMonitorCommand)\s*\(/g;
-  for (const match of source.matchAll(detectorCall)) detectors.add(match[0].replace(/\s*\($/, ''));
-  return [...detectors].sort();
-}
-
-/** Return the detector names missing from either the source dispatch chain or registry. */
-export function diffDetectorSets(
-  sourceText: string,
-  registry: readonly PreDispatchCommand[],
-): { readonly unregistered: string[]; readonly stale: string[] } {
-  const dispatched = new Set(dispatchedDetectors(sourceText));
-  const registered = new Set(registry.map(({ detector }) => detector));
-  return {
-    unregistered: [...dispatched].filter((detector) => !registered.has(detector)).sort(),
-    stale: [...registered].filter((detector) => !dispatched.has(detector)).sort(),
-  };
-}
-
-/** Return catalog command paths that cannot be resolved through Commander declarations. */
-export function undeclaredRegistryCommands(
-  registry: readonly PreDispatchCommand[],
-  program: Command,
-): string[] {
-  return registry.flatMap(({ commandPath }) => {
-    let current = program;
-    for (const commandName of commandPath) {
-      const next = current.commands.find((command) => command.name() === commandName);
-      if (next === undefined) return [commandPath.join(' ')];
-      current = next;
-    }
-    return [];
-  });
-}
-
 /** Return Commander-owned help for a registered command path, if help was requested. */
 export function routeSubcommandHelp(
   argv: readonly string[],
@@ -148,19 +73,22 @@ export function routeSubcommandHelp(
   program?: Command,
 ): string | null {
   const args = argv.slice(2);
-  if (args.at(-1) !== '--help' && args.at(-1) !== '-h') return null;
+  const optionTerminator = args.indexOf('--');
+  const helpArgs = optionTerminator < 0 ? args : args.slice(0, optionTerminator);
+  if (!helpArgs.some((arg) => arg === '--help' || arg === '-h')) return null;
 
-  const commandPath = args.slice(0, -1);
-  const entry = registry.find((candidate) => candidate.commandPath.join('\0') === commandPath.join('\0'));
-  if (entry?.helpOwner !== 'router') {
+  // The top-level argv token selects the dispatch owner. A command's path can
+  // include positional arguments and nested Commander commands after it.
+  const entry = registry.find((candidate) => candidate.commandPath[0] === args[0]);
+  if (entry === undefined || entry.helpOwner !== 'router') {
     return null;
   }
 
   let command = program ?? createProgram();
-  for (const name of commandPath) {
-    const next = command.commands.find((candidate) => candidate.name() === name);
-    if (next === undefined) return null;
-    command = next;
+  for (const arg of helpArgs) {
+    if (arg.startsWith('-')) continue;
+    const next = command.commands.find((candidate) => candidate.name() === arg);
+    if (next !== undefined) command = next;
   }
   return command.helpInformation();
 }
