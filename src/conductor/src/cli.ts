@@ -72,7 +72,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .argument('[feature]', 'Feature description')
     .option('--resume', 'Resume from last state')
     .option('--fresh', 'Start a new feature; skip auto-resume even if a worktree for this feature description already exists')
-    .option('--auto', 'Deprecated: use `ai-conductor daemon start` instead')
+    .option('--auto', 'Deprecated and rejected: use `ai-conductor daemon start` instead; cannot be combined with --interactive')
     .option('--status', 'Show dashboard only')
     .option('--from <step>', 'Start from specific step')
     .option('--cleanup', 'Clean up worktrees')
@@ -82,7 +82,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .option('--effort <level>', 'Override effort for every step: low | medium | high | xhigh | max')
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
-    .option('--interactive', `Run every step in interactive ${CLAUDE_DISPLAY_NAME} REPL mode (no -p flag)`)
+    .option('--interactive', `Run every step in interactive ${CLAUDE_DISPLAY_NAME} REPL mode (no -p flag); cannot be combined with --auto`)
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
     .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
 }
