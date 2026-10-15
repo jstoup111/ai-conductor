@@ -935,8 +935,9 @@ export function createProgram(): Command {
   daemon
     .command('logs')
     .description('Print or follow a repo\'s .daemon/daemon.log')
-    .option('--repo <path>', 'Target repo (default: current directory)')
-    .option('--follow', 'Stream new log lines (tail -f); single repo only')
+    .option('--repo <path>', 'Target repo (default: current directory; also accepts --repo=<path>)')
+    .option('-f, --follow', 'Stream new log lines (tail -f); single repo only')
+    .option('-n, --lines <n>', 'Show the last n log lines')
     .option('--all', 'Show logs for every registered repo');
   // Filesystem-direct, pre-boot park/unpark verbs (detectDaemonParkCommand) —
   // no daemon/supervisor startup required. Declared here ONLY so `--help`
@@ -972,14 +973,17 @@ export function createProgram(): Command {
     .command('stop')
     .description('Stop this repo\'s tmux-supervised daemon');
   daemon
-    .command('restart')
-    .description('Restart this repo\'s tmux-supervised daemon');
+    .command('restart [repos...]')
+    .description('Restart this repo\'s tmux-supervised daemon; bare repo names select a named subset')
+    .option('--all', 'Act on every registered repo');
   daemon
-    .command('pause')
-    .description('Pause dispatch by writing the pause marker; running work finishes');
+    .command('pause [repos...]')
+    .description('Pause dispatch by writing the pause marker; bare repo names select a named subset; running work finishes')
+    .option('--all', 'Act on every registered repo');
   daemon
-    .command('resume')
-    .description('Resume dispatch by clearing the pause marker');
+    .command('resume [repos...]')
+    .description('Resume dispatch by clearing the pause marker; bare repo names select a named subset')
+    .option('--all', 'Act on every registered repo');
   daemon
     .command('connect')
     .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)')

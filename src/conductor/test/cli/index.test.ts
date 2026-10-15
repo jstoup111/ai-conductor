@@ -17,6 +17,8 @@ import {
   detectBuildReviewRecordReducedCoverageCommand,
 } from '../../src/cli.js';
 import { DAEMON_RUN_FLAGS } from '../../src/engine/daemon-command.js';
+import { detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
+import { detectDaemonObserveCommand } from '../../src/engine/daemon-observe-cli.js';
 import { PRE_DISPATCH_COMMANDS } from '../../src/cli-pre-dispatch.js';
 import { renderCanonicalFullHelp } from '../../src/index.js';
 
@@ -499,6 +501,44 @@ describe('CLI', () => {
       const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
       expect(daemon).toBeDefined();
       expect(missingDaemonRunFlags(['--no-such-run-flag'], daemon!)).toEqual(['--no-such-run-flag']);
+    });
+
+    // Covers: task:10
+    it('lists the logs flags, including the --repo=<path> spelling', () => {
+      const logs = fullHelpSection(help, 'daemon logs');
+      expect(logs).toContain('-f, --follow');
+      expect(logs).toContain('-n, --lines <n>');
+      expect(logs).toMatch(/--repo <path>[\s\S]*--repo=<path>/);
+      expect(logs).toContain('--all');
+    });
+
+    // Covers: task:10
+    it('documents fleet selectors without adding commander action handlers or --names', () => {
+      const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
+      expect(daemon).toBeDefined();
+      for (const verb of ['pause', 'resume', 'restart']) {
+        const section = fullHelpSection(help, `daemon ${verb}`);
+        expect(section).toContain(`[repos...]`);
+        expect(section).toMatch(/named\s+subset/i);
+        expect(section).toMatch(/--all[\s\S]*every registered repo/i);
+
+        const command = daemon!.commands.find((candidate) => candidate.name() === verb);
+        expect(command?._actionHandler).toBeNull();
+        expect(command?.options.map((option) => option.long)).not.toContain('--names');
+      }
+    });
+
+    // Covers: task:10
+    it('parses logs -n exactly as --lines', () => {
+      const short = detectDaemonObserveCommand(['node', 'conduct', 'daemon', 'logs', '-n', '50']);
+      const long = detectDaemonObserveCommand(['node', 'conduct', 'daemon', 'logs', '--lines', '50']);
+      expect(short).toMatchObject({ kind: 'logs', lines: 50 });
+      expect(short).toEqual(long);
+    });
+
+    // Covers: task:10
+    it('leaves bare daemon restart on its pre-selector result shape', () => {
+      expect(detectDaemonSupervisorCommand(['node', 'conduct', 'daemon', 'restart'])).toEqual({ verb: 'restart' });
     });
   });
 
