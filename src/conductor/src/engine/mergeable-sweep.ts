@@ -419,6 +419,8 @@ export interface SweepOpts {
   ciFix?: CiFixDispatchOpts;
   /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
   repairQueue?: RepairQueue;
+  /** Captures the sanctioned adapter call-site for a queued request. */
+  registerRepair?: (request: RepairRequest, run: () => Promise<void>) => void;
   /** True while a pooled repair has already claimed this PR. */
   isRepairRunning?: (prUrl: string) => boolean;
   /**
@@ -465,6 +467,7 @@ export async function sweepMergeableLabels({
   autoresolve,
   ciFix,
   repairQueue,
+  registerRepair,
   isRepairRunning,
   teardownWorktree,
   shippedRecordProbe,
@@ -902,7 +905,7 @@ export async function sweepMergeableLabels({
       }
     }
 
-    const enqueue = (request: RepairRequest): void => {
+    const enqueue = (request: RepairRequest, run?: () => Promise<void>): void => {
       if (!repairQueue) return;
       if (isRepairRunning?.(request.prUrl)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
@@ -910,6 +913,8 @@ export async function sweepMergeableLabels({
       }
       if (!repairQueue.enqueue(request)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already queued)`);
+      } else if (run) {
+        registerRepair?.(request, run);
       }
     };
 
@@ -920,7 +925,8 @@ export async function sweepMergeableLabels({
         const elig = await autoresolve.isEligible(entry, state);
         if (!elig.eligible) continue;
         const queuedAt = now().toISOString();
-        enqueue({ kind: 'autoresolve', prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt });
+        const request = { kind: 'autoresolve' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
+        enqueue(request, async () => { await autoresolve.dispatch(entry); });
       }
     }
 
@@ -931,7 +937,8 @@ export async function sweepMergeableLabels({
         const elig = await ciFix.isEligible(entry, state);
         if (!elig.eligible) continue;
         const queuedAt = now().toISOString();
-        enqueue({ kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt });
+        const request = { kind: 'ci-fix' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
+        enqueue(request, async () => { await ciFix.dispatch(entry, state); });
       }
     }
 

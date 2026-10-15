@@ -34,4 +34,11 @@ export class RepairQueue {
     this.requests.delete(first[0]);
     return first[1];
   }
+
+  /** Remove this exact request after the dispatcher has selected it. */
+  takeByUrl(prUrl: string): RepairRequest | undefined {
+    const request = this.requests.get(prUrl);
+    if (request) this.requests.delete(prUrl);
+    return request;
+  }
 }

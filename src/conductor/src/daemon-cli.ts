@@ -245,7 +245,8 @@ import {
 } from './engine/daemon-rekick.js';
 import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { enrollWatch, sweepMergeableLabels, type SweepOpts } from './engine/mergeable-sweep.js';
+import { enrollWatch, sweepMergeableLabels, updateWatch, type SweepOpts } from './engine/mergeable-sweep.js';
+import { RepairQueue, type RepairRequest } from './engine/repair-queue.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { isPaused } from './engine/pause-marker.js';
 import {
@@ -2319,9 +2320,43 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         makeWatchHaltClearedSeam(worktreeBase, { recordRemote: { events } })(slug, onCleared)
     : undefined;
 
+  // Maintenance discovers repairs; the dispatcher owns their pool claims and
+  // invokes these captured sanctioned call-sites at claim time.
+  const repairQueue = new RepairQueue();
+  const queuedRepairRunners = new Map<string, () => Promise<void>>();
   const result = await runDaemon(
     {
       claims: workClaims,
+      repairQueue,
+      runRepair: async (request: RepairRequest) => {
+        // Re-read before touching a worktree: queued state is advisory and
+        // may have been resolved while the pool was full.
+        const state = await tracker.readPullRequestMergeState(request.prUrl, projectRoot, log);
+        if (state.state === 'MERGED' || state.state === 'CLOSED' || state.isDraft ||
+          (request.kind === 'ci-fix' && state.checksOutcome === 'green') ||
+          (request.kind === 'autoresolve' && state.mergeable !== 'CONFLICTING') ||
+          (request.slug && isWorkClaimActive(request.slug))) {
+          log(`[daemon] dropping repair ${request.prUrl}: no longer eligible`);
+          return;
+        }
+        // Claim time, rather than sweep time, owns attempt accounting. A
+        // restart after this serialized write intentionally consumes an
+        // attempt; a queued/held request does not.
+        await updateWatch(projectRoot, (entries) => entries.map((entry) => {
+          if (entry.prUrl !== request.prUrl) return entry;
+          return request.kind === 'ci-fix'
+            ? { ...entry, ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1, lastCiFixAt: new Date().toISOString() }
+            : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1 };
+        }));
+        const run = queuedRepairRunners.get(request.prUrl);
+        if (!run) {
+          log(`[daemon] dropping repair ${request.prUrl}: no registered adapter`);
+          return;
+        }
+        await run();
+        queuedRepairRunners.delete(request.prUrl);
+      },
+      emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog,
       isHalted: (slug) => isHalted(worktreeBase, slug),
       sweepProviderScratch: () => sweepFeatureWorktreeScratch({
@@ -2772,6 +2807,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           tracker,
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
+          repairQueue,
+          isRepairRunning: (prUrl) => workClaims.list().includes(`repair:${prUrl}`),
+          registerRepair: (request, run) => queuedRepairRunners.set(request.prUrl, run),
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).
