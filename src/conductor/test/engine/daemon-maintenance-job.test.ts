@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, expect, it, vi } from 'vitest';
 import { MaintenanceJob } from '../../src/engine/daemon-maintenance.js';
 
