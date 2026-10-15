@@ -997,6 +997,11 @@ export function createProgram(): Command {
   return program;
 }
 
+/** Commander stores its `{ hidden: true }` declaration on this runtime field. */
+function isHiddenCommand(command: Command): boolean {
+  return (command as Command & { _hidden?: boolean })._hidden === true;
+}
+
 /**
  * Render a SINGLE, root-level help document that recurses through every command
  * and sub-subcommand — so `ai-conductor --help` is a complete reference (each command's
@@ -1010,7 +1015,7 @@ export function renderFullHelp(program: Command = createProgram()): string {
 
   const walk = (cmd: Command, path: string[]): void => {
     for (const sub of cmd.commands) {
-      if (sub.name() === 'help' || sub._hidden) continue; // commander's auto `help [command]`
+      if (sub.name() === 'help' || isHiddenCommand(sub)) continue; // commander's auto `help [command]`
       const fullPath = ['ai-conductor', ...path, sub.name()].join(' ');
       sections.push(`${rule}\n${fullPath}\n${rule}\n${sub.helpInformation().trimEnd()}`);
       walk(sub, [...path, sub.name()]);
@@ -1033,7 +1038,7 @@ export function renderDaemonHelp(program: Command = createProgram()): string {
   const rule = '─'.repeat(72);
   const sections = [daemon.helpInformation().trimEnd()];
   for (const sub of daemon.commands) {
-    if (sub.name() === 'help' || sub._hidden) continue; // commander's auto `help [command]`
+    if (sub.name() === 'help' || isHiddenCommand(sub)) continue; // commander's auto `help [command]`
     sections.push(
       `${rule}\nai-conductor daemon ${sub.name()}\n${rule}\n${sub.helpInformation().trimEnd()}`,
     );

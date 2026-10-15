@@ -61,6 +61,7 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'reseal',
   'memory',
   'register',
+  'create',
   'config',
   'engineer',
   'intake-loop',
