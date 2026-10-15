@@ -21,6 +21,8 @@ export interface TranscriptRetentionDependencies {
   readonly remove?: (path: string) => Promise<void>;
   readonly maxCaptures?: number;
   readonly maxBytes?: number;
+  /** Sweeps retain only captures they recover; they must not settle live work. */
+  readonly reconcile?: boolean;
 }
 
 type CapturedTranscript = {
@@ -83,7 +85,7 @@ export class TranscriptRetention {
       });
     };
     this.events.on('provider_transcripts_captured', this.capturedHandler);
-    this.reconciliation = this.reconcile();
+    this.reconciliation = dependencies.reconcile === false ? Promise.resolve() : this.reconcile();
   }
 
   /** Await startup reconciliation when a caller needs recovered captures recorded first. */
