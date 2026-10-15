@@ -16,6 +16,7 @@ import {
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
 } from '../../src/cli.js';
+import { DAEMON_RUN_FLAGS } from '../../src/engine/daemon-command.js';
 import { PRE_DISPATCH_COMMANDS } from '../../src/cli-pre-dispatch.js';
 import { renderCanonicalFullHelp } from '../../src/index.js';
 
@@ -87,6 +88,14 @@ function fullHelpSection(help: string, path: string): string {
   expect(start, `missing full-reference section: ${path}`).toBeGreaterThanOrEqual(0);
   const nextSection = help.indexOf(`\n\n${'─'.repeat(72)}\n`, start + header.length);
   return help.slice(start, nextSection === -1 ? undefined : nextSection);
+}
+
+function missingDaemonRunFlags(
+  flags: readonly string[],
+  daemon: Command,
+): string[] {
+  const declared = new Set(daemon.options.map((option) => option.long));
+  return flags.filter((flag) => !declared.has(flag));
 }
 
 describe('CLI', () => {
@@ -469,6 +478,27 @@ describe('CLI', () => {
       for (const verb of ['status', 'logs', 'start', 'stop', 'restart', 'connect', 'debug']) {
         expect(help).toContain(`ai-conductor daemon ${verb}`);
       }
+    });
+
+    // Covers: task:9
+    it('lists every daemon run flag and describes --all as including completed features', () => {
+      expect(help).toContain('--no-watch');
+      expect(help).toContain('--completed');
+      expect(help).toMatch(/--all[\s\S]*including completed features/i);
+    });
+
+    // Covers: task:9
+    it('declares every parser-recognized daemon run flag', () => {
+      const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
+      expect(daemon).toBeDefined();
+      expect(missingDaemonRunFlags(DAEMON_RUN_FLAGS, daemon!)).toEqual([]);
+    });
+
+    // Covers: task:9
+    it('names an undeclared daemon run flag in the parity fixture', () => {
+      const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
+      expect(daemon).toBeDefined();
+      expect(missingDaemonRunFlags(['--no-such-run-flag'], daemon!)).toEqual(['--no-such-run-flag']);
     });
   });
 

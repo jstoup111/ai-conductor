@@ -924,7 +924,10 @@ export function createProgram(): Command {
     .option('--max-cost <tokens>', 'Ceiling: stop starting features after this many total output tokens')
     .option('--max-runtime <seconds>', 'Ceiling: stop starting features after this much wall-clock time')
     .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', String(DEFAULT_IDLE_POLL_SECONDS))
-    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
+    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls')
+    .option('--no-watch', 'Disable filesystem watching for new features')
+    .option('--completed', 'Show completed features in daemon status output')
+    .option('--all', 'Show all features, including completed features, in daemon status output');
   // Read-only observability sub-subcommands.
   daemon
     .command('status')
