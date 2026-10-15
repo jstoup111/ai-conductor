@@ -37,7 +37,7 @@
 //   - childEnv() returns a COPY — the daemon's own env is never mutated (no bleed).
 
 import * as fsp from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
 import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/provider-catalog.js';
@@ -228,6 +228,25 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         join(skillsRoot, directory),
         join(configDir, 'skills', await resolveSkillName(opts.worktreeRoot, directory)),
       );
+    }
+    const resolvedSkillsRoot = await fs.realpath(skillsRoot);
+    const linkedTargets = await sandboxLinkTargets({
+      configDir,
+      childEnv: () => ({}),
+      teardown: async () => {},
+    });
+    for (const [name, target] of Object.entries(linkedTargets)) {
+      const pathFromSkillsRoot = relative(resolvedSkillsRoot, target);
+      if (
+        pathFromSkillsRoot === ''
+        || pathFromSkillsRoot === '..'
+        || pathFromSkillsRoot.startsWith(`..${sep}`)
+        || isAbsolute(pathFromSkillsRoot)
+      ) {
+        throw new SandboxProvisionError(
+          `Harness self-build sandbox skill link ${name} resolves outside worktree skills directory ${resolvedSkillsRoot}: ${target}.`,
+        );
+      }
     }
 
     // Start from engine-owned empty settings. Operator preferences/hooks never

@@ -123,6 +123,24 @@ else
   fail 'frontmatter-named Codex link resolves to its source directory'
 fi
 
+for syntax in double single comment; do
+  SCALAR_CHECKOUT="$TMP_ROOT/${syntax}-checkout"
+  copy_checkout "$SCALAR_CHECKOUT"
+  case "$syntax" in
+    double) sed -i 's/^name: plan$/name: "ac-plan"/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+    single) sed -i "s/^name: plan$/name: 'ac-plan'/" "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+    comment) sed -i 's/^name: plan$/name: ac-plan # comment/' "$SCALAR_CHECKOUT/skills/plan/SKILL.md" ;;
+  esac
+  SCALAR_HOME="$TMP_ROOT/${syntax}-home"
+  if run_install "$SCALAR_CHECKOUT" "$SCALAR_HOME" --providers claude,codex >"$TMP_ROOT/${syntax}.out" 2>&1; then
+    check "${syntax} frontmatter scalar links ac-plan in both catalogs" \
+      bash -c 'test "$(readlink -f "$1/.claude/skills/ac-plan")" = "$2/skills/plan" && test "$(readlink -f "$1/.agents/skills/ac-plan")" = "$2/skills/plan"' \
+      _ "$SCALAR_HOME" "$SCALAR_CHECKOUT"
+  else
+    fail "${syntax} frontmatter scalar links ac-plan in both catalogs"
+  fi
+done
+
 FALLBACK_CHECKOUT="$TMP_ROOT/fallback-checkout"
 copy_checkout "$FALLBACK_CHECKOUT"
 sed -i '/^name: plan$/d' "$FALLBACK_CHECKOUT/skills/plan/SKILL.md"

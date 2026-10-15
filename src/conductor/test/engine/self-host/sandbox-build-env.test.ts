@@ -1,6 +1,6 @@
 // Covers: task:8
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -117,6 +117,16 @@ describe('minimal Claude self-host sandbox', () => {
     } finally {
       await sandbox.teardown();
     }
+  });
+
+  it('fails closed and removes the partial sandbox when a skill link escapes the worktree skills directory', async () => {
+    const outsideSkill = join(root, 'outside-skill');
+    await mkdir(outsideSkill);
+    await writeFile(join(outsideSkill, 'SKILL.md'), '---\nname: escape\n---\n');
+    await symlink(outsideSkill, join(worktree, 'skills', 'escape'));
+
+    await expect(provisionSandboxBuildEnv(options())).rejects.toBeInstanceOf(SandboxProvisionError);
+    expect(await readdir(base)).toEqual([]);
   });
 
   it('creates an engine-owned executable write fence and never a worktree hooks link', async () => {

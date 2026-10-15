@@ -136,8 +136,26 @@ skill_frontmatter_name() {
       printf '%s\n' "${declared_name:-$fallback_name}"
       return 0
     fi
-    if [[ "$line" =~ ^name:[[:space:]]*(.+)[[:space:]]*$ ]]; then
+    if [[ "$line" =~ ^name:[[:space:]]*(.*)$ ]]; then
       declared_name=${BASH_REMATCH[1]}
+      declared_name="${declared_name#"${declared_name%%[![:space:]]*}"}"
+      declared_name="${declared_name%"${declared_name##*[![:space:]]}"}"
+      case "$declared_name" in
+        \"*\")
+          declared_name=${declared_name#\"}
+          declared_name=${declared_name%\"}
+          declared_name=${declared_name//\\\"/\"}
+          ;;
+        \'*\')
+          declared_name=${declared_name#\'}
+          declared_name=${declared_name%\'}
+          declared_name=${declared_name//\'\'/\'}
+          ;;
+        *)
+          declared_name=${declared_name%% \#*}
+          declared_name="${declared_name%"${declared_name##*[![:space:]]}"}"
+          ;;
+      esac
     fi
   done < <(tail -n +2 "$skill_file")
 

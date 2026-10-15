@@ -1698,6 +1698,7 @@ export class DefaultStepRunner implements StepRunner {
           false,
           undefined,
           customSkill,
+          resolvedSkillName,
         );
       }
       return this.runAutonomous(
@@ -1739,6 +1740,7 @@ export class DefaultStepRunner implements StepRunner {
         true,
         interactive,
         customSkill,
+        resolvedSkillName,
       );
     }
 
@@ -1831,6 +1833,7 @@ export class DefaultStepRunner implements StepRunner {
     interactive = false,
     customSkill?: string,
     invocationKind: 'skill' | 'free-form' = 'skill',
+    resolvedSkillName?: string,
   ): Promise<StepRunResult> {
     const sessions = opts?.providerSessions ?? this.sessionStore;
     if (!this.providerRuntimes || !sessions) {
@@ -1895,7 +1898,7 @@ export class DefaultStepRunner implements StepRunner {
                   optionsForCandidate: (candidateKey: string) => ({
                     ...options,
                     prompt: customSkill === undefined
-                      ? renderSkillInvocation(STEP_SKILL_INVOCATIONS[step]!, candidateKey)
+                      ? renderSkillInvocation(STEP_SKILL_INVOCATIONS[step]!, candidateKey, resolvedSkillName)
                       : renderAuxiliarySkillInvocation(customSkill, candidateKey),
                   }),
                 }
@@ -1953,6 +1956,10 @@ export class DefaultStepRunner implements StepRunner {
   ): Promise<ProviderExecutionResult | undefined> {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
 
+    const resolvedSkillName = request.kind === 'skill'
+      ? await resolveSkillName(this.skillNameRoot, STEP_SKILL_INVOCATIONS[request.step]!.skillName)
+      : undefined;
+
     const safety = this.candidateSafetyFor(request.step);
     const invocationOptions = this.withFeatureDiagnosticLog(request.options);
     if (this.providerExecutionContext?.managedSessionContext) {
@@ -1996,8 +2003,8 @@ export class DefaultStepRunner implements StepRunner {
                 optionsForCandidate: (candidateKey: string) => ({
                   ...options,
                   prompt: options.nativeSchema === undefined
-                    ? renderSkillInvocation(STEP_SKILL_INVOCATIONS[request.step]!, candidateKey)
-                    : `${renderSkillInvocation(STEP_SKILL_INVOCATIONS[request.step]!, candidateKey)}\n\n${options.prompt}`,
+                    ? renderSkillInvocation(STEP_SKILL_INVOCATIONS[request.step]!, candidateKey, resolvedSkillName)
+                    : `${renderSkillInvocation(STEP_SKILL_INVOCATIONS[request.step]!, candidateKey, resolvedSkillName)}\n\n${options.prompt}`,
                 }),
               }
             : {}),
@@ -4878,7 +4885,7 @@ export class DefaultStepRunner implements StepRunner {
     }
     if (initial.commandUnresolved) {
       return makeBuildReviewDispatchFailure(renderBuildReviewUnresolvedSkillRemedy(
-        branch.skillName,
+        resolvedSkillName,
         initial.commandUnresolvedName ?? '',
       ));
     }

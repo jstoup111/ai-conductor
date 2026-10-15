@@ -5,6 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
+import type { InvokeResult } from '../../src/execution/llm-provider.js';
+import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 
 const roots: string[] = [];
 
@@ -26,6 +33,7 @@ async function renamedSkillRoot(): Promise<string> {
   roots.push(root);
   await Promise.all([
     'build-review-security',
+    'explore',
     'rebase-regrade',
     'rebase',
     'conduct',
@@ -39,6 +47,41 @@ async function renamedSkillRoot(): Promise<string> {
 }
 
 describe('DefaultStepRunner skill-name root', () => {
+  it.each([
+    ['claude', '/'],
+    ['codex', '$'],
+  ] as const)('keeps resolved built-in names in %s candidate overrides, including one-shot gates', async (providerKey, prefix) => {
+    const root = await renamedSkillRoot();
+    const candidatePrompts: string[] = [];
+    const candidateExecutor: NonNullable<StepRunnerOptions['providerExecutor']> = async (input) => {
+      candidatePrompts.push(input.optionsForCandidate?.(providerKey)?.prompt ?? input.options.prompt);
+      return {
+        success: true, output: 'MODELS: 0\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S', exitCode: 0,
+        preferredProvider: 'claude', actualProvider: providerKey, attempts: [],
+      };
+    };
+    const policy = resolveProviderModelPolicy(providerKey);
+    const runner = new DefaultStepRunner({ invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) }, 'skill-name', root, {
+      providerKey,
+      skillNameRoot: root,
+      providerExecution: {
+        configuredProviders: ['claude', 'codex'],
+        runtimes: new ProviderRuntimeSet([{
+          key: providerKey,
+          provider: { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) },
+          policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder),
+        }]),
+        sessions: new ProviderSessionStore(),
+        executor: candidateExecutor,
+      },
+    });
+
+    await runner.run('explore', {});
+    await runner.assessComplexity();
+
+    expect(candidatePrompts).toEqual(expect.arrayContaining([`${prefix}ac-explore`, `${prefix}ac-conduct complexity`]));
+  });
+
   it('renders a built-in invocation from the served skill frontmatter', async () => {
     const root = await skillRoot('---\nname: ac-explore\n---\n');
     const invoke = vi.fn(async () => ({ success: true, output: '', exitCode: 0 }));
@@ -94,6 +137,26 @@ describe('DefaultStepRunner skill-name root', () => {
 });
 
 describe('DefaultStepRunner auxiliary and legacy skill names', () => {
+  it('uses the resolved rubric name in an unresolved-skill diagnostic', async () => {
+    const root = await renamedSkillRoot();
+    const invoke = vi.fn(async () => ({
+      success: false, output: 'unknown skill command', exitCode: 1,
+      commandUnresolved: true, commandUnresolvedName: '$ac-build-review-security',
+    }));
+    const runner = new DefaultStepRunner({ invoke }, 'skill-name', root, { skillNameRoot: root });
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+    }).dispatchBuildReviewRubric({
+      rubric: 'security', skillName: 'build-review-security',
+      policy: { enabled: true, llm_provider: 'claude', model: 'test', effort: 'high', model_fallback_ladder: [], max_retries: 0, escalate: false },
+    }, { rubric: 'security', contractVersion: 'v1', projectionVersion: 'v1', lapId: 'lap', snapshotDigest: 'sha256:test', digest: 'sha256:test' });
+
+    expect(result).toEqual({
+      kind: 'dispatch-failure',
+      detail: renderBuildReviewUnresolvedSkillRemedy('ac-build-review-security', '$ac-build-review-security'),
+    });
+  });
+
   it.each([
     ['claude', '/'],
     ['codex', '$'],
