@@ -87,11 +87,13 @@ export function routeSubcommandHelp(
   for (let index = 0; index < helpArgs.length; index += 1) {
     const arg = helpArgs[index];
     if (arg.startsWith('-')) {
-      const option = command.options.find((candidate) =>
+      // Only a value-taking option advances the command-path cursor. Inline
+      // values (for example, --event=audit) are already part of this token.
+      const consumesNextToken = command.options.some((candidate) =>
         (candidate.short === arg || candidate.long === arg)
         && (candidate.required || candidate.optional),
       );
-      if (option !== undefined && !arg.includes('=')) index += 1;
+      if (consumesNextToken && !arg.includes('=')) index += 1;
       continue;
     }
     const next = command.commands.find((candidate) => candidate.name() === arg);
