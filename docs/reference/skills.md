@@ -23,7 +23,7 @@ matches on when deciding to invoke the skill.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `name` | yes | Skill identifier; must match the directory name |
+| `name` | yes | Host-visible skill name. `bin/install` links each catalog entry, the self-host provider home and sandbox list each skill, and the engine renders every harness-skill invocation and operator-only `skillOverrides` key under this name, read from the skill tree being served (the feature worktree for self-host builds, the engine's harness checkout otherwise). The directory stays the internal id for step mappings, rubric paths, and `OPERATOR_ONLY_SKILLS`. A missing key falls back to the directory name; an unclosed frontmatter block fails dispatch and makes `bin/install` exit 1. Every shipped skill currently sets it equal to its directory |
 | `description` | yes | Model-facing trigger text — when to invoke this skill |
 | `enforcement` | yes for `skills/*` | Declared strictness: `advisory`, `gating`, or `structural`. **Advisory only.** The engine's step definition decides real skippability — see [Known limitations](#known-limitations) |
 | `phase` | yes for `skills/*` | `understand`, `decide`, `build`, `ship`, or `all` |
