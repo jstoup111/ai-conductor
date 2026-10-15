@@ -117,6 +117,10 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     if (drained.kind !== 'drained') return { kind: 'unavailable', detail: `cannot drain routing outbox: ${drained.kind}` };
     const reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
     if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: reconciled.detail };
+    if (options.baseRefreshDue && await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+      await deferredBaseRefresh(options.events);
+      return { kind: 'clear' };
+    }
     if (reconciled.kind === 'navigate-leaf-to-build') return { kind: 'clear' };
   }
 
@@ -130,12 +134,6 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     return cursor.kind === 'git-error' || cursor.kind === 'detached-head' || cursor.kind === 'envelope-missing'
       ? { kind: 'unavailable', detail: `cannot resolve stack cursor: ${cursor.kind}` }
       : { kind: 'clear' };
-  }
-
-  if (config.ok && routingSettingOn(config.config) &&
-    await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
-    if (options.baseRefreshDue) await deferredBaseRefresh(options.events);
-    return { kind: 'clear' };
   }
 
   if (cursor.foreignRoundChildren?.length) {
