@@ -158,6 +158,13 @@ export async function maybeClearReadinessLabel(
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
 
 /**
+ * In-process, per-project serialization for watch-registry read-modify-write
+ * updates. Each waiter keeps the tail promise alive until its own mutation has
+ * either persisted or failed, so a throwing mutation cannot strand the queue.
+ */
+const watchUpdateLocks = new Map<string, Promise<void>>();
+
+/**
  * Hard cap on the number of entries retained in the watch registry. The
  * JSONL file is append-ordered oldest-first, so when the sweep exceeds this
  * cap it trims from the front, keeping only the most recently enrolled
@@ -295,6 +302,32 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
     await writeFile(join(projectRoot, WATCH_FILE), content);
   } catch {
     // swallow (C3)
+  }
+}
+
+/**
+ * Apply a watch-registry mutation as one serialized read-modify-write update.
+ * Mutator failures deliberately propagate before `rewriteWatch`, preserving
+ * the existing bytes while still releasing the per-project mutex.
+ */
+export async function updateWatch(
+  projectRoot: string,
+  mutate: (entries: WatchEntry[]) => WatchEntry[] | Promise<WatchEntry[]>,
+): Promise<void> {
+  const previous = watchUpdateLocks.get(projectRoot) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => done);
+  watchUpdateLocks.set(projectRoot, tail);
+
+  await previous;
+  try {
+    await rewriteWatch(projectRoot, await mutate(await readWatch(projectRoot)));
+  } finally {
+    release();
+    if (watchUpdateLocks.get(projectRoot) === tail) watchUpdateLocks.delete(projectRoot);
   }
 }
 
@@ -1009,7 +1042,7 @@ export async function sweepMergeableLabels({
         );
       }
     }
-    await rewriteWatch(projectRoot, trimmed);
+    await updateWatch(projectRoot, () => trimmed);
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted (FR-15).
     log?.(`[mergeable-sweep] sweep error: ${err}`);
