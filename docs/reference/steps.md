@@ -24,7 +24,7 @@ whether the step can be skipped and whether it can be disabled by config.
 | Level | Can be skipped | Can be config-disabled | Used by |
 | --- | --- | --- | --- |
 | `advisory` | Yes | Yes | `memory`, `explore`, `complexity`, `architecture_diagram`, and all four out-of-band steps |
-| `gating` | No | Only with `configDisableAllowed` | `prd`, `architecture_review`, `stories`, `conflict_check`, `plan`, `coherence_check`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
+| `gating` | No | Only with `configDisableAllowed` | `prd`, `architecture_review`, `stories`, `conflict_check`, `plan`, `coherence_check`, `plan_review`, `coverage_binding`, `acceptance_specs`, `build_review`, `test_suite`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `finish` |
 | `structural` | No | Never — the flag is ignored entirely | `worktree`, `build`, `rebase` |
 | `mechanical` | — | — | Nothing. The level is declared in the type union but no step definition uses it. |
 
@@ -34,7 +34,7 @@ mechanism and apply to gating steps too. For what a gate *is* and why it fails c
 
 ## Sequential steps
 
-The 20 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
+The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track exclusions; see
 [Tier skips](#tier-skips) and [Track skips](#track-skips).
 
 | # | Step | Phase | Enforcement | Prerequisites | Skips | Dispatches |
@@ -50,17 +50,24 @@ The 20 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 | 8 | `conflict_check` | DECIDE | gating | `stories` | tier S | `/conflict-check` |
 | 9 | `plan` | DECIDE | gating | `conflict_check` | — | `/plan` |
 | 10 | `coherence_check` | DECIDE | gating | `plan` | tier S | `/coherence-check` |
-| 11 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
-| 12 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
-| 13 | `test_suite` | BUILD | gating | `build` | — | engine-native |
-| 14 | `build_review` | BUILD | gating | `test_suite` | — | engine-native |
-| 15 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
-| 16 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
-| 17 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
-| 18 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
-| 19 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
+| 11 | `plan_review` | DECIDE | gating | `coherence_check` | tier S | `/plan-review`, through an engine-owned read-only reviewer session |
+| 12 | `coverage_binding` | BUILD | gating | `plan` | — | engine-native |
+| 13 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
+| 14 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
+| 15 | `test_suite` | BUILD | gating | `build` | — | engine-native |
+| 16 | `build_review` | BUILD | gating | `test_suite` | — | engine-native |
+| 17 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
+| 18 | `prd_audit` | SHIP | gating | `manual_test` | — (runs at every tier and on both tracks; trivially passes when a feature has no acceptance criteria to grade) | `/prd-audit` |
+| 19 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | — (runs at every tier; individual checks are conditional on tier and artifact presence, see [gates](../explanation/gates.md#the-as-built-architecture-reviews-checks-and-verdict)) | `/architecture-review --as-built` |
+| 20 | `rebase` | SHIP | structural | `architecture_review_as_built` | — | native; `/rebase` only on conflict |
+| 21 | `finish` | SHIP | gating | `rebase` | — | `/finish` |
 
-Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 4, SHIP 5.
+Per phase: SETUP 1, UNDERSTAND 1, DECIDE 10, BUILD 5, SHIP 5.
+
+`plan_review` has a legacy carve-out. When a daemon run reaches it without an operator grant and this
+feature's `.docs/plan-review/<plan-stem>.md` is absent — a spec landed before the step existed — the
+engine records the step `skipped` and writes `landed-before-plan-review` under `step_reasons` in
+`conduct-state.json` instead of authoring a review.
 
 `test_suite` is the sole engine-native BUILD verifier. Static wiring reachability is retired.
 `build_review` runs the default-on `implementationQuality` rubric plus any enabled `testQuality`,
@@ -101,7 +108,7 @@ deprecation notice. See `adr-2026-08-11-deprecated-no-op-step-retirement`.
 Two steps are checkpoints (`isCheckpoint: true`) — the engine pauses for the operator after them in
 default and interactive mode: `build` and `manual_test`.
 
-`build` is the first `loopGate` step, which makes index 12 the boundary between the front (DECIDE-ish,
+`build` is the first `loopGate` step, which makes index 14 the boundary between the front (DECIDE-ish,
 one-way) region and the gate loop. Everything from `build` to `finish` is a loop gate and can be
 re-entered when a downstream gate kicks back. The kickback targets — the steps a blocking gate can send
 work back to — are `prd`, `architecture_review`, `stories`, and `plan`.
@@ -183,15 +190,15 @@ not consume retry or kickback budget.
 
 ## Tier skips
 
-Tier S skips 6 steps. Tiers M and L skip none.
+Tier S skips 7 steps. Tiers M and L skip none.
 
 | Tier | Steps skipped |
 | --- | --- |
-| S | `architecture_diagram`, `architecture_review`, `conflict_check`, `coherence_check`, `acceptance_specs`, `manual_test` |
+| S | `architecture_diagram`, `architecture_review`, `conflict_check`, `coherence_check`, `plan_review`, `acceptance_specs`, `manual_test` |
 | M | none |
 | L | none |
 
-Tier S additionally disengages the land-time coherence gate entirely.
+Tier S additionally disengages the land-time coherence and plan-review gates entirely.
 
 Steps that are **not** tier-skippable at any tier include the whole BUILD spine — `build`,
 `build_review`, `test_suite` — plus `plan`, `stories`, `prd`, `rebase`, `finish`,
@@ -226,7 +233,7 @@ The track split touches exactly one step plus one land-gate layer.
 | Difference | `product` | `technical` |
 | --- | --- | --- |
 | `prd` (index 4) | Runs | Skipped — no product requirements to spec |
-| `prd_audit` (index 17) | Runs — stories' acceptance criteria are the audit key on both tracks; PRD FRs are context only when a PRD exists | Runs |
+| `prd_audit` (index 18) | Runs — stories' acceptance criteria are the audit key on both tracks; PRD FRs are context only when a PRD exists | Runs |
 | Land-time coherence `fr` layer | Required | Not required; the layer degrades away |
 
 Everything else is identical on both tracks. The track is decided in `explore` and recorded in
@@ -308,6 +315,7 @@ detail.
 | `conflict_check` | `.docs/conflicts/*.md` | yes | At least one matching file |
 | `plan` | `.docs/plans/*.md` | yes | At least one matching file. The verdict layer additionally requires every story unit in this feature's plan to be covered by at least one task, and fails when the feature's plan cannot be resolved among several |
 | `coherence_check` | `.docs/coherence/*.md` | yes | At least one matching file, named with the plan's filename stem |
+| `plan_review` | `.docs/plan-review/<plan-stem>.md` | yes | This feature's artifact parses, its integrity line matches, and every `blocking` finding carries an `accepted` or `resolved` disposition |
 | `acceptance_specs` | spec files in the project's test dirs, plus `.pipeline/acceptance-specs-red.json` | specs yes, evidence no | At least one spec file **and** RED evidence proving the feature's own specs ran and failed. A spec that was skipped, deselected, or hit a collection error does not establish RED |
 | `build` | `.pipeline/task-status.json` | no | No `.pipeline/halt-user-input-required` marker, every task completed or skipped, **and** a clean working tree whenever the status probe establishes one. The post-rebase closure applies the same conjunct: a reapplied autostash blocks BUILD until the named paths are committed or discarded. An absent or failed probe fails open to the legacy behavior. Task status is re-seeded and re-derived on each evaluation, so forged rows fail |
 | `build_review` | `.pipeline/build-review.json` | no | A fresh, valid effective `PASS` from the enabled rubric set (`implementationQuality` by default; `testQuality` and `security` opt in — an empty enabled set is a vacuous `PASS`). An enabled test-quality rubric with a valid empty typed scope also passes without a reviewer or counterfactual dispatch. Missing, prior-session, malformed, unresolved findings, or uncovered `scope-incomplete`/infrastructure faults all block. Raw outcomes and valid findings remain recorded; effective dispositions control routing. |

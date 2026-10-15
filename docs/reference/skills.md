@@ -58,8 +58,8 @@ activation boundary: the active lifecycle/caller state that qualifies, plus near
 not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
 operator invocation remains available regardless of these implicit-selection boundaries.
 
-The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
-`daemon-triage`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
+The 19 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
+`daemon-triage`, `finish`, `manual-test`, `memory`, `pipeline`, `plan-review`, `prd-audit`, `rebase`,
 `remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
 `write-tests`.
@@ -104,24 +104,25 @@ policy across both catalogs and both host metadata formats.
 | `architecture-diagram` | advisory | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
-| `architecture-review` | gating | decide | — | `architecture_review` (6), `architecture_review_as_built` (18) | Blocking |
+| `architecture-review` | gating | decide | — | `architecture_review` (6), `architecture_review_as_built` (19) | Blocking |
 | `stories` | gating | decide | — | `stories` (7) | Blocking |
 | `conflict-check` | gating | decide | — | `conflict_check` (8) | Blocking |
 | `plan` | gating | decide | — | `plan` (9) | Blocking |
 | `coherence-check` | gating | decide | — | `coherence_check` (10) | Blocking |
+| `plan-review` | gating | decide | — | `plan_review` (11) | Blocking |
 | `intake` | gating | decide | — | none — operator-invoked | Neither |
 | `composer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
-| `writing-system-tests` | gating | build | — | `acceptance_specs` (11) | Blocking |
-| `pipeline` | structural | build | — | `build` (12) | Blocking; cannot be disabled |
+| `writing-system-tests` | gating | build | — | `acceptance_specs` (13) | Blocking |
+| `pipeline` | structural | build | — | `build` (14) | Blocking; cannot be disabled |
 | `tdd` | structural | build | — | none — runs inside `build` | Neither |
 | `code-review` | gating | build | opus | none — pipeline batch boundary | Blocking in place |
 | `simplify` | gating | build | sonnet | none — pipeline batch boundary | Blocking in place |
 | `debugging` | gating | build | opus | none — on demand | Neither |
-| `manual-test` | gating | ship | — | `manual_test` (16) | Blocking |
-| `prd-audit` | gating | ship | opus | `prd_audit` (17) | Blocking |
+| `manual-test` | gating | ship | — | `manual_test` (17) | Blocking |
+| `prd-audit` | gating | ship | opus | `prd_audit` (18) | Blocking |
 | `remediate` | advisory | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
-| `rebase` | advisory | ship | — | `rebase` (19) — on conflict only | Blocking via the structural step |
-| `finish` | gating | ship | — | `finish` (20) | Blocking |
+| `rebase` | advisory | ship | — | `rebase` (20) — on conflict only | Blocking via the structural step |
+| `finish` | gating | ship | — | `finish` (21) | Blocking |
 | `pr` | advisory | ship | — | none — operator-invoked; `/finish` inlines it rather than calling it | Neither |
 | `maintain-documentation` | (none) | (none) | — | custom step after `rebase` | Blocking, this repository only |
 | `release-disposition` | (none) | (none) | — | custom step after `maintain-documentation` | Blocking, this repository only |
@@ -303,7 +304,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — two: `architecture_review` (index 6, DECIDE, engine enforcement `gating`) and
-  `architecture_review_as_built` (index 18, SHIP, engine enforcement `gating`), the latter invoked as
+  `architecture_review_as_built` (index 19, SHIP, engine enforcement `gating`), the latter invoked as
   `/architecture-review --as-built`. The DECIDE-time step skips at tier S; the as-built step runs at
   every tier.
 - **Inputs** — `.docs/decisions/`, `.docs/architecture/`, `CLAUDE.md`, `.memory/decisions/`, existing
@@ -356,7 +357,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   is resolved in `stories`. In an unattended run a blocking conflict HALTs for a human — never a silent
   pass.
 - **Layer ownership** — story↔story pairs only. Cross-layer and task↔task pairs belong to
-  `coherence-check`, because this step runs before `plan` creates tasks.
+  `plan-review` at tiers M and L and to the plan's §7b contradiction pass at tier S, because this step
+  runs before `plan` creates tasks.
 
 ### plan
 
@@ -417,30 +419,49 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   for binding constraints. An established inability to deliver is `fail`, explained with
   `CANNOT-DELIVER:` prose below the table identifying the criterion, task, quoted check, and any
   binding ADR decision. Criterion rows retain six cells; no Notes cell or new gap-id vocabulary is added.
-  The review also checks preserved/default-mode observables against new side effects across tasks,
-  and verifies that closed state/result/reason sets can truthfully represent required negative paths.
-  Checks over normalized inputs or exported subsets must establish the source boundary as well as
-  the helper behavior; agreement within an incomplete subset does not establish complete coverage.
+  The review also verifies that closed state/result/reason sets can truthfully represent required
+  negative paths. Checks over normalized inputs or exported subsets must establish the source boundary
+  as well as the helper behavior; agreement within an incomplete subset does not establish complete
+  coverage.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
   §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
   `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived
-  mechanically by the land-time gate from the real PRD and stories files, so the skill spends its judgement
-  on whether a cited FR is actually *delivered* by that story's scenarios — a correct citation the
-  acceptance criteria contradict is `fail`, not `covered`. Story-versus-story contradictions stay with
-  `conflict-check`; this skill compares each story against the PRD.
-- **Task-versus-task sweep** — owns task↔task and cross-layer oscillation; story↔story pairs belong
-  to `conflict-check`, which runs before tasks exist. For each task pair sharing a behavior, entity,
-  file, or fixture, it asks whether completing one task leaves the other's `Done when` true, in both
-  directions; an acyclic dependency graph is not evidence of compatibility. An invalidation grounded in
-  quoted text from both tasks sets the affected `task` row to `fail` (never a new verdict word);
-  ungrounded suspicions are raised as assumptions, and pairs sharing nothing add no rows.
+  mechanically by the land-time gate from the real PRD and stories files.
+- **Layer ownership** — mapping and achievability only. Story↔story pairs belong to `conflict-check`;
+  cross-layer and task↔task contradiction, oscillation, and preserved-behavior conflicts belong to
+  [`plan-review`](#plan-review) at tiers M and L and to the plan's §7b contradiction pass at tier S.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
-  exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it
-  or whose cited task checks cannot deliver the criterion under approved architecture,
+  exactly `covered`, `gap`, or `fail` — `fail` marks a row whose cited task checks cannot deliver the
+  criterion under approved architecture, or whose required ADR decision mapping is semantically wrong,
   which coverage alone cannot express. Criterion rows enforce that vocabulary mechanically; unknown
   values are malformed. The five legacy row classes retain affirmative-by-default parsing for backward
   compatibility. In an autonomous run an ambiguous row is marked `gap` and left for the fail-closed land
   gate — never silently passed. At tier S it does not run and must not author a stub.
+
+### plan-review
+
+> Use only within active engineer/conduct DECIDE after coherence-check for Medium or Large work to adversarially review the final plan against the real source. Reports source-grounded findings; does not author or amend plan artifacts.
+
+- **Frontmatter** — `enforcement: gating`, `phase: decide`, `disable-model-invocation: true`, no
+  model pin. Codex metadata sets `allow_implicit_invocation: false`.
+- **Engine step** — `plan_review` (index 11, DECIDE, prerequisite `coherence_check`, skipped at tier S).
+  The engine dispatches the skill in a fresh read-only reviewer session; outside the daemon, run it with
+  [`compose plan-review`](cli.md#compose-subcommands).
+- **Inputs** — the plan, stories, in-scope ADR `## Decision` sections, the coherence artifact, the target
+  worktree source, and engine-computed candidate rows for the `test-impact`, `reachability`, and
+  `dependency-order` lenses. Round 2 receives only the plan tasks, stories, and ADR decisions whose
+  digests changed since round 1, plus round 1's blocking and significant findings.
+- **Outputs** — `.docs/plan-review/<plan-stem>.md`, rendered by the engine from the reviewer's
+  schema-validated structured result. The reviewer writes nothing.
+- **Reviewer choice** — the engine tries configured providers in order, with
+  `steps.plan_review.llm_provider` first when set. Unless that setting names the authoring host, the
+  authoring host moves to the end of the list. A reviewer that is not provably a different provider
+  prints an `independence` notice (`same-provider` or `unknown-host`).
+- **Gate role** — blocking. Findings are `blocking`, `significant`, or `advisory`. Every unresolved
+  `blocking` finding blocks both step completion and land. Review is bounded to two rounds: after round
+  2, the operator either accepts each standing finding with a reason, or acknowledges later plan edits
+  with a reason so the recorded digest matches again. Land also rejects a review whose digest no longer
+  matches the plan, stories, in-scope ADR decisions, or coherence artifact.
 
 ### intake
 
@@ -479,7 +500,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `requires: [verify-claims]`, no model pin.
   It is the only `skills/*` entry with no `standalone` key, so it defaults to non-standalone.
-- **Engine step** — `acceptance_specs` (index 11, BUILD, prerequisite `plan`, skipped at tier S).
+- **Engine step** — `acceptance_specs` (index 13, BUILD, prerequisite `plan`, skipped at tier S).
 - **Inputs** — happy and negative acceptance criteria from `.docs/stories/*.md`; the existing test suite
   and tech-context for framework and layout detection; the approved PRD FR list on the product track.
 - **Outputs** — committed acceptance spec files in the project's test directories, plus gitignored run
@@ -504,7 +525,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: structural`, `phase: build`, `standalone: false`,
   `requires: [".docs/plans/ with implementation plan"]`, no model pin.
-- **Engine step** — `build` (index 12, BUILD, prerequisite `plan`). Checkpoint, loop gate, structural,
+- **Engine step** — `build` (index 14, BUILD, prerequisite `plan`). Checkpoint, loop gate, structural,
   never tier-skipped, never disableable.
 - **Inputs** — the plan's task dependency graph, file sets, and dependency lines;
   `.pipeline/task-status.json`; story acceptance criteria; prior batch reviews; ADRs and the approved
@@ -663,7 +684,7 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: false`,
   `requires: [verify-claims]`, no model pin.
-- **Engine step** — `manual_test` (index 16, SHIP, prerequisite `test_suite`, skipped at tier S).
+- **Engine step** — `manual_test` (index 17, SHIP, prerequisite `test_suite`, skipped at tier S).
   Checkpoint and loop gate, and the only step that opts into `configDisableAllowed`.
 - **Inputs** — story acceptance criteria; the running application; the absolute worktree `.pipeline`
   path supplied in the step's system prompt.
@@ -685,7 +706,7 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, `model: opus`.
-- **Engine step** — `prd_audit` (index 17, SHIP, prerequisite `manual_test`). Loop gate; runs on every
+- **Engine step** — `prd_audit` (index 18, SHIP, prerequisite `manual_test`). Loop gate; runs on every
   feature, at every tier and on both tracks — the skill does not infer a skip from tier, track, or the
   absence of a PRD.
 - **Inputs** — in a managed run, an engine-built, versioned, size-bounded evidence projection: the
@@ -766,7 +787,7 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: ship`, `standalone: true`, `requires: []`, no model
   pin.
-- **Engine step** — `rebase` (index 19, SHIP, prerequisite `architecture_review_as_built`). Engine enforcement is
+- **Engine step** — `rebase` (index 20, SHIP, prerequisite `architecture_review_as_built`). Engine enforcement is
   `structural`. The engine rebases natively and dispatches this skill **only on conflict**.
 - **Inputs** — live git state only: status, the rebase-merge or rebase-apply path, the unmerged file
   list, and the conflicted files.

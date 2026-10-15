@@ -30,6 +30,7 @@ const EXPECTED_INVOCATIONS = {
     skillName: 'coherence-check',
     arguments: [],
   },
+  plan_review: { kind: 'skill', skillName: 'plan-review', arguments: [] },
   architecture_diagram: {
     kind: 'skill',
     skillName: 'architecture-diagram',

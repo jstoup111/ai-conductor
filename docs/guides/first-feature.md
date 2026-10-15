@@ -34,7 +34,7 @@ ai-conductor compose
 This spawns an interactive `claude` session with `/composer` as the opening prompt, inheriting your
 terminal. Drive the loop from there: it walks the DECIDE phase — explore, complexity, PRD (product
 track only), architecture, stories, conflict-check, plan, and (for Medium and Large tiers)
-coherence-check — inside a dedicated per-idea git worktree,
+coherence-check and plan review — inside a dedicated per-idea git worktree,
 then lands the artifacts on a `spec/<slug>` branch and opens the spec PR.
 
 To skip the chat prompt and hand it the idea directly:
@@ -49,7 +49,7 @@ directly.
 
 **Observable outcome:** a PR against `main` whose diff is entirely `.docs/` artifacts — an intake
 marker, stories, a plan, a complexity marker, ADRs, and (for Medium and Large tiers) a coherence
-record. Confirm it:
+record and a plan review. Confirm it:
 
 ```bash
 gh pr list --state open

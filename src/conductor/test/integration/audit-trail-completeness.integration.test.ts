@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, task:5, task:6, task:11, task:15
+// Covers: task:1, task:2, task:4, task:5, task:6, task:9, task:11, task:15
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -86,6 +86,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   coverage_binding_invalidated: 'not-audited-by-design',
   coverage_binding_task_reopened: 'not-audited-by-design',
   plan_slices_changed: 'not-audited-by-design',
+  plan_review_dispatched: 'not-audited-by-design',
+  plan_review_completed: 'not-audited-by-design',
+  plan_review_finding_accepted: 'not-audited-by-design',
   // Per-child transitions remain in the durable event spine but are not
   // audit-trail friction records (event-sinks declares audit: false).
   child_started: 'not-audited-by-design',
@@ -386,6 +389,26 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     added: ['9'],
     removed: ['3'],
     manifest: 'unchanged',
+  },
+  plan_review_dispatched: {
+    type: 'plan_review_dispatched',
+    round: 1,
+    reviewerProvider: 'codex',
+    independence: 'cross-provider',
+  },
+  plan_review_completed: {
+    type: 'plan_review_completed',
+    round: 1,
+    reviewerProvider: 'codex',
+    independence: 'cross-provider',
+    blockingCount: 1,
+    significantCount: 2,
+    advisoryCount: 3,
+  },
+  plan_review_finding_accepted: {
+    type: 'plan_review_finding_accepted',
+    findingId: 'finding-1',
+    reason: 'accepted with operator rationale',
   },
   child_started: { type: 'child_started', child: parseChildId(1)!, position: 1, branch: 'feat/c1/feature' },
   child_closed: {

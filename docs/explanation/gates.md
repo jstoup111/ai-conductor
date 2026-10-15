@@ -193,6 +193,7 @@ from specs that would waste a build.
 | ADR status | any ADR under `.docs/decisions/` whose first line-anchored `Status:` declaration is not `APPROVED` or `SUPERSEDED`, or that declares no status at all — fenced code-block examples of rejected statuses are excluded from matching |
 | tier agreement | a declared complexity tier that disagrees with the artifacts present |
 | coherence | a traceability record that does not connect outcomes, requirements, accepted ADRs, stories, and tasks, or stories that do not tie out to the PRD |
+| plan review | at tiers M and L, a missing, tampered, or stale plan review, or one with an unaccepted `blocking` finding — see [plan-review gate](#plan-review-gate) |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | diagram presence | a non-Small architecture artifact with no fenced Mermaid block |
 | draft amendment note | a spec-branch `.md` artifact absent from the base branch that contains a dated `**Amended YYYY-MM-DD` line — fold the correction into the artifact text instead |
@@ -244,9 +245,10 @@ Forward, a PRD requirement no story cites — or whose only citing stories no ta
 Reverse, a story that cites an `FR-N` the PRD never declares, or that cites no requirement at all, is a gap
 against that story's id. The reverse direction runs on the product track only: a technical-track spec has no
 PRD, so it has no requirement layer to tie out against. What the gate does not judge is whether a story
-*semantically* delivers the requirement it cites — a story whose scenarios contradict its own FR is a
-`fail` verdict the `/coherence-check` skill records, not a set comparison. Story-versus-story contradictions
-belong to `conflict-check` earlier in DECIDE; this gate compares each story against the PRD only.
+*semantically* conflicts with the requirement it cites — that is a judgement, not a set comparison.
+Story-versus-story contradictions belong to `conflict-check` earlier in DECIDE. Cross-layer and
+task-versus-task contradictions belong to the [plan-review gate](#plan-review-gate) at tiers M and L, and
+to the plan's own contradiction pass at tier S.
 
 Earlier in DECIDE, `conflict_check` also compares each relevant story with the approved ADR corpus. It
 always considers every approved ADR, narrows to overlapping subjects, and records the ADRs it examined
@@ -254,6 +256,22 @@ and excluded. That judgment resolves
 ADR-versus-story conflicts before planning. This is separate from the coherence gate: any current-change-set
 ADR path engages its ADR layer, while only non-deleted ADR files enter the traceability-row pool; no
 conceptual applicability judgment expands that row set.
+
+### Plan-review gate
+
+At tiers M and L, `plan_review` runs after `coherence_check`: a fresh, read-only reviewer session judges
+the final plan against the worktree's real source. The engine computes candidate rows — an existing test
+no task updates, a planned export with no production caller, a task depending on something only an
+out-of-closure task introduces — and the reviewer confirms or discards each with evidence, then sweeps
+for contradictions. Candidates are prompts, never findings by themselves; deterministic candidate
+generation keeps the reviewer's judgement scoped, and schema validation constrains its output.
+
+The engine records the result in `.docs/plan-review/<plan-stem>.md`, guarded by an integrity hash and a
+digest of exactly the reviewed inputs. Land fails closed when the review is missing, tampered with, or
+stale against those inputs, or when a `blocking` finding stands without an operator acceptance. Review is
+bounded at two rounds, so the same finding is not re-litigated indefinitely: after round 2 the operator
+accepts standing findings or acknowledges later edits, each with a recorded reason. See
+[`compose plan-review`](../reference/cli.md#compose-subcommands) for the commands.
 
 ### Self-host gates
 

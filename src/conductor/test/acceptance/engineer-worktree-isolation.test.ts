@@ -14,7 +14,7 @@
 //   - A real-git smoke test of the full create→land→handoff(no-remote)→remove lifecycle.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -26,6 +26,7 @@ import {
 } from '../../src/engine/engineer/worktree-authoring.js';
 import { landSpec } from '../../src/engine/engineer/land-spec.js';
 import { openSpecPr } from '../../src/engine/engineer/handoff.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 
@@ -89,6 +90,34 @@ async function writeDocs(dir: string, idea: string): Promise<void> {
     `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story 1: s\n\n### Acceptance Criteria\n\n#### Happy Path\n- Given a, when b, then c.\n\n#### Negative Paths\n- Given invalid input, when land runs, then it refuses.\n`,
   );
   await writeFile(join(dir, '.docs', 'plans', `${slug}.md`), `# Plan: ${idea}\n\n### Task 1\n**Dependencies:** none\n\n**Done when:**\n- The planned behavior is implemented.\n- The scoped tests pass.\n`);
+  await seedCleanPlanReview(dir, slug);
+}
+
+/**
+ * Land's plan-review gate is not under test here: record a clean review round
+ * whose digest covers exactly the docs written above (no ADRs, no coherence).
+ */
+async function seedCleanPlanReview(dir: string, slug: string): Promise<void> {
+  const reviewedDigest = computeReviewedDigest({
+    planText: await readFile(join(dir, '.docs', 'plans', `${slug}.md`), 'utf8'),
+    storiesText: await readFile(join(dir, '.docs', 'stories', `${slug}.md`), 'utf8'),
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${slug}.md`]: '' },
+    changedPaths: [],
+  });
+  await mkdir(join(dir, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(dir, '.docs', 'plan-review', `${slug}.md`),
+    renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest,
+    }),
+  );
 }
 
 /** A byte-comparable snapshot of the primary tree's git identity. */

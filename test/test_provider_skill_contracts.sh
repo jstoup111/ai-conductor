@@ -279,6 +279,10 @@ for decide_skill in explore prd architecture-diagram architecture-review stories
   require_pattern "composer retains /${decide_skill} in the DECIDE workflow" \
     "/${decide_skill}" "$composer_skill"
 done
+require_pattern 'composer runs plan review after coherence-check for Medium/Large specs' \
+  'ai-conductor compose plan-review' "$HARNESS_DIR/skills/composer/SKILL.md"
+require_pattern 'conduct lists plan review after coherence-check' \
+  'Step 10c: /plan-review' "$HARNESS_DIR/skills/conduct/SKILL.md"
 require_pattern 'composer retains AuthoringGuard worktree isolation' \
   'AuthoringGuard.{0,160}(worktree|target repo)|(worktree|target repo).{0,160}AuthoringGuard' \
   "$composer_skill"

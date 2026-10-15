@@ -5,9 +5,10 @@ import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { LandGateError, landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { validatePlanSlices } from '../../../src/engine/plan-slices.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 import type { OwnerConfig } from '../../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
@@ -42,6 +43,21 @@ async function seed(planContent: string, tier?: 'S' | 'M', waiver?: string): Pro
     await mkdir(join(worktreePath, '.docs', 'coherence-waivers'), { recursive: true });
     await writeFile(join(worktreePath, '.docs', 'coherence-waivers', 'membership.md'), waiver);
   }
+  const reviewedDigest = computeReviewedDigest({
+    planText: planContent,
+    storiesText: STORIES,
+    adrTexts: {},
+    artifactTexts: { '.docs/coherence/plan-slices-membership.md': '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', 'plan-slices-membership.md'),
+    renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [], dispositions: [], reviewedDigest,
+    }),
+  );
   return worktreePath;
 }
 

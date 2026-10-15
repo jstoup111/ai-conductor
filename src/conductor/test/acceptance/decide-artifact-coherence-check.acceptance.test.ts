@@ -49,6 +49,7 @@ import { promisify } from 'node:util';
 import { landSpec } from '../../src/engine/engineer/land-spec.js';
 import { slugify } from '../../src/engine/engineer/spec-branch.js';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
@@ -344,6 +345,32 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
       join(dir, '.pipeline', 'intake-outcomes.md'),
       [`Source-Ref: ${SOURCE_REF}`, '', '## Desired outcome', ...OUTCOME_BULLETS, ''].join('\n'),
     );
+  }
+
+  // M/L land fixtures must carry the clean DECIDE review artifact required by
+  // the plan-review rung. This keeps each coherence assertion at its intended
+  // land boundary rather than failing earlier on an unrelated missing review.
+  if (tier !== 'S') {
+    const planText = plan.replace('.docs/stories/coherence-demo.md', `.docs/stories/${stem}.md`);
+    const coherenceText = coherence === null
+      ? ''
+      : (stageOutcomes ? coherence : coherence.split('\n').filter((line) => !line.trimStart().startsWith('| outcome')).join('\n'));
+    await mkdir(join(dir, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'plan-review', `${stem}.md`), renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest: computeReviewedDigest({
+        planText,
+        storiesText: stories,
+        adrTexts: { 'adr-2026-09-08-coherence': adr },
+        artifactTexts: { [`.docs/coherence/${stem}.md`]: coherenceText },
+        changedPaths: ['.docs/decisions/adr-2026-09-08-coherence.md'],
+      }),
+    }), 'utf8');
   }
 
   return dir;

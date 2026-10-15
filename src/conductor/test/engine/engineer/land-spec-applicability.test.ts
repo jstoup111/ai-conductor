@@ -6,9 +6,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { LandGateError, landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { validateApplicability } from '../../../src/engine/feature-applicability.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 const IDEA = 'applicability landing';
@@ -93,6 +94,23 @@ async function seed(
     await mkdir(join(worktreePath, '.docs', 'applicability'), { recursive: true });
     await writeFile(join(worktreePath, '.docs', 'applicability', `${markerStem ?? stem}.md`), marker);
   }
+  const planText = await readFile(join(worktreePath, '.docs', 'plans', `${stem}.md`), 'utf8');
+  const storiesText = await readFile(join(worktreePath, '.docs', 'stories', `${stem}.md`), 'utf8');
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText,
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${stem}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', `${stem}.md`),
+    renderPlanReviewArtifact({
+      round: 1, authoringHost: 'claude', reviewerProvider: 'codex', independence: 'cross-provider',
+      findings: [], dispositions: [], reviewedDigest,
+    }),
+  );
   return worktreePath;
 }
 

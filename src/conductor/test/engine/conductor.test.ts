@@ -326,6 +326,10 @@ function useRealGitExeca(): () => void {
   return () => execaMock.mockImplementation(originalImplementation!);
 }
 
+async function seedGenericTail(statePath: string): Promise<void> {
+  await writeState(statePath, { plan_review: 'done', coverage_binding: 'done' });
+}
+
 function buildBoundaryState(featureDesc = 'feature'): ConductState {
   return {
     ...Object.fromEntries(
@@ -3705,8 +3709,9 @@ describe('engine/conductor', () => {
   });
 
   it('starts at step index 0 for new feature', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3719,7 +3724,9 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
-        s.name !== 'rebase',
+        s.name !== 'rebase' &&
+        s.name !== 'plan_review' &&
+        s.name !== 'coverage_binding',
     ).length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('memory');
@@ -3762,8 +3769,9 @@ describe('engine/conductor', () => {
   });
 
   it('marks step done after success', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3778,6 +3786,7 @@ describe('engine/conductor', () => {
   });
 
   it('advances to next step after success', async () => {
+    await seedGenericTail(statePath);
     const callOrder: StepName[] = [];
     const runner: StepRunner = {
       run: async (step: StepName) => {
@@ -3785,7 +3794,7 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3796,14 +3805,17 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
-        s.name !== 'rebase',
+        s.name !== 'rebase' &&
+        s.name !== 'plan_review' &&
+        s.name !== 'coverage_binding',
     ).map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });
 
   it('sets feature_status=complete when all steps done', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     await conductor.run();
 
@@ -3815,8 +3827,9 @@ describe('engine/conductor', () => {
   });
 
   it('emits step_started and step_completed events', async () => {
+    await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
 
     const emitted: Array<{ type: string; step: string }> = [];
     events.on('step_started', (e) => {
@@ -3830,14 +3843,14 @@ describe('engine/conductor', () => {
 
     // Should have started + completed events for every step (complexity
     // dispatches via the engine path but still emits the same event pair).
-    expect(emitted.length).toBe(ALL_STEPS.length * 2);
+    expect(emitted.length).toBe((ALL_STEPS.length - 2) * 2);
 
     // Check first step events are in correct order
     expect(emitted[0]).toEqual({ type: 'step_started', step: 'worktree' });
     expect(emitted[1]).toEqual({ type: 'step_completed', step: 'worktree' });
 
     // Check last step
-    const lastIdx = (ALL_STEPS.length - 1) * 2;
+    const lastIdx = (ALL_STEPS.length - 3) * 2;
     expect(emitted[lastIdx]).toEqual({ type: 'step_started', step: 'finish' });
     expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
   });

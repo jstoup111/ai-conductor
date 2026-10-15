@@ -5,10 +5,11 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { LandGateError, landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { OwnerConfig } from '../../../src/engine/owner-gate/identity.js';
 import { deriveStoryOwnership, evaluateStackEligibility, validatePlanSlices } from '../../../src/engine/plan-slices.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 const IDEA = 'stacked delivery';
@@ -115,6 +116,26 @@ async function seed(
   await writeFile(join(worktreePath, '.docs', 'conflicts', 'stacked-delivery.md'), '# Conflicts\n\nNone.\n');
   await writeFile(join(worktreePath, '.docs', 'architecture', 'stacked-delivery.md'), '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n');
   await writeFile(join(worktreePath, '.docs', 'decisions', 'stacked-delivery.md'), '# Review\n\nApproved.\n');
+  const reviewedDigest = computeReviewedDigest({
+    planText: planContent,
+    storiesText: stories,
+    adrTexts: { 'stacked-delivery': '# Review\n\nApproved.\n' },
+    artifactTexts: { '.docs/coherence/stacked-delivery.md': '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', 'stacked-delivery.md'),
+    renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest,
+    }),
+  );
   return worktreePath;
 }
 

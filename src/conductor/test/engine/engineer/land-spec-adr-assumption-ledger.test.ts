@@ -1,12 +1,13 @@
 // Covers: task:6
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { LandGateError, landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 
 const execFile = promisify(execFileCb);
 let repoPath: string;
@@ -66,6 +67,32 @@ async function seedWorktree(): Promise<string> {
   return worktreePath;
 }
 
+async function writeCleanPlanReview(worktreePath: string): Promise<void> {
+  const planText = await readFile(join(worktreePath, '.docs', 'plans', 'ledger-landing.md'), 'utf-8');
+  const storiesText = await readFile(join(worktreePath, '.docs', 'stories', 'ledger-landing.md'), 'utf-8');
+  const adrTexts = {
+    'adr-2026-10-10-empty': await readFile(join(worktreePath, '.docs', 'decisions', 'adr-2026-10-10-empty.md'), 'utf-8'),
+    'adr-2026-10-10-valid': await readFile(join(worktreePath, '.docs', 'decisions', 'adr-2026-10-10-valid.md'), 'utf-8'),
+  };
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText,
+    adrTexts,
+    artifactTexts: { '.docs/coherence/ledger-landing.md': '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(join(worktreePath, '.docs', 'plan-review', 'ledger-landing.md'), renderPlanReviewArtifact({
+    round: 1,
+    authoringHost: 'claude',
+    reviewerProvider: 'codex',
+    independence: 'cross-provider',
+    findings: [],
+    dispositions: [],
+    reviewedDigest,
+  }));
+}
+
 beforeEach(async () => {
   repoPath = await mkdtemp(join(tmpdir(), 'land-spec-adr-assumption-ledger-'));
   await git(['init', '-b', 'main', '-q']);
@@ -90,6 +117,7 @@ describe('landSpec ADR assumption-ledger gate', () => {
       writeFile(join(worktreePath, '.docs', 'decisions', 'adr-2026-10-10-valid.md'), approvedAdr(VALID_LEDGER)),
       writeFile(join(worktreePath, '.docs', 'decisions', 'adr-2026-10-10-empty.md'), approvedAdr('## Assumptions\n\nNo load-bearing assumptions.')),
     ]);
+    await writeCleanPlanReview(worktreePath);
 
     await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, 'ledger landing', worktreePath, undefined, options()))
       .resolves.toMatchObject({ slug: 'ledger-landing' });

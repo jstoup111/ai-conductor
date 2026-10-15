@@ -3856,7 +3856,7 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done', coherence_check: 'done',
+        plan: 'done', coherence_check: 'done', plan_review: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         coverage_binding: 'done',
@@ -6508,6 +6508,7 @@ describe('engine/conductor', () => {
         // This fixture targets the BUILD completion predicate. Its temporary
         // directory has no merge base for the architecture-review ledger gate.
         architecture_review: 'done',
+        plan_review: 'done',
         coverage_binding: 'done',
       } as ConductState);
 
@@ -6615,7 +6616,8 @@ describe('engine/conductor', () => {
       const seed = seedRes.ok ? seedRes.value : {};
       seed.feature_desc = 'add foo';
       // This fixture proves the ordinary artifact walk, not the separate
-      // build-review or PRD-audit effective-verdict resolvers.
+      // plan-review, build-review, or PRD-audit effective-verdict resolvers.
+      seed.plan_review = 'done';
       seed.build_review = 'done';
       seed.prd_audit = 'done';
       await writeState(statePath, seed);

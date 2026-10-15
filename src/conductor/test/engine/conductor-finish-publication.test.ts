@@ -176,7 +176,7 @@ describe('Conductor FINISH publication routing', () => {
     };
     for (const step of [
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
-      'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+      'conflict_check', 'plan', 'coherence_check', 'plan_review', 'architecture_diagram',
       'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
       'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'rebase',

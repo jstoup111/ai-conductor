@@ -62,6 +62,8 @@ import {
   readCommittedIntakeOutcomes,
 } from './outcome-staging.js';
 import { runCoherenceGate } from './coherence-validator.js';
+import { runPlanReviewGate } from './plan-review-gate.js';
+import { resolveIdeaFiles } from './spec-change-set.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import {
   checkDiagramsForFile,
@@ -165,6 +167,7 @@ export type LandGateIdentifier =
   | 'adr-assumption-ledger'
   | 'adr-filename'
   | 'coherence'
+  | 'plan-review'
   | 'mermaid-render'
   | 'mermaid-tool-missing'
   | 'artifact-empty'
@@ -631,6 +634,10 @@ export async function landSpec(
         step: 'coherence_check',
         paths: await familyPaths('coherence_check', join(worktreePath, '.docs', 'coherence')),
       },
+      {
+        step: 'plan_review',
+        paths: await familyPaths('plan_review', join(worktreePath, '.docs', 'plan-review')),
+      },
     ],
     featureSlug,
   );
@@ -767,6 +774,11 @@ export async function landSpec(
     });
   } catch (error) {
     throw landGateError('coherence', error instanceof Error ? error.message : String(error));
+  }
+  try {
+    await runPlanReviewGate({ worktreePath, canonicalPath: canonical, planStem: markerSlug!, tier: tier!, planText: planContent, storiesText: storiesContent });
+  } catch (error) {
+    throw landGateError('plan-review', error instanceof Error ? error.message : String(error));
   }
 
   // D6: intake land is the sole blocking dependency-read path.  Markerless
@@ -907,6 +919,7 @@ async function resolveFeatureFiles(
     { step: 'plan', directory: 'plans' },
     { step: 'conflict_check', directory: 'conflicts' },
     { step: 'coherence_check', directory: 'coherence' },
+    { step: 'plan_review', directory: 'plan-review' },
   ];
   const amendments = validateFeatureArtifactStems(families.map(({ step, directory }) => ({
     step,
@@ -953,45 +966,7 @@ export function findDraftAmendmentNoteLines(content: string): string[] {
  * @param canonicalPath - the target's registry canonical path, used to derive the
  *   default branch the same way the worktree primitive did at creation time.
  */
-export async function resolveIdeaFiles(
-  worktreePath: string,
-  canonicalPath: string,
-): Promise<Set<string>> {
-  const defaultBranch = await deriveDefaultBranch(canonicalPath);
-
-  const { stdout: baseOut } = await execFile(
-    'git',
-    ['merge-base', 'HEAD', defaultBranch],
-    { cwd: worktreePath },
-  );
-  const base = baseOut.trim();
-
-  const { stdout: diffOut } = await execFile(
-    'git',
-    ['diff', '--name-only', base, 'HEAD'],
-    { cwd: worktreePath },
-  );
-  const committed = diffOut.trim() === '' ? [] : diffOut.trim().split('\n');
-
-  const { stdout: porcelainOut } = await execFile(
-    'git',
-    ['status', '--porcelain', '--untracked-files=all'],
-    { cwd: worktreePath },
-  );
-  const porcelainLines = porcelainOut.trim() === '' ? [] : porcelainOut.trim().split('\n');
-  const untracked = porcelainLines
-    .filter((line) => line.slice(0, 2) === '??')
-    .map((line) => line.slice(3).trim().replace(/^"(.*)"$/, '$1'));
-
-  const all = [...committed, ...untracked];
-  const ideaFiles = new Set<string>();
-  for (const p of all) {
-    if (p.startsWith('.docs/') || p.startsWith('.docs\\')) {
-      ideaFiles.add(p);
-    }
-  }
-  return ideaFiles;
-}
+export { resolveIdeaFiles } from './spec-change-set.js';
 
 /**
  * List EVERY artifact `.md` file in `dir` attributable to this idea — the files

@@ -1,5 +1,5 @@
 <!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
-{"type":"step_started","step":"prd_audit","index":17,"executionContext":{"executionId":"00000000-0000-4000-8000-000000000003","subject":{"kind":"lifecycle-step","step":"prd_audit"}},"ts":"<TIMESTAMP>"}
+{"type":"step_started","step":"prd_audit","index":18,"executionContext":{"executionId":"00000000-0000-4000-8000-000000000003","subject":{"kind":"lifecycle-step","step":"prd_audit"}},"ts":"<TIMESTAMP>"}
 {"type":"step_failed","step":"prd_audit","error":"Step 'prd_audit' completed but completion check failed: prd-audit found blocking criterion grades: S1.1 (FIXABLE) — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit","retryCount":1,"tier":"S","executionContext":{"executionId":"00000000-0000-4000-8000-000000000003","subject":{"kind":"lifecycle-step","step":"prd_audit"}},"ts":"<TIMESTAMP>"}
 {"type":"kickback","from":"prd_audit","to":"build","evidence":"S1.1→build","count":1,"tier":"S","ts":"<TIMESTAMP>"}
 {"type":"operator_park_boundary","featureSlug":"n1-golden","boundary":{"kind":"pre-first-unit"},"ts":"<TIMESTAMP>"}

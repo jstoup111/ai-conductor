@@ -4918,9 +4918,10 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(tierSkipEvents.length).toBe(6);
+    expect(tierSkipEvents.length).toBe(7);
     expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('coherence_check');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('plan_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');

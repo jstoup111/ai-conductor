@@ -22,9 +22,8 @@ layer. That engagement is distinct from the ADR row pool: deleted ADRs produce n
 deletion-only change has no ADR row to author.
 
 **Correctness gate:** a row's verdict (`covered` / `gap` / `fail`) is a judgment call, not
-a mechanical grep. Coverage, consistency, and achievability are separate questions: a counterpart
-can exist and still contradict what it implements (§4d), or be compatible with a criterion without
-delivering it (§4g). Per the `/verify-claims` protocol, ground every verdict in the actual
+a mechanical grep. Mapping and achievability are separate questions: a counterpart can exist while
+a criterion still cannot be delivered (§4g). Per the `/verify-claims` protocol, ground every verdict in the actual
 cited text — do not mark a row covered on the assumption that a plausible-looking
 counterpart id exists; confirm it against the real artifact file.
 
@@ -127,11 +126,9 @@ The artifact is a Markdown table (or one table per row class) with these columns
    also reports `criterion:correction-unknown-decision:<n>`. Do not use the
    correction cell on `covered` or `gap` rows.
 
-   Before writing the artifact, run the plan skill's independent coverage judgement (plan §7a) on
-   every criterion row, using this artifact's cited tasks. A row whose criterion, cited task ids,
-   and cited `Done when` blocks are identical to a plan `## Coverage Check` row the judgement has
-   already passed needs no second judgement. Resolve every refusal as §7a directs; a refused row
-   is never recorded `covered`.
+**Layer ownership.** Story↔story pairs belong to `/conflict-check`. Cross-layer and task versus task
+pairs belong to plan review at Medium and Large tier, and to the plan's §7b at Small tier.
+`/conflict-check` runs before `/plan`, so it cannot see tasks.
 
 ### 4b. Verdict Vocabulary
 
@@ -139,24 +136,24 @@ Use exactly these three verdict values — this is the same vocabulary the land-
 validator parses and the same vocabulary the coherence-waiver mechanism consumes:
 
 - **covered** — the cited id has ≥1 real counterpart id (confirmed to exist in the
-  counterpart's own artifact file, not merely referenced) **and** nothing in that
-  counterpart contradicts it (§4d); a criterion row must also establish achievability (§4g).
+  counterpart's own artifact file, not merely referenced); a criterion row must also establish
+  achievability (§4g).
 - **gap** — the cited id has zero counterparts, or its only counterpart is itself
   transitively uncovered (e.g. a story maps to a task, but that task cites no story
   back, or the coverage table claims a task id that does not exist in the task tree).
-- **fail** — the cited id *has* a real counterpart, but the two **contradict** each
-  other (§4d), or the cited task checks cannot deliver the criterion under the approved
-  architecture (§4g). Coverage is satisfied here; consistency or achievability is not. Recording it as `gap`
-  would misdescribe it and send the reader hunting for a missing artifact that is in
-  fact present and wrong.
+- **fail** — the cited id has a real counterpart, but the cited task checks cannot deliver the
+  criterion under the approved architecture (§4g), or a required ADR decision mapping is
+  semantically wrong (§4f). Coverage is satisfied here; achievability or architecture alignment is
+  not. Recording it as `gap` would misdescribe it and send the reader hunting for a missing
+  artifact that is in fact present and wrong.
 
 **The exact strings matter more than they look.** The land-time validator treats
 `gap`, `missing`, `uncovered`, and `fail` as blocking for legacy rows, and **every other string as
 affirmative**. Criterion rows instead reject any verdict outside `covered`, `gap`, and `fail`.
 An invented verdict — "partial", "contradiction", "n/a", "pending" — can therefore
 *silently pass the legacy gate* or make a criterion row malformed. That is why a
-contradiction or achievability failure is recorded as `fail` rather than as a new word that reads more
-precisely: `fail` is already in the blocking set and already flows into the gap list a
+achievability or architecture-alignment failure is recorded as `fail` rather than as a new word that
+reads more precisely: `fail` is already in the blocking set and already flows into the gap list a
 waiver can cite. A row that is genuinely not applicable (e.g. the FR row class on a
 technical-track spec) is omitted entirely, never given a placeholder verdict.
 
@@ -195,9 +192,8 @@ and verify that the quoted text comes from one of those checks.
 
 A **fail** row uses the same id form as its row class (`outcome-<n>`, `fr-<N>`,
 `story-<id>`, `task-<id>`, `adr-<stem>`) — the id identifies *which* row, and the
-verdict says what is wrong with it. For a contradiction, prefix its Notes with `CONTRADICTS:` and name the
-counterpart id and the specific opposing text, so a reader can adjudicate without
-re-deriving the finding.
+verdict says what is wrong with it. Name the supporting evidence in Notes so a reader can
+adjudicate without re-deriving the finding.
 
 Use `CANNOT-DELIVER:` for an achievability failure (§4g). Criterion rows have six required cells
 and no Notes cell; a `fail` row may add the optional seventh correction cell described in §4a.
@@ -207,91 +203,6 @@ cited task id, quoted check, and any binding ADR decision. Do not append comment
 or create another table for these notes. This prefix is explanatory prose, not a verdict,
 disposition, gap id, or correction-layer routing signal. Do not invent an achievability-specific
 gap-id form.
-
-### 4d. Consistency Pass — Contradiction and Oscillation
-
-Coverage and consistency are different questions, and this artifact is the only place
-both are visible: it is the one view holding outcomes, FRs, ADRs, stories, and tasks at once.
-A row where the counterpart exists but *opposes* what it implements is **`fail`**, not
-`covered` — the mapping is complete and wrong.
-
-After establishing coverage, re-read each covered row and ask whether the counterpart
-opposes what it implements. Criterion achievability is a separate question (§4g). Two shapes matter:
-
-**Static contradiction** — the two cannot both hold. An FR requires a field be
-immutable after creation while a task adds an edit endpoint for it; an outcome demands
-a gate fail closed while its task adds a bypass flag. Whichever is right, they cannot
-both ship, and one artifact must be amended during DECIDE before BUILD begins.
-
-**Oscillation** — the dangerous one, and the reason this pass exists. Two requirements
-are individually satisfiable but mutually exclusive *in practice*, so satisfying one
-re-breaks the other. Nothing looks wrong at authoring time; the damage appears later as
-a gate kicking work back, the fix tripping a different gate, and that gate kicking it
-back again. The loop does not terminate on its own, and each lap costs a full agent
-session. Prefer catching this here, where the cost is an amended sentence.
-
-Detection heuristic: for each pair of requirements touching the same behavior, entity,
-field, or gate, ask **"if I fully satisfy A, does B still hold?"** Then ask it in the
-other direction. Two "no" answers is an oscillation regardless of how reasonable each
-requirement reads alone. Pairs worth checking first are the ones sharing a subject
-across *different* layers — an outcome and a task, an FR and a story, an ADR and a story — because
-`/conflict-check` already sweeps story↔story same-layer contradictions, and cross-layer ones are
-what nothing else sees.
-
-**Layer ownership.** Story↔story pairs belong to `/conflict-check`. Cross-layer pairs and
-task↔task pairs belong to `/coherence-check`. `/conflict-check` runs before `/plan`, so
-`/coherence-check` owns the task↔task sweep once plan tasks exist.
-
-**Task-versus-task oscillation.** For each pair of tasks sharing a behavior, entity, file or
-fixture, ask **"if I fully complete task A, does task B's `Done when` still hold?"** in both
-directions: A against B, then B against A. #1535's Task 3 and Task 9 are the worked example:
-compare their quoted `Done when` text, rather than assuming that an acyclic dependency graph
-makes their assertions compatible.
-
-When the quoted text establishes an invalidation, set the affected `task` row's verdict to
-`fail` and use Notes to quote the opposing text from both tasks. A pair that fails in both
-directions is an oscillation; one that fails in one direction is a contradiction. Record both as
-`fail`, because the dependency graph does not stop BUILD from completing the two tasks in either
-order. The row verdict is `fail`, never `oscillation` or `interference`.
-
-If an apparent interference cannot be grounded in quoted text from both tasks, raise it to the
-operator as an assumption and record no `fail`. Pairs with nothing shared need no row, section,
-or verdict; existing `task` rows keep their coverage verdicts.
-
-Ground every `fail` in the specific opposing text from both artifacts, per the
-verify-claims protocol in Section 5. "These feel like they might conflict" is not a
-finding. If a suspected contradiction cannot be grounded in quoted text, surface it as
-an assumption for the operator rather than recording a verdict either way.
-
-**Preserved-behavior sweep.** For a criterion promising unchanged behavior, compatibility, or a
-default-mode no-op, compare that scenario with every task check that introduces a side effect on the
-same path, including logging, emitted events, writes, and dispatches. A new effect with no condition
-excluding the preserved scenario can defeat the promise even when its own task serves a different
-story. Name the exact protected observable and conflicting check; do not infer preservation merely
-from a separate regression-test task. Use §5 if the artifacts do not establish that the paths overlap.
-
-**Criterion-conflict sweep (mandatory).** Coverage rows only pair a task with the criteria it cites.
-For every task, check each Done-when bullet and required behavior against *every* story criterion —
-cited or not, negative paths and "only"/"never"/"no" constraints first. Record `fail` when satisfying
-the task would violate a criterion, or when the task's design cannot represent state a criterion
-depends on (e.g. a void that erases the provenance a later "no reopen" check reads). Example: Story 6
-negative says "the only assertion changes are the added credential option"; Task 8's Done-when
-requires new endpoint assertions — both cannot ship, so amend one before landing or surface it to
-the operator.
-
-Run this sweep through a fresh subagent exactly as plan §7b directs: the same inputs, including
-every approved ADR decision the plan is subject to, and the same conflict rule and round limit. Never
-run it in the authoring context. Record each confirmed conflict as `fail` on the affected criterion
-or `adr` row, with `CONTRADICTS:` prose naming the task and quoting both passages. A sweep that finds
-nothing still needs the subagent's clean result; do not mark rows `covered` on the author's own
-re-read.
-
-When a contradiction is confirmed, amend the artifact during this DECIDE pass — do not
-defer it to BUILD. An accepted DECIDE artifact absent from the base branch is a draft:
-revise it in place, remove superseded text, and add no amendment note or revision log.
-For an accepted non-story artifact already on the base branch, follow the accepted-artifact
-amendment convention the sibling DECIDE skills use: add a dated note beside the original
-assertion, additively, leaving the original text in place.
 
 ### 4e. PRD ↔ Stories Tie-Out
 
@@ -310,26 +221,8 @@ Both directions are **enforced mechanically by the land-time gate** over parsed 
 re-derives them from the real PRD and stories files regardless of what this artifact claims,
 and reports every offending id, not the first. Do not spend judgement re-deriving set
 membership by hand: read the ids, record the rows, and let the gate be the authority on
-coverage. Reserve judgement for the part the gate cannot compute:
-
-- **Does the story actually deliver the FR it cites?** A correct citation is not a correct
-  implementation. An `FR-N` requiring an immutable field, cited by a story whose scenario
-  edits that field, is `fail` (§4d) — coverage is satisfied, consistency is not. This is the
-  reverse-direction contradiction the mechanical check cannot see, and it is the reason the
-  `fr` and `story` rows carry verdicts at all rather than just id lists.
-- **Is the citation load-bearing or decorative?** A story citing three FRs while its scenarios
-  exercise one is not covered for the other two — record those FRs as `gap` on their own `fr`
-  rows and say so in Notes, rather than crediting a citation the acceptance criteria do not
-  honor.
-
-**Boundary vs `/conflict-check`.** `/conflict-check` sweeps **story against story** — two
-stories that cannot both hold. This section sweeps **story against the PRD** — a story that
-does not tie out to, or contradicts, the requirement it claims to implement. A story pair that
-conflicts with each other but each tie out cleanly to their FRs is `/conflict-check`'s finding,
-not this one; a single story that no other story disagrees with but which contradicts its own
-FR is this one's, and nothing else in DECIDE sees it. Do not re-report a conflict-check finding
-here, and do not assume conflict-check's clean pass says anything about PRD agreement — it
-never reads the PRD's FRs as a party to the comparison.
+coverage. Plan review at Medium and Large tier, and the plan's §7b at Small tier, own whether
+cross-layer artifacts conflict; this tie-out does not repeat that judgment.
 
 ### 4f. Architecture-Decision ↔ Plan Tie-Out
 
@@ -354,11 +247,8 @@ Then-clause?** Related work and compatible wording do not establish delivery. Wh
 are cited, judge their checks together; do not require each task to deliver the whole criterion
 independently, or assume an unstated connection between them.
 
-§4d asks whether the task **opposes** the criterion; §4g asks whether the task is **compatible with
-the criterion and still does not reach it**. For the criterion "the gate rejects an unsigned
-artifact," a task adding a bypass flag is a §4d failure. A task whose checks require only logging a
-warning, allowing the unsigned artifact through, is a §4g failure: all its checks can pass without
-rejection.
+A task whose checks require only logging a warning, allowing an unsigned artifact through, is a
+§4g failure: all its checks can pass without rejection.
 
 A cited task that cannot deliver the criterion is **`fail`**, not `covered` or `gap`. The counterpart
 exists and coverage is satisfied; what is wrong is that its promised behavior does not work. Use the
@@ -441,9 +331,6 @@ per row and must never assert "covered" that it has not actually confirmed.
 - [ ] All five row classes present where applicable (outcome/fr/adr omitted only when genuinely not required)
 - [ ] Every verdict is exactly `covered`, `gap`, or `fail` — no invented verdict strings
       (legacy rows can silently pass them; criterion rows reject them as malformed)
-- [ ] §4d consistency pass run over every covered row; contradictions recorded as `fail`
-      with `CONTRADICTS:` notes quoting the opposing text from both artifacts
-- [ ] Preserved/default-mode behavior compared with new side effects on the same path across tasks
 - [ ] §4e PRD↔stories tie-out checked in BOTH directions — no FR without a story, and no
       story citing a phantom FR or citing no FR at all
 - [ ] §4f architecture-decision mappings judged semantically; every `task`, `existing`, or
@@ -453,13 +340,8 @@ per row and must never assert "covered" that it has not actually confirmed.
 - [ ] Established inability to deliver recorded as `fail`; unsettled achievability handled under §5
 - [ ] Each achievability failure has `CANNOT-DELIVER:` prose below the table naming the criterion,
       task id, quoted check, and any binding ADR and decision id; six-cell rows and quotes stay intact
-- [ ] Every story's cited FR confirmed to be actually delivered by that story's scenarios —
-      a correct citation that the acceptance criteria contradict is `fail`, not `covered`
-- [ ] Story-vs-story conflicts left to `/conflict-check`; this artifact reports story-vs-PRD only
-- [ ] Cross-layer pairs (outcome↔task, FR↔story, ADR↔story) checked in both directions for
-      oscillation; route story↔story same-layer pairs to `/conflict-check`
-- [ ] Task↔task pairs sharing a behavior, entity, file or fixture checked in both directions; any
-      invalidation recorded as `fail` on the `task` row.
+- [ ] Story↔story pairs left to `/conflict-check`; plan review at Medium and Large tier and plan
+      §7b at Small tier own cross-layer and task-versus-task checks
 - [ ] Every `gap` row's Notes column restates its gap id in the canonical form (Section 4c)
 - [ ] Every `covered` verdict was confirmed against the real counterpart artifact file, not inferred
 - [ ] Ambiguous rows surfaced as assumptions (interactive: wait for confirmation; autonomous: mark `gap`, never silently pass)

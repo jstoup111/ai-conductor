@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { detectEngineerCommand, dispatchEngineer, type DispatchEngineerOpts } from '../../../src/engine/engineer-cli.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
+import { resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
 import type { GitRunner } from '../../../src/engine/pr-labels.js';
 
@@ -31,7 +33,32 @@ async function seed(idea = 'dependency gate'): Promise<string> {
   await writeFile(join(wt.worktreePath, `.docs/specs/${stem}.md`), `# PRD: ${idea}\n\nApproved.\n`);
   await writeFile(join(wt.worktreePath, `.docs/stories/${stem}.md`), stories);
   await writeFile(join(wt.worktreePath, `.docs/plans/${stem}.md`), plan.replaceAll('dependency-gate', stem));
+  await seedCleanPlanReview(wt.worktreePath, stem);
   return wt.worktreePath;
+}
+
+async function seedCleanPlanReview(worktree: string, stem: string): Promise<void> {
+  const planText = await readFile(join(worktree, `.docs/plans/${stem}.md`), 'utf8');
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText: stories,
+    adrTexts: {},
+    artifactTexts: { [`.docs/coherence/${stem}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(worktree, repo)],
+  });
+  await mkdir(join(worktree, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktree, `.docs/plan-review/${stem}.md`),
+    renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest,
+    }),
+  );
 }
 
 async function seedOutputFixture(): Promise<string> {
@@ -48,6 +75,7 @@ async function seedOutputFixture(): Promise<string> {
 - [test] The change is covered.
 - [test] The negative path is covered.
 `);
+  await seedCleanPlanReview(worktree, 'dependency-gate');
   return worktree;
 }
 

@@ -171,6 +171,7 @@ describe('N=1 golden state', () => {
       conflict_check: 'done',
       plan: 'done',
       coherence_check: 'done',
+      plan_review: 'skipped',
       coverage_binding: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',

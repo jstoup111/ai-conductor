@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { writeState } from '../../src/engine/state.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { buildProgressReKickDeps } from '../../src/daemon-cli.js';
@@ -182,6 +183,9 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     });
     await initGitRepo(dir);
     await seedAllArtifactsExceptTaskStatus(dir);
+    // plan_review is not under test here: its completion predicate needs a
+    // feature-keyed review artifact this fixture never seeds.
+    await writeState(statePath, { plan_review: 'done' });
   });
 
   afterEach(async () => {

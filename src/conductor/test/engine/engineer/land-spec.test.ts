@@ -13,7 +13,7 @@
 // with valid Accepted DECIDE artifacts.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile, writeFile, utimes } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, mkdir, readFile, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -24,6 +24,7 @@ import {
   landSpec,
   resolveIdeaFiles,
 } from '../../../src/engine/engineer/land-spec.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../../src/engine/plan-review-artifact.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 
@@ -191,6 +192,38 @@ function passingRenderDeps() {
   };
 }
 
+/** Seed the current clean review state required for every non-Small land. */
+async function seedCleanPlanReview(dir: string, stem: string, planText: string, storiesText: string): Promise<void> {
+  await mkdir(join(dir, '.docs', 'plan-review'), { recursive: true });
+  const decisionsDir = join(dir, '.docs', 'decisions');
+  const decisionFiles = await readdir(decisionsDir).catch(() => [] as string[]);
+  const adrTexts = Object.fromEntries(await Promise.all(
+    decisionFiles.filter((file) => file.endsWith('.md')).map(async (file) => [
+      file.slice(0, -3),
+      await readFile(join(decisionsDir, file), 'utf8'),
+    ] as const),
+  ));
+  const reviewedDigest = computeReviewedDigest({
+    planText,
+    storiesText,
+    adrTexts,
+    artifactTexts: { [`.docs/coherence/${stem}.md`]: '' },
+    changedPaths: [...await resolveIdeaFiles(dir, repoPath)],
+  });
+  await writeFile(
+    join(dir, '.docs', 'plan-review', `${stem}.md`),
+    renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest,
+    }),
+  );
+}
+
 /** Create the per-idea worktree and seed valid Accepted DECIDE artifacts. */
 async function seedValidWorktree(idea = 'dep bump'): Promise<string> {
   const wt = await createEngineerWorktree(repoPath, idea);
@@ -206,6 +239,7 @@ async function seedValidWorktree(idea = 'dep bump'): Promise<string> {
   await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
   await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
   await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+  await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
   return dir;
 }
 
@@ -252,6 +286,9 @@ async function seedNamedTierMWorktree(
       '# Coherence\n\n| Outcome | FR | Story | Task | Verdict |\n|---|---|---|---|---|\n| outcome-1 | FR-1 | S1 | 1 | OK |\n',
     );
   }
+  const planText = await readFile(join(dir, '.docs', 'plans', `${planFileStem}.md`), 'utf8');
+  const storiesText = await readFile(join(dir, '.docs', 'stories', `${storiesStem}.md`), 'utf8');
+  await seedCleanPlanReview(dir, planFileStem, planText, storiesText);
   return dir;
 }
 
@@ -513,6 +550,7 @@ describe('landSpec ADR citability gate (Task 6)', () => {
     const dir = await seedValidWorktree();
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
     await writeFile(join(dir, '.docs', 'decisions', 'adr-2026-09-08-citable.md'), APPROVED_CITABLE_ADR);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -558,6 +596,7 @@ describe('landSpec ADR citability gate (Task 6)', () => {
     );
     await git(['add', '.docs/decisions/adr-existing.md'], dir);
     await git(['commit', '-m', 'amend ATX ADR body'], dir);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -597,6 +636,7 @@ describe('Task 2: landSpec canonical ADR filename gate', () => {
       join(dir, '.docs', 'decisions', 'adr-2026-09-08-canonical.md'),
       APPROVED_CITABLE_ADR,
     );
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -671,6 +711,7 @@ describe('Task 3: landSpec canonical ADR filename gate merge-base exemptions', (
       join(dir, '.docs', 'decisions', 'adr-2026-09-08-new-decision.md'),
       APPROVED_CITABLE_ADR,
     );
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -688,6 +729,7 @@ describe('Task 3: landSpec canonical ADR filename gate merge-base exemptions', (
     await writeFile(adrPath, `${LEGACY_CITABLE_ADR}\nUpdated while preserving citation.\n`);
     await git(['add', '.docs/decisions/adr-001-legacy.md'], dir);
     await git(['commit', '-m', 'update legacy sequential ADR'], dir);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -1002,6 +1044,13 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
       join(worktree, '.docs', 'plans', 'feature.md'),
       PLAN_WITH_DEPS.replaceAll('dep-bump', idea),
     );
+    await rm(join(worktree, '.docs', 'plan-review', 'dep-bump.md'), { force: true });
+    await seedCleanPlanReview(
+      worktree,
+      'feature',
+      PLAN_WITH_DEPS.replaceAll('dep-bump', idea),
+      ACCEPTED_STORIES.replaceAll('dep bump', idea),
+    );
 
     const gh: GhRunner = async () => ({ stdout: 'carol\n' });
 
@@ -1078,6 +1127,13 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     await writeFile(planPath, PLAN_WITH_DEPS.replaceAll('dep-bump', 'this-idea'));
     const oldDate = new Date('2020-01-01T00:00:00Z');
     await utimes(planPath, oldDate, oldDate);
+    await rm(join(worktree, '.docs', 'plan-review', 'dep-bump.md'), { force: true });
+    await seedCleanPlanReview(
+      worktree,
+      'this-idea',
+      PLAN_WITH_DEPS.replaceAll('dep-bump', 'this-idea'),
+      ACCEPTED_STORIES.replaceAll('dep bump', idea),
+    );
 
     const gh: GhRunner = async () => ({ stdout: 'dana\n' });
 
@@ -1218,6 +1274,7 @@ describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
     await writeFile(join(dir, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: technical\n');
     await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     // Touch the legacy spec to be newest-by-mtime in .docs/specs/ AFTER the
     // idea's own artifacts were written — a corpus-wide picker would now pick it.
@@ -1262,6 +1319,7 @@ describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
     await utimes(join(dir, '.docs', 'track', 'legacy.md'), newDate, newDate);
     await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     const gh: GhRunner = async () => ({ stdout: 'bob\n' });
 
@@ -1438,6 +1496,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
     await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
     await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     // Touch the legacy stories file to be newest-by-mtime AFTER the idea's own
     // artifacts were written — a corpus-wide picker would now pick it.
@@ -1472,6 +1531,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
     await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
     await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     // Touch the legacy plan to be newest-by-mtime AFTER the idea's own plan
     // was written — a corpus-wide picker would now pick it (and key the
@@ -1585,6 +1645,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
       '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
     );
     await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\nApproved.\n');
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     const result = await landSpec(target(), idea, dir, undefined, {
       ownerConfig: {}, gh, renderDeps: passingRenderDeps(),
@@ -2089,7 +2150,7 @@ describe('landSpec Done-when validation', () => {
 
   it('lands a plan whose tasks have two well-formed Done-when criteria', async () => {
     const dir = await seedValidWorktree();
-    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
+    const plan = [
       '# Implementation Plan: dep bump',
       '',
       '**Stories:** .docs/stories/dep-bump.md',
@@ -2104,7 +2165,9 @@ describe('landSpec Done-when validation', () => {
       '- The first observable result exists.',
       '- The second observable result exists.',
       '',
-    ].join('\n'));
+    ].join('\n');
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), plan);
+    await seedCleanPlanReview(dir, 'dep-bump', plan, ACCEPTED_STORIES);
 
     const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
 
@@ -2186,10 +2249,12 @@ describe('landSpec plan task-count validation', () => {
   it('lands an authorized hard-stop plan and preserves its rationale verbatim', async () => {
     const dir = await seedValidWorktree();
     const rationale = 'The coordinated migration needs all changes reviewed together.';
+    const plan = planWithAddressableTaskCount(30, `**Scope-exception:** ${rationale}`);
     await writeFile(
       join(dir, '.docs', 'plans', 'dep-bump.md'),
-      planWithAddressableTaskCount(30, `**Scope-exception:** ${rationale}`),
+      plan,
     );
+    await seedCleanPlanReview(dir, 'dep-bump', plan, ACCEPTED_STORIES);
 
     const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
     const committedPlan = await git(['show', `${result.branch}:.docs/plans/dep-bump.md`], dir);
@@ -2219,6 +2284,7 @@ describe('landSpec plan task-count validation', () => {
   ])('lands a below-boundary plan with %s', async (_caseName, plan) => {
     const dir = await seedValidWorktree();
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), plan);
+    await seedCleanPlanReview(dir, 'dep-bump', plan, ACCEPTED_STORIES);
 
     const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
 
@@ -2380,6 +2446,7 @@ describe('Task 4: idea-scoped spec requirement on the product track (#488)', () 
     await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
     await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     const newDate = new Date();
     await utimes(join(dir, '.docs', 'specs', 'legacy.md'), newDate, newDate);

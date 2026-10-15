@@ -85,7 +85,7 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
     expect(missing).toEqual([]);
     expect(empty).toEqual([]);
-    expect(policySteps.size).toBe(25);
+    expect(policySteps.size).toBe(26);
   });
 
   it('describes deterministic BUILD gates as engine machinery rather than generative review', () => {

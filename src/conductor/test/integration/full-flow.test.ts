@@ -55,7 +55,9 @@ describe('Integration: full conductor flow', () => {
   });
 
   it('stops at failed step', async () => {
-    await writeState(statePath, { complexity_tier: 'L' } as ConductState);
+    // plan_review is pre-resolved: its completion predicate requires a
+    // committed review artifact this mocked runner never writes.
+    await writeState(statePath, { complexity_tier: 'L', plan_review: 'done' } as ConductState);
     runner.failOn = 'build';
 
     const conductor = new Conductor({

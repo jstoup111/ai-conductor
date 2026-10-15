@@ -27,7 +27,7 @@ function deepFreeze<T>(value: T): T {
 const CLAUDE_STEP_MODELS: Record<StepName, string> = {
   bootstrap: 'sonnet', memory: 'haiku', assess: 'sonnet', explore: 'opus', prd: 'opus',
   complexity: 'sonnet', stories: 'sonnet', conflict_check: 'opus', plan: 'opus',
-  coherence_check: 'sonnet', architecture_diagram: 'sonnet', architecture_review: 'opus',
+  coherence_check: 'sonnet', plan_review: 'opus', architecture_diagram: 'sonnet', architecture_review: 'opus',
   worktree: 'haiku', coverage_binding: 'sonnet', acceptance_specs: 'opus', build: 'sonnet',
   build_review: 'opus', test_suite: 'sonnet', manual_test: 'sonnet', prd_audit: 'opus',
   architecture_review_as_built: 'opus', rebase: 'opus', finish: 'sonnet', remediate: 'opus',
@@ -38,7 +38,7 @@ const CODEX_STEP_MODELS: Record<StepName, string> = {
   bootstrap: 'gpt-5.6-terra', memory: 'gpt-5.6-luna', assess: 'gpt-5.6-terra',
   explore: 'gpt-5.6-sol', prd: 'gpt-5.6-sol', complexity: 'gpt-5.6-terra',
   stories: 'gpt-5.6-terra', conflict_check: 'gpt-5.6-terra', plan: 'gpt-5.6-sol',
-  coherence_check: 'gpt-5.6-terra', architecture_diagram: 'gpt-5.6-terra',
+  coherence_check: 'gpt-5.6-terra', plan_review: 'gpt-5.6-sol', architecture_diagram: 'gpt-5.6-terra',
   architecture_review: 'gpt-5.6-sol', worktree: 'gpt-5.6-luna',
   coverage_binding: 'gpt-5.6-terra', acceptance_specs: 'gpt-5.6-sol',
   build: 'gpt-5.6-terra', build_review: 'gpt-5.6-sol', test_suite: 'gpt-5.6-terra',
@@ -50,7 +50,7 @@ const CODEX_STEP_MODELS: Record<StepName, string> = {
 const STEP_EFFORTS: Record<StepName, EffortLevel> = {
   bootstrap: 'low', memory: 'low', assess: 'high', explore: 'high', prd: 'high',
   complexity: 'low', stories: 'medium', conflict_check: 'medium', plan: 'high',
-  coherence_check: 'medium', architecture_diagram: 'medium', architecture_review: 'high',
+  coherence_check: 'medium', plan_review: 'high', architecture_diagram: 'medium', architecture_review: 'high',
   worktree: 'low', coverage_binding: 'low', acceptance_specs: 'medium', build: 'medium',
   build_review: 'high', test_suite: 'low', manual_test: 'medium', prd_audit: 'high',
   architecture_review_as_built: 'high', rebase: 'high', finish: 'medium', remediate: 'medium',

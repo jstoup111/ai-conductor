@@ -2129,6 +2129,7 @@ export class Conductor {
     state: ConductState,
     step: StepName,
     status: StepStatus,
+    reason?: string,
   ): Promise<void> {
     await this.restoreMissingStateFile(state);
     // The routed child store owns BUILD-region fields.  Reading
@@ -2150,11 +2151,18 @@ export class Conductor {
           intent: 'record last completed step',
           next: step,
         },
+        ...(reason ? [{
+          field: 'step_reasons',
+          expected: state.step_reasons,
+          intent: `record ${step} step disposition reason`,
+          next: { ...(state.step_reasons ?? {}), [step]: reason },
+        } as StateMutation<ConductState>] : []),
       ],
     });
     requireStateMutation(result, `Conductor step-status update for ${step}`);
     if (result.kind === 'applied' && result.resolvedFields?.includes(step)) return;
     state[step] = status;
+    if (reason) state.step_reasons = { ...(state.step_reasons ?? {}), [step]: reason };
     state.last_step = step;
     this.persistedStateSnapshot = { ...state };
   }
@@ -2251,19 +2259,33 @@ export class Conductor {
     consumeGrant = false,
   ): Promise<ReturnType<typeof decideEntryDisposition>> {
     const targetStep = input.steps.find((step) => step.name === input.target);
+    const artifactPresent =
+      input.target === 'plan_review'
+        ? await this.planReviewArtifactPresent()
+        : (await findArtifactFilesForStep(this.projectRoot, input.target)).length > 0;
+    const dispositionInput = { ...input, artifactPresent };
     if (!input.daemon || targetStep?.phase !== 'DECIDE') {
-      return decideEntryDisposition(input);
+      return decideEntryDisposition(dispositionInput);
     }
 
     const grant = await readOperatorGrant(this.projectRoot);
-    const disposition = decideEntryDisposition({ ...input, grant });
+    const disposition = decideEntryDisposition({ ...dispositionInput, grant });
     if (!consumeGrant || disposition.kind !== 'enter' || grant?.step !== input.target) {
       return disposition;
     }
 
     return (await consumeOperatorGrant(this.projectRoot, input.target))
       ? disposition
-      : decideEntryDisposition({ ...input, grant: null });
+      : decideEntryDisposition({ ...dispositionInput, grant: null });
+  }
+
+  /** Resolve plan-review presence to this feature's active plan, not the corpus. */
+  private async planReviewArtifactPresent(): Promise<boolean> {
+    const planPath = await resolveFeaturePlanPath(this.projectRoot, this.haltState.feature_desc);
+    if (!planPath) return false;
+    return accessFile(
+      join(this.projectRoot, '.docs', 'plan-review', `${planStem(planPath)}.md`),
+    ).then(() => true).catch(() => false);
   }
 
   /** Read expectations immediately before constructing a guarded mutation. */
@@ -4644,6 +4666,7 @@ export class Conductor {
         daemon: this.daemon,
         tier: state.complexity_tier,
         hasContract,
+        artifactPresent: satisfied !== false,
         satisfied,
         grant: null,
         sourceGate: 'remediate',
@@ -6214,7 +6237,7 @@ export class Conductor {
           expected: undefined,
           intent: 'complete interrupted rebase operation',
           next: 'pending' as const,
-        })));
+        } as StateMutation<ConductState>)));
         rebaseClassification = await classifyRebaseOperation(this.projectRoot);
       }
       if (rebaseClassification.kind === 'integrity-fault') {
@@ -6330,6 +6353,7 @@ export class Conductor {
           daemon: this.daemon,
           tier: state.complexity_tier,
           hasContract: hasCompletionContract(resolvedStep.name, this.config),
+          artifactPresent: gateSatisfied(resolvedStep.name, state, verdicts) !== false,
           satisfied: gateSatisfied(resolvedStep.name, state, verdicts),
           grant: null,
           sourceGate: 'resume-clamp',
@@ -7290,6 +7314,7 @@ export class Conductor {
             daemon: this.daemon,
             tier: state.complexity_tier,
             hasContract,
+            artifactPresent: satisfied !== false,
             satisfied,
             grant: null,
             sourceGate: 'forward-walk',
@@ -7299,7 +7324,7 @@ export class Conductor {
             this.remediationDecideReentryTargets.delete(step.name);
           }
           if (disposition.kind === 'fast-forward') {
-            await this.saveConductorStepStatus(state, step.name, disposition.as);
+            await this.saveConductorStepStatus(state, step.name, disposition.as, disposition.reason);
             continue;
           }
           if (disposition.kind === 'halt') {
@@ -14570,6 +14595,7 @@ export class Conductor {
           daemon: this.daemon,
           tier: state.complexity_tier,
           hasContract,
+          artifactPresent: false,
           satisfied: false,
           grant: null,
           sourceGate: stepName,
@@ -15614,7 +15640,7 @@ export class Conductor {
         expected: undefined,
         intent: 'apply rebase transition',
         next: 'pending' as const,
-      })));
+      } as StateMutation<ConductState>)));
       // Events describe the durable operation, not the pre-application
       // classification.  The transition is the only authority that knows
       // which effects actually became the completed rebase operation.

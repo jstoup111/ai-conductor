@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../test-conductor.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,6 +139,9 @@ describe('#859 trailer-union build completion (real Conductor.run() loop)', () =
     });
     await initGitRepo(dir);
     await seedAllArtifactsExceptTaskStatus(dir);
+    // plan_review is not under test here: its completion predicate needs a
+    // feature-keyed review artifact this fixture never seeds.
+    await writeState(statePath, { plan_review: 'done' });
   });
 
   afterEach(async () => {

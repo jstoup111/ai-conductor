@@ -22,6 +22,7 @@ const EXPECTED_CUSTOM_COMPLETION_PREDICATES = [
   'coverage_binding',
   'finish',
   'manual_test',
+  'plan_review',
   'prd_audit',
   'test_suite',
 ];

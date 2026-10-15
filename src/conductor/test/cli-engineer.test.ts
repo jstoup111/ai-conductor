@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:6
+// Covers: task:1, task:2, task:3, task:6, task:10
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
@@ -89,7 +89,9 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(loadLaunchConfig).toHaveBeenCalledOnce();
     expect(prePoll).toHaveBeenCalledOnce();
     expect(spawnHost).toHaveBeenCalledOnce();
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd());
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), {
+      AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+    });
     expect(vi.mocked(discoverInstalledProviders)).not.toHaveBeenCalled();
   });
 });
@@ -100,6 +102,7 @@ describe('detectEngineerCommand — argv detection', () => {
   const subcommandArgs = {
     projects: [],
     'dep-audit': ['--project', 'project'],
+    'plan-review': ['--project', 'project', '--worktree', '/tmp/worktree'],
     worktree: ['--project', 'project', '--idea', 'idea'],
     land: ['--project', 'project', '--idea', 'idea', '--worktree', '/tmp/worktree'],
     handoff: ['--project', 'project', '--branch', 'spec/idea', '--worktree', '/tmp/worktree'],

@@ -622,6 +622,29 @@ type ConductorEventBody =
       manifest: 'unchanged' | 'dropped';
     }
   | {
+      /** A source-grounded reviewer session was dispatched for one plan-review round. */
+      type: 'plan_review_dispatched';
+      round: number;
+      reviewerProvider: string;
+      independence: 'cross-provider' | 'same-provider' | 'unknown-host';
+    }
+  | {
+      /** A source-grounded reviewer session completed with severity totals. */
+      type: 'plan_review_completed';
+      round: number;
+      reviewerProvider: string;
+      independence: 'cross-provider' | 'same-provider' | 'unknown-host';
+      blockingCount: number;
+      significantCount: number;
+      advisoryCount: number;
+    }
+  | {
+      /** An operator accepted a bounded plan-review finding. */
+      type: 'plan_review_finding_accepted';
+      findingId: string;
+      reason: string;
+    }
+  | {
       /** A retired configuration key was accepted as a compatibility no-op. */
       type: 'config_deprecated_key';
       key: string;

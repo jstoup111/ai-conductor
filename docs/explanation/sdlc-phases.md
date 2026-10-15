@@ -41,7 +41,7 @@ and it sits inside BUILD.
 
 ```mermaid
 flowchart LR
-  A["front half: linear walk<br/>worktree ... plan, coherence_check, acceptance_specs"] --> B["gate loop: build ... finish"]
+  A["front half: linear walk<br/>worktree ... plan, coherence_check, plan_review, acceptance_specs"] --> B["gate loop: build ... finish"]
   B -->|kickback| C["kickback targets:<br/>prd, architecture_review, stories, plan"]
   C --> B
 ```
@@ -78,13 +78,13 @@ The tier is a cost dial with exactly one setting that does anything:
 
 | Tier | Effect |
 | --- | --- |
-| S | skips 8 steps, and disengages the land-time coherence gate entirely |
+| S | skips 7 steps, and disengages the land-time coherence and plan-review gates entirely |
 | M | skips nothing |
 | L | skips nothing |
 
 M and L are identical in flow. The tier exists to let genuinely small work — a one-file fix, a copy change —
-avoid paying for architecture diagrams, conflict analysis, and traceability mapping. It
-never *adds* ceremony to large work; L features and M features run the same step list.
+avoid paying for architecture diagrams, conflict analysis, traceability mapping, and source-grounded plan
+review. It never *adds* ceremony to large work; L features and M features run the same step list.
 
 Which steps tier S skips, and why each is safe to drop, is enumerated in [steps](../reference/steps.md).
 The shape of the reasoning: everything skipped at S is either an analysis of interactions between many
@@ -109,7 +109,7 @@ deliberately narrow — it changes two things and nothing else.
 | land-time coherence `fr` layer | required | not required |
 
 Everything else is identical: explore, complexity, worktree, architecture, stories, conflict-check, plan,
-coherence-check, the whole of BUILD, manual test, `prd_audit`, as-built review, rebase, finish.
+coherence-check, plan review, the whole of BUILD, manual test, `prd_audit`, as-built review, rebase, finish.
 `prd_audit` grades the stories' acceptance criteria on both tracks; PRD requirements are context only when a
 PRD exists.
 

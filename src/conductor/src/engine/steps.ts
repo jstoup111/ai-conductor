@@ -129,6 +129,18 @@ export const ALL_STEPS: StepDefinition[] = [
     skillName: 'coherence-check',
   },
   {
+    name: 'plan_review',
+    label: 'Plan Review',
+    phase: 'DECIDE',
+    enforcement: 'gating',
+    prerequisites: ['coherence_check'],
+    skippableForTiers: ['S'],
+    isCheckpoint: false,
+    skillName: 'plan-review',
+    absentArtifactDisposition: 'skipped',
+    absentArtifactReason: 'landed-before-plan-review',
+  },
+  {
     // Engine-native BUILD gate: judges whether each criterion coverage claim
     // is actually asserted by its cited task's Done when checks (ADR D4).
     name: 'coverage_binding',

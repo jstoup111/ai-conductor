@@ -67,6 +67,7 @@ not a tuning knob.
 | `conflict_check` | opus | gpt-5.6-terra | medium | 3 | conditional |
 | `plan` | opus | gpt-5.6-sol | high | 3 | manual |
 | `coherence_check` | sonnet | gpt-5.6-terra | medium | 3 | conditional |
+| `plan_review` | opus | gpt-5.6-sol | high | 1 | conditional |
 | `architecture_diagram` | sonnet | gpt-5.6-terra | medium | 3 | auto |
 | `architecture_review` | opus | gpt-5.6-sol | high | 5 | conditional |
 | `worktree` | haiku | gpt-5.6-luna | low | 1 | auto |

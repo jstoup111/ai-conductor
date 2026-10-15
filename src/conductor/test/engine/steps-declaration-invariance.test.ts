@@ -19,6 +19,7 @@ const expectedPolicies: Record<ComplexityTier, {
       'architecture_review',
       'conflict_check',
       'coherence_check',
+      'plan_review',
       'acceptance_specs',
       'manual_test',
     ],
@@ -27,7 +28,7 @@ const expectedPolicies: Record<ComplexityTier, {
   M: {
     skippedSteps: [],
     enabledGateSteps: [
-      'prd', 'architecture_review', 'stories', 'conflict_check', 'plan', 'coherence_check', 'coverage_binding', 'acceptance_specs',
+      'prd', 'architecture_review', 'stories', 'conflict_check', 'plan', 'coherence_check', 'plan_review', 'coverage_binding', 'acceptance_specs',
       'test_suite', 'build_review', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'finish',
     ],
@@ -35,7 +36,7 @@ const expectedPolicies: Record<ComplexityTier, {
   L: {
     skippedSteps: [],
     enabledGateSteps: [
-      'prd', 'architecture_review', 'stories', 'conflict_check', 'plan', 'coherence_check', 'coverage_binding', 'acceptance_specs',
+      'prd', 'architecture_review', 'stories', 'conflict_check', 'plan', 'coherence_check', 'plan_review', 'coverage_binding', 'acceptance_specs',
       'test_suite', 'build_review', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'finish',
     ],

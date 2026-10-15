@@ -10,6 +10,8 @@ import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { LandGateError, landSpec } from '../../src/engine/engineer/land-spec.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
+import { resolveIdeaFiles } from '../../src/engine/engineer/land-spec.js';
+import { computeReviewedDigest, renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import type { OwnerConfig } from '../../src/engine/owner-gate/identity.js';
 
 const execFile = promisify(execFileCb);
@@ -63,7 +65,7 @@ async function git(args: string[], cwd = repoPath): Promise<string> {
   return (await execFile('git', args, { cwd })).stdout;
 }
 
-async function seed(): Promise<string> {
+async function seed(plan = PLAN): Promise<string> {
   const { worktreePath } = await createEngineerWorktree(repoPath, IDEA);
   await rm(join(worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   await Promise.all([
@@ -73,7 +75,27 @@ async function seed(): Promise<string> {
   ]);
   await writeFile(join(worktreePath, '.docs', 'specs', 'plan-slices-consumer-boundary.md'), '# PRD\n\nApproved.\n');
   await writeFile(join(worktreePath, '.docs', 'stories', 'plan-slices-consumer-boundary.md'), STORIES);
-  await writeFile(join(worktreePath, '.docs', 'plans', 'plan-slices-consumer-boundary.md'), PLAN);
+  await writeFile(join(worktreePath, '.docs', 'plans', 'plan-slices-consumer-boundary.md'), plan);
+  const reviewedDigest = computeReviewedDigest({
+    planText: plan,
+    storiesText: STORIES,
+    adrTexts: {},
+    artifactTexts: { '.docs/coherence/plan-slices-consumer-boundary.md': '' },
+    changedPaths: [...await resolveIdeaFiles(worktreePath, repoPath)],
+  });
+  await mkdir(join(worktreePath, '.docs', 'plan-review'), { recursive: true });
+  await writeFile(
+    join(worktreePath, '.docs', 'plan-review', 'plan-slices-consumer-boundary.md'),
+    renderPlanReviewArtifact({
+      round: 1,
+      authoringHost: 'claude',
+      reviewerProvider: 'codex',
+      independence: 'cross-provider',
+      findings: [],
+      dispositions: [],
+      reviewedDigest,
+    }),
+  );
   return worktreePath;
 }
 
@@ -125,11 +147,7 @@ describe('plan-slices consumer boundary', () => {
   });
 
   it('refuses an incomplete slice manifest even when stacked PRs are disabled', async () => {
-    const worktreePath = await seed();
-    await writeFile(
-      join(worktreePath, '.docs', 'plans', 'plan-slices-consumer-boundary.md'),
-      PLAN.replace('| 2 | Consumer boundary | 5, 6, 7, 8 |', '| 2 | Consumer boundary | 5, 6, 7 |'),
-    );
+    const worktreePath = await seed(PLAN.replace('| 2 | Consumer boundary | 5, 6, 7, 8 |', '| 2 | Consumer boundary | 5, 6, 7 |'));
     const headBeforeLanding = await git(['rev-parse', 'HEAD'], worktreePath);
     const ownerConfig = { spec_owner: 'test-owner', stacked_prs: { enabled: false } } as OwnerConfig;
 
