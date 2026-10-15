@@ -157,6 +157,25 @@ describe('DefaultStepRunner auxiliary and legacy skill names', () => {
     });
   });
 
+  it('keeps the shipped unresolved-skill diagnostic unchanged', async () => {
+    const invoke = vi.fn(async () => ({
+      success: false, output: 'unknown skill command', exitCode: 1,
+      commandUnresolved: true, commandUnresolvedName: '$build-review-security',
+    }));
+    const runner = new DefaultStepRunner({ invoke }, 'skill-name', '/project');
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+    }).dispatchBuildReviewRubric({
+      rubric: 'security', skillName: 'build-review-security',
+      policy: { enabled: true, llm_provider: 'claude', model: 'test', effort: 'high', model_fallback_ladder: [], max_retries: 0, escalate: false },
+    }, { rubric: 'security', contractVersion: 'v1', projectionVersion: 'v1', lapId: 'lap', snapshotDigest: 'sha256:test', digest: 'sha256:test' });
+
+    expect(result).toEqual({
+      kind: 'dispatch-failure',
+      detail: renderBuildReviewUnresolvedSkillRemedy('build-review-security', '$build-review-security'),
+    });
+  });
+
   it.each([
     ['claude', '/'],
     ['codex', '$'],
