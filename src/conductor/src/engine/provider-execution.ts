@@ -60,8 +60,7 @@ import {
   UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
 } from '../execution/managed-session-preparation.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
-import type { ProviderStartIdentity } from '../types/events.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEvent, ProviderStartIdentity } from '../types/events.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -371,18 +370,23 @@ export interface ProviderExecutionContext {
  * persister must never delay the provider process entering its invocation.
  */
 export function providerExecutionEventCallbacks(
-  eventTarget: Pick<ConductorEventEmitter, 'emit'>,
+  eventTarget: { emit(event: ConductorEvent): unknown },
 ): Pick<ProviderExecutionContext, 'onAttempt' | 'onCandidateStart' | 'warn'> {
   return {
-    onAttempt: (step, { executionContext, ...attempt }) =>
-      eventTarget.emit({
+    onAttempt: async (step, { executionContext, ...attempt }) => {
+      await eventTarget.emit({
         type: 'provider_attempt', step, ...attempt,
         ...(executionContext ? { executionContext } : {}),
-    }),
-    onCandidateStart: (step, candidate) => {
-      void eventTarget.emit({ type: 'provider_attempt_started', step, ...candidate }).catch(() => {});
+      });
     },
-    warn: (_message, transition) => eventTarget.emit(transition),
+    onCandidateStart: (step, candidate) => {
+      void Promise.resolve(
+        eventTarget.emit({ type: 'provider_attempt_started', step, ...candidate }),
+      ).catch(() => {});
+    },
+    warn: async (_message, transition) => {
+      await eventTarget.emit(transition);
+    },
   };
 }
 
