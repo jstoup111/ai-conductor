@@ -63,8 +63,8 @@ async function initRepo(prefix: string): Promise<{
   await git('config', 'user.email', 'test@example.com');
   await git('config', 'user.name', 'Test');
   await git('config', 'commit.gpgsign', 'false');
-  await mkdir(join(root, 'skills'), { recursive: true });
-  await writeFile(join(root, 'skills', 'fixture.md'), 'fixture\n');
+  await mkdir(join(root, 'skills', 'fixture'), { recursive: true });
+  await writeFile(join(root, 'skills', 'fixture', 'SKILL.md'), '---\nname: fixture\n---\n');
   await writeFile(join(root, '.gitignore'), '.daemon/\n');
   await git('add', '.');
   await git('commit', '-q', '-m', 'fixture');
