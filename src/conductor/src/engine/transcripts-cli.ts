@@ -134,10 +134,12 @@ function sanitizedMessage(message: string): string {
 }
 
 export async function dispatchTranscripts(cmd: TranscriptsDispatch, cwd: string): Promise<number> {
+  // ai-conductor:session-command-context=operator-only
   if (cmd.kind === 'guide') {
     console.error('ai-conductor transcripts <slug> [--show <capture>]');
     return 1;
   }
+  // /ai-conductor:session-command-context
   const repoRoot = await resolveMainRepoRoot(cwd);
   const worktree = join(repoRoot, '.worktrees', cmd.slug);
   try {
