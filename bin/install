@@ -114,6 +114,37 @@ for reference_document in HARNESS.md ARCHITECTURE.md; do
 done
 unset reference_document
 
+# Returns the frontmatter name for a skill directory. Frontmatter is optional,
+# but a leading opening delimiter must have a closing delimiter so malformed
+# skill metadata cannot silently install under a misleading catalog name.
+skill_frontmatter_name() {
+  local skill_file=$1 fallback_name=$2 line declared_name=''
+
+  if ! IFS= read -r line < "$skill_file"; then
+    printf '%s\n' "$fallback_name"
+    return 0
+  fi
+  line="${line%$'\r'}"
+  if [ "$line" != '---' ]; then
+    printf '%s\n' "$fallback_name"
+    return 0
+  fi
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [ "$line" = '---' ]; then
+      printf '%s\n' "${declared_name:-$fallback_name}"
+      return 0
+    fi
+    if [[ "$line" =~ ^name:[[:space:]]*(.+)[[:space:]]*$ ]]; then
+      declared_name=${BASH_REMATCH[1]}
+    fi
+  done < <(tail -n +2 "$skill_file")
+
+  fail "Skill frontmatter is unclosed: ${skill_file}" >&2
+  return 1
+}
+
 # ─── Worktree-root guard (issue #363) ─────────────────────────────────────────
 
 # Refuse global-mutating installs when this checkout is a build worktree.
@@ -1374,7 +1405,8 @@ install() {
   # Project-local skills remain available only as explicit project overrides.
   local installed=0
   local updated=0
-  local skills_dir client skill source target current harness_target
+  local skill_frontmatter_failure=false
+  local skills_dir client skill skill_name source target current harness_target
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -1386,12 +1418,17 @@ install() {
 
     for skill in "${SKILLS[@]}"; do
       source="${HARNESS_DIR}/skills/${skill}"
-      target="${skills_dir}/${skill}"
 
       if [ ! -d "$source" ]; then
         warn "Skill source missing: ${source} — skipping"
         continue
       fi
+
+      if ! skill_name=$(skill_frontmatter_name "${source}/SKILL.md" "$skill"); then
+        skill_frontmatter_failure=true
+        continue
+      fi
+      target="${skills_dir}/${skill_name}"
 
       if [ -L "$target" ]; then
         if owned_skill_link "$skills_dir" "$skill" "$target"; then
@@ -1438,6 +1475,11 @@ install() {
       fi
     done
   done
+
+  if [ "$skill_frontmatter_failure" = true ]; then
+    fail "Installation incomplete — one or more skill frontmatter blocks are unclosed."
+    return 1
+  fi
 
   reconcile_legacy_codex_links
 
