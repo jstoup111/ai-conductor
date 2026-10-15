@@ -337,3 +337,46 @@ Task 11 (independent)
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-R1: src/conductor/test/cli/help-router.test.ts: add failing cases — routeSubcommandHelp returns register's usage for `register /tmp --help` and `register --help /tmp`, create's usage for `create demo --help`, `brain start`'s usage for `brain start --help`, `config init`'s usage for `config init -h`, the `memory` parent's usage for `memory --help`; through the dispatch entry with mocked create/brain handlers, `create demo --help` and `brain start --help` write help, exit 0, and never call the handler; exemption cases (`compose land x --help`, `daemon logs --help`, `halt-issues sweep --help`, `update --help`, `no-such-command --help`) still return null
+**Gate:** as-built
+**Rationale:** Verified (read cli-pre-dispatch.ts:146-167): routeSubcommandHelp returns null unless the help token is the last arg and the remaining args exactly equal a registry commandPath, so `register /tmp --help`, `create demo --help`, `brain start --help`, `config init --help` fall through to real handlers. ADR D2 ('argv names a declared command path and carries --help or -h') and the plan's own module contract ('the deepest declared command path named by argv') already specify the correct behavior, so this is conforming implementation drift with no architectural decision open. Plan Tasks 5 (router) and 6 (exemptions) admit the repair; the exemption contract (self/passthrough/unknown by argv[2]'s registry entry) must be preserved.
+**Governing clause:** adr-2026-10-14-commander-program-is-the-cli-catalog decision 2
+**Done when:**
+- adr-2026-10-14-commander-program-is-the-cli-catalog decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: src/conductor/src/cli-pre-dispatch.ts routeSubcommandHelp: detect --help/-h anywhere in argv before a `--` terminator; select the registry entry by argv[2] (return null when absent or owner is self/passthrough); walk createProgram() from the top-level command through the longest prefix of non-option args that match declared subcommand names, ignoring positional arguments and option tokens, and return that deepest command's helpInformation()
+**Gate:** as-built
+**Rationale:** Verified (read cli-pre-dispatch.ts:146-167): routeSubcommandHelp returns null unless the help token is the last arg and the remaining args exactly equal a registry commandPath, so `register /tmp --help`, `create demo --help`, `brain start --help`, `config init --help` fall through to real handlers. ADR D2 ('argv names a declared command path and carries --help or -h') and the plan's own module contract ('the deepest declared command path named by argv') already specify the correct behavior, so this is conforming implementation drift with no architectural decision open. Plan Tasks 5 (router) and 6 (exemptions) admit the repair; the exemption contract (self/passthrough/unknown by argv[2]'s registry entry) must be preserved.
+**Governing clause:** adr-2026-10-14-commander-program-is-the-cli-catalog decision 2
+**Done when:**
+- adr-2026-10-14-commander-program-is-the-cli-catalog decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R3: Move diffDetectorSets and its source-parsing helpers from src/conductor/src/cli-pre-dispatch.ts into a test-support module src/conductor/test/cli/support/cli-catalog-checks.ts and update src/conductor/test/cli/pre-dispatch-registry.test.ts imports; live-source and fixture unregistered/stale tests stay green
+**Gate:** as-built
+**Rationale:** Verified: diffDetectorSets (and its private helpers dispatchedDetectors/dispatcherBody) have only test callers. Task 1's done-when criteria name the function's behavior, not its module, so relocating it to test support keeps every criterion satisfied while removing the unreachable production export; Task 1 owns this function and admits the move. PRE_DISPATCH_COMMANDS stays in production.
+**Parent task:** 1
+**Governing clause:** Task 1
+**Done when:**
+- Task 1 is satisfied by this task.
+- The repair for task rem-as-built-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: Move undeclaredRegistryCommands from src/conductor/src/cli-pre-dispatch.ts into src/conductor/test/cli/support/cli-catalog-checks.ts, drop the now-unused Command import if any, and update src/conductor/test/cli/pre-dispatch-registry.test.ts imports; live and fixture coverage tests stay green
+**Gate:** as-built
+**Rationale:** Verified: undeclaredRegistryCommands has only test callers. Task 4's done-when criteria are location-neutral, so moving it to the same test-support module keeps the live catalog coverage and fixture tests intact and removes the dead production export; Task 4 admits the move.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-R5: Move RUNTIME_FALLBACK_FLAGS, DefaultMismatch, and defaultMismatches from src/conductor/src/cli-defaults.ts into src/conductor/test/cli/support/cli-defaults-parity.ts (table still built from the imported DEFAULT_IDLE_POLL_SECONDS); cli-defaults.ts keeps only DEFAULT_IDLE_POLL_SECONDS; update src/conductor/test/cli/cli-defaults-parity.test.ts imports so live, fixture-mismatch, and --max-idle-polls parity tests stay green
+**Gate:** as-built
+**Rationale:** Verified (read cli-defaults.ts): RUNTIME_FALLBACK_FLAGS, DefaultMismatch, and defaultMismatches are consumed only by tests; DEFAULT_IDLE_POLL_SECONDS is the production constant used by cli.ts and daemon-command.ts. Task 8's done-when criteria for the parity check are location-neutral, so the parity table and checker move to test support while DEFAULT_IDLE_POLL_SECONDS stays the single production source; Task 8 admits the move.
+**Parent task:** 8
+**Governing clause:** Task 8
+**Done when:**
+- Task 8 is satisfied by this task.
+- The repair for task rem-as-built-R5 is committed and its targeted tests pass.
