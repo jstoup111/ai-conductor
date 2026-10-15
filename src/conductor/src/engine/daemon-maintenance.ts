@@ -24,6 +24,60 @@ export interface DaemonDrainState {
 
 type MaintenancePolicy = 'drained' | 'busy-allowed';
 
+/** One ordered, best-effort action performed by the background maintenance job. */
+export type MaintenanceJobStep = readonly [name: string, run: () => Promise<void>];
+
+/**
+ * Serializes best-effort daemon maintenance without making the dispatcher wait
+ * for it. Repeated triggers during a run request one additional pass only.
+ */
+export class MaintenanceJob {
+  private current: Promise<void> | undefined;
+  private rerunPending = false;
+  private closed = false;
+
+  constructor(
+    private readonly steps: readonly MaintenanceJobStep[],
+    private readonly log: (message: string) => void = () => {},
+  ) {}
+
+  trigger(): void {
+    if (this.closed) return;
+    if (this.current) {
+      this.rerunPending = true;
+      return;
+    }
+
+    this.current = this.run().finally(() => {
+      this.current = undefined;
+    });
+  }
+
+  /** Resolves when the currently running pass (and one coalesced rerun) finish. */
+  settled(): Promise<void> {
+    return this.current ?? Promise.resolve();
+  }
+
+  /** Prevents future starts; an already-running pass is allowed to complete. */
+  close(): void {
+    this.closed = true;
+    this.rerunPending = false;
+  }
+
+  private async run(): Promise<void> {
+    do {
+      this.rerunPending = false;
+      for (const [name, step] of this.steps) {
+        try {
+          await step();
+        } catch (error) {
+          this.log(`[daemon] ${name} error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    } while (!this.closed && this.rerunPending);
+  }
+}
+
 const maintenancePolicies: Record<DaemonMaintenanceOperation, MaintenancePolicy> = {
   refresh: 'busy-allowed',
   rekick: 'busy-allowed',
