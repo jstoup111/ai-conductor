@@ -363,13 +363,33 @@ done
 echo ""
 echo -e "${BOLD}5. ARCHITECTURE.md model table${NC}"
 
-for skill_name in "${known_skills[@]}"; do
-  if grep -qE "\| ${skill_name}[ (|]" "${HARNESS_DIR}/ARCHITECTURE.md" 2>/dev/null; then
-    assert "${skill_name} in model table" 0
+model_table_presence_checker="${HARNESS_DIR}/test/check_model_table_presence.sh"
+model_table_presence_fixture_test="${HARNESS_DIR}/test/test_model_table_presence.sh"
+
+if [ ! -f "$model_table_presence_checker" ] || [ ! -f "$model_table_presence_fixture_test" ]; then
+  assert "model-table presence checker and fixtures exist" 1
+else
+  set +e
+  model_table_presence_output=$(bash "$model_table_presence_checker" 2>&1)
+  model_table_presence_exit=$?
+  model_table_presence_fixture_output=$(bash "$model_table_presence_fixture_test" 2>&1)
+  model_table_presence_fixture_exit=$?
+  set -e
+
+  if [ "$model_table_presence_exit" -eq 0 ]; then
+    assert "model-table presence — every skill resolves to a row, alias, or allowlist entry" 0
   else
-    warn_check "${skill_name} — not in ARCHITECTURE.md model selection table" 1
+    echo "$model_table_presence_output" | sed 's/^/    /'
+    assert "model-table presence — every skill resolves to a row, alias, or allowlist entry" 1
   fi
-done
+
+  if [ "$model_table_presence_fixture_exit" -eq 0 ]; then
+    assert "model-table presence — fixtures cover exact rows, aliases, and allowlisted skills" 0
+  else
+    echo "$model_table_presence_fixture_output" | sed 's/^/    /'
+    assert "model-table presence — fixtures cover exact rows, aliases, and allowlisted skills" 1
+  fi
+fi
 
 # ── 5a. Model-table drift gate ───────────────────────────────────────────────
 # bin/generate-model-table --check validates that ARCHITECTURE.md's generated
