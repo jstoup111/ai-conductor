@@ -1,4 +1,4 @@
-import { lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import * as fsp from 'node:fs/promises';
 import { matchesGlob, join, relative, sep } from 'node:path';
 
 import { sanitizeTranscriptLine } from './transcript-sanitize.js';
@@ -9,7 +9,12 @@ export interface HarvestTranscriptsOptions {
   readonly destination: string;
   readonly knownSecrets: Iterable<string>;
   readonly sanitizeLine?: (line: string, knownSecrets: Iterable<string>) => string;
+  /** Injectable filesystem boundary for harvest-failure tests. */
+  readonly fs?: TranscriptHarvestFilesystem;
 }
+
+export type TranscriptHarvestFilesystem = Pick<typeof fsp,
+  'lstat' | 'mkdir' | 'readdir' | 'readFile' | 'writeFile' | 'rm'>;
 
 export interface CapturedTranscriptHarvest {
   readonly kind: 'captured';
@@ -35,11 +40,12 @@ function isAllowed(path: string, globs: readonly string[]): boolean {
 }
 
 async function collectTranscriptPaths(
+  fs: TranscriptHarvestFilesystem,
   home: string,
   current: string,
   globs: readonly string[],
 ): Promise<{ readonly paths: string[]; readonly skipped: string[] }> {
-  const stat = await lstat(current);
+  const stat = await fs.lstat(current);
   const relativePath = relativePosix(home, current);
   if (stat.isSymbolicLink()) {
     return { paths: [], skipped: isAllowed(relativePath, globs) ? [relativePath] : [] };
@@ -49,8 +55,8 @@ async function collectTranscriptPaths(
 
   const paths: string[] = [];
   const skipped: string[] = [];
-  for (const entry of (await readdir(current)).sort()) {
-    const collected = await collectTranscriptPaths(home, join(current, entry), globs);
+  for (const entry of (await fs.readdir(current)).sort()) {
+    const collected = await collectTranscriptPaths(fs, home, join(current, entry), globs);
     paths.push(...collected.paths);
     skipped.push(...collected.skipped);
   }
@@ -80,30 +86,42 @@ function sanitizeFile(
  * provider-relative transcript layout for the reader and retention layers.
  */
 export async function harvestTranscripts(options: HarvestTranscriptsOptions): Promise<TranscriptHarvestResult> {
+  const fs = options.fs ?? fsp;
   try {
-    await mkdir(options.destination, { recursive: true });
-    const collected = await collectTranscriptPaths(options.home, options.home, options.globs);
+    await fs.mkdir(options.destination, { recursive: true });
+    const collected = await collectTranscriptPaths(fs, options.home, options.home, options.globs);
     let files = 0;
     let bytes = 0;
     let omittedLines = 0;
     for (const source of collected.paths) {
       const relativePath = relativePosix(options.home, source);
-      const sanitized = sanitizeFile(
-        await readFile(source, 'utf8'),
-        options.knownSecrets,
-        options.sanitizeLine ?? sanitizeTranscriptLine,
-      );
+      let content: string;
+      try {
+        content = await fs.readFile(source, 'utf8');
+      } catch (error) {
+        if (isNotFound(error)) {
+          collected.skipped.push(relativePath);
+          continue;
+        }
+        throw error;
+      }
+      const sanitized = sanitizeFile(content, options.knownSecrets, options.sanitizeLine ?? sanitizeTranscriptLine);
       const target = join(options.destination, relativePath);
-      await mkdir(join(target, '..'), { recursive: true });
-      await writeFile(target, sanitized.content);
+      await fs.mkdir(join(target, '..'), { recursive: true });
+      await fs.writeFile(target, sanitized.content);
       files += 1;
       bytes += Buffer.byteLength(sanitized.content);
       omittedLines += sanitized.omittedLines;
     }
     return { kind: 'captured', files, bytes, skipped: collected.skipped, omittedLines };
   } catch (error) {
+    await fs.rm(options.destination, { recursive: true, force: true }).catch(() => undefined);
     return { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function isNotFound(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 
 /** Runs normal provider-home retirement in the ADR-mandated harvest-before-remove order. */

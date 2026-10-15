@@ -1,5 +1,5 @@
-// Covers: task:4, task:5
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+// Covers: task:4, task:5, task:6
+import { access, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -144,6 +144,118 @@ describe('harvestTranscripts', () => {
         result: { kind: 'captured', files: 1, bytes: 45, skipped: [], omittedLines: 1 },
         content: 'sanitized:safe\nsanitized:also-safe\nsanitized:',
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves a destination write error as a failed harvest without throwing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transcript-harvest-write-error-'));
+    const home = join(root, 'home');
+    const destination = join(root, 'destination');
+    await mkdir(join(home, 'projects', 'w'), { recursive: true });
+    await writeFile(join(home, 'projects', 'w', 's.jsonl'), '{"message":"first"}\n');
+
+    try {
+      await expect(harvestTranscripts({
+        home,
+        globs: ['projects/**/*.jsonl'],
+        destination,
+        knownSecrets: [],
+        fs: {
+          lstat,
+          mkdir,
+          readdir,
+          readFile,
+          writeFile: async () => { throw Object.assign(new Error('destination is read-only'), { code: 'EACCES' }); },
+          rm,
+        },
+      } as Parameters<typeof harvestTranscripts>[0])).resolves.toMatchObject({
+        kind: 'failed',
+        error: 'destination is read-only',
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('skips a matched transcript that vanishes between walk and read while capturing the others', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transcript-harvest-vanished-source-'));
+    const home = join(root, 'home');
+    const destination = join(root, 'destination');
+    const vanished = join(home, 'projects', 'w', 'gone.jsonl');
+    await mkdir(join(home, 'projects', 'w'), { recursive: true });
+    await Promise.all([
+      writeFile(vanished, '{"message":"gone"}\n'),
+      writeFile(join(home, 'projects', 'w', 'kept.jsonl'), '{"message":"kept"}\n'),
+    ]);
+
+    try {
+      const result = await harvestTranscripts({
+        home,
+        globs: ['projects/**/*.jsonl'],
+        destination,
+        knownSecrets: [],
+        fs: {
+          lstat,
+          mkdir,
+          readdir,
+          readFile: async (path: Parameters<typeof readFile>[0], options: Parameters<typeof readFile>[1]) => {
+            if (path === vanished) throw Object.assign(new Error('vanished'), { code: 'ENOENT' });
+            return readFile(path, options);
+          },
+          writeFile,
+          rm,
+        },
+      } as Parameters<typeof harvestTranscripts>[0]);
+
+      expect(result).toStrictEqual({
+        kind: 'captured',
+        files: 1,
+        bytes: 19,
+        skipped: ['projects/w/gone.jsonl'],
+        omittedLines: 0,
+      });
+      await expect(readFile(join(destination, 'projects', 'w', 'kept.jsonl'), 'utf8')).resolves.toBe('{"message":"kept"}\n');
+      await expect(access(join(destination, 'projects', 'w', 'gone.jsonl'))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes the partial destination when the second transcript write fails with ENOSPC', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transcript-harvest-enospc-'));
+    const home = join(root, 'home');
+    const destination = join(root, 'destination');
+    await mkdir(join(home, 'projects', 'w'), { recursive: true });
+    await Promise.all([
+      writeFile(join(home, 'projects', 'w', 'a.jsonl'), '{"message":"first"}\n'),
+      writeFile(join(home, 'projects', 'w', 'b.jsonl'), '{"message":"second"}\n'),
+    ]);
+    let writes = 0;
+
+    try {
+      const result = await harvestTranscripts({
+        home,
+        globs: ['projects/**/*.jsonl'],
+        destination,
+        knownSecrets: [],
+        fs: {
+          lstat,
+          mkdir,
+          readdir,
+          readFile,
+          writeFile: async (path: Parameters<typeof writeFile>[0], data: Parameters<typeof writeFile>[1]) => {
+            writes += 1;
+            if (writes === 2) throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+            await writeFile(path, data);
+          },
+          rm,
+        },
+      } as Parameters<typeof harvestTranscripts>[0]);
+
+      expect(result).toMatchObject({ kind: 'failed', error: 'disk full' });
+      await expect(access(destination)).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
