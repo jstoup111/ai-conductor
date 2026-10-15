@@ -141,7 +141,6 @@ import {
 } from './provider-model-policy.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
-import { EventPersister } from './event-persister.js';
 import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher, isNoTaskProgressBuildStall } from './build-progress-watcher.js';
 import { StepInFlightTicker } from './step-in-flight-ticker.js';
@@ -628,6 +627,7 @@ export {
 } from './remediation-hints.js';
 export type { ExistingTaskBindingResolution } from './remediation-hints.js';
 import { appendConductorRemediationTasks } from './remediation-task-append.js';
+import { citedRepositoryPaths } from './routing/cited-repository-paths.js';
 import {
   readAsBuiltRoutingOutcome,
   renderAsBuiltBlockedFindingDetail,
@@ -643,41 +643,6 @@ export type { AsBuiltGoverningClauseResolution } from './as-built-routing.js';
  * user is pushed toward `interactive`, `back`, or `quit` instead.
  */
 export const MAX_RECOVERY_RETRIES = 2;
-
-const CITED_PATH_LINE_SUFFIX = /(?::\d+(?:-\d+)?|#L\d+)$/i;
-const CITED_PATH_FILE = /(?:^|\/)[^/\s]+\.[^/\s.]+$/;
-
-/**
- * Extract repository paths from the already-admitted work-order context.  The
- * host selector alone decides whether a cited path is an input or an output;
- * this seam deliberately preserves every path-shaped citation without trying
- * to infer whether the repair will edit it.
- */
-function citedRepositoryPaths(text: string): string[] {
-  const paths: string[] = [];
-  // Done-when criteria commonly put the path in a code span. Preserve that
-  // token as a unit before the prose scan, so punctuation around the span
-  // cannot make a prerequisite citation disappear.
-  const tokens = [
-    ...[...text.matchAll(/`([^`]+)`/g)].map((match) => match[1]!),
-    ...text.split(/\s+/),
-  ];
-  for (const rawToken of tokens) {
-    const path = rawToken
-      .replace(/^[`"']+|[`"'),.;:!?]+$/g, '')
-      .replace(/^\.\//, '')
-      .replace(CITED_PATH_LINE_SUFFIX, '');
-    if (
-      path === '' ||
-      path.startsWith('/') ||
-      path.startsWith('../') ||
-      (!path.includes('/') && !CITED_PATH_FILE.test(path)) ||
-      paths.includes(path)
-    ) continue;
-    paths.push(path);
-  }
-  return paths;
-}
 
 // ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
 /** Bound message-derived reset deadlines so a malformed provider response cannot wedge a run. */
@@ -4739,12 +4704,11 @@ export class Conductor {
             if (created.kind !== 'created') return { kind: 'halt', haltClass: 'needs-human', detail: `routing record creation failed: ${created.kind}` };
             const firstHost = routed.hosts[0];
             if (firstHost === undefined) return { kind: 'halt', haltClass: 'needs-human', detail: 'routing produced no host' };
-            const routingEvents = new EventPersister(
-              join(this.projectRoot, '.pipeline', 'events.jsonl'),
-              this.events,
-            );
             const admission = await admitRound(this.projectRoot, this.featureSlug, created.record, firstHost, {
-              persist: (event) => routingEvents.persistDurably(event),
+              persist: async (event) => {
+                await this.events.emitOrThrow(event);
+                return 'persisted';
+              },
             });
             if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
             return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };

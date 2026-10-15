@@ -150,6 +150,7 @@ vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
 });
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { childBranchFor, leafBranchFor } from '../../src/engine/feature-branch-identity.js';
@@ -676,13 +677,16 @@ describe('Conductor residue routing judge binding', () => {
       resolution: 'Wire the boundary.',
     }, { attemptId: 'fixture-as-built', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
     const second = parseChildId(2)!;
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    persister.start();
     const conductor = new Conductor({
       projectRoot,
       stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
       featureSlug: 'demo',
       config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
       stepRunner: new AsBuiltResidueRunner(projectRoot),
-      events: new ConductorEventEmitter(),
+      events,
       mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
       childRegionLifecycle: {
         resolveActiveChild: async () => ({
@@ -692,24 +696,28 @@ describe('Conductor residue routing judge binding', () => {
       },
     });
 
-    const outcome = await (conductor as unknown as {
-      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string }>;
-    }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
-      ALL_STEPS,
-      'as-built ADR finding requires residue routing',
-      { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
-    );
+    try {
+      const outcome = await (conductor as unknown as {
+        planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string }>;
+      }).planRemediation(
+        { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+        ALL_STEPS,
+        'as-built ADR finding requires residue routing',
+        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+      );
 
-    expect(outcome).toMatchObject({ kind: 'route' });
-    expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
-    expect((await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))).toEqual([
-      expect.objectContaining({ type: 'routed_repair_phase', roundId: 'r1', phase: 'admitted' }),
-      expect.objectContaining({ type: 'remediation_routed', roundId: 'r1' }),
-    ]);
+      expect(outcome).toMatchObject({ kind: 'route' });
+      expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
+      expect((await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))).toEqual([
+        expect.objectContaining({ type: 'routed_repair_phase', roundId: 'r1', phase: 'admitted' }),
+        expect.objectContaining({ type: 'remediation_routed', roundId: 'r1' }),
+      ]);
+    } finally {
+      persister.stop();
+    }
   });
 
   // Covers: task:rem-as-built-W12
