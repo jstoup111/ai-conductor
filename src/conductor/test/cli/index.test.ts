@@ -1,7 +1,8 @@
-// Covers: task:3, task:10, task:12, task:21
+// Covers: task:2, task:3, task:10, task:12, task:21
 
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
+import { Command } from 'commander';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +16,33 @@ import {
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
 } from '../../src/cli.js';
+import { renderCanonicalFullHelp } from '../../src/index.js';
+
+const OPERATOR_FACING_COMMANDS = [
+  'shipped-record',
+  'kpi',
+  'memory',
+  'brain',
+  'intake-loop',
+  'render-diagrams',
+  'build-auth-status',
+  'shipment-evidence',
+] as const;
+
+function expectVisibleOperatorCommands(program = createProgram()): void {
+  const commandNames = program.commands.map((command) => command.name());
+  for (const command of OPERATOR_FACING_COMMANDS) {
+    expect(commandNames, `missing visible command: ${command}`).toContain(command);
+  }
+}
+
+function fullHelpSection(help: string, path: string): string {
+  const header = `ai-conductor ${path}\n`;
+  const start = help.indexOf(header);
+  expect(start, `missing full-reference section: ${path}`).toBeGreaterThanOrEqual(0);
+  const nextSection = help.indexOf(`\n\n${'─'.repeat(72)}\n`, start + header.length);
+  return help.slice(start, nextSection === -1 ? undefined : nextSection);
+}
 
 describe('CLI', () => {
   it('detects only the explicit read-only build-review findings grammar', () => {
@@ -295,6 +323,50 @@ describe('CLI', () => {
     it('documents the real land/handoff flags (--worktree, --source-ref)', () => {
       expect(help).toContain('--worktree');
       expect(help).toContain('--source-ref');
+    });
+  });
+
+  describe('operator-facing command reference', () => {
+    it('lists each operator-facing command with a one-line description in canonical help', () => {
+      const help = renderCanonicalFullHelp();
+      expectVisibleOperatorCommands();
+      for (const command of OPERATOR_FACING_COMMANDS) {
+        expect(help).toMatch(new RegExp(`^  ${command}\\b\\s+.+$`, 'm'));
+      }
+    });
+
+    it('gives every operator-facing command a full-reference section with its declared interface', () => {
+      const help = renderCanonicalFullHelp();
+      const commandOptions: Record<(typeof OPERATOR_FACING_COMMANDS)[number], string[]> = {
+        'shipped-record': ['--slug', '--pr'],
+        kpi: [],
+        memory: ['setup'],
+        brain: ['start', 'stop', 'status'],
+        'intake-loop': ['--continuous', '--once', '--interval-ms'],
+        'render-diagrams': ['--check'],
+        'build-auth-status': [],
+        'shipment-evidence': ['--pr', '--event', 'reconcile', 'audit'],
+      };
+      for (const [command, options] of Object.entries(commandOptions)) {
+        const section = fullHelpSection(help, command);
+        for (const option of options) expect(section).toContain(option);
+      }
+      expect(fullHelpSection(help, 'memory setup')).toContain('[dir]');
+      expect(fullHelpSection(help, 'shipment-evidence reconcile')).toContain('--shipped');
+      expect(fullHelpSection(help, 'shipment-evidence audit')).toContain('--report');
+    });
+
+    it('names a missing operator-facing command in the visible-command fixture check', () => {
+      const program = new Command();
+      for (const command of OPERATOR_FACING_COMMANDS.filter((command) => command !== 'memory')) {
+        program.command(command);
+      }
+      expect(() => expectVisibleOperatorCommands(program)).toThrow('missing visible command: memory');
+    });
+
+    it('keeps previously visible recovery and timing commands in the top-level list', () => {
+      const commandNames = createProgram().commands.map((command) => command.name());
+      expect(commandNames).toEqual(expect.arrayContaining(['kickback-budget', 'build-tail']));
     });
   });
 

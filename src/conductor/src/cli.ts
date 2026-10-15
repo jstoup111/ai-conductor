@@ -752,6 +752,57 @@ export function createProgram(): Command {
     .command('build-tail [worktree]')
     .description('Render a deterministic build task/remediation/closeout timing rollup');
 
+  // Operator-directed commands dispatch before normal CLI bootstrapping in
+  // index.ts. They are declarations only: Commander owns their help surface,
+  // while the existing pre-dispatch detectors retain runtime ownership.
+  program
+    .command('shipped-record')
+    .description('Write the shipped record that prevents a completed feature from being re-dispatched')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--pr <url>', 'Implementation pull request URL, or local');
+  program
+    .command('kpi')
+    .description('Report delivery metrics from committed shipped records');
+  const memory = program
+    .command('memory')
+    .description('Set up or migrate the project memory store');
+  memory
+    .command('setup [dir]')
+    .description('Create or migrate the memory store for this project directory');
+  const brain = program
+    .command('brain')
+    .description('Manage the background intake supervisor');
+  brain.command('start').description('Start the background intake supervisor');
+  brain.command('stop').description('Stop the background intake supervisor');
+  brain.command('status').description('Show background intake supervisor status');
+  program
+    .command('intake-loop')
+    .description('Run one intake pass or continuously poll configured intake sources')
+    .option('--continuous', 'Poll continuously')
+    .option('--once', 'Run one intake pass')
+    .option('--interval-ms <milliseconds>', 'Polling interval in milliseconds');
+  program
+    .command('render-diagrams [files...]')
+    .description('Render Mermaid diagrams in Markdown artifacts')
+    .option('--check', 'Parse-check diagrams without rendering');
+  program
+    .command('build-auth-status')
+    .description('Report the daemon build-auth mode and token health');
+  const shipmentEvidence = program
+    .command('shipment-evidence')
+    .description('Check or reconcile shipped-record evidence for implementation pull requests')
+    .requiredOption('--pr <url>', 'Implementation pull request URL')
+    .option('--event <path>', 'Pull-request event metadata path');
+  shipmentEvidence
+    .command('reconcile')
+    .description('Publish a missing shipped record for an implementation pull request')
+    .requiredOption('--pr <url>', 'Implementation pull request URL')
+    .requiredOption('--shipped <date>', 'Shipment date in YYYY-MM-DD format');
+  shipmentEvidence
+    .command('audit')
+    .description('Audit shipped-record evidence for every pull request')
+    .option('--report <path>', 'Audit report output path');
+
   // Operator budget recovery. Dispatch lives in index.ts
   // (detectKickbackBudgetCommand); declared here so `--help` documents it.
   program
