@@ -84,9 +84,14 @@ function callsAssertNever(node: ts.Node): boolean {
 
 function hasAssertNeverAfterSwitch(statement: ts.SwitchStatement): boolean {
   const parent = statement.parent;
-  if (!ts.isBlock(parent) && !ts.isSourceFile(parent)) return false;
-  const index = parent.statements.indexOf(statement);
-  return index >= 0 && parent.statements[index + 1] !== undefined && callsAssertNever(parent.statements[index + 1]);
+  const statements = ts.isBlock(parent) || ts.isSourceFile(parent)
+    ? parent.statements
+    : ts.isCaseClause(parent) || ts.isDefaultClause(parent)
+      ? parent.statements
+      : undefined;
+  if (statements === undefined) return false;
+  const index = statements.indexOf(statement);
+  return index >= 0 && statements[index + 1] !== undefined && callsAssertNever(statements[index + 1]);
 }
 
 function routingSwitchViolationsInProgram(program: ts.Program, fileNames: readonly string[]): SwitchViolation[] {
@@ -184,6 +189,16 @@ describe('routing exhaustive switch guard', () => {
       "function assertNever(value: never): never { throw new Error(String(value)); }",
       "switch (kind) { case 'audit': break; case 'revalidate': break; }",
       'assertNever(kind);',
+    ].join('\n')]]))).toEqual([]);
+  });
+
+  it('allows a nested exhaustive routing switch followed by assertNever in its case clause', () => {
+    expect(routingSwitchViolations(new Map([['nested.fixture.ts', [
+      "type HostState = 'pending' | 'done'; type RouteKind = 'audit' | 'revalidate';",
+      'declare const state: HostState; declare const kind: RouteKind;',
+      'function assertNever(value: never): never { throw new Error(String(value)); }',
+      "switch (state) { case 'pending': switch (kind) { case 'audit': break; case 'revalidate': break; } assertNever(kind); break; case 'done': break; }",
+      'assertNever(state);',
     ].join('\n')]]))).toEqual([]);
   });
 

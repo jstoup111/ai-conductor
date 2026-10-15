@@ -1,11 +1,16 @@
 // Covers: tasks:26,28,29,30,31,32
 import { describe, expect, it, vi } from 'vitest';
 
+import { parseChildId } from '../../../src/engine/child-context.js';
 import type { CriterionBoundRemediationGap } from '../../../src/engine/remediation-append.js';
 import type { GitRunner } from '../../../src/engine/rebase.js';
 import { routeAdmittedRound } from '../../../src/engine/routing/round-router.js';
 
-const gap = (id: string, taskId: string, disposition: CriterionBoundRemediationGap['disposition'] = 'append-task'): CriterionBoundRemediationGap => ({
+const c1 = parseChildId(1)!;
+const c2 = parseChildId(2)!;
+const c3 = parseChildId(3)!;
+
+const gap = (id: string, taskId: string, disposition: CriterionBoundRemediationGap['disposition'] = 'build'): CriterionBoundRemediationGap => ({
   id, disposition, category: null, rationale: `${id} rationale`, criterion: `${id} criterion`,
   tasks: [{ id: taskId, title: `${taskId} repair` }],
 });
@@ -18,7 +23,7 @@ const git: GitRunner = async (args) => {
 const input = (admitted: Parameters<typeof routeAdmittedRound>[0]['admitted']) => ({
   admitted,
   envelope: { sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] } },
-  planText: '', appendedChildren: {}, declaredPositions: [1, 2, 3] as const,
+  planText: '', appendedChildren: {}, declaredPositions: [c1, c2, c3] as const,
   leafTip: 'feat/daemon-demo', roundId: 'r1' as const, git,
 });
 
@@ -81,6 +86,6 @@ describe('routeAdmittedRound', () => {
     ]));
     expect(routed.hostHints[2]).toContain('manual_test: FAIL row one');
     expect(routed.hostHints[3]).toContain('manual_test: FAIL row two');
-    expect(routed.allocation[2]?.retryHint).toBe(routed.hostHints[2]);
+    expect(routed.allocation[c2]?.retryHint).toBe(routed.hostHints[2]);
   });
 });
