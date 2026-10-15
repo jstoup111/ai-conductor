@@ -78,7 +78,7 @@ describe('per-command help router', () => {
       .toBe(commandHelp(['finish-record']));
   });
 
-  // Covers: rem-as-built-rem-as-built-R6
+  // Covers: task:rem-as-built-rem-as-built-R6
   it('does not treat option values as shipment-evidence subcommands', () => {
     const expected = commandHelp(['shipment-evidence']);
 
