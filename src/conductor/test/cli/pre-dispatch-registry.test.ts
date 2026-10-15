@@ -7,6 +7,7 @@ import {
 } from '../../src/cli-pre-dispatch.js';
 
 describe('pre-dispatch command registry', () => {
+  // Covers: task:1
   it('covers exactly the detectors invoked by the pre-dispatch chains', async () => {
     const source = await readFile(join(process.cwd(), 'src', 'index.ts'), 'utf8');
 
@@ -16,6 +17,7 @@ describe('pre-dispatch command registry', () => {
     });
   });
 
+  // Covers: task:1
   it('names an unregistered detector invoked by a dispatcher', () => {
     const source = `
       export async function dispatchNonDispatchingCliCommand() {
@@ -32,6 +34,7 @@ describe('pre-dispatch command registry', () => {
     });
   });
 
+  // Covers: task:1
   it('names a stale registry entry whose detector is never dispatched', () => {
     const source = `
       export async function dispatchNonDispatchingCliCommand() {
