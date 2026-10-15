@@ -937,3 +937,21 @@ Governing review: `.docs/decisions/architecture-review-2026-10-14-admitted-whole
 **Done when:**
 - [test] S2.5 is satisfied by this task.
 - The repair for task rem-prd-audit-rem-prd-audit-W14 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-W15: conductor.ts planRemediation resolveStackedRoute: return undefined (no routing) when the work order has any halt disposition (halts.length > 0) or an unresolvable disposition, before nextRoundId/createRouteRecord/admitRound, so the existing ordinary append/halt path runs and halts with today's detail; leave the post-append halts.length>0 check and N=1/routing-off ordering from fd1e0c4d4a unchanged
+**Gate:** as-built
+**Rationale:** Verified (99%, conductor.ts:4385-4395 read): resolveStackedRoute runs before the halts.length>0 check and only considers non-halt routedFixes, so a stacked routing-on work order with an admitted fix plus a halt disposition admits a route and returns BUILD, silently dropping the halt. The approved diagram (.docs/architecture/...:40-42) already routes 'today's mixed-plan halt' to the ordinary N=1 path, and task 36 owns that exclusion. The architecture is clear, so this is conforming implementation drift and belongs in BUILD. Fix: resolveStackedRoute returns undefined when halts.length>0, which also covers an unresolvable disposition. The existing append/halt ordering then runs unchanged. Keep the refusal-task ordering restored in fd1e0c4d4a for N=1 and routing-off.
+**Parent task:** 36
+**Governing clause:** Task 36
+**Done when:**
+- Task 36 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-W15 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-W16: conductor planRemediation tests: add routing-on stacked (durable children) cases for an admitted BUILD fix plus a halt disposition, and for an admitted fix plus an unresolvable disposition. Assert each halts with today's halt and unresolvable-disposition detail, nextRoundId/createRouteRecord/admitRound/routeAdmittedRound record zero calls, and no routes/ record or routing marker ref is written
+**Gate:** prd-audit
+**Rationale:** This is the same defect as the as-built finding (99%): the only mixed-halt test runs with routing off, so the task 36 Done-when '[test] a stacked work order with an admitted fix plus a halt disposition halts with today's halt detail ... with no route record or marker created' is unproven for a routing-eligible stack. Task 36 already admits this test, so it is BUILD test work and not a planning omission. The test must fail against the current code, which admits the round and returns build.
+**Criterion:** S1.9
+**Parent task:** 36
+**Done when:**
+- [test] S1.9 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-W16 is committed and its targeted tests pass.
