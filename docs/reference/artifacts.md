@@ -818,7 +818,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `remediation_case_reconciled`, `remediation_case_refuted`, `remediation_effect_reserved`, `remediation_effect_applied`,
 `remediation_effect_failed`, `remediation_semantic_repeat_halt`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_discovery`, `provider_attempt`,
-`provider_stream_progress`,
+`provider_attempt_started`, `provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
@@ -969,6 +969,12 @@ step — `(tree abc1234..def5678)` when it moved, `(tree abc1234 unchanged)` whe
 same witness pair persisted in `.pipeline/build-outcome.json`; the two fields do not report the
 separate HEAD-commit witness (`adr-2026-07-23-commit-movement-liveness-floor`), which can legitimately
 disagree on the same turn (an empty commit moves HEAD without moving the tree).
+
+`provider_attempt_started` records a provider candidate entering invocation for a step, before its
+`provider_attempt` outcome exists. It carries `step`, `provider` (`{ kind: 'known', id }` or
+`{ kind: 'unknown' }`), optional `model`, and optional `executionContext`. One event is emitted per
+candidate and per model-fallback rung. Emission is fire-and-forget and never delays or fails the
+invocation. The event is rendered and persisted but not exported to OpenTelemetry.
 
 `session_policy` records when the fail-closed `supportsSessionResume` capability seam suppresses a
 would-be session resume. All built-in providers declare the capability false, so this is diagnostic
