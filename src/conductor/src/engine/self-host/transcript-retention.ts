@@ -56,7 +56,7 @@ type RetainedCapture = {
  * no retention state is written beside the captures.
  */
 export class TranscriptRetention {
-  private readonly pending = new Map<string, string[]>();
+  private readonly pending = new Map<string, CapturedTranscript[]>();
   private readonly remove: (path: string) => Promise<void>;
   private readonly maxCaptures: number;
   private readonly maxBytes: number;
@@ -108,18 +108,28 @@ export class TranscriptRetention {
     await this.settleKeys([captureKey(identity)], outcome);
   }
 
-  /** Settle the most recently captured attempt for a step at an in-step retry boundary. */
-  async settleLatestAttempt(step: StepName, outcome: TranscriptRetentionOutcome): Promise<void> {
-    const keys = [...this.pending.keys()].filter((key) => key.startsWith(`${step}\u0000`));
-    const latest = keys.at(-1);
-    if (latest !== undefined) await this.settleKeys([latest], outcome);
+  /**
+   * A retry event names the attempt about to run. Settle every older pending
+   * attempt for that exact step/member independently, so a later successful
+   * retry cannot prune a failed attempt's capture.
+   */
+  async settleBeforeRetry(step: StepName, nextAttempt: number, member?: string): Promise<void> {
+    const identities = [...this.pending.entries()].flatMap(([key, captures]) => {
+      const capture = captures[0];
+      return capture !== undefined && capture.step === step && capture.attempt < nextAttempt && capture.member === member
+        ? [{ key, capture }]
+        : [];
+    });
+    for (const { capture } of identities) {
+      await this.settleAttempt(capture, 'failed');
+    }
   }
 
   private async settleKeys(keys: readonly string[], outcome: TranscriptRetentionOutcome): Promise<void> {
     const paths = keys.flatMap((key) => {
       const captured = this.pending.get(key) ?? [];
       this.pending.delete(key);
-      return captured;
+      return captured.map(({ path }) => path);
     });
     switch (outcome) {
       case 'succeeded-with-progress':
@@ -142,9 +152,9 @@ export class TranscriptRetention {
       return;
     }
     const key = captureKey(capture);
-    const paths = this.pending.get(key) ?? [];
-    paths.push(capture.path);
-    this.pending.set(key, paths);
+    const captures = this.pending.get(key) ?? [];
+    captures.push(capture);
+    this.pending.set(key, captures);
   }
 
   private async reconcile(): Promise<void> {

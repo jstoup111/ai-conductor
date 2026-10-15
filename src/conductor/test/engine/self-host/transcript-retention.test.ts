@@ -188,6 +188,32 @@ describe('TranscriptRetention', () => {
     }
   });
 
+  it('settles only the failed member attempt before a configured-member retry', async () => {
+    const { root, events, persister } = await fixture();
+    const retention = new TranscriptRetention(root, events);
+    const failed = '.pipeline/transcripts/build_review/member-attempt-1';
+    const retry = '.pipeline/transcripts/build_review/member-attempt-2';
+    try {
+      await retention.ready();
+      await capture(events, root, failed, 'build_review', false, 3, {
+        runId: 'review', attempt: 1, member: 'build_review',
+      });
+      await retention.settleBeforeRetry('build_review', 2, 'build_review');
+      await capture(events, root, retry, 'build_review', false, 3, {
+        runId: 'review', attempt: 2, member: 'build_review',
+      });
+      await retention.settleAttempt({ step: 'build_review', runId: 'review', attempt: 2, member: 'build_review' }, 'succeeded-with-progress');
+
+      await expect(access(join(root, failed))).resolves.toBeUndefined();
+      await expect(access(join(root, retry))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_retained'))
+        .toEqual([expect.objectContaining({ path: failed })]);
+    } finally {
+      retention.stop();
+      persister.stop();
+    }
+  });
+
   it('never evicts an unsettled capture while enforcing the retained cap', async () => {
     const { root, events, persister } = await fixture();
     const retention = new TranscriptRetention(root, events, { maxCaptures: 1 });
