@@ -1210,9 +1210,13 @@ export async function runDaemon(
   // deliberately started only after that attempt, whether it dispatches or
   // finds no eligible item.  Its ordered steps preserve the former startup
   // maintenance sequence without making the dispatcher await it.
+  // Captured by the first claim gate below.  The dashboard preserves its
+  // former paused-at-boot behavior without adding another pause read after
+  // the claim attempt.
+  let pausedAtBoot = false;
   const maintenanceJob = new MaintenanceJob([
     ['startup-dashboard', async () => {
-      if (!(await checkPaused())) await deps.renderStartupDashboard?.();
+      if (!pausedAtBoot) await deps.renderStartupDashboard?.();
     }],
     ['rekick', async () => maybeRekick(true)],
     ['resume-authorizations', async () => deps.consumeResumeAuthorizations?.()],
@@ -1448,6 +1452,7 @@ export async function runDaemon(
       // A drain reaches this same boundary at zero active claims, but must not
       // select a replacement item before its pending restart action runs.
       paused = maintenance.isDraining() || (await checkPaused());
+      if (firstFillPass) pausedAtBoot = paused;
       buildAuthMissing = await checkBuildAuthMissing();
       ghVersionBlocked = await checkGhVersionFloor();
       episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
