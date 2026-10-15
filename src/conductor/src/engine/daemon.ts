@@ -21,7 +21,7 @@ import type { RateLimitEpisode } from './rate-limit-episode.js';
 import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
 import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
-import { DaemonMaintenance } from './daemon-maintenance.js';
+import { DaemonMaintenance, MaintenanceJob } from './daemon-maintenance.js';
 import type { FeatureTerminalEffects } from './feature-executor.js';
 import { isOperatorActionHalt, type HaltDisposition } from './halt-marker.js';
 
@@ -1109,11 +1109,6 @@ export async function runDaemon(
     );
   };
 
-  // ── Startup (ADR-013): dashboard before any dispatch, then base-SHA seed +
-  //    downtime-advance re-kick. All hooks are optional; absent → the pure
-  //    pre-fix behavior (PR #109 markers honored, no re-kick). ────────────────
-  await deps.renderStartupDashboard?.();
-
   // Seed the last-seen SHA from the persisted value. A genuine advance is
   // `current !== lastSeenSha` with `lastSeenSha != null`; a null seed (first
   // run / corrupt file) initializes WITHOUT a sweep (FR-5 first-run path).
@@ -1211,13 +1206,31 @@ export async function runDaemon(
     return picked;
   };
 
-  // Startup advance check: refresh so a base that moved on origin while the
-  // daemon was DOWN is caught (FR-5 downtime-advance path).
-  // FR-14: sweep mergeable labels on startup (after reconciliation).
-  await maintenance.startup(async () => {
-    await maybeRekick(true);
-    await deps.consumeResumeAuthorizations?.();
-  }, sweepBestEffort);
+  // Keep best-effort startup work off the first-claim path.  The job is
+  // deliberately started only after that attempt, whether it dispatches or
+  // finds no eligible item.  Its ordered steps preserve the former startup
+  // maintenance sequence without making the dispatcher await it.
+  const maintenanceJob = new MaintenanceJob([
+    ['startup-dashboard', async () => {
+      if (!(await checkPaused())) await deps.renderStartupDashboard?.();
+    }],
+    ['rekick', async () => maybeRekick(true)],
+    ['resume-authorizations', async () => deps.consumeResumeAuthorizations?.()],
+    ['reconcileHaltPrs', async () => deps.reconcileHaltPrs?.()],
+    ['reconcileParkedFeatures', async () => deps.reconcileParkedFeatures?.({
+      disposeHaltWatcher: disposeWatcher,
+      isFeatureInFlight: (slug) => inFlight.has(slug),
+    })],
+    ['sweepProviderScratch', async () => deps.sweepProviderScratch?.()],
+    ['sweepMergeableLabels', async () => deps.sweepMergeableLabels?.({
+      isFeatureInFlight: (slug) => inFlight.has(slug),
+    })],
+  ], log);
+
+  // The sole awaited startup I/O before a claim.  Later task work folds its
+  // resolved base through rekick and the refresh throttle; Task 4 only keeps
+  // this refreshed discovery ahead of the first eligibility pass.
+  const startupBacklog = await deps.discoverBacklog({ refresh: true });
 
   // Stale-engine restart gate chain (Task 12, gates 1-4) — constant per run.
   const staleGatesArmed =
@@ -1364,6 +1377,16 @@ export async function runDaemon(
   // fixes #598 Task 15's regression where both independently invoked
   // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
   let staleAlreadyHandledByPreflight = false;
+  let firstFillPass = true;
+  let startupMaintenanceTriggered = false;
+  const triggerStartupMaintenance = (): void => {
+    if (!firstFillPass) return;
+    firstFillPass = false;
+    if (!startupMaintenanceTriggered) {
+      startupMaintenanceTriggered = true;
+      maintenanceJob.trigger();
+    }
+  };
   let latestBlocked = {
     paused: false,
     build_auth_missing: false,
@@ -1445,14 +1468,18 @@ export async function runDaemon(
         isProgressReKickEligible: isProgressReKickEligibleBounded,
       };
 
-      // An operator adjustment changes the feature ledger, not main's SHA.
-      // Consume it before retained HALTs are classified for this iteration.
-      await deps.consumeResumeAuthorizations?.();
+      // The first selection intentionally observes any inherited live HALT
+      // before resume authorizations are consumed by background maintenance.
+      // Subsequent fill passes retain the established authorization behavior.
+      if (!firstFillPass) await deps.consumeResumeAuthorizations?.();
       if (!paused && !episodeActive && !buildAuthMissing && !ghVersionBlocked) {
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
         const parkedBeforeLocal = new Set(claims.listParked());
-        next = await pickEligible({ items: await deps.discoverBacklog({ refresh: false }) }, pickCtx);
+        const items = firstFillPass
+          ? startupBacklog
+          : await deps.discoverBacklog({ refresh: false });
+        next = await pickEligible({ items }, pickCtx);
         // pickEligible's "durable HALT from a prior run" branch adds directly to
         // `parked` for a slug this run never dispatched — register its watcher
         // here (collectOne never sees it, since it never went through runFeature).
@@ -1487,12 +1514,17 @@ export async function runDaemon(
         // concurrency 1 it runs before every feature. In production
         // `requestRestart` exits the process; the break matters only to tests.
         if (await rebuildAndMaybeRestartForStaleEngine()) {
+          triggerStartupMaintenance();
           stopReason = 'engine_restart';
           break;
         }
         // Task 1 (#651): re-check park immediately before this dispatch — closes
         // the selection→dispatch race opened by the rebuild/restart await above.
         const dispatched = await guardedDispatch(next);
+        // Do not start the job until the guarded claim has either dispatched
+        // or refused.  Calling trigger earlier would let its synchronous
+        // prefix race ahead of this first dispatch.
+        triggerStartupMaintenance();
         if (dispatched) {
           // The ceiling counts consecutive empty polls. A started feature begins
           // a new idle episode; a rejected dispatch deliberately falls through.
@@ -1504,6 +1536,7 @@ export async function runDaemon(
         // re-picking the same parked slug.
       }
       // Nothing new to start.
+      triggerStartupMaintenance();
       if (maintenance.isDrained()) {
         // Task T28/T30: at idle boundary, check for pending restart marker and either
         // fire the supervisor trigger (T28) or consume in bare-run (T30).
