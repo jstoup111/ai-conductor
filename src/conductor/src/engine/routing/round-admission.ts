@@ -15,7 +15,7 @@ export async function admitRound(
   dependencies: RouteRecordStoreDependencies = {},
 ): Promise<AdmitRoundResult> {
   const marker = await readRepairMarker(worktree, slug, dependencies);
-  if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open` : 'routing marker is unreadable' };
+  if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open; cannot admit ${record.roundId}` : 'routing marker is unreadable' };
   const stored = await readRouteRecord(worktree, slug, record.roundId, dependencies);
   if (stored.kind !== 'record') return { kind: 'refused', detail: 'routing record is unavailable before admission' };
   if (stored.record.phase !== 'prepared' || stored.record.hosts[firstHost] !== 'pending') return { kind: 'refused', detail: `routing round ${record.roundId} is not prepared for host ${firstHost}` };

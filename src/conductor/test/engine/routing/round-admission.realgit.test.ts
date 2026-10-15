@@ -63,7 +63,10 @@ describe('routed-round admission (real local Git)', () => {
       if (created.kind !== 'created') throw new Error(created.kind);
       const markerBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: 1, roundId: 'r9' }) })).stdout.trim();
       await subject.git(['update-ref', repairMarkerRefFor('demo'), markerBlob]);
-      expect(await admitRound(subject.repo, 'demo', created.record, c1)).toMatchObject({ kind: 'refused', detail: expect.stringContaining('already open') });
+      expect(await admitRound(subject.repo, 'demo', created.record, c1)).toEqual({
+        kind: 'refused',
+        detail: 'routing round r9 is already open; cannot admit r1',
+      });
       expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: { phase: 'prepared', hosts: { 1: 'pending' } } });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
