@@ -46,7 +46,14 @@ vi.mock('../../src/engine/routing/route-record-store.js', async (importOriginal)
     routingMutationSpy.nextRoundIdCalls += 1;
     return 'r1';
   }),
-  createRouteRecord: vi.fn(async (_worktree, _slug, input) => {
+  createRouteRecord: vi.fn(async (
+    _worktree,
+    _slug,
+    input: Pick<
+      import('../../src/engine/routing/route-types.js').RouteRecord,
+      'roundId' | 'kind' | 'items' | 'allocation'
+    >,
+  ) => {
     routingMutationSpy.createRouteRecordCalls += 1;
     routingMutationSpy.calls.push('create-record');
     routingMutationSpy.storedRouteItems = input.items.map(({ owner, host }) => ({ owner, host }));
@@ -742,7 +749,8 @@ describe('Conductor residue routing judge binding', () => {
       resolution: 'Repair the shared task boundary.',
     }, projectRoot, '.docs/plans/feature.md');
     if (!canonicalized.ok) throw new Error(`fixture contract resolution failed: ${canonicalized.requirement}`);
-    await expect(canonicalized.verdict.findings[0]?.reference).toEqual({ kind: 'plan-task', taskId: 'T2,T3' });
+    if (canonicalized.verdict.verdict !== 'BLOCKED') throw new Error('fixture requires a BLOCKED as-built verdict');
+    expect(canonicalized.verdict.findings[0]?.reference).toEqual({ kind: 'plan-task', taskId: 'T2,T3' });
     await persistAsBuiltVerdict(projectRoot, canonicalized.verdict, {
       attemptId: 'fixture-multi-task', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY,
     });
@@ -768,7 +776,7 @@ describe('Conductor residue routing judge binding', () => {
         pendingAsBuiltFindings: [], priorLaps: [], refusals: [],
         vocabulary: {
           dispositions: ['build', 'acceptance_specs', 'architecture_review', 'plan', 'publication', 'existing-task', 'halt'],
-          haltCategories: ['architectural-clarity', 'product-scope', 'unsupported', 'policy'],
+          haltCategories: ['architectural-clarity', 'product-scope', 'unanswerable'],
         },
       },
     };
