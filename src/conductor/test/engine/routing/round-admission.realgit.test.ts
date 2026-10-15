@@ -1,3 +1,4 @@
+// Covers: S5.10
 // Covers: tasks:40,41,42,101,102
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

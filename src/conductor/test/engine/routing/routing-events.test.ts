@@ -1,4 +1,4 @@
-// Covers: rem-prd-audit-W10
+// Covers: S7.6, rem-prd-audit-W10
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
