@@ -4589,18 +4589,6 @@ export class Conductor {
       }
       | undefined
     > {
-    // Task 23: a 'halt' disposition must never be silently dropped in favor
-    // of a sibling 'route' disposition. Even when the SAME plan also names
-    // routable fixes for other gaps, a halt gap means at least one blocking
-    // gap needs a human — checked BEFORE the fixes branch below so a mixed
-    // plan (some fixes + one halt) still surfaces the halt rather than
-    // routing around it and losing the halt detail entirely.
-    if (halts.length > 0) {
-      return {
-        kind: 'halt',
-        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; ') + droppedSuffix,
-      };
-    }
     // This is the single dark-launch decision point for an admitted repair
     // lap.  The existing remediation route remains byte-for-byte authoritative
     // on either result until the route writer/settler feature lands; making
@@ -4716,6 +4704,20 @@ export class Conductor {
         }
       }
     }
+    return undefined;
+    }
+    // Task 23: a 'halt' disposition must never be silently dropped in favor
+    // of a sibling 'route' disposition. Even when the SAME plan also names
+    // routable fixes for other gaps, a halt gap means at least one blocking
+    // gap needs a human — checked BEFORE the fixes branch below so a mixed
+    // plan (some fixes + one halt) still surfaces the halt rather than
+    // routing around it and losing the halt detail entirely.
+    if (halts.length > 0) {
+      return {
+        kind: 'halt',
+        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; ') + droppedSuffix,
+      };
+    }
     if (fixes.length > 0 && routedFixes.length === 0) {
       const rejectedAppendGapIds = fixes
         .filter((gap) => remediationDispositionAppendsToPlan(gap.disposition))
@@ -4738,8 +4740,6 @@ export class Conductor {
             : '\nNo admission keys were available.') +
           renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
       };
-    }
-    return undefined;
     }
     if (routedFixes.length > 0) {
       const { target, unresolved } = earliestRemediationTarget(routedFixes, steps);

@@ -210,6 +210,35 @@ class ContextBoundResidueRunner implements StepRunner {
   }
 }
 
+class RoutingOffMixedHaltRunner implements StepRunner {
+  constructor(private readonly projectRoot: string) {}
+
+  async run(_step: string, _state: ConductState, options: Parameters<StepRunner['run']>[2]) {
+    const request = options?.remediationRequest;
+    if (request?.mode !== 'gap-plan' || options?.runId === undefined) {
+      throw new Error('fixture requires a remediation gap-plan request');
+    }
+    await persistFixtureRemediationPlan(this.projectRoot, options, {
+      version: 'v1',
+      dispositions: [
+        {
+          reference: { kind: 'stall', id: 'stall:append' },
+          disposition: 'build', category: null,
+          rationale: 'Append the ordinary leaf repair before surfacing the sibling halt.',
+          tasks: [{ id: 'leaf-repair', title: 'Append the ordinary leaf repair' }], boundTaskIds: [],
+        },
+        {
+          reference: { kind: 'stall', id: 'stall:human' },
+          disposition: 'halt', category: 'architectural-clarity',
+          rationale: 'A human must decide the sibling architectural boundary.',
+          tasks: [], boundTaskIds: [],
+        },
+      ],
+    });
+    return { success: true };
+  }
+}
+
 class AsBuiltResidueRunner implements StepRunner {
   calls = 0;
   projection: unknown;
@@ -356,6 +385,42 @@ describe('Conductor residue routing judge binding', () => {
     expect(runner.calls, JSON.stringify(outcome)).toBe(1);
     expect(outcome).toMatchObject({ kind: 'route' });
     expect(outcome.detail).toBeUndefined();
+  });
+
+  // Covers: task:rem-prd-audit-refusal-51431839-5348-4d88-8273-9c808a3b7887
+  it('keeps routing-off mixed halt rounds on the main leaf append and commit path before halting', async () => {
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: false } },
+      stepRunner: new RoutingOffMixedHaltRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({ kind: 'no-child' as const }),
+      },
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: unknown,
+      ) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'routing-off mixed remediation must preserve leaf ordering',
+      { source: 'build_stall' },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('stall:human (architectural-clarity: A human must decide the sibling architectural boundary.)'),
+    });
+    expect(routingMutationSpy.calls).toEqual(['append', 'record-appended', 'seed', 'commit']);
   });
 
   it('sends an ADR-only as-built finding with its summary and reference to the residue judge', async () => {
