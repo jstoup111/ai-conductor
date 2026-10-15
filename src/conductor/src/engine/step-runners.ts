@@ -1963,8 +1963,9 @@ export class DefaultStepRunner implements StepRunner {
   ): Promise<ProviderExecutionResult | undefined> {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
 
-    const resolvedSkillName = request.kind === 'skill'
-      ? await resolveSkillName(this.skillNameRoot, STEP_SKILL_INVOCATIONS[request.step]!.skillName)
+    const skillInvocation = request.kind === 'skill' ? STEP_SKILL_INVOCATIONS[request.step] : undefined;
+    const resolvedSkillName = skillInvocation?.kind === 'skill'
+      ? await resolveSkillName(this.skillNameRoot, skillInvocation.skillName)
       : undefined;
 
     const safety = this.candidateSafetyFor(request.step);
