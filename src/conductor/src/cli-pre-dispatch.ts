@@ -1,4 +1,5 @@
-import type { Command } from 'commander';
+import { type Command } from 'commander';
+import { createProgram } from './cli.js';
 
 /**
  * The command detectors reached before the foreground pipeline starts.
@@ -35,6 +36,7 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectTestSuiteCommand', commandPath: ['test-suite'], helpOwner: 'router' },
   { detector: 'detectMemoryCommand', commandPath: ['memory', 'setup'], helpOwner: 'router' },
   { detector: 'detectRegistryCommand', commandPath: ['register'], helpOwner: 'router' },
+  { detector: 'detectRegistryCommand', commandPath: ['create'], helpOwner: 'router' },
   { detector: 'detectUserConfigReadCommand', commandPath: ['config'], helpOwner: 'router' },
   { detector: 'detectUserConfigWriteCommand', commandPath: ['config'], helpOwner: 'router' },
   { detector: 'detectUserConfigSetCommand', commandPath: ['config', 'set'], helpOwner: 'router' },
@@ -137,4 +139,28 @@ export function undeclaredRegistryCommands(
     }
     return [];
   });
+}
+
+/** Return Commander-owned help for a registered command path, if help was requested. */
+export function routeSubcommandHelp(
+  argv: readonly string[],
+  registry: readonly PreDispatchCommand[] = PRE_DISPATCH_COMMANDS,
+  program?: Command,
+): string | null {
+  const args = argv.slice(2);
+  if (args.at(-1) !== '--help' && args.at(-1) !== '-h') return null;
+
+  const commandPath = args.slice(0, -1);
+  const entry = registry.find((candidate) => candidate.commandPath.join('\0') === commandPath.join('\0'));
+  if (entry?.helpOwner !== 'router') {
+    return null;
+  }
+
+  let command = program ?? createProgram();
+  for (const name of commandPath) {
+    const next = command.commands.find((candidate) => candidate.name() === name);
+    if (next === undefined) return null;
+    command = next;
+  }
+  return command.helpInformation();
 }
