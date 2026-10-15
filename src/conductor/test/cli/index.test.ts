@@ -16,6 +16,7 @@ import {
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
 } from '../../src/cli.js';
+import { PRE_DISPATCH_COMMANDS } from '../../src/cli-pre-dispatch.js';
 import { renderCanonicalFullHelp } from '../../src/index.js';
 
 const OPERATOR_FACING_COMMANDS = [
@@ -27,6 +28,50 @@ const OPERATOR_FACING_COMMANDS = [
   'render-diagrams',
   'build-auth-status',
   'shipment-evidence',
+] as const;
+
+const HIDDEN_PRE_DISPATCH_COMMANDS = [
+  'scoped-run',
+  'halt-clear',
+  'missing-reseal-reason',
+  'test-suite',
+  'finish-record',
+  'manual-test-record',
+  'derive-feedback',
+  'github-boundary-audit',
+  'github-operation',
+  'scope-check',
+  'task-membership-check',
+] as const;
+
+const VISIBLE_PRE_DISPATCH_COMMANDS = [
+  'render-diagrams',
+  'rate-card',
+  'overlap-scan',
+  'version',
+  'update',
+  'build-review',
+  'build-tail',
+  'decide-grant',
+  'kickback-budget',
+  'rewind',
+  'reseal',
+  'memory',
+  'register',
+  'config',
+  'engineer',
+  'intake-loop',
+  'brain',
+  'shipped-record',
+  'shipment-evidence',
+  'task',
+  'evidence',
+  'kpi',
+  'build-auth-status',
+  'halt-issues',
+  'plan-protected-targets',
+  'monitor',
+  'daemon',
 ] as const;
 
 function expectVisibleOperatorCommands(program = createProgram()): void {
@@ -367,6 +412,41 @@ describe('CLI', () => {
     it('keeps previously visible recovery and timing commands in the top-level list', () => {
       const commandNames = createProgram().commands.map((command) => command.name());
       expect(commandNames).toEqual(expect.arrayContaining(['kickback-budget', 'build-tail']));
+    });
+  });
+
+  describe('engine-internal command catalog', () => {
+    it('declares the four named engine-internal commands as hidden', () => {
+      const commands = createProgram().commands;
+      for (const name of ['test-suite', 'finish-record', 'manual-test-record', 'derive-feedback']) {
+        expect(commands.find((command) => command.name() === name)?._hidden, name).toBe(true);
+      }
+    });
+
+    it('declares every formerly undeclared pre-dispatch top-level command as hidden', () => {
+      const commands = createProgram().commands;
+      const declaredHiddenCommands = [...new Set(
+        PRE_DISPATCH_COMMANDS
+          .map(({ commandPath }) => commandPath[0])
+          .filter((name) => !VISIBLE_PRE_DISPATCH_COMMANDS.includes(
+            name as (typeof VISIBLE_PRE_DISPATCH_COMMANDS)[number],
+          )),
+      )].sort();
+      expect(declaredHiddenCommands).toEqual([...HIDDEN_PRE_DISPATCH_COMMANDS].sort());
+      for (const name of HIDDEN_PRE_DISPATCH_COMMANDS) {
+        expect(commands.find((command) => command.name() === name)?._hidden, name).toBe(true);
+      }
+      for (const name of [...VISIBLE_PRE_DISPATCH_COMMANDS, ...OPERATOR_FACING_COMMANDS]) {
+        expect(commands.find((command) => command.name() === name)?._hidden, name).not.toBe(true);
+      }
+    });
+
+    it('omits hidden commands from canonical full help listings and sections', () => {
+      const help = renderCanonicalFullHelp();
+      for (const name of HIDDEN_PRE_DISPATCH_COMMANDS) {
+        expect(help).not.toMatch(new RegExp(`^  ${name}\\b`, 'm'));
+        expect(help).not.toContain(`ai-conductor ${name}\n`);
+      }
     });
   });
 

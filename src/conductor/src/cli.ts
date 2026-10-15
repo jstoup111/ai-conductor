@@ -752,6 +752,25 @@ export function createProgram(): Command {
     .command('build-tail [worktree]')
     .description('Render a deterministic build task/remediation/closeout timing rollup');
 
+  // These commands are invoked by the engine and its hooks before normal CLI
+  // bootstrapping. They remain declared so Commander can provide their own
+  // help, but stay out of the operator-facing command reference.
+  for (const command of [
+    'scoped-run',
+    'halt-clear',
+    'missing-reseal-reason',
+    'test-suite',
+    'finish-record',
+    'manual-test-record',
+    'derive-feedback',
+    'github-boundary-audit',
+    'github-operation',
+    'scope-check',
+    'task-membership-check',
+  ]) {
+    program.command(command, { hidden: true });
+  }
+
   // Operator-directed commands dispatch before normal CLI bootstrapping in
   // index.ts. They are declarations only: Commander owns their help surface,
   // while the existing pre-dispatch detectors retain runtime ownership.
@@ -984,7 +1003,7 @@ export function renderFullHelp(program: Command = createProgram()): string {
 
   const walk = (cmd: Command, path: string[]): void => {
     for (const sub of cmd.commands) {
-      if (sub.name() === 'help') continue; // commander's auto `help [command]`
+      if (sub.name() === 'help' || sub._hidden) continue; // commander's auto `help [command]`
       const fullPath = ['ai-conductor', ...path, sub.name()].join(' ');
       sections.push(`${rule}\n${fullPath}\n${rule}\n${sub.helpInformation().trimEnd()}`);
       walk(sub, [...path, sub.name()]);
@@ -1007,7 +1026,7 @@ export function renderDaemonHelp(program: Command = createProgram()): string {
   const rule = '─'.repeat(72);
   const sections = [daemon.helpInformation().trimEnd()];
   for (const sub of daemon.commands) {
-    if (sub.name() === 'help') continue; // commander's auto `help [command]`
+    if (sub.name() === 'help' || sub._hidden) continue; // commander's auto `help [command]`
     sections.push(
       `${rule}\nai-conductor daemon ${sub.name()}\n${rule}\n${sub.helpInformation().trimEnd()}`,
     );
