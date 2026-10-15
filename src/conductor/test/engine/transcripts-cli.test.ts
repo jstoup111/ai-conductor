@@ -28,7 +28,7 @@ async function capture(
     { type: 'provider_transcripts_retained', ts: capturedAt + 1, path: relative },
   ];
   await mkdir(join(repo, '.worktrees', slug, '.pipeline'), { recursive: true });
-  await writeFile(join(repo, '.worktrees', slug, '.pipeline', 'events.jsonl'), `${events.map(JSON.stringify).join('\n')}\n`, { flag: 'a' });
+  await writeFile(join(repo, '.worktrees', slug, '.pipeline', 'events.jsonl'), `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, { flag: 'a' });
   return relative;
 }
 

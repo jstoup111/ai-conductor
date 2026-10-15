@@ -76,7 +76,7 @@ describe('conductor transcript retention wiring', () => {
         interrupted: false, skipped: 0, omittedLines: 0,
       });
       await events.emit({
-        type: 'step_retry', step: 'ship_validation', attempt: 2, maxAttempts: 3, reason: 'retry',
+        type: 'step_retry', step: 'build_review', attempt: 2, maxAttempts: 3, reason: 'retry',
         executionContext: {
           executionId: 'member-retry',
           subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'build_review' },
@@ -129,7 +129,7 @@ describe('conductor transcript retention wiring', () => {
           configuredProviders: ['codex'],
           preferredProvider: 'codex',
           runtimes,
-          sessions: new ProviderSessionScope(() => undefined),
+          sessions: new ProviderSessionScope(() => 'test-session'),
           config: { llm_provider: 'codex' } as never,
           runId: 'retry-flow',
           attempt: options?.attempt,
@@ -155,8 +155,8 @@ describe('conductor transcript retention wiring', () => {
           const path = join('.pipeline', 'transcripts', String(options.step), `${options.runId}-a${options.attempt}-codex`);
           await mkdir(join(root, path), { recursive: true });
           await writeFile(join(root, path, 'session.jsonl'), '{}\n');
-          await events.emit({ type: 'provider_transcripts_captured', step: options.step as never,
-            runId: options.runId, attempt: options.attempt, provider: 'codex', path,
+          await events.emit({ type: 'provider_transcripts_captured', step: 'build',
+            runId: options.runId ?? 'retry-flow', attempt: options.attempt ?? 1, provider: 'codex', path,
             files: 1, bytes: 3, interrupted: false, skipped: 0, omittedLines: 0 });
         },
       }),

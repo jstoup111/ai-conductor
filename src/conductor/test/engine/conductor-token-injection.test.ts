@@ -180,8 +180,10 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     expect(dispatches).toHaveLength(2);
     if (selfHost) {
       expect(dispatches).toEqual([
-        { attempt: undefined, model: undefined, effort: undefined },
-        { attempt: undefined, model: undefined, effort: undefined },
+        // Self-host attempt identity names the provider transcript capture.
+        // It is independent of generic retry escalation, which remains absent.
+        { attempt: 1, model: undefined, effort: undefined },
+        { attempt: 2, model: undefined, effort: undefined },
       ]);
       expect(retryEvents[0]).not.toHaveProperty('escalatedModel');
       expect(retryEvents[0]).not.toHaveProperty('escalatedEffort');
