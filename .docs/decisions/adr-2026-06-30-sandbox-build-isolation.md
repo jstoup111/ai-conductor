@@ -27,6 +27,12 @@ exercises its own edited harness, while the global `~/.claude` the operator's se
 **never mutated**. The sandbox is torn down after the build (pass or fail) under a
 try/finally-style guarantee; the global symlinks are left byte-for-byte as found.
 
+> **Amended 2026-10-14 by #885:** the sandbox's `skills/` is no longer one link to the worktree's
+> `skills/` tree. Per `adr-2026-10-14-ac-prefixed-skill-names` Decision 3 it is a directory of one
+> link per skill, named by that skill's frontmatter `name:` and resolving into the build worktree's
+> `skills/<dir>`. Each link still exposes the worktree's edited copy; the set of entries is fixed when
+> the sandbox is provisioned.
+
 A throwaway config dir with only `skills/` + `hooks/` is not launchable on its own: the headless
 `claude -p` build has **no authentication** (subscription credentials live in
 `<config-dir>/.credentials.json`, not an env key, and the daemon cannot re-auth interactively), and
