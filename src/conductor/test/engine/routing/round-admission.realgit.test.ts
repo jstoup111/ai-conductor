@@ -56,7 +56,7 @@ describe('routed-round admission (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
-  // Covers: S5.10
+  // Covers: task:rem-prd-audit-W8, S5.10
   it('refuses a concurrent marker without mutating the prepared record', async () => {
     const subject = await fixture();
     try {
