@@ -2482,6 +2482,16 @@ export class Conductor {
         return this.transcriptRetention.settle(event.step, 'halted');
       }
     });
+    this.events.on('step_retry', (event) => {
+      if (event.type !== 'step_retry') return;
+      // Configured groups report their parent as the lifecycle step. Their
+      // transcript owner is the member, carried in the execution context.
+      const member = event.executionContext?.subject.kind === 'configured-member'
+        ? event.executionContext.subject.member
+        : undefined;
+      const step = (member ?? event.step) as StepName;
+      return this.transcriptRetention.settleBeforeRetry(step, event.attempt, member);
+    });
     this.events.on('step_completed', (event) => {
       if (event.type === 'step_completed' && event.step !== 'build') {
         return this.transcriptRetention.settle(event.step, 'succeeded-with-progress');
@@ -8254,7 +8264,6 @@ export class Conductor {
                           }
                         },
                         onRetry: async (observation) => {
-                          await this.transcriptRetention.settleLatestAttempt(observation.member as StepName, 'failed');
                           memberRetryCounts.set(
                             observation.member,
                             (memberRetryCounts.get(observation.member) ?? 0) + 1,
@@ -11761,7 +11770,6 @@ export class Conductor {
             }
 
             if (attempt < stepMaxRetries) {
-              await this.transcriptRetention.settleLatestAttempt(step.name, 'failed');
               // #188: carry the (model, effort) the NEXT attempt will use so
               // retry diagnostics can measure how far up the ladder the step climbed.
               // Omitted entirely when escalate:false (no movement to record, S5).
@@ -12784,7 +12792,6 @@ export class Conductor {
               }
 
               if (progressBypassed || attempt < stepMaxRetries) {
-                await this.transcriptRetention.settleLatestAttempt(step.name, 'failed');
                 // #188: same escalation annotation as the dispatch-failure emit
                 // above — the (model, effort) the upcoming attempt will use.
                 const nextAttempt = progressBypassed ? attempt : attempt + 1;
@@ -15870,7 +15877,6 @@ export class Conductor {
               }
             },
             onRetry: async (observation) => {
-              await this.transcriptRetention.settleLatestAttempt(observation.member as StepName, 'failed');
               memberRetryCounts.set(
                 observation.member,
                 (memberRetryCounts.get(observation.member) ?? 0) + 1,

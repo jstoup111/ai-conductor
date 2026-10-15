@@ -45,4 +45,40 @@ describe('conductor transcript retention wiring', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('settles the failed configured-member attempt when its retry is emitted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-member-retry-'));
+    const events = new ConductorEventEmitter();
+    const retained: string[] = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') retained.push(event.path);
+    });
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }) },
+    });
+    const path = join('.pipeline', 'transcripts', 'build_review', 'attempt-1');
+    try {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+      await events.emit({
+        type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 1,
+        member: 'build_review', provider: 'codex', path, files: 1, bytes: 3,
+        interrupted: false, skipped: 0, omittedLines: 0,
+      });
+      await events.emit({
+        type: 'step_retry', step: 'ship_validation', attempt: 2, maxAttempts: 3, reason: 'retry',
+        executionContext: {
+          executionId: 'member-retry',
+          subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'build_review' },
+        },
+      });
+      await expect(access(join(root, path))).resolves.toBeUndefined();
+      expect(retained).toEqual([path]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
