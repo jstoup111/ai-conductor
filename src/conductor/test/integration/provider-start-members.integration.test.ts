@@ -4,7 +4,7 @@ import { createProviderStartSurfaces, member, providerStart } from './provider-s
 describe('provider start member rendering', () => {
   it('labels configured and built-in group members on both surfaces', async () => {
     const surfaces = createProviderStartSurfaces();
-    await surfaces.emit(providerStart('review', 'codex', member('review', 'security')));
+    await surfaces.emit(providerStart('plan_review', 'codex', member('review', 'security')));
     await surfaces.emit(providerStart('prd_audit', 'claude'));
     for (const output of [surfaces.daemon(), surfaces.terminal()]) {
       expect(output).toContain('review / security on codex');

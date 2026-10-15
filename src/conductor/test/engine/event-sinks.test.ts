@@ -1673,7 +1673,7 @@ describe('event sink subscriptions', () => {
       persisted: persistedEventTypes().includes('provider_attempt_started'),
       rendered: renderedEventTypes().includes('provider_attempt_started'),
       audited: auditedEventTypes().includes('provider_attempt_started'),
-      otel: otelEventTypes().includes('provider_attempt_started'),
+      otel: EVENT_SINKS.provider_attempt_started.otel,
     }).toEqual({
       sink: { render: true, persist: true, audit: false, otel: false },
       persisted: true,

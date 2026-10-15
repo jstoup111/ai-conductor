@@ -177,7 +177,7 @@ describe('TerminalRenderer', () => {
 
     await renderer.handle({
       type: 'provider_attempt_started',
-      step: 'review',
+      step: 'plan_review',
       provider: { kind: 'known', id: 'codex' },
       executionContext: {
         executionId: 'review-security',

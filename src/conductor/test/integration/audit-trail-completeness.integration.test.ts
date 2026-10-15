@@ -157,6 +157,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   bot_co_author_skipped: 'not-audited-by-design',
   provider_discovery: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
+  provider_attempt_started: 'not-audited-by-design',
   // Daemon-only suppression durability is not an operator-friction record.
   provider_suppressed: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
@@ -572,6 +573,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     provider: 'claude',
     outcome: 'success',
     invoked: true,
+  },
+  provider_attempt_started: {
+    type: 'provider_attempt_started',
+    step: 'build',
+    provider: { kind: 'known', id: 'claude' },
   },
   provider_suppressed: {
     type: 'provider_suppressed', provider: 'claude', deadline: 1,

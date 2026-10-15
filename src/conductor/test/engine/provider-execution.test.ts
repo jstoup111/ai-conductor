@@ -25,7 +25,7 @@ import {
 import { ProviderSessionScope, ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { createProviderLifecycleSupervisor } from '../../src/engine/provider-lifecycle.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { ProviderAttemptEvent } from '../../src/types/events.js';
@@ -2247,7 +2247,7 @@ describe('executeProviderCandidates', () => {
     const observerForCandidate = vi.fn();
     const executionContext = {
       executionId: 'interactive-dispatch',
-      subject: { kind: 'lifecycle-step' as const },
+      subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName },
     };
     const invoke = vi.fn(async (): Promise<InvokeResult> => {
       events.push('invoke');
@@ -2354,7 +2354,7 @@ describe('executeProviderCandidates', () => {
   });
 
   it('keeps candidate-start callbacks out of runtime options and ignores throws and cached model-rung results', async () => {
-    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+    const invoke = vi.fn(async (..._args: Parameters<LLMProvider['invoke']>): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
     const starts = vi.fn(() => { throw new Error('telemetry failure'); });
     const thrownResult = await executeProviderCandidates({
       step: 'build', configuredProviders: ['claude'], runtimes: new ProviderRuntimeSet([runtime('claude', { invoke })]),

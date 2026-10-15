@@ -29,7 +29,7 @@ describe('renderDaemonEvent: provider_attempt_started', () => {
       type: 'provider_attempt_started', step: 'prd', provider: { kind: 'known', id: 'claude' },
     })[0]).toContain('prd on claude');
     expect(lines({
-      type: 'provider_attempt_started', step: 'review', provider: { kind: 'known', id: 'codex' },
+      type: 'provider_attempt_started', step: 'plan_review', provider: { kind: 'known', id: 'codex' },
       executionContext: {
         executionId: 'review-security',
         subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' },
@@ -68,24 +68,24 @@ describe('subscribeScopedProviderRendering', () => {
     subscribeScopedProviderRendering(events, (line) => output.push(line));
 
     await events.emit({
-      type: 'provider_attempt_started', step: 'rebase_conflict',
+      type: 'provider_attempt_started', step: 'rebase',
       provider: { kind: 'known', id: 'codex' },
     });
     await events.emit({
-      type: 'provider_attempt', step: 'rebase_conflict', provider: 'codex', invoked: true,
+      type: 'provider_attempt', step: 'rebase', provider: 'codex', invoked: true,
       outcome: 'success',
     });
     await events.emit({
-      type: 'provider_fallback', step: 'rebase_conflict', failedProvider: 'codex',
+      type: 'provider_fallback', step: 'rebase', failedProvider: 'codex',
       reason: 'unavailable', nextProvider: 'claude',
     });
     await events.emit({
-      type: 'session_policy', step: 'rebase_conflict', provider: 'claude',
+      type: 'session_policy', step: 'rebase', provider: 'claude',
       reason: 'fresh session',
     });
 
-    expect(output.join('\n')).toContain('rebase_conflict on codex');
-    expect(output.join('\n')).toContain('rebase_conflict via codex');
+    expect(output.join('\n')).toContain('rebase on codex');
+    expect(output.join('\n')).toContain('rebase via codex');
     expect(output.join('\n')).toContain('PROVIDER FALLBACK');
     expect(output.join('\n')).toContain('fresh session');
   });

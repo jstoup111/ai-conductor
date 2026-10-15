@@ -8,7 +8,7 @@ describe('provider start isolation', () => {
     let reached = false;
     events.on('provider_attempt_started', () => { throw new Error('render failed'); });
     events.on('provider_attempt_started', async () => new Promise<void>(() => {}));
-    providerExecutionEventCallbacks(events).onCandidateStart?.('stories', {
+    void providerExecutionEventCallbacks(events).onCandidateStart?.('stories', {
       provider: { kind: 'known', id: 'claude' },
     });
     reached = true;

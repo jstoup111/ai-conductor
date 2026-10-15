@@ -17,7 +17,7 @@ describe('provider start history', () => {
       await persistence.events.emit({ type: 'provider_attempt_started', step: 'build', provider: { kind: 'known', id: 'codex' }, executionContext: {
         executionId: 'review-security', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' },
       } });
-      const records = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+      const records = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((record) => JSON.parse(record));
       expect(records.map((record) => record.provider.id)).toEqual(['claude', 'codex']);
       expect(records.every((record) => typeof record.ts === 'string')).toBe(true);
       expect(records[1].executionContext.subject.member).toBe('security');
