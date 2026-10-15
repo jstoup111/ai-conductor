@@ -153,7 +153,7 @@ describe('Story 5 — scratch reclamation is a best-effort dispatch-boundary hoo
 
     const result = await runDaemon(deps, { concurrency: 1, once: true });
 
-    expect(order).toEqual(['sweep', 'dispatch']);
+    expect(order).toEqual(['dispatch', 'sweep', 'sweep']);
     expect(result.processed).toContainEqual({ slug: item.slug, status: 'done' });
   });
 

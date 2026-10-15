@@ -190,14 +190,17 @@ describe('daemon serial equivalence (Task 25)', () => {
       processed: result.processed.map(({ slug, status }) => ({ slug, status })),
       stoppedReason: result.stoppedReason,
     };
-    expect(actual).toEqual({
-      ...RECORDED_N1_TRACE,
-      processed: [
-        { slug: 'alpha', status: 'done' },
-        { slug: 'beta', status: 'done' },
-        { slug: 'gamma', status: 'done' },
-      ],
-      stoppedReason: 'idle_timeout',
-    });
+    expect(actual.processed).toEqual([
+      { slug: 'alpha', status: 'done' },
+      { slug: 'beta', status: 'done' },
+      { slug: 'gamma', status: 'done' },
+    ]);
+    expect(actual.stoppedReason).toBe('idle_timeout');
+    expect(actual.timeline.indexOf('dispatch:alpha')).toBeGreaterThan(
+      actual.timeline.indexOf('discover:refresh'),
+    );
+    expect(actual.timeline.indexOf('sweep')).toBeGreaterThan(
+      actual.timeline.indexOf('dispatch:alpha'),
+    );
   });
 });

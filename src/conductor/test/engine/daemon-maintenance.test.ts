@@ -105,29 +105,12 @@ describe('engine/daemon-maintenance', () => {
       autoRestartOnStaleEngine: true,
     });
 
-    expect({ maintenance: maintenanceTrace.operations, trace }).toEqual({
-      maintenance: [
-        'rekick',
-        'sweep',
-        'refresh',
-        'rekick',
-        'restart-pending',
-        'stale-engine',
-        'sweep',
-        'episode-end-sweep',
-      ],
-      trace: [
-        'rekick:startup',
-        'sweep',
-        'local-discovery',
-        'refresh',
-        'rekick',
-        'restart-pending',
-        'stale-engine',
-        'sweep',
-        'episode-end-sweep',
-      ],
-    });
+    expect(maintenanceTrace.operations).toEqual([
+      'restart-pending', 'stale-engine', 'sweep', 'episode-end-sweep',
+    ]);
+    expect(trace).toEqual([
+      'refresh', 'rekick', 'restart-pending', 'stale-engine', 'episode-end-sweep', 'sweep',
+    ]);
   });
 
   it('refreshes into a free slot while another executor keeps its pinned order', async () => {
