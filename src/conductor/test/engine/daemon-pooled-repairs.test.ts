@@ -1,4 +1,4 @@
-// Covers: task:14, task:15, task:16
+// Covers: task:14, task:15, task:16, task:19
 import { describe, expect, it, vi } from 'vitest';
 import { runDaemon, type FeatureOutcome } from '../../src/engine/daemon.js';
 import { RepairQueue } from '../../src/engine/repair-queue.js';
