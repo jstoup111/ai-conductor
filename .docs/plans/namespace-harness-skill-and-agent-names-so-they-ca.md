@@ -355,3 +355,11 @@ Task 9 ──▶ Task 10
 **Done when:**
 - adr-2026-10-14-ac-prefixed-skill-names decision 3 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-R6 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R7: bin/install skill_frontmatter_name: fix the double-quote escape check at :150. Compare the one-char substring against a single backslash ("\\" in double quotes or $'\\'), not the two-character '\\', so \" unescapes to a quote. Keep the existing '' handling and the trailing whitespace/' #' comment acceptance from R3/R6. Add test/test_install_skill_names.sh scenarios: name: "ac-\"plan" resolves to the same name skill-names.ts yields and links it under ~/.claude/skills and ~/.agents/skills, and name: "ac-\"plan" # comment does the same. Keep the existing quoted/comment scenarios passing.
+**Gate:** as-built
+**Rationale:** Verified (100%, read bin/install:149-152): the escape check compares the one-character substring ${declared_name:index:1} against '\\' written in single quotes, which is a two-backslash string, so it can never match. A valid double-quoted name with an escaped quote, such as name: "ac-\"plan", therefore closes early on the inner quote, leaves trailing text, and fails at :171-173, while skill-names.ts accepts it. ADR decision 3 is authoritative and clear, so no architectural decision is needed. This is a conforming implementation defect in the R6 repair, and Task 9 (bin/install links skills under their frontmatter names) plus the R3/R6 contract admit the fix. The existing R3/R6 quote and comment behavior and its tests must survive: only the backslash comparison literal changes, and the missing escaped-quote test is added.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 3
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R7 is committed and its targeted tests pass.
