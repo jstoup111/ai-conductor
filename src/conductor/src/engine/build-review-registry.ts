@@ -33,6 +33,22 @@ export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security', 'implementati
 
 type RegisteredBuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
 
+/**
+ * Per-rubric default enablement; an explicit `rubrics.<id>.enabled` always
+ * wins, both when config is loaded and when it is resolved. Test quality is
+ * opt-in: its scoped-run preflight classifies test output with
+ * framework-specific patterns, and on frameworks it does not recognize
+ * (e.g. RSpec, #1682) every run — pass or fail — becomes an unretriable
+ * infrastructure failure, so the rubric can never return a verdict and the
+ * gate deadlocks. Projects whose framework the preflight understands enable
+ * it explicitly (this repository does, in `.ai-conductor/config.yml`).
+ */
+export const BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED: Readonly<Record<RegisteredBuildReviewRubricId, boolean>> = Object.freeze({
+  testQuality: false,
+  security: true,
+  implementationQuality: true,
+});
+
 type BuildReviewRubricRegistryCatalogMember = {
   readonly id: RegisteredBuildReviewRubricId;
   readonly descriptor: BuildReviewRubricDescriptor;

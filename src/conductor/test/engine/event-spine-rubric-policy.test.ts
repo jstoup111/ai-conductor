@@ -87,7 +87,7 @@ describe('repository-local event-spine policy settlement', () => {
       ...loaded.config,
       build_review: {
         ...loaded.config.build_review,
-        rubrics: { ...loaded.config.build_review?.rubrics, testQuality: { enabled: false }, security: { enabled: false } },
+        rubrics: { ...loaded.config.build_review?.rubrics, testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
       },
     };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));

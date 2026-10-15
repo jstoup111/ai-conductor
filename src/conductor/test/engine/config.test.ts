@@ -57,6 +57,36 @@ describe('config', () => {
   });
 
   describe('loadConfig', () => {
+    describe('built-in build_review rubric default enablement', () => {
+      const loadedRubricEnablement = async (yaml: string) => {
+        process.env.AI_CONDUCTOR_USER_CONFIG_DIR = join(tmpDir, 'no-user-config');
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+        const loaded = await loadConfig(tmpDir);
+        if (!loaded.ok) throw new Error(`config failed to load: ${JSON.stringify(loaded.error)}`);
+        const { rubrics } = resolveBuildReviewConfig(loaded.config);
+        return Object.fromEntries(Object.entries(rubrics).map(([id, policy]) => [id, policy.enabled]));
+      };
+      const defaults = { testQuality: false, security: true, implementationQuality: true };
+
+      it('enables the default-on rubrics when no build_review block is declared', async () => {
+        expect(await loadedRubricEnablement('{}\n')).toEqual(defaults);
+      });
+
+      it('enables the default-on rubrics when build_review declares no rubric', async () => {
+        expect(await loadedRubricEnablement('build_review:\n  enabled: true\n')).toEqual(defaults);
+      });
+
+      it('keeps undeclared rubrics at their defaults beside a declared one', async () => {
+        expect(await loadedRubricEnablement('build_review:\n  rubrics:\n    testQuality:\n      enabled: true\n'))
+          .toEqual({ ...defaults, testQuality: true });
+      });
+
+      it('honors an explicit opt-out of a default-on rubric', async () => {
+        expect(await loadedRubricEnablement('build_review:\n  rubrics:\n    security:\n      enabled: false\n'))
+          .toEqual({ ...defaults, security: false });
+      });
+    });
+
     describe('pull request template regions', () => {
       const configWithCustomSteps = (steps: string) => steps === '' ? '{}\n' : `steps:\n${steps}`;
       const customStep = (
@@ -3220,8 +3250,8 @@ steps:
           adjudication: { enabled: true },
           rubrics: {
             testQuality: { enabled: false },
-            security: { enabled: false },
-            implementationQuality: { enabled: false },
+            security: { enabled: true },
+            implementationQuality: { enabled: true },
           },
         },
         configured: {
@@ -3238,8 +3268,8 @@ steps:
               max_retries: 2,
               escalate: true,
             },
-            security: { enabled: false },
-            implementationQuality: { enabled: false },
+            security: { enabled: true },
+            implementationQuality: { enabled: true },
           },
         },
       });
@@ -3382,8 +3412,8 @@ steps:
           adjudication: { enabled: true },
           rubrics: {
             testQuality: { enabled: false },
-            security: { enabled: false },
-            implementationQuality: { enabled: false },
+            security: { enabled: true },
+            implementationQuality: { enabled: true },
           },
         },
         warnings: ['build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).'],
