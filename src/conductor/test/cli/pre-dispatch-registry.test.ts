@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 import {
   diffDetectorSets,
   PRE_DISPATCH_COMMANDS,
+  undeclaredRegistryCommands,
 } from '../../src/cli-pre-dispatch.js';
+import { createProgram } from '../../src/cli.js';
 
 describe('pre-dispatch command registry', () => {
   // Covers: task:1
@@ -51,5 +53,19 @@ describe('pre-dispatch command registry', () => {
       unregistered: [],
       stale: ['detectStaleCommand'],
     });
+  });
+
+  // Covers: task:4
+  it('declares every pre-dispatch registry command path in the CLI catalog', () => {
+    expect(undeclaredRegistryCommands(PRE_DISPATCH_COMMANDS, createProgram())).toEqual([]);
+  });
+
+  // Covers: task:4
+  it('names a registry command path that the CLI catalog does not declare', () => {
+    const registry = [
+      { detector: 'detectUndeclaredCommand', commandPath: ['undeclared'], helpOwner: 'router' },
+    ] as const;
+
+    expect(undeclaredRegistryCommands(registry, createProgram())).toEqual(['undeclared']);
   });
 });

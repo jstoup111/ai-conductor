@@ -1,3 +1,5 @@
+import type { Command } from 'commander';
+
 /**
  * The command detectors reached before the foreground pipeline starts.
  *
@@ -119,4 +121,20 @@ export function diffDetectorSets(
     unregistered: [...dispatched].filter((detector) => !registered.has(detector)).sort(),
     stale: [...registered].filter((detector) => !dispatched.has(detector)).sort(),
   };
+}
+
+/** Return catalog command paths that cannot be resolved through Commander declarations. */
+export function undeclaredRegistryCommands(
+  registry: readonly PreDispatchCommand[],
+  program: Command,
+): string[] {
+  return registry.flatMap(({ commandPath }) => {
+    let current = program;
+    for (const commandName of commandPath) {
+      const next = current.commands.find((command) => command.name() === commandName);
+      if (next === undefined) return [commandPath.join(' ')];
+      current = next;
+    }
+    return [];
+  });
 }
