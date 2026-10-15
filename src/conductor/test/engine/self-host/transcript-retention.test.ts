@@ -1,4 +1,4 @@
-// Covers: task:11, task:13
+// Covers: task:11, task:13, task:rem-prd-audit-rem-vg-S6.2
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -208,6 +208,32 @@ describe('TranscriptRetention', () => {
       await expect(access(join(root, retry))).rejects.toMatchObject({ code: 'ENOENT' });
       expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_retained'))
         .toEqual([expect.objectContaining({ path: failed })]);
+    } finally {
+      retention.stop();
+      persister.stop();
+    }
+  });
+
+  it('settles every auxiliary member capture before an unscoped group retry', async () => {
+    const { root, events, persister } = await fixture();
+    const retention = new TranscriptRetention(root, events);
+    const rubric = '.pipeline/transcripts/build_review/rubric-attempt-1';
+    const audit = '.pipeline/transcripts/build_review/audit-attempt-1';
+    try {
+      await retention.ready();
+      await capture(events, root, rubric, 'build_review', false, 3, {
+        runId: 'review', attempt: 1, member: 'rubric',
+      });
+      await capture(events, root, audit, 'build_review', false, 3, {
+        runId: 'review', attempt: 1, member: 'audit',
+      });
+
+      await retention.settleBeforeRetry('build_review', 2);
+
+      await expect(access(join(root, rubric))).resolves.toBeUndefined();
+      await expect(access(join(root, audit))).resolves.toBeUndefined();
+      expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_retained').map((event) => event.path))
+        .toEqual([rubric, audit]);
     } finally {
       retention.stop();
       persister.stop();

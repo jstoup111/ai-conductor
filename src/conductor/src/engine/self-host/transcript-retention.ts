@@ -116,7 +116,10 @@ export class TranscriptRetention {
   async settleBeforeRetry(step: StepName, nextAttempt: number, member?: string): Promise<void> {
     const identities = [...this.pending.entries()].flatMap(([key, captures]) => {
       const capture = captures[0];
-      return capture !== undefined && capture.step === step && capture.attempt < nextAttempt && capture.member === member
+      return capture !== undefined
+        && capture.step === step
+        && capture.attempt < nextAttempt
+        && (member === undefined || capture.member === member)
         ? [{ key, capture }]
         : [];
     });
