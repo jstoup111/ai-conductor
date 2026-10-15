@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createProgram } from '../../src/cli.js';
+import { createProgram, renderDaemonHelp } from '../../src/cli.js';
+import { renderCanonicalFullHelp } from '../../src/index.js';
+import { detectUpdateCommand, dispatchUpdateCommand } from '../../src/engine/update-cli.js';
 import {
   PRE_DISPATCH_COMMANDS,
   routeSubcommandHelp,
@@ -11,6 +13,16 @@ import {
 
 const REPO_ROOT = join(process.cwd(), '..', '..');
 const AI_CONDUCTOR = join(REPO_ROOT, 'bin', 'ai-conductor');
+const CLI_ENTRY = join(process.cwd(), 'src', 'index.ts');
+
+function runCli(args: readonly string[]) {
+  return execa(process.execPath, ['--import', 'tsx', CLI_ENTRY, ...args], {
+    cwd: process.cwd(),
+    env: { ...process.env, CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW: '1' },
+    reject: false,
+    stripFinalNewline: false,
+  });
+}
 
 function commandHelp(path: readonly string[]): string {
   let command = createProgram();
@@ -110,5 +122,63 @@ describe('per-command help router', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.startsWith('Usage: ai-conductor finish-record')).toBe(true);
     expect(result.stderr).toBe('');
+  }, 30_000);
+
+  // Covers: task:6
+  it('leaves self-owned, pass-through, and unknown command help out of the router', () => {
+    for (const args of [
+      ['compose', 'land', '--help'],
+      ['engineer', 'land', '--help'],
+      ['daemon', 'logs', '--help'],
+      ['halt-issues', 'sweep', '--help'],
+      ['update', '--help'],
+      ['no-such-command', '--help'],
+    ]) {
+      expect(routeSubcommandHelp(['node', 'bin', ...args])).toBeNull();
+    }
+  });
+
+  // Covers: task:6
+  it('preserves self-owned help at the CLI entry', async () => {
+    const [compose, daemon, haltIssues] = await Promise.all([
+      runCli(['compose', 'land', '--help']),
+      runCli(['daemon', 'logs', '--help']),
+      runCli(['halt-issues', 'sweep', '--help']),
+    ]);
+
+    expect(compose).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(compose.stdout).toContain('compose land');
+    expect(compose.stdout).toContain('authored .docs/ set');
+
+    expect(daemon).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(daemon.stdout).toBe(renderDaemonHelp());
+
+    expect(haltIssues).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(haltIssues.stdout).toContain('Usage: ai-conductor halt-issues sweep');
+    expect(haltIssues.stdout).toContain('--dry-run');
+  }, 30_000);
+
+  // Covers: task:6
+  it('passes update help through to its resolved updater unchanged', async () => {
+    const harnessRoot = join(scratch, 'harness');
+    const updaterPath = join(harnessRoot, 'bin', 'update');
+    const runner = vi.fn(async () => 0);
+    await mkdir(join(harnessRoot, 'bin'), { recursive: true });
+    await mkdir(join(harnessRoot, '.git'));
+    await writeFile(updaterPath, '#!/usr/bin/env bash\n');
+
+    await expect(dispatchUpdateCommand(
+      detectUpdateCommand(['node', 'bin', 'update', '--help'])!,
+      { harnessRoot, runner },
+    )).resolves.toBe(0);
+    expect(runner).toHaveBeenCalledWith(updaterPath, ['--help']);
+  });
+
+  // Covers: task:6
+  it('keeps unknown command help on the canonical full-help path', async () => {
+    const result = await runCli(['no-such-command', '--help']);
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(result.stdout).toBe(renderCanonicalFullHelp());
   }, 30_000);
 });
