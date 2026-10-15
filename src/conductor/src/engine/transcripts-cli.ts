@@ -158,7 +158,11 @@ export async function dispatchTranscripts(cmd: TranscriptsDispatch, cwd: string)
     return 1;
   }
   const provider = findBuiltInProviderDescriptor(capture.provider);
-  const file = provider?.selfHostShape ? await sessionFile(worktree, capture) : undefined;
+  if (!provider?.selfHostShape) {
+    console.error(`no assistant message in ${cmd.capture}`);
+    return 1;
+  }
+  const file = await sessionFile(worktree, capture);
   if (!file) {
     console.error(`no assistant message in ${cmd.capture}`);
     return 1;

@@ -542,7 +542,7 @@ async function emitTranscriptHarvest(
   if (harvest.result.kind === 'captured') {
     await emitScratchCleanup(events, {
       type: 'provider_transcripts_captured',
-      step: harvest.step,
+      step: harvest.step as import('../../types/steps.js').StepName,
       runId: harvest.runId,
       attempt: harvest.attempt,
       ...(harvest.member === undefined ? {} : { member: harvest.member }),
@@ -558,7 +558,7 @@ async function emitTranscriptHarvest(
   }
   await emitScratchCleanup(events, {
     type: 'provider_transcripts_harvest_failed',
-    step: harvest.step,
+    step: harvest.step as import('../../types/steps.js').StepName,
     runId: harvest.runId,
     attempt: harvest.attempt,
     ...(harvest.member === undefined ? {} : { member: harvest.member }),
