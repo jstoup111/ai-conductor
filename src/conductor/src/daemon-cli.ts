@@ -1445,9 +1445,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       (message) => log(message, true),
       formatDaemonFeatureTag(slug),
     );
-    scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
+    subscribeScopedProviderRendering(scopedEvents, scopedLog);
     subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
     const providerExecution = createProviderExecution(scopedEvents, scopedLog);
     const provider = providerExecution.configuredProviders[0];
@@ -1471,6 +1469,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           })),
     };
   };
+  
   // Repair providers can write in a transient worktree, but their producer
   // records are projected through the retained feature's persistence scope.
   // Deriving this subscription from EVENT_SINKS keeps refusals and bypasses
@@ -3129,6 +3128,26 @@ export function resetRenderedReclaimRetentions(): void {
  * signal high: step boundaries, failures/retries, unsatisfied gates, kickbacks,
  * halts/convergence, and rate limits — not the full event firehose.
  */
+/**
+ * Render provider lifecycle observations on a recovery session's slug-scoped
+ * logger.  Recovery dispatches have their own event emitter, so subscribing
+ * here keeps their live provider identity on the same surface as a feature
+ * dispatch without forwarding it to the untagged daemon logger.
+ */
+export function subscribeScopedProviderRendering(
+  events: ConductorEventEmitter,
+  log: (msg: string) => void,
+): void {
+  for (const type of [
+    'provider_attempt',
+    'provider_fallback',
+    'session_policy',
+    'provider_attempt_started',
+  ] as const) {
+    events.on(type, (event) => renderDaemonEvent(event, log));
+  }
+}
+
 export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => void): void {
   // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
   // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under

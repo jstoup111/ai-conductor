@@ -4,7 +4,8 @@ import chalk from 'chalk';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
-import { renderDaemonEvent } from '../src/daemon-cli.js';
+import { renderDaemonEvent, subscribeScopedProviderRendering } from '../src/daemon-cli.js';
+import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { ConductorEvent } from '../src/types/index.js';
 
 function lines(event: ConductorEvent): string[] {
@@ -57,5 +58,35 @@ describe('renderDaemonEvent: provider_attempt_started', () => {
     expect(known).toHaveLength(1);
     expect(unknown[0]).toContain('prd provider unknown');
     expect(unknown[0]).not.toContain('claude');
+  });
+});
+
+describe('subscribeScopedProviderRendering', () => {
+  it('renders provider starts and retains every existing recovery lifecycle subscription', async () => {
+    const events = new ConductorEventEmitter();
+    const output: string[] = [];
+    subscribeScopedProviderRendering(events, (line) => output.push(line));
+
+    await events.emit({
+      type: 'provider_attempt_started', step: 'rebase_conflict',
+      provider: { kind: 'known', id: 'codex' },
+    });
+    await events.emit({
+      type: 'provider_attempt', step: 'rebase_conflict', provider: 'codex', invoked: true,
+      outcome: 'success',
+    });
+    await events.emit({
+      type: 'provider_fallback', step: 'rebase_conflict', failedProvider: 'codex',
+      reason: 'unavailable', nextProvider: 'claude',
+    });
+    await events.emit({
+      type: 'session_policy', step: 'rebase_conflict', provider: 'claude',
+      reason: 'fresh session',
+    });
+
+    expect(output.join('\n')).toContain('rebase_conflict on codex');
+    expect(output.join('\n')).toContain('rebase_conflict via codex');
+    expect(output.join('\n')).toContain('PROVIDER FALLBACK');
+    expect(output.join('\n')).toContain('fresh session');
   });
 });
