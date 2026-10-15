@@ -278,3 +278,41 @@ describe('runPlanReview', () => {
     expect(calls[0].options.prompt).toContain('"taskId":"1"');
   });
 });
+
+describe('runPlanReview prompt bounds', () => {
+  it('sends reachability candidates with a searched-path count instead of the full path list', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs/plans/idea.md'), `# Plan
+
+### Task 1: Add surface
+**Files likely touched:**
+- \`surface.ts\`
+
+**Steps:**
+1. Add \`unwiredSurface\`.
+
+**Done when:**
+- [test] the surface is covered.
+
+**Dependencies:** none
+`, 'utf8');
+    await writeFile(join(root, 'other.ts'), 'export const other = 1;\n', 'utf8');
+
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    expect(calls[0].options.prompt).toContain('"identifier":"unwiredSurface"');
+    expect(calls[0].options.prompt).toMatch(/"searchedPathCount":[1-9]/);
+    expect(calls[0].options.prompt).not.toContain('"searchedPaths"');
+  });
+
+  it('refuses before dispatch, naming the sizes, when the review prompt exceeds its budget', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      maxPromptChars: 10,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    })).rejects.toThrow(/plan review prompt is too large: \d+ characters exceeds 10 \(plan \d+, stories \d+, ADR decisions \d+, coherence \d+, candidates \d+\)/);
+    expect(calls).toHaveLength(0);
+  });
+});

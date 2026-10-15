@@ -24,6 +24,25 @@ export interface TestImpactCandidate {
 export interface TestImpactCandidatesInput {
   readonly worktreePath: string;
   readonly planText: string;
+  /** Upper bound on returned rows; defaults to {@link MAX_TEST_IMPACT_CANDIDATES}. */
+  readonly maxCandidates?: number;
+}
+
+/**
+ * A term found in more test files than this identifies nothing specific (for
+ * example `prd_audit` or `conductor.ts` in this repository), so it yields no
+ * candidates. Without the bound one large plan produced 32,289 rows.
+ */
+export const TEST_IMPACT_TERM_FILE_LIMIT = 25;
+
+/** The reviewer prompt carries every candidate, so the row count is bounded. */
+export const MAX_TEST_IMPACT_CANDIDATES = 200;
+
+const MIN_TEST_IMPACT_TERM_LENGTH = 3;
+
+/** Bare numbers and very short tokens (`1`, `T1`) match nearly every test file. */
+function isSpecificTerm(term: string): boolean {
+  return term.length >= MIN_TEST_IMPACT_TERM_LENGTH && !/^[\d\s.,:;'"()[\]{}+-]*$/.test(term);
 }
 
 export interface WiringSurfaceItem {
@@ -263,6 +282,7 @@ export async function reachabilityCandidates({
 export async function testImpactCandidates({
   worktreePath,
   planText,
+  maxCandidates = MAX_TEST_IMPACT_CANDIDATES,
 }: TestImpactCandidatesInput): Promise<readonly TestImpactCandidate[]> {
   const taskPaths = parsePlanTaskPaths(planText);
   const listedPaths = new Set(
@@ -273,33 +293,48 @@ export async function testImpactCandidates({
     .filter(isPlanReviewTestPath)
     .filter((path) => !listedPaths.has(path))
     .sort();
-  const candidates: TestImpactCandidate[] = [];
+  const contents = new Map(await Promise.all(testPaths.map(async (path) => [
+    path,
+    await readFile(join(worktreePath, path), 'utf8'),
+  ] as const)));
+  const matches: { readonly candidate: TestImpactCandidate; readonly termFiles: number }[] = [];
 
   for (const [taskId, paths] of taskPaths) {
     const terms = [...new Set([
       ...[...paths].map((path) => basename(path)),
       ...backtickedIdentifiers(taskBodies.get(taskId) ?? ''),
-    ])].filter(Boolean);
-    if (terms.length === 0) continue;
+    ])].filter(isSpecificTerm);
+    // A term's specificity is the number of test files it appears in. An
+    // over-common term is dropped, and each test file is claimed by its most
+    // specific matching term.
+    const fileCounts = new Map(terms.map((term) => [
+      term,
+      testPaths.filter((testPath) => firstMatchingLine(contents.get(testPath)!, term) !== undefined).length,
+    ]));
+    const specific = terms
+      .filter((term) => fileCounts.get(term)! <= TEST_IMPACT_TERM_FILE_LIMIT)
+      .sort((left, right) => fileCounts.get(left)! - fileCounts.get(right)!);
+    if (specific.length === 0) continue;
 
     for (const testPath of testPaths) {
-      const contents = await readFile(join(worktreePath, testPath), 'utf8');
-      for (const term of terms) {
-        const line = firstMatchingLine(contents, term);
+      const text = contents.get(testPath)!;
+      for (const term of specific) {
+        const line = firstMatchingLine(text, term);
         if (line === undefined) continue;
-        candidates.push({
-          lens: 'test-impact',
-          taskId,
-          testPath,
-          evidence: `${testPath}:${line}`,
-          matchedTerm: term,
+        matches.push({
+          candidate: { lens: 'test-impact', taskId, testPath, evidence: `${testPath}:${line}`, matchedTerm: term },
+          termFiles: fileCounts.get(term)!,
         });
         break;
       }
     }
   }
 
-  return candidates;
+  // Most specific terms first; a stable sort keeps task and path order within a tier.
+  return matches
+    .sort((left, right) => left.termFiles - right.termFiles)
+    .slice(0, Math.max(0, maxCandidates))
+    .map((match) => match.candidate);
 }
 
 /**
