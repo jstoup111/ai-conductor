@@ -63,4 +63,12 @@ describe('sanitizeTranscriptLine', () => {
 
     expect(output).not.toContain('sk-test-0123456789');
   });
+
+  it('masks known secrets before JSON escaping quote, slash, and newline characters', () => {
+    for (const secret of ['quote"secret', 'slash\\secret', 'line\nsecret']) {
+      const output = sanitizeTranscriptLine(JSON.stringify({ output: `prefix ${secret} suffix` }), [secret]);
+      expect(output).not.toContain(secret);
+      expect(JSON.parse(output).output).toContain('[REDACTED]');
+    }
+  });
 });

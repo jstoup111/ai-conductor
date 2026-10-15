@@ -34,11 +34,13 @@ async function capture(
   step: 'build' | 'build_review',
   interrupted = false,
   bytes = 3,
+  identity: { runId?: string; attempt?: number; member?: string } = {},
 ) {
   await mkdir(join(root, path), { recursive: true });
   await writeFile(join(root, path, 'session.jsonl'), 'x'.repeat(bytes));
   await events.emit({
-    type: 'provider_transcripts_captured', step, runId: 'run', attempt: 1, provider: 'codex', path,
+    type: 'provider_transcripts_captured', step, runId: identity.runId ?? 'run', attempt: identity.attempt ?? 1,
+    ...(identity.member === undefined ? {} : { member: identity.member }), provider: 'codex', path,
     files: 1, bytes, interrupted, skipped: 0, omittedLines: 0,
   });
 }
@@ -159,6 +161,45 @@ describe('TranscriptRetention', () => {
       await expect(access(join(root, path))).resolves.toBeUndefined();
       expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_retained'))
         .toEqual([expect.objectContaining({ path })]);
+    } finally {
+      retention.stop();
+      persister.stop();
+    }
+  });
+
+  it('keeps a failed attempt while pruning only the succeeding retry', async () => {
+    const { root, events, persister } = await fixture();
+    const retention = new TranscriptRetention(root, events);
+    const first = '.pipeline/transcripts/build/attempt-1';
+    const second = '.pipeline/transcripts/build/attempt-2';
+    try {
+      await retention.ready();
+      await capture(events, root, first, 'build');
+      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: 1 }, 'failed');
+      await capture(events, root, second, 'build', false, 3, { attempt: 2 });
+      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: 2 }, 'succeeded-with-progress');
+
+      // A distinct attempt identity is required to prune the second capture.
+      await expect(access(join(root, first))).resolves.toBeUndefined();
+      await expect(access(join(root, second))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      retention.stop();
+      persister.stop();
+    }
+  });
+
+  it('never evicts an unsettled capture while enforcing the retained cap', async () => {
+    const { root, events, persister } = await fixture();
+    const retention = new TranscriptRetention(root, events, { maxCaptures: 1 });
+    const pending = '.pipeline/transcripts/build/pending';
+    try {
+      await retention.ready();
+      await capture(events, root, '.pipeline/transcripts/build/retained', 'build');
+      await retention.settle('build', 'failed');
+      await capture(events, root, pending, 'build');
+      await capture(events, root, '.pipeline/transcripts/build/new-retained', 'build', false, 3, { attempt: 2 });
+      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: 2 }, 'failed');
+      await expect(access(join(root, pending))).resolves.toBeUndefined();
     } finally {
       retention.stop();
       persister.stop();

@@ -1140,6 +1140,9 @@ export class Conductor {
    */
   private currentRunId: string | undefined;
 
+  /** Step whose admitted attempt currently owns any terminal halt. */
+  private dispatchingStep: StepName | undefined;
+
   /**
    * Set when a recorded prd-audit finding could not be projected into the
    * verdict artifact (D8). Consumed once by `routeCurrentPrdAudit`, which
@@ -5438,7 +5441,7 @@ export class Conductor {
     // While the loop is active, the breadcrumb identifies the step that is
     // actually halting. Persisted state can still name the previously settled
     // step, so use it only when no active breadcrumb is available.
-    const candidate = this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
+    const candidate = this.dispatchingStep ?? this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
     const step =
       ALL_STEPS.some(({ name }) => name === candidate) ||
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
@@ -5796,6 +5799,7 @@ export class Conductor {
         attempt: 1,
         step: name,
         events: this.events,
+        injectedToken: daemonToken,
       });
       const priorConfig = process.env.CLAUDE_CONFIG_DIR;
       const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -5987,6 +5991,7 @@ export class Conductor {
             step: name,
             member: identity.member,
             events: this.events,
+            injectedToken: daemonToken,
           });
           ownershipTransferred = true;
           return prepareInvocation({
@@ -8249,6 +8254,7 @@ export class Conductor {
                           }
                         },
                         onRetry: async (observation) => {
+                          await this.transcriptRetention.settleLatestAttempt(observation.member as StepName, 'failed');
                           memberRetryCounts.set(
                             observation.member,
                             (memberRetryCounts.get(observation.member) ?? 0) + 1,
@@ -10426,6 +10432,7 @@ export class Conductor {
         if (!bypassesAcceptanceDispatch(acceptancePreDispatch))
         while (attempt < stepMaxRetries) {
           attempt++;
+          this.dispatchingStep = step.name;
           const isAuthorizedRecoveryTrial = authorizedRecoveryTrial;
           authorizedRecoveryTrial = false;
           const recoveryProbeFailure = authorizedRecoveryProbeFailure;
@@ -11754,6 +11761,7 @@ export class Conductor {
             }
 
             if (attempt < stepMaxRetries) {
+              await this.transcriptRetention.settleLatestAttempt(step.name, 'failed');
               // #188: carry the (model, effort) the NEXT attempt will use so
               // retry diagnostics can measure how far up the ladder the step climbed.
               // Omitted entirely when escalate:false (no movement to record, S5).
@@ -12776,6 +12784,7 @@ export class Conductor {
               }
 
               if (progressBypassed || attempt < stepMaxRetries) {
+                await this.transcriptRetention.settleLatestAttempt(step.name, 'failed');
                 // #188: same escalation annotation as the dispatch-failure emit
                 // above — the (model, effort) the upcoming attempt will use.
                 const nextAttempt = progressBypassed ? attempt : attempt + 1;
@@ -14922,6 +14931,7 @@ export class Conductor {
       // and live-boundary paths. Existing terminals win; only still-open
       // admitted scopes receive the truthful interruption terminal.
       await this.closeOpenExecutions();
+      this.transcriptRetention.stop();
       this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
@@ -15860,6 +15870,7 @@ export class Conductor {
               }
             },
             onRetry: async (observation) => {
+              await this.transcriptRetention.settleLatestAttempt(observation.member as StepName, 'failed');
               memberRetryCounts.set(
                 observation.member,
                 (memberRetryCounts.get(observation.member) ?? 0) + 1,

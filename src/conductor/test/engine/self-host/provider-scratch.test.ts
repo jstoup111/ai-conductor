@@ -634,6 +634,29 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('captures an interrupted Claude sandbox home before reclaiming it', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-claude-capture-'));
+    const events = new ConductorEventEmitter();
+    const captures: ConductorEvent[] = [];
+    events.on('provider_transcripts_captured', (event) => { captures.push(event); });
+    const home = await acquireScratchHome({
+      worktreeRoot, repository: 'owner/repository', featureSlug: 'provider-scratch',
+      runId: 'claude-run', attempt: 1, step: 'build', provider: 'claude', ownerPid: 1001,
+    });
+    try {
+      const sandbox = join(home, 'harness-selfbuild-interrupted');
+      await mkdir(join(sandbox, 'projects', 'w'), { recursive: true });
+      await writeFile(join(sandbox, 'projects', 'w', 'session.jsonl'), '{"message":"interrupted"}\n');
+      await sweepScratch({ worktreeRoot, events, ownerLiveness: () => 'dead' });
+      await expect(readFile(join(worktreeRoot, '.pipeline', 'transcripts', 'build', 'claude-run-a1-claude', 'projects', 'w', 'session.jsonl'), 'utf8'))
+        .resolves.toContain('interrupted');
+      expect(captures).toEqual([expect.objectContaining({ provider: 'claude', interrupted: true })]);
+      await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   // Covers: task:10
   it('leaves missing, unreadable, and live leases untouched without transcript events', async () => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-retained-capture-'));

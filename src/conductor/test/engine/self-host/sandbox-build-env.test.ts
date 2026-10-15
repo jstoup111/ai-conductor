@@ -339,6 +339,21 @@ describe('minimal Claude self-host sandbox', () => {
     }
   });
 
+  it('redacts the injected daemon token after ambient credentials are absent', async () => {
+    const token = 'daemon-token-123456';
+    const sandbox = await provisionSandboxBuildEnv(options({
+      step: 'build', runId: 'r-token', attempt: 1, injectedToken: token,
+    }));
+    await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
+    await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), JSON.stringify({ output: token }));
+    await sandbox.teardown();
+
+    const captured = await readFile(join(
+      worktree, '.pipeline', 'transcripts', 'build', 'r-token-a1-claude', 'projects', 'w', 's.jsonl',
+    ), 'utf8');
+    expect(captured).not.toContain(token);
+  });
+
   it('keys a Claude capture by rubric member and reports a failed harvest without blocking teardown', async () => {
     const events = new ConductorEventEmitter();
     const captured: unknown[] = [];

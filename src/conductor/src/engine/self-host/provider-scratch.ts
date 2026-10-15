@@ -12,6 +12,7 @@ import {
   type TranscriptHarvestResult,
 } from './transcript-harvest.js';
 import { collectKnownSecrets } from './transcript-sanitize.js';
+import { TranscriptRetention } from './transcript-retention.js';
 
 const OWNER_LEASE_FILE = 'owner.json';
 const LEGACY_SCRATCH_PREFIXES = ['self-host-', 'harness-selfbuild-'] as const;
@@ -158,7 +159,9 @@ export async function sweepFeatureWorktreeScratch(options: {
   for (const slug of entries) {
     const worktreePath = join(options.worktreeBase, slug);
     const scope = options.startFeatureEventScope?.(worktreePath, slug);
+    const retention = new TranscriptRetention(worktreePath, scope?.events ?? options.events);
     try {
+      await retention.ready();
       await sweepScratch({
         worktreeRoot: worktreePath,
         events: scope?.events ?? options.events,
@@ -167,6 +170,7 @@ export async function sweepFeatureWorktreeScratch(options: {
     } catch (error) {
       options.log(`provider scratch sweep failed for ${slug}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      retention.stop();
       scope?.stop();
     }
   }
@@ -504,9 +508,11 @@ async function harvestInterruptedHome(options: {
   ].filter((part): part is string => part !== undefined).join('-');
   const path = join('.pipeline', 'transcripts', step, captureName);
   const destination = join(options.worktreeRoot, path);
-  const childPrefix = `self-host-${provider}-`;
+  const childPrefixes = provider === 'claude'
+    ? ['harness-selfbuild-', `self-host-${provider}-`]
+    : [`self-host-${provider}-`];
   const children = (await fsp.readdir(options.home, { withFileTypes: true }).catch(() => []))
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(childPrefix));
+    .filter((entry) => entry.isDirectory() && childPrefixes.some((prefix) => entry.name.startsWith(prefix)));
   const harvest = options.harvest ?? harvestTranscripts;
 
   return Promise.all(children.map(async (child) => {

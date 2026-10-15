@@ -132,6 +132,8 @@ interface ProvisionOptionsBase {
   globalStateFile?: string;
   /** Event-spine emitter for best-effort transcript lifecycle reporting. */
   events?: ConductorEventEmitter;
+  /** Credential injected into the child; retained only until transcript capture. */
+  injectedToken?: string;
 }
 
 type SandboxScratchLeaseIdentity = {
@@ -180,6 +182,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     private readonly fs: SandboxFs,
     private readonly releaseScratch?: () => Promise<void>,
     private readonly transcriptCapture?: TranscriptCapture,
+    private injectedToken?: string,
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
@@ -189,8 +192,10 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     // during retries/parks, so we capture the current value at call time.
     const env: Record<string, string | undefined> = { ...this.parentEnv };
     env[sandboxProvider().homeVariable] = this.configDir;
-    if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const token = this.injectedToken ?? process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (token !== undefined) {
+      this.injectedToken = token;
+      env.CLAUDE_CODE_OAUTH_TOKEN = token;
     }
     return scrubTmuxEnvironment(env as NodeJS.ProcessEnv);
   }
@@ -213,7 +218,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
           home: this.configDir,
           globs: sandboxProvider().selfHostShape.transcripts.globs,
           destination,
-          knownSecrets: collectKnownSecrets(credentials, process.env.CLAUDE_CODE_OAUTH_TOKEN === undefined ? [] : [process.env.CLAUDE_CODE_OAUTH_TOKEN]),
+          knownSecrets: collectKnownSecrets(credentials, this.injectedToken === undefined ? [] : [this.injectedToken]),
         }),
         // force: true → ENOENT is not an error, so double teardown is a no-op.
         remove: () => this.fs.rm(this.configDir, { recursive: true, force: true }),
@@ -392,6 +397,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         ...(opts.member === undefined ? {} : { member: opts.member }),
         events: opts.events,
       },
+    opts.injectedToken,
   );
 }
 

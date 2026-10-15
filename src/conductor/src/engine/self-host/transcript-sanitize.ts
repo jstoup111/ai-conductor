@@ -10,14 +10,14 @@ function redactKnownSecrets(value: string, knownSecrets: Iterable<string>): stri
   return sanitized;
 }
 
-function sanitizeJsonValue(value: unknown): unknown {
-  if (typeof value === 'string') return redactSafetyText(value);
-  if (Array.isArray(value)) return value.map(sanitizeJsonValue);
+function sanitizeJsonValue(value: unknown, knownSecrets: Iterable<string>): unknown {
+  if (typeof value === 'string') return redactKnownSecrets(redactSafetyText(value), knownSecrets);
+  if (Array.isArray(value)) return value.map((child) => sanitizeJsonValue(child, knownSecrets));
   if (value === null || typeof value !== 'object') return value;
 
   return Object.fromEntries(Object.entries(value).map(([key, child]) => [
     key,
-    CREDENTIAL_KEY.test(key) ? '[REDACTED]' : sanitizeJsonValue(child),
+    CREDENTIAL_KEY.test(key) ? '[REDACTED]' : sanitizeJsonValue(child, knownSecrets),
   ]));
 }
 
@@ -42,7 +42,7 @@ export function collectKnownSecrets(authFileText: string, extra: Iterable<string
 /** Redact one transcript line while preserving valid JSON whenever the input was valid JSON. */
 export function sanitizeTranscriptLine(line: string, knownSecrets: Iterable<string>): string {
   try {
-    return redactKnownSecrets(JSON.stringify(sanitizeJsonValue(JSON.parse(line))), knownSecrets);
+    return JSON.stringify(sanitizeJsonValue(JSON.parse(line), knownSecrets));
   } catch {
     return redactKnownSecrets(redactSafetyText(line), knownSecrets);
   }
