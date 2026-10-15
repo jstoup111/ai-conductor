@@ -1100,7 +1100,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     }
   }, REAL_GIT_TIMEOUT_MS);
 
-  it('suite gate fails -> no push, outcome logged, attempt stays consumed (Task 19)', async () => {
+  it('suite gate fails -> lease push is not called and records the inline verification outcome (Task 16)', async () => {
     const { repoPath, originPath, cleanup } = await createFixtureRepo();
     try {
       const logs: string[] = [];
@@ -1121,16 +1121,19 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
+      const leasePush = vi.fn(permittedRemoteGit);
       const result = await runCiFix(
         entry,
         branch,
         hint,
-        { fixRunner, verify: async () => 1 },
+        { fixRunner, verify: async () => 1, remoteGit: leasePush },
         logger,
       );
 
-      // Attempt stays consumed, but the failed verifier is explicit.
+      // The pooled repair invokes this same adapter; its failure result is the
+      // inline path's terminal outcome and must stop before lease publication.
       expect(result).toEqual({ kind: 'failed', stage: 'verification' });
+      expect(leasePush).not.toHaveBeenCalled();
 
       const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
       expect(afterSha).toBe(beforeSha);
