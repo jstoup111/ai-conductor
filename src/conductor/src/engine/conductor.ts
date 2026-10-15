@@ -4613,7 +4613,7 @@ export class Conductor {
               })), envelope, planText,
               appendedChildren: await readAppendedRemediationTaskChildren(this.projectRoot),
               declaredPositions, leafTip: leafBranchFor(this.featureSlug), roundId,
-              judge: this.stepRunner.dispatchResidueRoutingJudgement,
+              judge: (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
               git: makeGitRunner(this.projectRoot), leafPlan: planText,
               ...(hintSource.consolidatedManualTestFail ? { consolidatedManualTestFail: ['manual_test: FAIL'] } : {}),
             });
