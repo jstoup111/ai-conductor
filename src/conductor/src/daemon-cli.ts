@@ -219,6 +219,7 @@ import {
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
 import {
+  createParkedReconciliationMemo,
   isReclaimOperationFailure,
   reconcileParkedFeatures,
   type ParkClassification,
@@ -1053,6 +1054,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
   const parkedSweepCache = new Map<string, ParkClassification>();
+  // Task 17: daemon-lifetime only; never persists a parked-reconcile result.
+  const parkedReconciliationMemo = createParkedReconciliationMemo();
   const reconcileParkedAutoCleanup = config?.reconcile_parked_auto_cleanup ?? true;
   const reclaimMergedWorktrees = config?.reclaim_merged_worktrees ?? true;
 
@@ -2736,9 +2739,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           projectRoot,
           log: (message) => log(message, true),
           cache: parkedSweepCache,
+          memo: parkedReconciliationMemo,
           autoCleanup: reconcileParkedAutoCleanup,
           reclaimMergedWorktrees,
           isFeatureInFlight,
+          inFlightSlugs: () => workClaims.list(),
           onEvent: (event) => { void events.emit(event); },
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events }),
