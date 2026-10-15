@@ -37,6 +37,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Users receive enforced ADR assumption ledgers before DECIDE work can proceed. ([implementation PR #3136](https://github.com/jstoup111/ai-conductor/pull/3136)).
 - Operators can inspect task progress for the active or routed child without changing state. ([implementation PR #3219](https://github.com/jstoup111/ai-conductor/pull/3219)).
 - Engineers receive a plan-review gate that identifies defects before implementation begins. ([implementation PR #3207](https://github.com/jstoup111/ai-conductor/pull/3207)).
+- Enables eligible stacked-feature remediation rounds to route to their owning child. ([implementation PR #3243](https://github.com/jstoup111/ai-conductor/pull/3243)).
+- Daemon operators see the active provider and model as each step starts. ([implementation PR #3245](https://github.com/jstoup111/ai-conductor/pull/3245)).
 
 ### Changed
 
@@ -52,6 +54,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon operators see plan-growth budgets based on the resolved plan and clear unresolved-plan state. ([implementation PR #3143](https://github.com/jstoup111/ai-conductor/pull/3143)).
 - Build pipelines now rely on build review while retiring batch evaluators and closeout telemetry. ([implementation PR #3224](https://github.com/jstoup111/ai-conductor/pull/3224)).
 - Spec PRs no longer include the plan-review record; land verifies it in the authoring worktree and leaves it uncommitted. ([implementation PR #3239](https://github.com/jstoup111/ai-conductor/pull/3239)).
+- Harness maintainers receive fail-closed integrity checks for model-table and task-status contracts. ([implementation PR #3240](https://github.com/jstoup111/ai-conductor/pull/3240)).
 
 ### Removed
 
@@ -123,6 +126,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host builds no longer halt when a Vitest run in the live checkout cleans up its temporary storage. ([implementation PR #3225](https://github.com/jstoup111/ai-conductor/pull/3225)).
 - `compose land` no longer rejects specs over legacy ADR assumption ledgers the spec did not change. ([implementation PR #3226](https://github.com/jstoup111/ai-conductor/pull/3226)).
 - Plan review no longer overflows its reviewer prompt on large plans: test-impact candidates are bounded by term specificity, and an over-budget prompt is refused with a size breakdown. ([implementation PR #3234](https://github.com/jstoup111/ai-conductor/pull/3234)).
+- Built-in build-review rubrics that a project does not declare now run at their documented defaults, so security and implementation-quality review are on unless explicitly disabled. ([implementation PR #3248](https://github.com/jstoup111/ai-conductor/pull/3248)).
+- Command help now accurately lists supported commands, flags, and defaults. ([implementation PR #3241](https://github.com/jstoup111/ai-conductor/pull/3241)).
 
 ## Migration
 
