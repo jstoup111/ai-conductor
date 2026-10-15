@@ -51,6 +51,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plans of 30 or more tasks are now refused at spec land unless they carry a `**Scope-exception:**` declaration (previously 41). ([implementation PR #3201](https://github.com/jstoup111/ai-conductor/pull/3201)).
 - Daemon operators see plan-growth budgets based on the resolved plan and clear unresolved-plan state. ([implementation PR #3143](https://github.com/jstoup111/ai-conductor/pull/3143)).
 - Build pipelines now rely on build review while retiring batch evaluators and closeout telemetry. ([implementation PR #3224](https://github.com/jstoup111/ai-conductor/pull/3224)).
+- Spec PRs no longer include the plan-review record; land verifies it in the authoring worktree and leaves it uncommitted. ([implementation PR #3239](https://github.com/jstoup111/ai-conductor/pull/3239)).
 
 ### Removed
 
