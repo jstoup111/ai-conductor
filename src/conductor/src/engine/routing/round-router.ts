@@ -151,8 +151,15 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   // round, however, the retry obligation is durable routed work: host it with
   // the lowest task-owned host without ever asking the residue judge or
   // manufacturing another remediation task.
+  const taskBoundHosts = hostOrder(
+    resolved.filter(({ source }) => !isResidue(source)).map(({ item }) => item.host),
+  );
+  // A residue item can be hosted below the task work it accompanies.  The
+  // mixed FAIL remains taskless, so when residue coexists its durable host is
+  // selected only from the mechanically task-bound portion of the round.
+  const failHost = residue.length > 0 && taskBoundHosts.length > 0 ? taskBoundHosts[0]! : hosts[0]!;
   const mixedFailItem: RoutedItem | undefined = failRows.length === 0 ? undefined : {
-    findingId: 'manual-test-fail', kind: 'audit', owner: hosts[0]!, host: hosts[0]!,
+    findingId: 'manual-test-fail', kind: 'audit', owner: failHost, host: failHost,
     reason: 'mixed-round', fallback: [], restage: false,
   };
   const hints: Record<number, string> = {};
@@ -161,7 +168,14 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     hints[host] = [...own, ...failRows].join('\n');
   }
   const byHost: Record<number, { gap: CriterionBoundRemediationGap; gateSource: string }[]> = {};
-  for (const host of hosts) byHost[host] = resolved.filter(({ item }) => item.host === host).map(({ source }) => ({ gap: source.gap, gateSource: source.gateSource }));
+  for (const host of hosts) {
+    // Existing-task gaps are durable hint context in a consolidated round,
+    // not new rem-* work.  Keep the empty host allocation so the retry hint
+    // survives with the route record, while allocating no block for it.
+    byHost[host] = resolved
+      .filter(({ item, source }) => item.host === host && !source.existingTask)
+      .map(({ source }) => ({ gap: source.gap, gateSource: source.gateSource }));
+  }
   let allocation: FrozenAllocation;
   try {
     allocation = await allocateFrozenBlocks({ itemsByHost: byHost, leafPlan: input.leafPlan ?? input.planText, hostPlans: input.hostPlans ?? [], roundId: input.roundId, git: input.git });

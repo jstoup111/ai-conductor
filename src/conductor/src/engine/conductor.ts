@@ -3642,7 +3642,10 @@ export class Conductor {
     state: ConductState,
     steps: StepDefinition[],
     dispatchContext: string,
-    hintSource: RemediationHintSource,
+    hintSource: RemediationHintSource & {
+      /** Raw rows remain durable routing evidence for a consolidated join. */
+      readonly consolidatedManualTestFailRows?: readonly string[];
+    },
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
     | {
@@ -4655,7 +4658,9 @@ export class Conductor {
               declaredPositions, leafTip: leafBranchFor(this.featureSlug), roundId,
               judge: (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
               git: makeGitRunner(this.projectRoot), leafPlan: planText,
-              ...(hintSource.consolidatedManualTestFail ? { consolidatedManualTestFail: ['manual_test: FAIL'] } : {}),
+              ...(hintSource.consolidatedManualTestFailRows !== undefined
+                ? { consolidatedManualTestFail: hintSource.consolidatedManualTestFailRows }
+                : {}),
             });
             if (routed.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, { roundId, kind: 'audit', items: routed.items, allocation: routed.allocation });
@@ -8922,6 +8927,9 @@ export class Conductor {
                     {
                     source: 'validation-group',
                     consolidatedManualTestFail: manualTestFailRows.length > 0,
+                    ...(manualTestFailRows.length > 0
+                      ? { consolidatedManualTestFailRows: manualTestFailRows }
+                      : {}),
                     evidence: [
                       { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
                       ...(asBuiltEvidenceIsTerminal
@@ -9109,6 +9117,9 @@ export class Conductor {
                     return await this.planRemediation(state, steps, dispatchContext, {
                       source: 'validation-group',
                       consolidatedManualTestFail: manualTestFailRows.length > 0,
+                      ...(manualTestFailRows.length > 0
+                        ? { consolidatedManualTestFailRows: manualTestFailRows }
+                        : {}),
                       evidence,
                     });
                   } catch (error) {

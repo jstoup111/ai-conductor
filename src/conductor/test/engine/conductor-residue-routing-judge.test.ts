@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-W1, task:rem-prd-audit-W2
+// Covers: task:rem-prd-audit-W1, task:rem-prd-audit-W2, task:rem-prd-audit-W4
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -8,6 +8,7 @@ import { join } from 'node:path';
 const routingMutationSpy = vi.hoisted(() => ({
   calls: [] as string[],
   ownerTaskIds: [] as Array<readonly string[] | undefined>,
+  consolidatedManualTestFail: undefined as readonly string[] | undefined,
   routeResult: undefined as unknown,
 }));
 
@@ -54,6 +55,7 @@ vi.mock('../../src/engine/routing/round-router.js', async (importOriginal) => {
     routeAdmittedRound: vi.fn(async (...args: Parameters<typeof actual.routeAdmittedRound>) => {
       routingMutationSpy.calls.push('route');
       routingMutationSpy.ownerTaskIds = args[0].admitted.map((item) => item.ownerTaskIds);
+      routingMutationSpy.consolidatedManualTestFail = args[0].consolidatedManualTestFail;
       return routingMutationSpy.routeResult ?? actual.routeAdmittedRound(...args);
     }),
   };
@@ -249,6 +251,7 @@ describe('Conductor residue routing judge binding', () => {
   beforeEach(async () => {
     routingMutationSpy.calls = [];
     routingMutationSpy.ownerTaskIds = [];
+    routingMutationSpy.consolidatedManualTestFail = undefined;
     routingMutationSpy.routeResult = undefined;
     projectRoot = await mkdtemp(join(tmpdir(), 'conductor-residue-routing-judge-'));
     const planPath = join(projectRoot, '.docs', 'plans', 'feature.md');
@@ -416,6 +419,60 @@ describe('Conductor residue routing judge binding', () => {
     expect(outcome).toMatchObject({ kind: 'route' });
     expect(routingMutationSpy.ownerTaskIds).toEqual([['first']]);
     expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
+  });
+
+  it('passes validation-group FAIL rows verbatim to the router and returns the stored host retry hint', async () => {
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task first: authored work\n',
+      'utf8',
+    );
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: 'first' },
+        summary: 'The authored boundary needs repair.',
+      }],
+      violations: 'The task-bound implementation is incomplete.',
+      resolution: 'Repair the task boundary.',
+    }, { attemptId: 'fixture-task-bound', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltTaskBoundRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: 'feat/daemon-demo', nextChild: undefined,
+        }),
+      },
+    });
+    const failRows = ['manual_test: FAIL row one\n  observed detail', 'manual_test: FAIL row two'];
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; hint?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'validation-group task-bound finding with manual-test FAIL rows',
+      {
+        source: 'validation-group',
+        consolidatedManualTestFail: true,
+        consolidatedManualTestFailRows: failRows,
+        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }],
+      },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route' });
+    expect(routingMutationSpy.consolidatedManualTestFail).toEqual(failRows);
+    expect(outcome.hint).toContain(failRows[0]!);
+    expect(outcome.hint).toContain(failRows[1]!);
   });
 
   // Covers: task:rem-as-built-W12

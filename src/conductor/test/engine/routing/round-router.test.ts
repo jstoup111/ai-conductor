@@ -1,4 +1,4 @@
-// Covers: tasks:26,28,29,30,31,32, task:rem-prd-audit-W2, task:rem-as-built-W3
+// Covers: tasks:26,28,29,30,31,32, task:rem-prd-audit-W2, task:rem-prd-audit-W4, task:rem-as-built-W3
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
@@ -97,7 +97,7 @@ describe('routeAdmittedRound', () => {
     expect(judge).toHaveBeenCalledTimes(2);
   });
 
-  it('makes a mixed FAIL obligation durable at the lowest task-owned host', async () => {
+  it('makes a mixed FAIL obligation durable at the lowest task-owned host without allocating an existing-task block', async () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
       ...input([
@@ -114,7 +114,44 @@ describe('routeAdmittedRound', () => {
     ]));
     expect(routed.hostHints[2]).toContain('manual_test: FAIL row one');
     expect(routed.hostHints[3]).toContain('manual_test: FAIL row two');
+    expect(routed.hostHints[3]).toContain('three rationale');
     expect(routed.allocation[c2]?.retryHint).toBe(routed.hostHints[2]);
+    expect(routed.allocation[c3]).toMatchObject({ remTaskIds: [], blockBodies: [] });
+  });
+
+  it('hosts mixed FAIL rows with task-bound work rather than a lower residue host', async () => {
+    const judge = vi.fn(async () => ({
+      success: true,
+      output: JSON.stringify({
+        version: 'v1',
+        items: [{ itemId: 'adr-d1', child: 1, candidates: [1], rationale: 'The ADR applies to child one.' }],
+      }),
+    }));
+    const failRows = ['manual_test: FAIL row one\n  observed detail', 'manual_test: FAIL row two'];
+    const routed = await routeAdmittedRound({
+      ...input([
+        {
+          id: 'adr-d1', gap: gap('adr-d1', 'repair-adr'), gateSource: 'as-built',
+          provenance: {
+            kind: 'as-built',
+            reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 1 },
+            summary: 'The ADR is not wired.',
+          },
+        },
+        { id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit', ownerTaskIds: ['T2'], provenance: { kind: 'task-bound' } },
+      ]),
+      judge, consolidatedManualTestFail: failRows,
+    });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ findingId: 'manual-test-fail', owner: 2, host: 2, reason: 'mixed-round', restage: false }),
+    ]));
+    for (const host of [1, 2]) {
+      expect(routed.hostHints[host]).toContain(failRows[0]!);
+      expect(routed.hostHints[host]).toContain(failRows[1]!);
+      expect(routed.allocation[host as typeof c1]?.retryHint).toBe(routed.hostHints[host]);
+    }
   });
 
   it('sends refusal rework with proposed tasks to the residue judge', async () => {
