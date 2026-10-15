@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, expect, it, vi } from 'vitest';
 
 import { timeMaintenancePhase } from '../../src/engine/maintenance-phase-timer.js';
