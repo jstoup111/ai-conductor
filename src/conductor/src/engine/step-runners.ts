@@ -89,6 +89,7 @@ import {
 import { resolveActiveChild } from './child-cursor.js';
 import { parseFeatureRef } from './feature-branch-identity.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
+import { RESIDUE_ROUTING_CALL_MEMBER } from './routing/residue-routing-call.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { BUILD_REVIEW_RUBRIC_IDS, fingerprintBuildReviewRubricPolicy, getBuildReviewRubricDescriptor } from './build-review-registry.js';
@@ -2659,6 +2660,66 @@ export class DefaultStepRunner implements StepRunner {
     }
     const dispatched = await this.provider.invoke({
       prompt: `${renderAuxiliarySkillInvocation(REBASE_REGRADE_SKILL, this.providerKey)}\n\n${prompt}`,
+      sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir,
+      model: policy.model, effort: policy.effort,
+    });
+    this.callCount++;
+    return { success: dispatched.success, output: dispatched.output };
+  }
+
+  /**
+   * One provider dispatch for the engine-owned residue routing contract. The
+   * caller owns parsing and its two-attempt budget; this seam only reaches the
+   * provider using remediation's resolved configuration.
+   */
+  async dispatchResidueRoutingJudgement(prompt: string): Promise<{ success: boolean; output?: string }> {
+    const resolved = this.resolvedConfigFor('remediate');
+    const llmProvider = this.config?.steps?.remediate?.llm_provider
+      ?? this.config?.llm_provider
+      ?? DEFAULT_PROVIDER;
+    const auxiliaryProvider = normalizeProviderSelection(llmProvider)[0]!;
+    const auxiliaryRuntime = this.providerRuntimes?.get(auxiliaryProvider);
+    const auxiliaryModelPolicy = auxiliaryRuntime?.policy
+      ?? resolveProviderModelPolicy(auxiliaryProvider, { config: this.config });
+    const auxiliaryNative = resolvePreferredProviderNativeStepConfig({
+      step: 'remediate',
+      phase: phaseForStep('remediate'),
+      preferredProvider: auxiliaryProvider,
+      inheritedProvider: normalizeProviderSelection(this.config?.llm_provider)[0]!,
+      policy: auxiliaryModelPolicy,
+      config: this.config,
+    });
+    const policy: ResolvedBuildReviewRubricPolicy = {
+      enabled: true,
+      max_projection_bytes: DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
+      llm_provider: llmProvider,
+      model: auxiliaryNative.model,
+      effort: auxiliaryNative.effort,
+      model_fallback_ladder: selectFallbackLadder(auxiliaryModelPolicy, auxiliaryProvider, this.config ?? {}),
+      max_retries: resolved.max_retries,
+      escalate: resolved.escalate,
+      min_confidence: 0,
+    };
+    if (this.providerRuntimes && this.sessionStore) {
+      const dispatched = await this.dispatchProviderWithLifecycleSupervision(
+        'remediate',
+        { prompt, cwd: this.projectDir, dangerouslySkipPermissions: true },
+        (options) => executeAuxiliaryProviderCandidates({
+          step: 'remediate', memberId: RESIDUE_ROUTING_CALL_MEMBER, policy,
+          runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`${RESIDUE_ROUTING_CALL_MEMBER}:judge`),
+          config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+          providerAvailability: this.providerExecutionContext?.providerAvailability,
+          withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+          onAttempt: this.providerAttempt, warn: this.providerWarn,
+          options,
+          optionsForCandidate: () => options,
+        }),
+      );
+      this.callCount++;
+      return { success: dispatched.success, output: dispatched.output };
+    }
+    const dispatched = await this.provider.invoke({
+      prompt,
       sessionId: randomUUID(), resume: false, dangerouslySkipPermissions: true, cwd: this.projectDir,
       model: policy.model, effort: policy.effort,
     });
