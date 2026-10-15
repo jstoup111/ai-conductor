@@ -5945,6 +5945,7 @@ export class Conductor {
               featureSlug,
               runId: identity.runId,
               attempt: identity.attempt,
+              step: name,
               member: identity.member,
             });
             ownershipTransferred = true;
@@ -5957,6 +5958,7 @@ export class Conductor {
             featureSlug,
             runId: identity.runId,
             attempt: identity.attempt,
+            step: name,
             member: identity.member,
           });
           ownershipTransferred = true;
