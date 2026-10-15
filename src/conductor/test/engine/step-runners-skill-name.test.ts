@@ -47,10 +47,11 @@ async function renamedSkillRoot(): Promise<string> {
 }
 
 describe('DefaultStepRunner skill-name root', () => {
-  it.each(['claude', 'codex'] as const)('keeps resolved built-in names in %s candidate overrides, including one-shot gates', async (providerKey) => {
+  it.each(['claude', 'codex'] as const)('requires candidate overrides for the multi-provider %s dispatch, including one-shot gates', async (providerKey) => {
     const root = await renamedSkillRoot();
     const candidatePrompts: Array<{ claude: string; codex: string }> = [];
     const candidateExecutor: NonNullable<StepRunnerOptions['providerExecutor']> = async (input) => {
+      expect(input.configuredProviders).toEqual(['claude', 'codex']);
       expect(input.optionsForCandidate).toBeTypeOf('function');
       const optionsForCandidate = input.optionsForCandidate!;
       candidatePrompts.push({
@@ -62,17 +63,19 @@ describe('DefaultStepRunner skill-name root', () => {
         preferredProvider: 'claude', actualProvider: providerKey, attempts: [],
       };
     };
-    const policy = resolveProviderModelPolicy(providerKey);
     const runner = new DefaultStepRunner({ invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) }, 'skill-name', root, {
       providerKey,
       skillNameRoot: root,
       providerExecution: {
         configuredProviders: ['claude', 'codex'],
-        runtimes: new ProviderRuntimeSet([{
-          key: providerKey,
-          provider: { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) },
-          policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder),
-        }]),
+        runtimes: new ProviderRuntimeSet(['claude', 'codex'].map((key) => {
+          const policy = resolveProviderModelPolicy(key);
+          return {
+            key,
+            provider: { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) },
+            policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder),
+          };
+        })),
         sessions: new ProviderSessionStore(),
         executor: candidateExecutor,
       },
