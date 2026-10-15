@@ -2,6 +2,7 @@
 name: remediate
 disable-model-invocation: true
 description: "Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Guides remediation toward the owning step and HALTs only for gaps that need a human."
+model: opus
 enforcement: advisory
 phase: ship
 standalone: true

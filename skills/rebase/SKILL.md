@@ -2,6 +2,7 @@
 name: rebase
 disable-model-invocation: true
 description: "Resolve an in-progress paused rebase conflict, stage fixes, and drive git rebase --continue to completion; invoked by the conductor's finish-time rebase step or by an operator running /rebase."
+model: opus
 enforcement: advisory
 phase: ship
 standalone: true

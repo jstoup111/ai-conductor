@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Covers: task:4, task:8
+# Covers: task:3
 # BEGIN integrity failure reporting
 set -eEuo pipefail
 
@@ -363,23 +364,41 @@ done
 echo ""
 echo -e "${BOLD}5. ARCHITECTURE.md model table${NC}"
 
-for skill_name in "${known_skills[@]}"; do
-  if grep -qE "\| ${skill_name}[ (|]" "${HARNESS_DIR}/ARCHITECTURE.md" 2>/dev/null; then
-    assert "${skill_name} in model table" 0
+model_table_presence_checker="${HARNESS_DIR}/test/check_model_table_presence.sh"
+model_table_presence_fixture_test="${HARNESS_DIR}/test/test_model_table_presence.sh"
+
+if [ ! -f "$model_table_presence_checker" ] || [ ! -f "$model_table_presence_fixture_test" ]; then
+  assert "model-table presence checker and fixtures exist" 1
+else
+  set +e
+  model_table_presence_output=$(bash "$model_table_presence_checker" 2>&1)
+  model_table_presence_exit=$?
+  model_table_presence_fixture_output=$(bash "$model_table_presence_fixture_test" 2>&1)
+  model_table_presence_fixture_exit=$?
+  set -e
+
+  if [ "$model_table_presence_exit" -eq 0 ]; then
+    assert "model-table presence — every skill resolves to a row, alias, or allowlist entry" 0
   else
-    warn_check "${skill_name} — not in ARCHITECTURE.md model selection table" 1
+    echo "$model_table_presence_output" | sed 's/^/    /'
+    assert "model-table presence — every skill resolves to a row, alias, or allowlist entry" 1
   fi
-done
+
+  if [ "$model_table_presence_fixture_exit" -eq 0 ]; then
+    assert "model-table presence — fixtures cover exact rows, aliases, and allowlisted skills" 0
+  else
+    echo "$model_table_presence_fixture_output" | sed 's/^/    /'
+    assert "model-table presence — fixtures cover exact rows, aliases, and allowlisted skills" 1
+  fi
+fi
 
 # ── 5a. Model-table drift gate ───────────────────────────────────────────────
 # bin/generate-model-table --check validates that ARCHITECTURE.md's generated
 # model-selection table region matches what the TypeScript generator would
 # produce. The tool runs the TS source directly via the local tsx binary
 # (src/conductor/node_modules/.bin/tsx), so it's only runnable when
-# src/conductor/node_modules has been installed. When absent, this is a
-# warn (skip), not a suite-aborting failure — CI/dev environments without
-# an npm install in src/conductor/ should still be able to run the rest of
-# the suite.
+# src/conductor/node_modules has been installed. A missing dependency tree is
+# a hard failure with an npm ci remedy; later sections still run.
 #
 # Exit codes (see bin/generate-model-table / generate-model-table.ts):
 #   0 - no drift (PASS)
@@ -390,8 +409,23 @@ echo ""
 echo -e "${BOLD}5a. Model-table drift gate${NC}"
 
 conductor_node_modules="${HARNESS_DIR}/src/conductor/node_modules"
-if [ ! -d "$conductor_node_modules" ]; then
-  warn_check "src/conductor/node_modules absent — skipping model-table drift check" 1
+set +e
+integrity_prerequisites_spec_output=$(bash "${HARNESS_DIR}/test/test_integrity_prerequisites.sh" 2>&1)
+integrity_prerequisites_spec_exit=$?
+set -e
+if [ "$integrity_prerequisites_spec_exit" -ne 0 ]; then
+  echo "$integrity_prerequisites_spec_output" | sed 's/^/    /'
+fi
+assert "test/test_integrity_prerequisites.sh — model-table prerequisite fixture spec" \
+  "$integrity_prerequisites_spec_exit"
+
+set +e
+model_table_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" node 2>&1)
+model_table_prerequisite_exit=$?
+set -e
+if [ "$model_table_prerequisite_exit" -ne 0 ]; then
+  echo "$model_table_prerequisite_output" | sed 's/^/    /'
+  assert "model-table drift prerequisite — src/conductor/node_modules is installed" "$model_table_prerequisite_exit"
 else
   set +e
   model_table_output=$("${HARNESS_DIR}/bin/generate-model-table" --check 2>&1)
@@ -447,68 +481,41 @@ else
 fi
 
 # ── 5b. SKILL.md pin agreement ──────────────────────────────────────────────
-# Consumes `bin/generate-model-table --pins` JSON and compares each
-# skills/*/SKILL.md `model:` pin against the engine-expected value. Exempt
-# skills (PIN_EXEMPT_SKILLS) pass without comparison; skills with no `model:`
-# line are skipped silently (inheriting from session/engine is legal).
-# Degrades to WARN (not FAIL) when src/conductor/node_modules is absent, since
-# the generator can't run without a local npm install — this is an
-# environment-availability skip, not a real integrity failure.
+# Consumes `bin/generate-model-table --pins` JSON and compares SKILL.md
+# `model:` pins against engine expectations in both directions. Exempt skills
+# pass without comparison; skills with neither a pin nor an expectation pass.
+# Fails closed when src/conductor/node_modules or jq is unavailable, since the
+# generator and JSON comparison are required integrity dependencies.
 
 echo ""
 echo -e "${BOLD}5b. SKILL.md pin agreement${NC}"
 
-if [ ! -d "${HARNESS_DIR}/src/conductor/node_modules" ]; then
-  warn_check "model-table checks skipped — run npm install in src/conductor" 1
-elif ! command -v jq >/dev/null 2>&1; then
-  warn_check "model-table pin check skipped — jq not installed" 1
+set +e
+pin_node_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" node 2>&1)
+pin_node_prerequisite_exit=$?
+pin_jq_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" jq 2>&1)
+pin_jq_prerequisite_exit=$?
+set -e
+if [ "$pin_node_prerequisite_exit" -ne 0 ] || [ "$pin_jq_prerequisite_exit" -ne 0 ]; then
+  if [ "$pin_node_prerequisite_exit" -ne 0 ]; then
+    echo "$pin_node_prerequisite_output" | sed 's/^/    /'
+    assert "model-table pin prerequisite — src/conductor/node_modules is installed" "$pin_node_prerequisite_exit"
+  fi
+  if [ "$pin_jq_prerequisite_exit" -ne 0 ]; then
+    echo "$pin_jq_prerequisite_output" | sed 's/^/    /'
+    assert "model-table pin prerequisite — jq is installed" "$pin_jq_prerequisite_exit"
+  fi
 else
-  if [ -n "${HARNESS_INTEGRITY_TEST_PINS_JSON:-}" ]; then
-    pins_json=$HARNESS_INTEGRITY_TEST_PINS_JSON
-    pins_exit=0
-  else
-    set +e
-    pins_json=$("${HARNESS_DIR}/bin/generate-model-table" --pins 2>/dev/null)
-    pins_exit=$?
-    set -e
-  fi
-  pin_skills_dir="${HARNESS_INTEGRITY_TEST_SKILLS_DIR:-${HARNESS_DIR}/skills}"
-
-  if [ "$pins_exit" -ne 0 ] || ! echo "$pins_json" | jq -e . >/dev/null 2>&1; then
-    assert "bin/generate-model-table --pins produced parseable JSON" 1
-  else
-    for skill_file in "${pin_skills_dir}"/*/SKILL.md; do
-      [ -f "$skill_file" ] || continue
-      skill_name=$(basename "$(dirname "$skill_file")")
-
-      frontmatter=$(sed -n '2,/^---$/p' "$skill_file" | head -n -1)
-      pinned=$({ echo "$frontmatter" | grep -E '^model:' || true; } | head -1 | sed -E 's/^model:[[:space:]]*//' | tr -d '[:space:]')
-
-      if [ -z "$pinned" ]; then
-        continue
-      fi
-
-      entry=$(echo "$pins_json" | jq -c --arg s "$skill_name" '.[$s] // empty')
-
-      if [ -z "$entry" ]; then
-        assert "${skill_name} — pinned '${pinned}' but not present in --pins output (unmapped)" 1
-        continue
-      fi
-
-      is_exempt=$(echo "$entry" | jq -r '.exempt // false')
-      if [ "$is_exempt" = "true" ]; then
-        assert "${skill_name} — exempt from pin check" 0
-        continue
-      fi
-
-      expected=$(echo "$entry" | jq -r '.expected // empty')
-      if [ "$pinned" = "$expected" ]; then
-        assert "${skill_name} — pin '${pinned}' agrees with expected '${expected}'" 0
-      else
-        assert "${skill_name} — pin/expected disagreement: pinned='${pinned}' expected='${expected}'" 1
-      fi
-    done
-  fi
+  set +e
+  bash "${HARNESS_DIR}/test/check_skill_model_pins.sh"
+  pin_check_exit=$?
+  bash "${HARNESS_DIR}/test/test_skill_model_pins.sh"
+  pin_spec_exit=$?
+  set -e
+  assert "test/check_skill_model_pins.sh — expected-model pins agree in both directions" \
+    "$pin_check_exit"
+  assert "test/test_skill_model_pins.sh — expected-model pin fixture spec" \
+    "$pin_spec_exit"
 fi
 
 # ── 5d. operator_only frontmatter ↔ engine constant agreement ────────────────
@@ -567,7 +574,7 @@ fi
 # hooks/claude/docs-guard.sh artifact matches what the TypeScript source
 # (src/conductor/src/engine/session-hook-assets.ts, via
 # src/conductor/src/tools/generate-docs-guard-hook.ts) would produce. Mirrors
-# check 5a's exit-code contract and node_modules-absent warn/skip behavior.
+# check 5a's exit-code contract and hard dependency prerequisite behavior.
 #
 # Exit codes (see bin/generate-docs-guard-hook / generate-docs-guard-hook.ts):
 #   0 - no drift (PASS)
@@ -577,8 +584,13 @@ fi
 echo ""
 echo -e "${BOLD}5c. Docs-guard generated-hook drift gate${NC}"
 
-if [ ! -d "$conductor_node_modules" ]; then
-  warn_check "src/conductor/node_modules absent — skipping docs-guard hook drift check" 1
+set +e
+docs_guard_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" node 2>&1)
+docs_guard_prerequisite_exit=$?
+set -e
+if [ "$docs_guard_prerequisite_exit" -ne 0 ]; then
+  echo "$docs_guard_prerequisite_output" | sed 's/^/    /'
+  assert "docs-guard hook drift prerequisite — src/conductor/node_modules is installed" "$docs_guard_prerequisite_exit"
 else
   set +e
   docs_guard_hook_output=$("${HARNESS_DIR}/bin/generate-docs-guard-hook" --check 2>&1)
@@ -606,31 +618,23 @@ else
       ;;
   esac
 
-  # Fixture sub-test: prove --check CAN detect drift. Back up the committed
-  # artifact, corrupt the working copy in place, run --check (expect exit 1),
-  # then restore byte-for-byte — via trap so a failed assertion still restores.
-  docs_guard_hook_path="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
-  docs_guard_hook_backup="$(mktemp)"
-  cp "$docs_guard_hook_path" "$docs_guard_hook_backup"
-
-  _restore_docs_guard_hook() {
-    cp "$docs_guard_hook_backup" "$docs_guard_hook_path"
-    rm -f "$docs_guard_hook_backup"
-  }
-  trap _restore_docs_guard_hook EXIT
-
-  printf '\n# deliberately corrupted for drift-detection fixture test\n' >> "$docs_guard_hook_path"
-
   set +e
-  docs_guard_hook_fixture_output=$("${HARNESS_DIR}/bin/generate-docs-guard-hook" --check 2>&1)
-  docs_guard_hook_fixture_exit=$?
+  docs_guard_fixture_checker_output=$(bash "${HARNESS_DIR}/test/check_docs_guard_drift_fixture.sh" 2>&1)
+  docs_guard_fixture_checker_exit=$?
+  docs_guard_fixture_spec_output=$(bash "${HARNESS_DIR}/test/test_docs_guard_drift_fixture.sh" 2>&1)
+  docs_guard_fixture_spec_exit=$?
   set -e
+  if [ "$docs_guard_fixture_checker_exit" -ne 0 ]; then
+    echo "$docs_guard_fixture_checker_output" | sed 's/^/    /'
+  fi
+  if [ "$docs_guard_fixture_spec_exit" -ne 0 ]; then
+    echo "$docs_guard_fixture_spec_output" | sed 's/^/    /'
+  fi
 
-  _restore_docs_guard_hook
-  trap - EXIT
-
-  assert "bin/generate-docs-guard-hook --check — fixture: corrupted hook correctly detected as drift (exit 1)" \
-    "$([ "$docs_guard_hook_fixture_exit" -eq 1 ] && echo 0 || echo 1)"
+  assert "test/check_docs_guard_drift_fixture.sh — generator detects drift against a temporary copy" \
+    "$docs_guard_fixture_checker_exit"
+  assert "test/test_docs_guard_drift_fixture.sh — temporary-copy drift fixture preserves the tracked hook" \
+    "$docs_guard_fixture_spec_exit"
 fi
 
 # ── 6. Template references ──────────────────────────────────────────────────
@@ -1079,69 +1083,38 @@ fi
 rm -rf "$bootstrap_publish_dir"
 
 # ── 10. Writer-audit for task-status.json single authority ──────────────────
-# Task #302 enforces that ONLY the engine (src/conductor/src/engine/) writes to
-# `.pipeline/task-status.json`. This is the single source of truth for task
-# completion state. Any writes from hooks, skills, or bin/ scripts are violations
-# of the completion derivation authority model.
-#
-# The check greps for task-status.json references that appear to be WRITES
-# (writeFile calls, file redirection patterns, etc.) and ensures they are only
-# found in the engine code. References that are clearly READ-ONLY (comments,
-# error messages, docs) are filtered out to avoid false positives.
-#
-# This check is expected to:
-#  - RED (fail): if any unauthorized writers are found in hooks/, skills/, or bin/
-#  - GREEN (pass): once Task 15 removes the old post-commit hook and no other
-#    unauthorized writers exist
+# The checker scans *.sh, *.ts, and *.js files under hooks/, bin/, and skills/
+# for write-like task-status references outside the engine's sole authority.
 
 echo ""
 echo -e "${BOLD}10. Writer-audit for task-status.json single authority${NC}"
 
-# Grep for task-status.json references in hooks and bin, excluding engine code.
-# Only flag actual write operations (writeFile, .write, etc.), not documentation
-# or read-only operations.
-_writer_audit_hits=$(grep -rn "task-status" \
-  "${HARNESS_DIR}/hooks" \
-  "${HARNESS_DIR}/bin" \
-  --include="*.sh" --include="*.ts" --include="*.js" \
-  2>/dev/null || true)
+task_status_writer_checker="${HARNESS_DIR}/test/check_task_status_writers.sh"
+task_status_writer_fixture="${HARNESS_DIR}/test/test_task_status_writers.sh"
 
-# Filter to keep only lines that look like write operations
-_writer_audit_violations=""
-if [ -n "$_writer_audit_hits" ]; then
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-
-    # Extract the file path and the code line
-    filepath=$(echo "$line" | cut -d: -f1)
-    content=$(echo "$line" | cut -d: -f3-)
-
-    # Skip read-only patterns: comments, console logs, error messages, documentation
-    if echo "$content" | grep -qE '^\s*(//|#|\*|\/\*|console|error|log|readFile)'; then
-      continue
-    fi
-
-    # Skip string literals that are clearly just documenting task-status
-    if echo "$content" | grep -qE '("|'"'"').*task-status.*\.("|'"'"')'; then
-      continue
-    fi
-
-    # Now check for write operations: writeFile, .write, fs.write, appendFile
-    if echo "$content" | grep -qE 'writeFile|\.write|fs\.write|fs\.appendFile|>> |> '; then
-      _writer_audit_violations="${_writer_audit_violations}${line}
-"
-    fi
-  done <<< "$_writer_audit_hits"
-fi
-
-if [ -z "$_writer_audit_violations" ]; then
-  assert "task-status.json — only engine writes (no unauthorized writers)" 0
+if [ ! -f "$task_status_writer_checker" ] || [ ! -f "$task_status_writer_fixture" ]; then
+  assert "task-status writer checker and fixtures exist" 1
 else
-  assert "task-status.json — unauthorized writers detected" 1
-  echo "$_writer_audit_violations" | while read -r violation; do
-    [ -z "$violation" ] && continue
-    echo -e "    ${RED}Violation:${NC} ${violation}"
-  done
+  set +e
+  task_status_writer_output=$(bash "$task_status_writer_checker" 2>&1)
+  task_status_writer_exit=$?
+  task_status_writer_fixture_output=$(bash "$task_status_writer_fixture" 2>&1)
+  task_status_writer_fixture_exit=$?
+  set -e
+
+  if [ "$task_status_writer_exit" -eq 0 ]; then
+    assert "task-status.json — only engine writes (no unauthorized writers)" 0
+  else
+    echo "$task_status_writer_output" | sed 's/^/    /'
+    assert "task-status.json — only engine writes (no unauthorized writers)" 1
+  fi
+
+  if [ "$task_status_writer_fixture_exit" -eq 0 ]; then
+    assert "task-status writer fixtures cover hooks/, bin/, and skills/" 0
+  else
+    echo "$task_status_writer_fixture_output" | sed 's/^/    /'
+    assert "task-status writer fixtures cover hooks/, bin/, and skills/" 1
+  fi
 fi
 
 # ── Pipeline SKILL.md — no imperative CLI stamping text ────────────────────────
