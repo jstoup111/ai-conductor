@@ -1,4 +1,4 @@
-// Covers: task:16, task:8
+// Covers: task:16, task:8, task:1
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -86,6 +86,29 @@ describe('EventPersister wiring constraints', () => {
       expect(messages.join('\n')).toContain('event persistence failed');
     } finally {
       daemonPersistence.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('persists an unknown provider start with its explicit identity and timestamp', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? process.env.TEMP ?? '/tmp', 'provider-start-ledger-'));
+    const events = new ConductorEventEmitter();
+    const persistence = startFeatureEventPersistence(root, events, 'feature');
+    try {
+      await persistence.events.emit({
+        type: 'provider_attempt_started',
+        step: 'build',
+        provider: { kind: 'unknown' },
+      });
+
+      const record = JSON.parse(await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'));
+      expect(record).toMatchObject({
+        type: 'provider_attempt_started',
+        provider: { kind: 'unknown' },
+        ts: expect.any(String),
+      });
+    } finally {
+      persistence.stop();
       await rm(root, { recursive: true, force: true });
     }
   });
