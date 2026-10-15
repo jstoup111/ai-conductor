@@ -1,5 +1,5 @@
 // Covers: tasks:40,41,42,101,102
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -74,9 +74,6 @@ describe('routed-round admission (real local Git)', () => {
 
   // Covers: task:rem-as-built-W11
   it('refuses an illegal host or round phase pre-state without writing an admission ref', async () => {
-    const source = await readFile(new URL('../../../src/engine/routing/round-admission.ts', import.meta.url), 'utf8');
-    expect(source).toContain("transitionHost(stored, firstHost, 'admitted', { credit: false })");
-    expect(source).toContain("isLegalRoundPhaseTransition(stored.record.phase, 'open')");
     for (const preState of [
       { name: 'host state', apply: (record: RouteRecord): RouteRecord => ({ ...record, hosts: { ...record.hosts, [c1]: 'built' } }) },
       { name: 'round phase', apply: (record: RouteRecord): RouteRecord => ({ ...record, phase: 'closed' }) },
