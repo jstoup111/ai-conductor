@@ -159,7 +159,10 @@ export async function sweepFeatureWorktreeScratch(options: {
   for (const slug of entries) {
     const worktreePath = join(options.worktreeBase, slug);
     const scope = options.startFeatureEventScope?.(worktreePath, slug);
-    const retention = new TranscriptRetention(worktreePath, scope?.events ?? options.events);
+    // This listener must see only captures recovered by this sweep. Reconciling
+    // the ledger here would mistake another live worker's pending capture for
+    // an abandoned one and settle it before that worker receives a verdict.
+    const retention = new TranscriptRetention(worktreePath, scope?.events ?? options.events, { reconcile: false });
     try {
       await retention.ready();
       await sweepScratch({
