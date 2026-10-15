@@ -1,8 +1,8 @@
 import type { ChildId } from '../child-context.js';
 import { makeGitRunner } from '../rebase.js';
-import { remediationRoutedEvent, routedRepairPhaseEvent, withOutboxEvent } from './routing-events.js';
-import { readRepairMarker, readRouteRecord, writeRoutingTransaction, type RouteRecordStoreDependencies } from './route-record-store.js';
-import { parseRoundId, type RouteRecord } from './route-types.js';
+import { remediationRoutedEvent, withOutboxEvent } from './routing-events.js';
+import { readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction, type RouteRecordStoreDependencies } from './route-record-store.js';
+import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord } from './route-types.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string };
 
@@ -18,10 +18,12 @@ export async function admitRound(
   if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open; cannot admit ${record.roundId}` : 'routing marker is unreadable' };
   const stored = await readRouteRecord(worktree, slug, record.roundId, dependencies);
   if (stored.kind !== 'record') return { kind: 'refused', detail: 'routing record is unavailable before admission' };
-  if (stored.record.phase !== 'prepared' || stored.record.hosts[firstHost] !== 'pending') return { kind: 'refused', detail: `routing round ${record.roundId} is not prepared for host ${firstHost}` };
-  let next: RouteRecord = { ...stored.record, phase: 'open', hosts: { ...stored.record.hosts, [firstHost]: 'admitted' } };
+  const hostTransition = transitionHost(stored, firstHost, 'admitted', { credit: false });
+  if (hostTransition.kind !== 'updated' || !isLegalRoundPhaseTransition(stored.record.phase, 'open')) {
+    return { kind: 'refused', detail: `routing round ${record.roundId} is not prepared for host ${firstHost}` };
+  }
+  let next: RouteRecord = { ...hostTransition.record, phase: 'open' };
   next = withOutboxEvent(next, remediationRoutedEvent(next));
-  next = withOutboxEvent(next, routedRepairPhaseEvent(next.roundId, firstHost, 'admitted', false));
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: stored, record: next },
     { kind: 'create-marker', marker: { host: firstHost, roundId: record.roundId } },

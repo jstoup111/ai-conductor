@@ -1,5 +1,5 @@
 // Covers: tasks:40,41,42,101,102
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -70,6 +70,40 @@ describe('routed-round admission (real local Git)', () => {
       });
       expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: { phase: 'prepared', hosts: { 1: 'pending' } } });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:rem-as-built-W11
+  it('refuses an illegal host or round phase pre-state without writing an admission ref', async () => {
+    const source = await readFile(new URL('../../../src/engine/routing/round-admission.ts', import.meta.url), 'utf8');
+    expect(source).toContain("transitionHost(stored, firstHost, 'admitted', { credit: false })");
+    expect(source).toContain("isLegalRoundPhaseTransition(stored.record.phase, 'open')");
+    for (const preState of [
+      { name: 'host state', apply: (record: RouteRecord): RouteRecord => ({ ...record, hosts: { ...record.hosts, [c1]: 'built' } }) },
+      { name: 'round phase', apply: (record: RouteRecord): RouteRecord => ({ ...record, phase: 'closed' }) },
+    ]) {
+      const subject = await fixture();
+      try {
+        const created = await createRouteRecord(subject.repo, 'demo', input);
+        if (created.kind !== 'created') throw new Error(created.kind);
+        const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+        if (stored.kind !== 'record') throw new Error('record unavailable');
+        const illegal = preState.apply(stored.record);
+        expect(await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: illegal }])).toEqual({ kind: 'updated' });
+
+        const calls: { args: readonly string[]; input?: string }[] = [];
+        const git: GitRunner = async (args, options) => {
+          calls.push({ args, input: options?.input });
+          return subject.git(args, options);
+        };
+        expect(await admitRound(subject.repo, 'demo', created.record, c1, { git })).toEqual({
+          kind: 'refused',
+          detail: 'routing round r1 is not prepared for host 1',
+        });
+        expect(calls.filter((call) => call.args[0] === 'update-ref')).toHaveLength(0);
+        expect(await readRepairMarker(subject.repo, 'demo')).toEqual({ kind: 'absent' });
+        expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: illegal });
+      } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    }
   });
 
   it('aborts an orphaned prepared round and sends an admitted one back to build', async () => {
