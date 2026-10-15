@@ -299,6 +299,13 @@ Add the branch to `main()` in `src/conductor/src/index.ts:1933`, **before** the 
 at `:670`. Each branch calls `process.exit`. Use the lazy `await import()` form for a heavy runtime, the
 way the daemon branch does — that is what keeps `daemon-cli.ts` off the hot path for every other command.
 
+Register the detector in `PRE_DISPATCH_COMMANDS` (`src/conductor/src/cli-pre-dispatch.ts`) with its
+command path and help owner, and declare that path in `createProgram()`. `routeSubcommandHelp` reads
+the registry so `<command> --help` prints that command's Commander help before any dispatcher runs.
+Use `helpOwner: 'self'` only for a command that renders its own help, and `'passthrough'` for one that
+forwards `--help` to another program. Declare engine-internal commands with `{ hidden: true }` so they
+stay out of the root help but still answer their own `--help`.
+
 ### Daemon sub-verbs
 
 A new `daemon <verb>` must also be added to `src/conductor/src/engine/daemon-command.ts`. Management
@@ -316,7 +323,8 @@ appropriate CLI or integration test; do not add a `wiring.entry_points` configur
 | Mistake | Caught by |
 | --- | --- |
 | Declared in `cli.ts` but never dispatched | Nothing — the command silently falls through to the inline rejection. Add a CLI test. |
-| Dispatched but not declared | Nothing — it works but is undiscoverable in `--help`. |
+| Dispatched but not registered or not declared | `test/cli/pre-dispatch-registry.test.ts`, which names the unregistered detector, the stale registry entry, or the undeclared command path |
+| A declared option default that differs from the runtime fallback | `test/cli/cli-defaults-parity.test.ts` |
 | A daemon sub-verb missing from `DAEMON_SUBVERBS` | `detectUnknownDaemonSubcommand` at runtime |
 | Independently invoked entry root lacks coverage | Add a CLI or integration test that exercises the entry point. |
 
