@@ -804,3 +804,117 @@ Governing review: `.docs/decisions/architecture-review-2026-10-14-admitted-whole
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-W1: conductor.ts routing branch: wrap the residue judge as (prompt) => this.stepRunner.dispatchResidueRoutingJudgement(prompt), matching the regrade judge; add a conductor-level test with a real-shaped step runner whose method reads `this`, asserting the router's judge invokes it once per residue item without a TypeError or malformed halt
+**Gate:** prd-audit
+**Rationale:** Verified defect: conductor.ts passes this.stepRunner.dispatchResidueRoutingJudgement unbound, and step-runners.ts reads this.resolvedConfigFor. The fix is a conforming implementation repair, an arrow wrapper like the existing regrade judge, plus a step-runner spy test. Task 34 Done-when already requires this.
+**Criterion:** S3.1
+**Parent task:** 34
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-W1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W2: conductor.ts + routing/round-router.ts: classify residue from admitted finding provenance (ADR-only as-built findings and refusal rework are residue even when they carry proposed tasks) instead of gap.tasks.length === 0, and pass the gap rationale/summary and governing evidence into the judge projection; add round-router.test.ts and conductor tests covering refusal rework with tasks and an ADR-only finding reaching the judge
+**Gate:** prd-audit
+**Rationale:** Two verified defects. The judge is unbound (fixed by W1). conductor marks residue as gap.tasks.length === 0, so refusal rework that carries tasks bypasses the judge. ADR D3 already defines residue by provenance, so this is BUILD work, not an architecture decision.
+**Criterion:** S3.3
+**Parent task:** 34
+**Done when:**
+- [test] S3.3 is satisfied by this task.
+- The repair for task rem-prd-audit-W2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W4: conductor.ts + routing/round-router.ts mixed rounds: thread the actual consolidated manual_test FAIL rows (not a boolean/placeholder) into routeAdmittedRound and the stored host retryHint verbatim; keep existing-task mixed items hint-only (no new rem block allocation); choose the FAIL host from task-bound items only when residue coexists; add tests per task 104 Done-when
+**Gate:** prd-audit
+**Rationale:** Verified: conductor.ts passes the placeholder ['manual_test: FAIL'] because hintSource.consolidatedManualTestFail is a boolean. The real FAIL rows must flow to host 2's retryHint, as task 104's Done-when requires. This is an implementation fix.
+**Criterion:** S3.5
+**Parent task:** 104
+**Done when:**
+- [test] S3.5 is satisfied by this task.
+- The repair for task rem-prd-audit-W4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W5: conductor.ts + routing/round-router.ts + routing/cannot-host.ts: populate AdmittedRoutingItem.citedPaths from the work order's Done-when paths, finding evidence paths and the owner task's declared files; preserve selectHost's prerequisite-paths reason on both item constructors; verify the leaf fallback by checking every prerequisite exists at the leaf tip and halting needs-human on missing paths; add conductor-level test where a T1 item citing a child-2 path routes to host 2
+**Gate:** prd-audit
+**Rationale:** Verified: production builds AdmittedRoutingItem without citedPaths, so selectHost always returns the owner. Task 22 already defines cited paths: Done-when paths, finding evidence paths, and the owner task's declared files. Wiring them is BUILD work.
+**Criterion:** S4.1
+**Parent task:** 22
+**Done when:**
+- [test] S4.1 is satisfied by this task.
+- The repair for task rem-prd-audit-W5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W6: conductor.ts: read each candidate host child branch's feature plan and pass hostPlans to routeAdmittedRound so frozen allocation reserves rem ids from the union of leaf and every host plan; add a conductor-level test where a child plan already holds a rem id and allocation skips it
+**Gate:** prd-audit
+**Rationale:** Verified: conductor.ts calls routeAdmittedRound without hostPlans, so allocation reserves only the leaf plan's rem ids. ADR D6 requires the union of the leaf plan and every host plan.
+**Criterion:** S5.3
+**Parent task:** 34
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-W6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W7: restack/stack-preflight.ts + conductor.ts resume: return a navigate-leaf-to-build preflight result instead of clear, and have conductor resume navigateBack the leaf to build without re-admitting; add the task 42 crash-after-marker resume test asserting routes/ and repairing ref counts stay 1
+**Gate:** prd-audit
+**Rationale:** Verified: navigate-leaf-to-build is produced by reconcileRounds, but stack-preflight.ts discards it as clear. Task 42 requires that resume navigate the leaf back to build. This is a wiring fix.
+**Criterion:** S5.9
+**Parent task:** 42
+**Done when:**
+- [test] S5.9 is satisfied by this task.
+- The repair for task rem-prd-audit-W7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W8: routing/round-admission.ts: make the concurrent-round refusal detail name both the existing marker's round and the round being admitted (e.g. 'routing round r2 is already open; cannot admit r1'); tighten round-admission.realgit.test.ts to assert both ids
+**Gate:** prd-audit
+**Rationale:** Verified: the refusal detail names only the existing marker's round. Task 41 requires the detail to name both rounds. This is a small implementation and test fix.
+**Criterion:** S5.10
+**Parent task:** 41
+**Done when:**
+- [test] S5.10 is satisfied by this task.
+- The repair for task rem-prd-audit-W8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W9: restack/stack-preflight.ts: evaluate routedRoundOpen + baseRefreshDue and emit restack_refused deferred-base-refresh before the navigate-leaf-to-build and non-repair-pending early exits; add task 44 tests with an admitted round (marker present) asserting one restack_refused and no consumeRekick
+**Gate:** prd-audit
+**Rationale:** Verified: stack-preflight returns clear for admitted rounds and for non-repair-pending cursors before the routedRoundOpen check, so deferred-base-refresh is never emitted for an admitted round. Task 44 defines the contract. This is a control-flow fix.
+**Criterion:** S6.5
+**Parent task:** 44
+**Done when:**
+- [test] S6.5 is satisfied by this task.
+- The repair for task rem-prd-audit-W9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-W10: test/engine/routing/routing-events.test.ts: add a structural check that scans src for { type: 'routed_repair_phase' } / { type: 'remediation_routed' } literals outside routing/routing-events.ts, failing with the offending file name, plus an in-memory fixture proving it fails
+**Gate:** prd-audit
+**Rationale:** Verified: the structural guard required by task 9's Done-when is missing. Adding it is test work inside an existing task.
+**Criterion:** S7.6
+**Parent task:** 9
+**Done when:**
+- [test] S7.6 is satisfied by this task.
+- The repair for task rem-prd-audit-W10 is committed and its targeted tests pass.
+
+### Task rem-as-built-W11: routing/round-admission.ts: perform the host pending->admitted change via transitionHost and gate the round prepared->open phase change with isLegalRoundPhaseTransition, so both transition guards participate in the shipped admission path; add a test that an illegal pre-state is refused with no ref written
+**Gate:** as-built
+**Rationale:** Verified: transitionHost has no production caller, and admission mutates host state by hand. Task 9 plans the primitive, so wiring it into admission is conforming BUILD work.
+**Parent task:** 9
+**Governing clause:** Task 9
+**Done when:**
+- Task 9 is satisfied by this task.
+- The repair for task rem-as-built-W11 is committed and its targeted tests pass.
+
+### Task rem-as-built-W12: conductor.ts planRemediation: move the routing decision, prepared-record creation and marker admission ahead of the leaf appendConductorRemediationTasks, recordAppendedRemediationTaskIds, seeding/commit and recordPendingRepair/admitAndRestageRepair, so routed rounds and routing halts leave no leaf-side mutations; add the task 34 ordered-spy and zero-call/byte-identical-plan tests
+**Gate:** as-built
+**Rationale:** Verified ordering defect. ADR D7 and task 34 already require routing before the leaf append, membership recording, and pending-repair creation. Reordering conductor.ts conforms to the approved design.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 7
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 7 is satisfied by this task.
+- The repair for task rem-as-built-W12 is committed and its targeted tests pass.
+
+### Task rem-as-built-W3: conductor.ts + routing/round-router.ts: derive each item's owning task ids from the admitted parent binding attached during admission (not the proposed repair task ids), and remove the round-router fallback to proposed ids; add a test where a repair task id differs from its owning authored/rem task and routes to the owner's host
+**Gate:** as-built
+**Rationale:** Verified: proposed repair-task ids are used as owners instead of the admitted parent binding. ADR D2 defines ownership, so this is an implementation fix.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 2
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 2 is satisfied by this task.
+- The repair for task rem-as-built-W3 is committed and its targeted tests pass.
+
+### Task rem-as-built-W13: routing/round-admission.ts + conductor.ts: drain the route record outbox into the existing EventPersister immediately after a successful marker transaction and before planRemediation returns the build route; add a test asserting remediation_routed and routed_repair_phase admitted are in events.jsonl before navigateBack
+**Gate:** as-built
+**Rationale:** Verified: the admission outbox is not drained before the BUILD route returns. ADR D7 requires the events on the existing event spine before leaf navigation. This is a wiring fix through the existing EventPersister.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 7
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 7 is satisfied by this task.
+- The repair for task rem-as-built-W13 is committed and its targeted tests pass.
