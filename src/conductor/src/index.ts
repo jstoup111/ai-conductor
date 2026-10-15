@@ -166,6 +166,7 @@ import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
+import { detectTranscriptsCommand, dispatchTranscripts } from './engine/transcripts-cli.js';
 import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
@@ -1093,6 +1094,14 @@ async function dispatchCliCommand(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Transcript inspection is deliberately read-only: it reconstructs the
+  // retained capture set from the event ledger and never creates pipeline state.
+  const transcriptsCmd = detectTranscriptsCommand(process.argv);
+  if (transcriptsCmd) {
+    const code = await dispatchTranscripts(transcriptsCmd, process.cwd());
     process.exit(code);
   }
 
