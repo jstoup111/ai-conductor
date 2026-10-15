@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-W1, task:rem-prd-audit-W2, task:rem-prd-audit-W4, task:rem-prd-audit-W5
+// Covers: task:rem-prd-audit-W1, task:rem-prd-audit-W2, task:rem-prd-audit-W4, task:rem-prd-audit-W5, task:rem-prd-audit-W16
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -7,6 +7,10 @@ import { join } from 'node:path';
 
 const routingMutationSpy = vi.hoisted(() => ({
   calls: [] as string[],
+  nextRoundIdCalls: 0,
+  routeAdmittedRoundCalls: 0,
+  createRouteRecordCalls: 0,
+  admitRoundCalls: 0,
   ownerTaskIds: [] as Array<readonly string[] | undefined>,
   citedPaths: [] as Array<readonly string[] | undefined>,
   hostPlans: [] as Array<readonly { readonly branch: string; readonly planPath: string }[] | undefined>,
@@ -38,8 +42,12 @@ vi.mock('../../src/engine/remediation-projection.js', async (importOriginal) => 
 
 vi.mock('../../src/engine/routing/route-record-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/routing/route-record-store.js')>(),
-  nextRoundId: vi.fn(async () => 'r1'),
+  nextRoundId: vi.fn(async () => {
+    routingMutationSpy.nextRoundIdCalls += 1;
+    return 'r1';
+  }),
   createRouteRecord: vi.fn(async (_worktree, _slug, input) => {
+    routingMutationSpy.createRouteRecordCalls += 1;
     routingMutationSpy.calls.push('create-record');
     routingMutationSpy.storedRouteItems = input.items.map(({ owner, host }) => ({ owner, host }));
     return {
@@ -59,6 +67,7 @@ vi.mock('../../src/engine/routing/route-record-store.js', async (importOriginal)
 vi.mock('../../src/engine/routing/round-admission.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/routing/round-admission.js')>(),
   admitRound: vi.fn(async (_worktree, _slug, record, firstHost, dependencies) => {
+    routingMutationSpy.admitRoundCalls += 1;
     routingMutationSpy.calls.push('admit-marker');
     const admitted = {
       ...record,
@@ -79,6 +88,7 @@ vi.mock('../../src/engine/routing/round-router.js', async (importOriginal) => {
   return {
     ...actual,
     routeAdmittedRound: vi.fn(async (...args: Parameters<typeof actual.routeAdmittedRound>) => {
+      routingMutationSpy.routeAdmittedRoundCalls += 1;
       routingMutationSpy.calls.push('route');
       routingMutationSpy.ownerTaskIds = args[0].admitted.map((item) => item.ownerTaskIds);
       routingMutationSpy.citedPaths = args[0].admitted.map((item) => item.citedPaths);
@@ -175,6 +185,8 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
+import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
 
 const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -251,6 +263,78 @@ class RoutingOffMixedHaltRunner implements StepRunner {
   }
 }
 
+class AdmittedMixedPrdAuditRunner implements StepRunner {
+  constructor(
+    private readonly projectRoot: string,
+    private readonly secondDisposition: 'halt' | 'acceptance_specs',
+  ) {}
+
+  async run(_step: string, _state: ConductState, options: Parameters<StepRunner['run']>[2]) {
+    const request = options?.remediationRequest;
+    if (request?.mode !== 'gap-plan' || options?.runId === undefined) {
+      throw new Error('fixture requires a remediation gap-plan request');
+    }
+    await persistFixtureProjectedRemediationPlan(this.projectRoot, options, [
+      {
+        id: 'S1.1', disposition: 'build', category: null,
+        rationale: 'Repair the admitted BUILD criterion.',
+        tasks: [{ id: 'repair-build', title: 'Repair the admitted BUILD criterion' }],
+      },
+      this.secondDisposition === 'halt'
+        ? {
+            id: 'S1.2', disposition: 'halt', category: 'architectural-clarity',
+            rationale: 'A human must decide the sibling architectural boundary.',
+            tasks: [],
+          }
+        : {
+            id: 'S1.2', disposition: 'acceptance_specs', category: null,
+            rationale: 'Repair the admitted acceptance-spec criterion.',
+            tasks: [{ id: 'repair-acceptance', title: 'Repair the admitted acceptance-spec criterion' }],
+          },
+    ]);
+    return { success: true };
+  }
+}
+
+async function persistAdmittedPrdAuditFindings(projectRoot: string): Promise<void> {
+  const criterionJudgments: PrdAuditJudgment['criterionJudgments'] = [
+    {
+      criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
+      evidence: 'The admitted BUILD criterion is incomplete.', rationale: 'Fixture repair.',
+      requirementAssociations: [], evidenceTaskIds: ['first'], ownerTaskId: 'first',
+    },
+    {
+      criterion: { storyId: '1', ordinal: 2 }, criterionId: 'S1.2', grade: 'FIXABLE',
+      evidence: 'The sibling criterion is incomplete.', rationale: 'Fixture repair.',
+      requirementAssociations: [], evidenceTaskIds: ['second'], ownerTaskId: 'second',
+    },
+  ];
+  await persistPrdAuditVerdict(projectRoot, {
+    complete: true,
+    judgment: { version: 'v1', criterionJudgments, noOwnerObservations: [] },
+    diagnostics: [],
+    recordedDispositions: [],
+  }, { attemptId: 'fixture-prd-audit', codeStamp: null });
+}
+
+async function expectNoRoutingMutations(projectRoot: string): Promise<void> {
+  expect({
+    nextRoundId: routingMutationSpy.nextRoundIdCalls,
+    routeAdmittedRound: routingMutationSpy.routeAdmittedRoundCalls,
+    createRouteRecord: routingMutationSpy.createRouteRecordCalls,
+    admitRound: routingMutationSpy.admitRoundCalls,
+  }).toEqual({
+    nextRoundId: 0,
+    routeAdmittedRound: 0,
+    createRouteRecord: 0,
+    admitRound: 0,
+  });
+
+  const git = makeGitRunner(projectRoot);
+  expect((await git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/'])).stdout.trim()).toBe('');
+  expect((await git(['rev-parse', '-q', '--verify', 'refs/conductor/demo/repairing'])).exitCode).toBe(1);
+}
+
 class AsBuiltResidueRunner implements StepRunner {
   calls = 0;
   projection: unknown;
@@ -319,6 +403,10 @@ describe('Conductor residue routing judge binding', () => {
 
   beforeEach(async () => {
     routingMutationSpy.calls = [];
+    routingMutationSpy.nextRoundIdCalls = 0;
+    routingMutationSpy.routeAdmittedRoundCalls = 0;
+    routingMutationSpy.createRouteRecordCalls = 0;
+    routingMutationSpy.admitRoundCalls = 0;
     routingMutationSpy.ownerTaskIds = [];
     routingMutationSpy.citedPaths = [];
     routingMutationSpy.hostPlans = [];
@@ -435,6 +523,93 @@ describe('Conductor residue routing judge binding', () => {
       detail: expect.stringContaining('stall:human (architectural-clarity: A human must decide the sibling architectural boundary.)'),
     });
     expect(routingMutationSpy.calls).toEqual(['append', 'record-appended', 'seed', 'commit']);
+  });
+
+  // Covers: task:rem-prd-audit-rem-prd-audit-W16, S1.9
+  it('keeps an admitted BUILD fix plus a halt disposition out of a routing-enabled durable stack', async () => {
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task first: first authored work\n\n### Task second: second authored work\n',
+      'utf8',
+    );
+    await persistAdmittedPrdAuditFindings(projectRoot);
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AdmittedMixedPrdAuditRunner(projectRoot, 'halt'),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: leafBranchFor('demo'), nextChild: undefined,
+        }),
+      },
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'mixed prd-audit remediation must preserve the halt',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('S1.2 (architectural-clarity: A human must decide the sibling architectural boundary.)'),
+    });
+    await expectNoRoutingMutations(projectRoot);
+  });
+
+  // Covers: task:rem-prd-audit-rem-prd-audit-W16, S1.10
+  it('keeps an admitted BUILD fix plus an unresolvable disposition out of a routing-enabled durable stack', async () => {
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task first: first authored work\n\n### Task second: second authored work\n',
+      'utf8',
+    );
+    await persistAdmittedPrdAuditFindings(projectRoot);
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AdmittedMixedPrdAuditRunner(projectRoot, 'acceptance_specs'),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: leafBranchFor('demo'), nextChild: undefined,
+        }),
+      },
+    });
+    const stepsWithoutAcceptanceSpecs = ALL_STEPS.filter(
+      (step) => step.name !== 'acceptance_specs',
+    );
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      stepsWithoutAcceptanceSpecs,
+      'mixed prd-audit remediation must preserve the unresolvable disposition',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining(
+        'remediation contained unresolvable disposition: acceptance_specs — human needed to provide a resolvable remediation target',
+      ),
+    });
+    await expectNoRoutingMutations(projectRoot);
   });
 
   it('sends an ADR-only as-built finding with its summary and reference to the residue judge', async () => {
