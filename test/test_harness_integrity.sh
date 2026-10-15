@@ -397,10 +397,8 @@ fi
 # model-selection table region matches what the TypeScript generator would
 # produce. The tool runs the TS source directly via the local tsx binary
 # (src/conductor/node_modules/.bin/tsx), so it's only runnable when
-# src/conductor/node_modules has been installed. When absent, this is a
-# warn (skip), not a suite-aborting failure — CI/dev environments without
-# an npm install in src/conductor/ should still be able to run the rest of
-# the suite.
+# src/conductor/node_modules has been installed. A missing dependency tree is
+# a hard failure with an npm ci remedy; later sections still run.
 #
 # Exit codes (see bin/generate-model-table / generate-model-table.ts):
 #   0 - no drift (PASS)
@@ -411,8 +409,23 @@ echo ""
 echo -e "${BOLD}5a. Model-table drift gate${NC}"
 
 conductor_node_modules="${HARNESS_DIR}/src/conductor/node_modules"
-if [ ! -d "$conductor_node_modules" ]; then
-  warn_check "src/conductor/node_modules absent — skipping model-table drift check" 1
+set +e
+integrity_prerequisites_spec_output=$(bash "${HARNESS_DIR}/test/test_integrity_prerequisites.sh" 2>&1)
+integrity_prerequisites_spec_exit=$?
+set -e
+if [ "$integrity_prerequisites_spec_exit" -ne 0 ]; then
+  echo "$integrity_prerequisites_spec_output" | sed 's/^/    /'
+fi
+assert "test/test_integrity_prerequisites.sh — model-table prerequisite fixture spec" \
+  "$integrity_prerequisites_spec_exit"
+
+set +e
+model_table_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" node 2>&1)
+model_table_prerequisite_exit=$?
+set -e
+if [ "$model_table_prerequisite_exit" -ne 0 ]; then
+  echo "$model_table_prerequisite_output" | sed 's/^/    /'
+  assert "model-table drift prerequisite — src/conductor/node_modules is installed" "$model_table_prerequisite_exit"
 else
   set +e
   model_table_output=$("${HARNESS_DIR}/bin/generate-model-table" --check 2>&1)
@@ -471,17 +484,27 @@ fi
 # Consumes `bin/generate-model-table --pins` JSON and compares SKILL.md
 # `model:` pins against engine expectations in both directions. Exempt skills
 # pass without comparison; skills with neither a pin nor an expectation pass.
-# Degrades to WARN (not FAIL) when src/conductor/node_modules is absent, since
-# the generator can't run without a local npm install — this is an
-# environment-availability skip, not a real integrity failure.
+# Fails closed when src/conductor/node_modules or jq is unavailable, since the
+# generator and JSON comparison are required integrity dependencies.
 
 echo ""
 echo -e "${BOLD}5b. SKILL.md pin agreement${NC}"
 
-if [ ! -d "${HARNESS_DIR}/src/conductor/node_modules" ]; then
-  warn_check "model-table checks skipped — run npm install in src/conductor" 1
-elif ! command -v jq >/dev/null 2>&1; then
-  warn_check "model-table pin check skipped — jq not installed" 1
+set +e
+pin_node_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" node 2>&1)
+pin_node_prerequisite_exit=$?
+pin_jq_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" jq 2>&1)
+pin_jq_prerequisite_exit=$?
+set -e
+if [ "$pin_node_prerequisite_exit" -ne 0 ] || [ "$pin_jq_prerequisite_exit" -ne 0 ]; then
+  if [ "$pin_node_prerequisite_exit" -ne 0 ]; then
+    echo "$pin_node_prerequisite_output" | sed 's/^/    /'
+    assert "model-table pin prerequisite — src/conductor/node_modules is installed" "$pin_node_prerequisite_exit"
+  fi
+  if [ "$pin_jq_prerequisite_exit" -ne 0 ]; then
+    echo "$pin_jq_prerequisite_output" | sed 's/^/    /'
+    assert "model-table pin prerequisite — jq is installed" "$pin_jq_prerequisite_exit"
+  fi
 else
   set +e
   bash "${HARNESS_DIR}/test/check_skill_model_pins.sh"
@@ -551,7 +574,7 @@ fi
 # hooks/claude/docs-guard.sh artifact matches what the TypeScript source
 # (src/conductor/src/engine/session-hook-assets.ts, via
 # src/conductor/src/tools/generate-docs-guard-hook.ts) would produce. Mirrors
-# check 5a's exit-code contract and node_modules-absent warn/skip behavior.
+# check 5a's exit-code contract and hard dependency prerequisite behavior.
 #
 # Exit codes (see bin/generate-docs-guard-hook / generate-docs-guard-hook.ts):
 #   0 - no drift (PASS)
@@ -561,8 +584,13 @@ fi
 echo ""
 echo -e "${BOLD}5c. Docs-guard generated-hook drift gate${NC}"
 
-if [ ! -d "$conductor_node_modules" ]; then
-  warn_check "src/conductor/node_modules absent — skipping docs-guard hook drift check" 1
+set +e
+docs_guard_prerequisite_output=$(bash "${HARNESS_DIR}/test/check_integrity_prerequisites.sh" node 2>&1)
+docs_guard_prerequisite_exit=$?
+set -e
+if [ "$docs_guard_prerequisite_exit" -ne 0 ]; then
+  echo "$docs_guard_prerequisite_output" | sed 's/^/    /'
+  assert "docs-guard hook drift prerequisite — src/conductor/node_modules is installed" "$docs_guard_prerequisite_exit"
 else
   set +e
   docs_guard_hook_output=$("${HARNESS_DIR}/bin/generate-docs-guard-hook" --check 2>&1)
