@@ -21,8 +21,8 @@
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
 import { spawn } from 'node:child_process';
-import { basename, join } from 'node:path';
-import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
