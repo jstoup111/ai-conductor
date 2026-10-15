@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Covers: task:6
+# Covers: task:7
 set -uo pipefail
 
 # check_docs_guard_drift_fixture.sh — proves the docs-guard generator detects
@@ -11,10 +12,10 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOOK="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
-GENERATOR="${HARNESS_DIR}/bin/generate-docs-guard-hook"
+GENERATOR="${HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR:-${HARNESS_DIR}/bin/generate-docs-guard-hook}"
 
 fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/docs-guard-drift-fixture-XXXXXX") || {
-  echo "docs-guard drift fixture: unable to create temporary copy directory" >&2
+  echo "docs-guard drift fixture: temporary-copy failure: unable to create temporary copy directory" >&2
   exit 1
 }
 cleanup() { rm -rf "$fixture_dir"; }
@@ -22,7 +23,7 @@ trap cleanup EXIT
 
 fixture_hook="${fixture_dir}/docs-guard.sh"
 if ! cp "$HOOK" "$fixture_hook"; then
-  echo "docs-guard drift fixture: unable to copy hook to temporary fixture" >&2
+  echo "docs-guard drift fixture: temporary-copy failure: unable to copy hook to temporary fixture" >&2
   exit 1
 fi
 
