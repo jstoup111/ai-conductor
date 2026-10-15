@@ -4377,6 +4377,18 @@ export class Conductor {
       };
     }
 
+    const fixes = gaps.filter((g) => g.disposition !== 'halt');
+    const halts = gaps.filter((g) => g.disposition === 'halt');
+    const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
+    const routedFixes = buildStallSource ? fixes : admittedFixes;
+    // ADR D7: a routed round is admitted by its prepared record and marker
+    // before this leaf can append, seed, commit, or create any repair receipt.
+    // The resolver below is declared later so it can retain the routing
+    // inputs beside their ordinary fallback, but function declarations are
+    // hoisted within this remediation transaction.
+    const stackedRoutingOutcome = await resolveStackedRoute.call(this);
+    if (stackedRoutingOutcome !== undefined) return stackedRoutingOutcome;
+
     // Tracks whether the append attempt (when one was needed) actually ran
     // and succeeded — used below to gate the D1 no-op guard. When there was
     // nothing to append (`allTasks.length === 0`) there is nothing the
@@ -4563,8 +4575,7 @@ export class Conductor {
       await this.persistPendingAsBuiltRemediationFindings();
     }
 
-    const fixes = gaps.filter((g) => g.disposition !== 'halt');
-    const halts = gaps.filter((g) => g.disposition === 'halt');
+    async function resolveStackedRoute(this: Conductor) {
     // Task 23: a 'halt' disposition must never be silently dropped in favor
     // of a sibling 'route' disposition. Even when the SAME plan also names
     // routable fixes for other gaps, a halt gap means at least one blocking
@@ -4577,8 +4588,6 @@ export class Conductor {
         detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; ') + droppedSuffix,
       };
     }
-    const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
-    const routedFixes = buildStallSource ? fixes : admittedFixes;
     // This is the single dark-launch decision point for an admitted repair
     // lap.  The existing remediation route remains byte-for-byte authoritative
     // on either result until the route writer/settler feature lands; making
@@ -4669,6 +4678,8 @@ export class Conductor {
             : '\nNo admission keys were available.') +
           renderAsBuiltBlockedFindingDetail(asBuiltTypedFindings),
       };
+    }
+    return undefined;
     }
     if (routedFixes.length > 0) {
       const { target, unresolved } = earliestRemediationTarget(routedFixes, steps);

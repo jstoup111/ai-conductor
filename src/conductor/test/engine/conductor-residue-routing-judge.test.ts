@@ -5,6 +5,11 @@ import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const routingMutationSpy = vi.hoisted(() => ({
+  calls: [] as string[],
+  routeResult: undefined as unknown,
+}));
+
 vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/build-review-effective.js')>(),
   resolveBuildReviewFeatureIdentity: vi.fn(async () => ({
@@ -17,23 +22,105 @@ vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => 
 vi.mock('../../src/engine/routing/route-record-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/routing/route-record-store.js')>(),
   nextRoundId: vi.fn(async () => 'r1'),
-  createRouteRecord: vi.fn(async (_worktree, _slug, input) => ({
-    kind: 'created' as const,
-    record: {
-      ...input,
-      phase: 'prepared' as const,
-      hosts: { 1: 'pending' as const },
-      currentHostIndex: 0,
-      receipt: {},
-      outbox: [],
-    },
-  })),
+  createRouteRecord: vi.fn(async (_worktree, _slug, input) => {
+    routingMutationSpy.calls.push('create-record');
+    return {
+      kind: 'created' as const,
+      record: {
+        ...input,
+        phase: 'prepared' as const,
+        hosts: { 1: 'pending' as const },
+        currentHostIndex: 0,
+        receipt: {},
+        outbox: [],
+      },
+    };
+  }),
 }));
 
 vi.mock('../../src/engine/routing/round-admission.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/routing/round-admission.js')>(),
-  admitRound: vi.fn(async (_worktree, _slug, record) => ({ kind: 'admitted' as const, record })),
+  admitRound: vi.fn(async (_worktree, _slug, record) => {
+    routingMutationSpy.calls.push('admit-marker');
+    return { kind: 'admitted' as const, record };
+  }),
 }));
+
+vi.mock('../../src/engine/routing/round-router.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/routing/round-router.js')>();
+  return {
+    ...actual,
+    routeAdmittedRound: vi.fn(async (...args: Parameters<typeof actual.routeAdmittedRound>) => {
+      routingMutationSpy.calls.push('route');
+      return routingMutationSpy.routeResult ?? actual.routeAdmittedRound(...args);
+    }),
+  };
+});
+
+vi.mock('../../src/engine/remediation-task-append.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/remediation-task-append.js')>();
+  return {
+    ...actual,
+    appendConductorRemediationTasks: vi.fn(async (
+      ...args: Parameters<typeof actual.appendConductorRemediationTasks>
+    ) => {
+      routingMutationSpy.calls.push('append');
+      return actual.appendConductorRemediationTasks(...args);
+    }),
+  };
+});
+
+vi.mock('../../src/engine/guarded-engine-commit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/guarded-engine-commit.js')>();
+  return {
+    ...actual,
+    commitEngineChangeWhenStacked: vi.fn(async () => {
+      routingMutationSpy.calls.push('commit');
+      return undefined;
+    }),
+  };
+});
+
+vi.mock('../../src/engine/artifacts.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/artifacts.js')>();
+  return {
+    ...actual,
+    recordAppendedRemediationTaskIds: vi.fn(async () => {
+      routingMutationSpy.calls.push('record-appended');
+    }),
+  };
+});
+
+vi.mock('../../src/engine/task-seed.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/task-seed.js')>();
+  return {
+    ...actual,
+    seedTaskStatus: vi.fn(async () => {
+      routingMutationSpy.calls.push('seed');
+    }),
+  };
+});
+
+vi.mock('../../src/engine/kickback-ledger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/kickback-ledger.js')>();
+  return {
+    ...actual,
+    recordPendingRepair: vi.fn(async () => {
+      routingMutationSpy.calls.push('record-pending');
+    }),
+  };
+});
+
+vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/repair-restage.js')>();
+  return {
+    ...actual,
+    admitAndRestageRepair: vi.fn(async () => {
+      routingMutationSpy.calls.push('restage');
+      return { kind: 'failed' as const, detail: 'fixture must not restage a routed repair' };
+    }),
+  };
+});
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
@@ -139,6 +226,8 @@ describe('Conductor residue routing judge binding', () => {
   let projectRoot: string;
 
   beforeEach(async () => {
+    routingMutationSpy.calls = [];
+    routingMutationSpy.routeResult = undefined;
     projectRoot = await mkdtemp(join(tmpdir(), 'conductor-residue-routing-judge-'));
     const planPath = join(projectRoot, '.docs', 'plans', 'feature.md');
     await mkdir(join(projectRoot, '.docs', 'plans'), { recursive: true });
@@ -256,5 +345,92 @@ describe('Conductor residue routing judge binding', () => {
         governingEvidence: { kind: 'adr-decision', stem: 'adr-boundary', decision: 3 },
       })],
     });
+  });
+
+  // Covers: task:rem-as-built-W12
+  it('creates and admits a routed round before any leaf-side repair writer runs', async () => {
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 3 },
+        summary: 'The ADR-governed boundary is not wired.',
+      }],
+      violations: 'The ADR implementation is incomplete.',
+      resolution: 'Wire the boundary.',
+    }, { attemptId: 'fixture-as-built', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltResidueRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: 'feat/daemon-demo', nextChild: undefined,
+        }),
+      },
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'as-built ADR finding requires residue routing',
+      { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route' });
+    expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
+  });
+
+  // Covers: task:rem-as-built-W12
+  it('leaves the leaf plan byte-identical and does not invoke leaf repair writers when routing halts', async () => {
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 3 },
+        summary: 'The ADR-governed boundary is not wired.',
+      }],
+      violations: 'The ADR implementation is incomplete.',
+      resolution: 'Wire the boundary.',
+    }, { attemptId: 'fixture-as-built', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+    routingMutationSpy.routeResult = { kind: 'halt', haltClass: 'needs-human', detail: 'fixture route refusal' };
+    const planBefore = await readFile(join(projectRoot, '.docs', 'plans', 'feature.md'), 'utf8');
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltResidueRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: 'feat/daemon-demo', nextChild: undefined,
+        }),
+      },
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'as-built ADR finding requires residue routing',
+      { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'halt', detail: 'fixture route refusal' });
+    expect(routingMutationSpy.calls).toEqual(['route']);
+    expect(await readFile(join(projectRoot, '.docs', 'plans', 'feature.md'), 'utf8')).toBe(planBefore);
   });
 });
