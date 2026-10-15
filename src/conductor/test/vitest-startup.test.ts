@@ -17,6 +17,7 @@ let observationPath: string;
 async function launch(
   env: NodeJS.ProcessEnv = {},
   path = `${join(fixtureRoot, 'bin')}${delimiter}${dirname(process.execPath)}`,
+  args = ['run', 'selected.test.ts'],
 ) {
   const childEnv = { ...process.env, ...env };
   for (const key of [
@@ -29,7 +30,7 @@ async function launch(
     if (key in env && env[key] === undefined) delete childEnv[key];
     else if (!(key in env)) delete childEnv[key];
   }
-  return execa(process.execPath, [join(fixtureRoot, 'scripts', 'run-vitest.mjs'), 'run', 'selected.test.ts'], {
+  return execa(process.execPath, [join(fixtureRoot, 'scripts', 'run-vitest.mjs'), ...args], {
     cwd: fixtureRoot,
     extendEnv: false,
     env: {
@@ -45,8 +46,8 @@ async function writeFakeVitest(path: string, binary: string) {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, [
     '#!/usr/bin/env node',
-    "import { writeFile } from 'node:fs/promises';",
-    "await writeFile(process.env.RUNNER_OBSERVATION_PATH, JSON.stringify({",
+    "import { appendFile } from 'node:fs/promises';",
+    "await appendFile(process.env.RUNNER_OBSERVATION_PATH, JSON.stringify({",
     `  binary: '${binary}',`,
     '  argv: process.argv.slice(2),',
     '  tmpdir: process.env.TMPDIR,',
@@ -58,7 +59,7 @@ async function writeFakeVitest(path: string, binary: string) {
     '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
     '  nodeOptions: process.env.NODE_OPTIONS,',
     '  managedGhObserverBypass: process.env.CONDUCT_GH_REAL_EXECUTABLE,',
-    '}), \'utf8\');',
+    "}) + '\\n', 'utf8');",
     "if (process.env.FAKE_VITEST_SIGNAL) process.kill(process.pid, process.env.FAKE_VITEST_SIGNAL);",
     'process.exitCode = Number(process.env.FAKE_VITEST_EXIT_CODE ?? 0);',
     '',
@@ -122,8 +123,18 @@ describe('run-vitest startup', () => {
 
     expect(result.exitCode).toBe(0);
     expect(observation.nodeOptions).toContain('--trace-warnings');
-    expect(observation.nodeOptions).toContain('--max-old-space-size=8192');
+    expect(observation.nodeOptions).toContain('--max-old-space-size=12288');
     expect(observation.nodeOptions).not.toContain('--max-old-space-size=4096');
+  });
+
+  it('splits an unselected aggregate run into bounded shards', async () => {
+    const result = await launch({}, undefined, ['run', '--reporter=dot']);
+    const observations = (await readFile(observationPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as Record<string, string[]>);
+
+    expect(result.exitCode).toBe(0);
+    expect(observations.map((observation) => observation.argv)).toEqual(
+      Array.from({ length: 32 }, (_, index) => ['run', '--reporter=dot', `--shard=${index + 1}/32`]),
+    );
   });
 
   it('fails without either Vitest binary and reclaims its run root', async () => {
