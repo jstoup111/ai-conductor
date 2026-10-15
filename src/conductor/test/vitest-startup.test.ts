@@ -122,7 +122,7 @@ describe('run-vitest startup', () => {
 
     expect(result.exitCode).toBe(0);
     expect(observation.nodeOptions).toContain('--trace-warnings');
-    expect(observation.nodeOptions).toContain('--max-old-space-size=6144');
+    expect(observation.nodeOptions).toContain('--max-old-space-size=8192');
     expect(observation.nodeOptions).not.toContain('--max-old-space-size=4096');
   });
 

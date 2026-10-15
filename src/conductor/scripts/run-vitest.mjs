@@ -9,7 +9,7 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
-const VITEST_WORKER_HEAP_LIMIT_MB = 6144;
+const VITEST_WORKER_HEAP_LIMIT_MB = 8192;
 
 function workerHeapOptions(nodeOptions = '') {
   const match = /(?:^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)(\d+)(?=\s|$)/.exec(nodeOptions);
