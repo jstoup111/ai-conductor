@@ -10,12 +10,14 @@ import {
   type CriterionBoundRemediationGap,
 } from '../../../src/engine/remediation-append.js';
 import { appendConductorRemediationTasks } from '../../../src/engine/remediation-task-append.js';
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { childBranchFor, leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { initTestRepo } from '../../fixtures/git-repo.js';
 
 const roots: string[] = [];
 const planPath = '.docs/plans/demo.md';
+const c1 = parseChildId(1)!;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -65,7 +67,7 @@ async function threeChildStack() {
   await writeFile(join(repo, planPath), [
     '### Task 1: Base work',
     '',
-    '### Task rem-prd-audit-existing-c2: Existing child repair',
+    '### Task rem-prd-audit-T1: Existing child repair',
     '',
   ].join('\n'));
   await mustSucceed(git, ['add', planPath]);
@@ -88,6 +90,10 @@ function withoutRouteLines(block: string): string {
   return block.replace(/^\*\*(?:Child|Round):\*\* .*\n/gm, '');
 }
 
+function remTaskIds(planText: string): string[] {
+  return [...planText.matchAll(/^#{1,6}\s+Task\s+(rem-[A-Za-z0-9._-]+)\s*:/gm)].map((match) => match[1]!);
+}
+
 describe('frozen remediation allocation (real local Git)', () => {
   it('renders unique complete blocks without changing any branch plan', async () => {
     const stack = await threeChildStack();
@@ -103,7 +109,9 @@ describe('frozen remediation allocation (real local Git)', () => {
       git: stack.git,
     });
     const after = await Promise.all(stack.branches.map(async (branch) => readBranchPlan(stack.git, branch)));
-    const allocated = allocation[1]!;
+    const allocated = allocation[c1]!;
+    const existingIds = new Set(before.flatMap(remTaskIds));
+    const allocatedIds = Object.values(allocation).flatMap(({ remTaskIds }) => remTaskIds);
 
     expect({
       body: allocated.blockBodies[0],
@@ -112,11 +120,12 @@ describe('frozen remediation allocation (real local Git)', () => {
     }).toEqual({
       body: expect.stringContaining('**Child:** 1'),
       unchanged: before,
-      ids: [expect.not.stringMatching(/^(?:rem-prd-audit-existing-c2|rem-prd-audit-existing-leaf)$/)],
+      ids: ['rem-prd-audit-T1-2'],
     });
     expect(allocated.blockBodies[0]).toContain('**Round:** r1');
-    expect(allocated.remTaskIds).not.toContain('rem-prd-audit-existing-c2');
-    expect(new Set(allocated.remTaskIds).size).toBe(allocated.remTaskIds.length);
+    expect(existingIds).toContain('rem-prd-audit-T1');
+    expect(new Set(allocatedIds).size).toBe(allocatedIds.length);
+    expect(new Set([...existingIds, ...allocatedIds]).size).toBe(existingIds.size + allocatedIds.length);
   });
 
   it('matches the N=1 appender rendering once its routing lines are removed', async () => {
@@ -130,7 +139,13 @@ describe('frozen remediation allocation (real local Git)', () => {
       git: stack.git,
     });
     const n1Plan = join(stack.repo, '.docs', 'plans', 'n1.md');
-    await writeFile(n1Plan, '### Task 1: Base work\n');
+    const n1Seed = [
+      '### Task 1: Base work',
+      '',
+      '### Task rem-prd-audit-T1: Existing repair',
+      '',
+    ].join('\n');
+    await writeFile(n1Plan, n1Seed);
     const appended = await appendConductorRemediationTasks(
       stack.repo,
       n1Plan,
@@ -138,8 +153,8 @@ describe('frozen remediation allocation (real local Git)', () => {
       { criterionBoundGaps: [t1Gap], gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE },
     );
     if (!appended.success) throw new Error(appended.error);
-    const renderedByN1 = (await readFile(n1Plan, 'utf8')).slice('### Task 1: Base work\n'.length).replace(/^\n+/, '');
+    const renderedByN1 = (await readFile(n1Plan, 'utf8')).slice(n1Seed.length).replace(/^\n+/, '');
 
-    expect(withoutRouteLines(allocation[1]!.blockBodies[0]!)).toBe(renderedByN1);
+    expect(withoutRouteLines(allocation[c1]!.blockBodies[0]!)).toBe(renderedByN1);
   });
 });
