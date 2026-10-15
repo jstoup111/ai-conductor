@@ -1,4 +1,3 @@
-// Covers: S5.10
 // Covers: tasks:40,41,42,101,102
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,6 +56,7 @@ describe('routed-round admission (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  // Covers: S5.10
   it('refuses a concurrent marker without mutating the prepared record', async () => {
     const subject = await fixture();
     try {
