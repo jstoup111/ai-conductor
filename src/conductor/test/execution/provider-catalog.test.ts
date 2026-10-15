@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:13
+// Covers: task:1, task:2, task:13, task:14
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -304,7 +304,10 @@ describe('built-in provider catalog', () => {
         claude: {
           isolation: 'claude-config-sandbox',
           selectedAuthPath: '.credentials.json',
-          transcripts: { globs: ['projects/**/*.jsonl'] },
+          transcripts: expect.objectContaining({
+            globs: ['projects/**/*.jsonl'],
+            extractFinalAssistantMessage: expect.any(Function),
+          }),
           claudeBuildPreflights: true,
           agentsSkillsLink: false,
           scrubVariables: ['CLAUDE_CODE_OAUTH_TOKEN'],
@@ -312,7 +315,10 @@ describe('built-in provider catalog', () => {
         codex: {
           isolation: 'provider-home',
           selectedAuthPath: 'auth.json',
-          transcripts: { globs: ['sessions/**/*.jsonl'] },
+          transcripts: expect.objectContaining({
+            globs: ['sessions/**/*.jsonl'],
+            extractFinalAssistantMessage: expect.any(Function),
+          }),
           claudeBuildPreflights: false,
           agentsSkillsLink: true,
           scrubVariables: [],
@@ -320,7 +326,10 @@ describe('built-in provider catalog', () => {
         pi: {
           isolation: 'provider-home',
           selectedAuthPath: 'auth.json',
-          transcripts: { globs: ['sessions/**/*.jsonl'] },
+          transcripts: expect.objectContaining({
+            globs: ['sessions/**/*.jsonl'],
+            extractFinalAssistantMessage: expect.any(Function),
+          }),
           claudeBuildPreflights: false,
           agentsSkillsLink: false,
           scrubVariables: ['PI_CODING_AGENT_SESSION_DIR'],
@@ -335,7 +344,7 @@ describe('built-in provider catalog', () => {
       ...claude,
       selfHostShape: {
         ...claude.selfHostShape,
-        transcripts: { globs: [] },
+        transcripts: { ...claude.selfHostShape.transcripts, globs: [] },
       },
     };
 

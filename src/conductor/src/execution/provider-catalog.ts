@@ -10,6 +10,12 @@ import type { LLMProvider } from './llm-provider.js';
 import type { StepName } from '../types/steps.js';
 import type { EffortLevel } from '../types/config.js';
 import {
+  extractClaudeFinalAssistantMessage,
+  extractCodexFinalAssistantMessage,
+  extractPiFinalAssistantMessage,
+  type FinalAssistantMessageExtractor,
+} from '../engine/self-host/transcript-format.js';
+import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -75,6 +81,7 @@ export interface SelfHostShape {
   readonly selectedAuthPath: string;
   readonly transcripts: {
     readonly globs: readonly string[];
+    readonly extractFinalAssistantMessage: FinalAssistantMessageExtractor;
   };
   readonly claudeBuildPreflights: boolean;
   readonly agentsSkillsLink: boolean;
@@ -177,7 +184,10 @@ export const BUILT_IN_PROVIDERS = [
     selfHostShape: {
       isolation: 'claude-config-sandbox',
       selectedAuthPath: '.credentials.json',
-      transcripts: { globs: ['projects/**/*.jsonl'] },
+      transcripts: {
+        globs: ['projects/**/*.jsonl'],
+        extractFinalAssistantMessage: extractClaudeFinalAssistantMessage,
+      },
       claudeBuildPreflights: true,
       agentsSkillsLink: false,
       scrubVariables: ['CLAUDE_CODE_OAUTH_TOKEN'],
@@ -232,7 +242,10 @@ export const BUILT_IN_PROVIDERS = [
     selfHostShape: {
       isolation: 'provider-home',
       selectedAuthPath: 'auth.json',
-      transcripts: { globs: ['sessions/**/*.jsonl'] },
+      transcripts: {
+        globs: ['sessions/**/*.jsonl'],
+        extractFinalAssistantMessage: extractCodexFinalAssistantMessage,
+      },
       claudeBuildPreflights: false,
       agentsSkillsLink: true,
       scrubVariables: [],
@@ -277,7 +290,10 @@ export const BUILT_IN_PROVIDERS = [
     selfHostShape: {
       isolation: 'provider-home',
       selectedAuthPath: 'auth.json',
-      transcripts: { globs: ['sessions/**/*.jsonl'] },
+      transcripts: {
+        globs: ['sessions/**/*.jsonl'],
+        extractFinalAssistantMessage: extractPiFinalAssistantMessage,
+      },
       claudeBuildPreflights: false,
       agentsSkillsLink: false,
       scrubVariables: ['PI_CODING_AGENT_SESSION_DIR'],
