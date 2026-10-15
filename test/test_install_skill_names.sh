@@ -3,7 +3,7 @@ set -uo pipefail
 
 # Public installer coverage for frontmatter-keyed skill links. Each scenario
 # invokes bin/install against a copied checkout and isolated HOME.
-# Covers: task:9
+# Covers: task:9, task:10
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -59,6 +59,17 @@ run_install() {
     cd "$checkout" || exit 1
     HOME="$fake_home" PATH="$STUBS:/usr/bin:/bin" \
       timeout 15s "$checkout/bin/install" "$@" --allow-worktree-root </dev/null
+  )
+}
+
+run_check() {
+  local checkout=$1
+  local fake_home=$2
+  shift 2
+  (
+    cd "$checkout" || exit 1
+    HOME="$fake_home" PATH="$fake_home/.local/bin:$STUBS:/usr/bin:/bin" \
+      timeout 15s "$checkout/bin/install" --check "$@" </dev/null
   )
 }
 
@@ -140,6 +151,66 @@ if [ "$UNCLOSED_STATUS" -ne 0 ] \
   pass 'unclosed frontmatter is reported, skipped, and makes install fail'
 else
   fail 'unclosed frontmatter is reported, skipped, and makes install fail'
+fi
+
+CHECK_CHECKOUT="$TMP_ROOT/check-checkout"
+copy_checkout "$CHECK_CHECKOUT"
+sed -i 's/^name: plan$/name: ac-plan/' "$CHECK_CHECKOUT/skills/plan/SKILL.md"
+CHECK_HOME="$TMP_ROOT/check-home"
+if run_install "$CHECK_CHECKOUT" "$CHECK_HOME" --providers claude,codex >"$TMP_ROOT/check-install.out" 2>&1 \
+  && run_check "$CHECK_CHECKOUT" "$CHECK_HOME" --providers claude,codex >"$TMP_ROOT/check-fresh.out" 2>&1; then
+  pass '--check accepts frontmatter-named links'
+else
+  fail '--check accepts frontmatter-named links'
+fi
+
+rm "$CHECK_HOME/.claude/skills/ac-plan" "$CHECK_HOME/.agents/skills/ac-plan"
+ln -s "$CHECK_CHECKOUT/skills/plan" "$CHECK_HOME/.claude/skills/plan"
+ln -s /tmp/foreign-skill "$CHECK_HOME/.agents/skills/plan"
+set +e
+run_check "$CHECK_CHECKOUT" "$CHECK_HOME" --providers claude,codex >"$TMP_ROOT/check-bare.out" 2>&1
+CHECK_BARE_STATUS=$?
+set -e
+if [ "$CHECK_BARE_STATUS" -ne 0 ] \
+  && grep -Fq 'Claude skill: ac-plan' "$TMP_ROOT/check-bare.out" \
+  && grep -Fq 'Codex active skill: ac-plan' "$TMP_ROOT/check-bare.out"; then
+  pass '--check reports directory-named links as missing frontmatter names'
+else
+  fail '--check reports directory-named links as missing frontmatter names'
+fi
+
+if run_install "$CHECK_CHECKOUT" "$CHECK_HOME" --update --providers claude,codex >"$TMP_ROOT/check-reconcile.out" 2>&1 \
+  && [ ! -e "$CHECK_HOME/.claude/skills/plan" ] \
+  && [ -L "$CHECK_HOME/.agents/skills/plan" ] \
+  && [ "$(readlink "$CHECK_HOME/.agents/skills/plan")" = /tmp/foreign-skill ] \
+  && [ -L "$CHECK_HOME/.claude/skills/ac-plan" ] \
+  && [ -L "$CHECK_HOME/.agents/skills/ac-plan" ]; then
+  pass 'update reconciles harness-owned stale bare links and preserves foreign entries'
+else
+  fail 'update reconciles harness-owned stale bare links and preserves foreign entries'
+fi
+
+rm "$CHECK_HOME/.agents/skills/ac-plan"
+set +e
+run_check "$CHECK_CHECKOUT" "$CHECK_HOME" --providers claude,codex >"$TMP_ROOT/check-one-missing.out" 2>&1
+CHECK_ONE_MISSING_STATUS=$?
+set -e
+if [ "$CHECK_ONE_MISSING_STATUS" -ne 0 ] \
+  && grep -Fq 'Codex active skill: ac-plan' "$TMP_ROOT/check-one-missing.out"; then
+  pass '--check identifies the catalog missing ac-plan'
+else
+  fail '--check identifies the catalog missing ac-plan'
+fi
+
+ln -s "$CHECK_CHECKOUT/skills/plan" "$CHECK_HOME/.agents/skills/ac-plan"
+printf 'foreign entry\n' > "$CHECK_HOME/.claude/skills/foreign-entry"
+if run_install "$CHECK_CHECKOUT" "$CHECK_HOME" --uninstall >"$TMP_ROOT/check-uninstall.out" 2>&1 \
+  && [ ! -e "$CHECK_HOME/.claude/skills/ac-plan" ] \
+  && [ ! -e "$CHECK_HOME/.agents/skills/ac-plan" ] \
+  && [ "$(cat "$CHECK_HOME/.claude/skills/foreign-entry")" = 'foreign entry' ]; then
+  pass '--uninstall removes frontmatter-named links and preserves foreign entries'
+else
+  fail '--uninstall removes frontmatter-named links and preserves foreign entries'
 fi
 
 printf '\nInstall skill-name coverage: %d passed, %d failed\n' "$PASS" "$FAIL"

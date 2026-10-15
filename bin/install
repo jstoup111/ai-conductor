@@ -228,7 +228,7 @@ check_installation() {
   local missing=0
   local stale=0
   local duplicates=0
-  local skills_dir client skill target harness_target location
+  local skills_dir client skill skill_name target harness_target location
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -245,24 +245,29 @@ check_installation() {
     fi
 
     for skill in "${SKILLS[@]}"; do
-      target="${skills_dir}/${skill}"
+      if ! skill_name=$(skill_frontmatter_name "${HARNESS_DIR}/skills/${skill}/SKILL.md" "$skill"); then
+        fail "${location} skill: ${skill} — frontmatter name could not be read"
+        stale=$((stale + 1))
+        continue
+      fi
+      target="${skills_dir}/${skill_name}"
       if [ -L "$target" ]; then
         local resolved_target
         resolved_target=$(readlink -f "$target" 2>/dev/null || echo "broken")
         if [ "$resolved_target" = "broken" ] || [ ! -e "$resolved_target" ]; then
-          fail "${location} skill: ${skill} (${target}) — broken symlink"
+          fail "${location} skill: ${skill_name} (${target}) — broken symlink"
           stale=$((stale + 1))
         elif [ "$resolved_target" = "${HARNESS_DIR}/skills/${skill}" ]; then
-          ok "${location} skill: ${skill}"
+          ok "${location} skill: ${skill_name}"
         else
-          warn "${location} skill: ${skill} (${target}) — stale target ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
+          warn "${location} skill: ${skill_name} (${target}) — stale target ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
           stale=$((stale + 1))
         fi
       elif [ -e "$target" ]; then
-        warn "${location} skill: ${skill} (${target}) — non-symlink entry"
+        warn "${location} skill: ${skill_name} (${target}) — non-symlink entry"
         stale=$((stale + 1))
       else
-        fail "${location} skill: ${skill} (${target}) — missing"
+        fail "${location} skill: ${skill_name} (${target}) — missing"
         missing=$((missing + 1))
       fi
     done
@@ -298,11 +303,15 @@ check_installation() {
   # not modify it in check mode: even a foreign entry is useful diagnostic
   # evidence, and reconciliation owns the mutation policy.
   local legacy_dir="${HOME}/.codex/skills" legacy_target
+  local legacy_skill_name
   for skill in "${SKILLS[@]}"; do
-    target="${CODEX_SKILLS_DIR}/${skill}"
-    legacy_target="${legacy_dir}/${skill}"
+    if ! legacy_skill_name=$(skill_frontmatter_name "${HARNESS_DIR}/skills/${skill}/SKILL.md" "$skill"); then
+      continue
+    fi
+    target="${CODEX_SKILLS_DIR}/${legacy_skill_name}"
+    legacy_target="${legacy_dir}/${legacy_skill_name}"
     if { [ -e "$target" ] || [ -L "$target" ]; } && { [ -e "$legacy_target" ] || [ -L "$legacy_target" ]; }; then
-      fail "Codex duplicate skill: ${skill} — active ${target} and legacy ${legacy_target} both exist"
+      fail "Codex duplicate skill: ${legacy_skill_name} — active ${target} and legacy ${legacy_target} both exist"
       duplicates=$((duplicates + 1))
     fi
   done
@@ -1323,7 +1332,7 @@ owned_harness_link() {
 # to that root's same-named skill. Foreign links and non-links are untouched.
 reconcile_obsolete_skill_links() {
   local client=$1 skills_dir=$2
-  local prior_root candidate candidate_name skill supported current
+  local prior_root candidate candidate_name skill skill_name supported current
 
   prior_root=$(prior_harness_root "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
   [ -n "$prior_root" ] || return 0
@@ -1333,7 +1342,10 @@ reconcile_obsolete_skill_links() {
     [[ "$candidate_name" = HARNESS.md || "$candidate_name" = ARCHITECTURE.md ]] && continue
     supported=false
     for skill in "${SKILLS[@]}"; do
-      [ "$candidate_name" = "$skill" ] && supported=true && break
+      if ! skill_name=$(skill_frontmatter_name "${HARNESS_DIR}/skills/${skill}/SKILL.md" "$skill"); then
+        continue
+      fi
+      [ "$candidate_name" = "$skill_name" ] && supported=true && break
     done
     [ "$supported" = true ] && continue
 
@@ -1351,18 +1363,21 @@ reconcile_obsolete_skill_links() {
 # can legitimately point at an older checkout.
 reconcile_legacy_codex_links() {
   local legacy_dir="${HOME}/.codex/skills"
-  local skill target document reference_source reference_label
+  local skill skill_name target document reference_source reference_label
 
   for skill in "${SKILLS[@]}"; do
-    target="${legacy_dir}/${skill}"
+    if ! skill_name=$(skill_frontmatter_name "${HARNESS_DIR}/skills/${skill}/SKILL.md" "$skill"); then
+      continue
+    fi
+    target="${legacy_dir}/${skill_name}"
     if [ -L "$target" ]; then
       if owned_skill_link "$legacy_dir" "$skill" "$target"; then
         rm -- "$target"
       else
-        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+        warn "Codex legacy skill: ${skill_name} — foreign symlink preserved"
       fi
     elif [ -e "$target" ]; then
-      warn "Codex legacy skill: ${skill} — foreign entry preserved"
+      warn "Codex legacy skill: ${skill_name} — foreign entry preserved"
     fi
   done
 
@@ -1773,7 +1788,7 @@ PYEOF
   echo ""
 
   local removed=0
-  local skills_dir legacy_dir client skill target points_to harness_target
+  local skills_dir legacy_dir client skill skill_name target points_to harness_target
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -1781,7 +1796,10 @@ PYEOF
       skills_dir="$CODEX_SKILLS_DIR"
     fi
     for skill in "${SKILLS[@]}"; do
-      target="${skills_dir}/${skill}"
+      if ! skill_name=$(skill_frontmatter_name "${HARNESS_DIR}/skills/${skill}/SKILL.md" "$skill"); then
+        continue
+      fi
+      target="${skills_dir}/${skill_name}"
       if [ -L "$target" ]; then
         points_to=$(readlink -f "$target" 2>/dev/null || echo "")
         if { [ "$client" = Codex ] && owned_skill_link "$skills_dir" "$skill" "$target"; } || \
@@ -1789,10 +1807,10 @@ PYEOF
           rm -- "$target"
           removed=$((removed + 1))
         else
-          warn "${client} skill: ${skill} — symlink points elsewhere, skipping"
+          warn "${client} skill: ${skill_name} — symlink points elsewhere, skipping"
         fi
       elif [ -e "$target" ]; then
-        warn "${client} skill: ${skill} — foreign entry preserved"
+        warn "${client} skill: ${skill_name} — foreign entry preserved"
       fi
     done
 
@@ -1818,16 +1836,19 @@ PYEOF
 
   legacy_dir="${HOME}/.codex/skills"
   for skill in "${SKILLS[@]}"; do
-    target="${legacy_dir}/${skill}"
+    if ! skill_name=$(skill_frontmatter_name "${HARNESS_DIR}/skills/${skill}/SKILL.md" "$skill"); then
+      continue
+    fi
+    target="${legacy_dir}/${skill_name}"
     if [ -L "$target" ]; then
       if owned_skill_link "$legacy_dir" "$skill" "$target"; then
         rm -- "$target"
         removed=$((removed + 1))
       else
-        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+        warn "Codex legacy skill: ${skill_name} — foreign symlink preserved"
       fi
     elif [ -e "$target" ]; then
-      warn "Codex legacy skill: ${skill} — foreign entry preserved"
+      warn "Codex legacy skill: ${skill_name} — foreign entry preserved"
     fi
   done
 
