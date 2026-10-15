@@ -2,6 +2,7 @@
 name: explore
 implicit_invocation: required
 description: "Use only within an active engineer/conduct DECIDE workflow when approach selection and product-versus-technical track classification are still unresolved. Do not invoke for ordinary implementation, review, explanation, or an already-decided change or hotfix."
+model: opus
 enforcement: advisory
 phase: decide
 standalone: true

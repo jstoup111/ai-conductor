@@ -2,6 +2,7 @@
 name: architecture-review
 implicit_invocation: required
 description: "Use only within an active harness lifecycle when pre-stories feasibility review, a pipeline batch drift check, or the SHIP as-built review is current. Do not invoke for ordinary implementation, code review, or general architecture questions."
+model: opus
 enforcement: gating
 phase: decide
 standalone: true

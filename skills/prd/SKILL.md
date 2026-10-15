@@ -2,6 +2,7 @@
 name: prd
 implicit_invocation: required
 description: "Use only within active engineer/conduct DECIDE after explore confirmed the product track, when a committed product requirements document is required. Do not invoke for technical-track work, ordinary specifications, or general product discussion."
+model: opus
 enforcement: gating
 phase: decide
 standalone: true
