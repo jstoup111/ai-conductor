@@ -1,10 +1,11 @@
-// Covers: tasks:26,28,29,30,31,32
+// Covers: tasks:26,28,29,30,31,32, task:rem-prd-audit-W2
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import type { CriterionBoundRemediationGap } from '../../../src/engine/remediation-append.js';
 import type { GitRunner } from '../../../src/engine/rebase.js';
 import { routeAdmittedRound } from '../../../src/engine/routing/round-router.js';
+import type { RoundId } from '../../../src/engine/routing/route-types.js';
 
 const c1 = parseChildId(1)!;
 const c2 = parseChildId(2)!;
@@ -24,7 +25,7 @@ const input = (admitted: Parameters<typeof routeAdmittedRound>[0]['admitted']) =
   admitted,
   envelope: { sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] } },
   planText: '', appendedChildren: {}, declaredPositions: [c1, c2, c3] as const,
-  leafTip: 'feat/daemon-demo', roundId: 'r1' as const, git,
+  leafTip: 'feat/daemon-demo', roundId: 'r1' as RoundId, git,
 });
 
 describe('routeAdmittedRound', () => {
@@ -32,8 +33,8 @@ describe('routeAdmittedRound', () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
       ...input([
-        { id: 'one', gap: gap('one', 'T1'), gateSource: 'prd-audit', taskIds: ['T1'] },
-        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', taskIds: ['T3'] },
+        { id: 'one', gap: gap('one', 'T1'), gateSource: 'prd-audit', taskIds: ['T1'], provenance: { kind: 'task-bound' } },
+        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', taskIds: ['T3'], provenance: { kind: 'task-bound' } },
       ]), judge,
     });
     expect(routed).toMatchObject({ kind: 'routed', hosts: [1, 3] });
@@ -47,7 +48,7 @@ describe('routeAdmittedRound', () => {
 
   it('halts before allocation when task ownership or a tree is unavailable', async () => {
     const missingOwner = await routeAdmittedRound({
-      ...input([{ id: 'missing', gap: gap('missing', 'T9'), gateSource: 'prd-audit', taskIds: ['T9'] }]),
+      ...input([{ id: 'missing', gap: gap('missing', 'T9'), gateSource: 'prd-audit', taskIds: ['T9'], provenance: { kind: 'task-bound' } }]),
     });
     expect(missingOwner).toMatchObject({ kind: 'halt', detail: expect.stringContaining('T9') });
 
@@ -55,7 +56,7 @@ describe('routeAdmittedRound', () => {
       ? { exitCode: 1, stdout: '', stderr: 'missing tree' }
       : git(args);
     const missingTree = await routeAdmittedRound({
-      ...input([{ id: 'one', gap: gap('one', 'T1'), gateSource: 'prd-audit', taskIds: ['T1'], citedPaths: ['src/a.ts'] }]), git: unreadable,
+      ...input([{ id: 'one', gap: gap('one', 'T1'), gateSource: 'prd-audit', taskIds: ['T1'], citedPaths: ['src/a.ts'], provenance: { kind: 'task-bound' } }]), git: unreadable,
     });
     expect(missingTree).toMatchObject({ kind: 'halt', detail: expect.stringContaining('feat/daemon-demo') });
   });
@@ -63,7 +64,10 @@ describe('routeAdmittedRound', () => {
   it('halts residue routing after two invalid answers without allocating work', async () => {
     const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({ success: true, output: 'not JSON' }));
     const routed = await routeAdmittedRound({
-      ...input([{ id: 'adr-d2', gap: gap('adr-d2', 'unused'), gateSource: 'as-built', residue: true }]), judge,
+      ...input([{
+        id: 'adr-d2', gap: gap('adr-d2', 'unused'), gateSource: 'as-built',
+        provenance: { kind: 'as-built', reference: { kind: 'adr-decision', stem: 'adr-d2', decision: 2 }, summary: 'ADR-only finding' },
+      }]), judge,
     });
     expect(routed).toMatchObject({ kind: 'halt', detail: expect.stringContaining('adr-d2') });
     expect(judge).toHaveBeenCalledTimes(2);
@@ -73,8 +77,8 @@ describe('routeAdmittedRound', () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
       ...input([
-        { id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit', taskIds: ['T2'] },
-        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', taskIds: ['T3'], existingTask: true },
+        { id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit', taskIds: ['T2'], provenance: { kind: 'task-bound' } },
+        { id: 'three', gap: gap('three', 'T3'), gateSource: 'prd-audit', taskIds: ['T3'], existingTask: true, provenance: { kind: 'task-bound' } },
       ]),
       judge, consolidatedManualTestFail: ['manual_test: FAIL row one', 'manual_test: FAIL row two'],
     });
@@ -87,5 +91,75 @@ describe('routeAdmittedRound', () => {
     expect(routed.hostHints[2]).toContain('manual_test: FAIL row one');
     expect(routed.hostHints[3]).toContain('manual_test: FAIL row two');
     expect(routed.allocation[c2]?.retryHint).toBe(routed.hostHints[2]);
+  });
+
+  it('sends refusal rework with proposed tasks to the residue judge', async () => {
+    const judge = vi.fn(async (prompt: string) => {
+      const request = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { items: Array<{ itemId: string; rationale: string; governingEvidence: string }> };
+      expect(request.items).toEqual([{
+        itemId: 'refusal-dec-1',
+        rationale: 'Remove the refused behavior.',
+        governingEvidence: 'Refused S2.1 (decision dec-1 r1)',
+      }]);
+      return {
+        success: true,
+        output: JSON.stringify({
+          version: 'v1',
+          items: [{ itemId: 'refusal-dec-1', child: 2, candidates: [2], rationale: 'Child two owns the refused behavior.' }],
+        }),
+      };
+    });
+    const refusalGap = {
+      ...gap('refusal-dec-1', 'remove-refused'),
+      rationale: 'Remove the refused behavior.',
+      governingClause: 'Refused S2.1 (decision dec-1 r1)',
+    };
+    const routed = await routeAdmittedRound({
+      ...input([{
+        id: 'refusal-dec-1', gap: refusalGap, gateSource: 'prd-audit', taskIds: ['remove-refused'],
+        provenance: { kind: 'refusal-rework', governingEvidence: refusalGap.governingClause },
+      }]), judge,
+    });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items).toEqual([expect.objectContaining({ findingId: 'refusal-dec-1', owner: 2, host: 2, reason: 'residue-judged' })]);
+    expect(routed.allocation[c1]).toBeUndefined();
+    expect(routed.allocation[c2]?.remTaskIds).toEqual(['rem-prd-audit-refusal-dec-1']);
+  });
+
+  it('projects an ADR-only as-built finding and its evidence to the residue judge', async () => {
+    const judge = vi.fn(async (prompt: string) => {
+      const request = JSON.parse(prompt.slice(prompt.indexOf('{'))) as {
+        items: Array<{ itemId: string; rationale: string; summary: string; governingEvidence: { kind: string; stem: string; decision: number } }>;
+      };
+      expect(request.items).toEqual([{
+        itemId: 'as-built-1',
+        rationale: 'Wire the boundary.',
+        summary: 'The boundary is not wired.',
+        governingEvidence: { kind: 'adr-decision', stem: 'adr-boundary', decision: 3 },
+      }]);
+      return {
+        success: true,
+        output: JSON.stringify({
+          version: 'v1',
+          items: [{ itemId: 'as-built-1', child: 2, candidates: [2], rationale: 'The ADR governs child two.' }],
+        }),
+      };
+    });
+    const asBuiltGap = { ...gap('as-built-1', 'wire-boundary'), rationale: 'Wire the boundary.' };
+    const routed = await routeAdmittedRound({
+      ...input([{
+        id: 'as-built-1', gap: asBuiltGap, gateSource: 'as-built', taskIds: ['wire-boundary'],
+        provenance: {
+          kind: 'as-built', reference: { kind: 'adr-decision', stem: 'adr-boundary', decision: 3 },
+          summary: 'The boundary is not wired.',
+        },
+      }]), judge,
+    });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items).toEqual([expect.objectContaining({ findingId: 'as-built-1', owner: 2, host: 2, reason: 'residue-judged' })]);
   });
 });

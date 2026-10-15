@@ -1,5 +1,6 @@
 import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
 import type { ChildId } from '../child-context.js';
+import type { AsBuiltGoverningReference } from '../as-built-contract.js';
 import type { CriterionBoundRemediationGap, FrozenHostPlan } from '../remediation-append.js';
 import { allocateFrozenBlocks } from '../remediation-append.js';
 import type { GitRunner } from '../rebase.js';
@@ -8,13 +9,28 @@ import { deriveTaskBoundOwner } from './owner-derivation.js';
 import { resolveResidueOwner, runResidueRoutingCall, type ResidueRoutingJudge } from './residue-routing-call.js';
 import type { FrozenAllocation, RoutedItem, RoundId } from './route-types.js';
 
+/**
+ * The authority that admitted an item.  Proposed remediation tasks describe
+ * the repair, not necessarily its owner: ADR-only as-built findings and
+ * refusal rework still require the residue judgement (ADR D3).
+ */
+export type AdmittedFindingProvenance =
+  | { readonly kind: 'task-bound' }
+  | { readonly kind: 'taskless-obligation' }
+  | { readonly kind: 'refusal-rework'; readonly governingEvidence: string }
+  | {
+    readonly kind: 'as-built';
+    readonly reference: AsBuiltGoverningReference;
+    readonly summary: string;
+  };
+
 export interface AdmittedRoutingItem {
   readonly id: string;
   readonly gap: CriterionBoundRemediationGap;
   readonly gateSource: string;
+  readonly provenance: AdmittedFindingProvenance;
   readonly taskIds?: readonly string[];
   readonly citedPaths?: readonly string[];
-  readonly residue?: boolean;
   readonly existingTask?: boolean;
 }
 
@@ -47,8 +63,35 @@ export function hostOrder(hosts: Iterable<number> | Readonly<Record<number, unkn
   return [...new Set(raw)].sort((a, b) => a - b) as ChildId[];
 }
 
-function isTaskBound(item: AdmittedRoutingItem): boolean {
-  return (item.taskIds?.length ?? 0) > 0 || !item.residue;
+function isResidue(item: AdmittedRoutingItem): boolean {
+  switch (item.provenance.kind) {
+    case 'refusal-rework':
+      return true;
+    case 'as-built':
+      return item.provenance.reference.kind === 'adr-decision';
+    case 'taskless-obligation':
+      return true;
+    case 'task-bound':
+      return false;
+  }
+}
+
+function residueJudgeItem(item: AdmittedRoutingItem): import('./residue-routing-call.js').ResidueRoutingItem {
+  const common = { itemId: item.id, rationale: item.gap.rationale };
+  switch (item.provenance.kind) {
+    case 'refusal-rework':
+      return { ...common, governingEvidence: item.provenance.governingEvidence };
+    case 'as-built':
+      return {
+        ...common,
+        summary: item.provenance.summary,
+        governingEvidence: item.provenance.reference,
+      };
+    case 'taskless-obligation':
+      return common;
+    case 'task-bound':
+      throw new Error(`Task-bound item ${item.id} cannot be projected to the residue judge`);
+  }
 }
 
 function hintFor(gap: CriterionBoundRemediationGap): string {
@@ -64,7 +107,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   const resolved: Array<{ source: AdmittedRoutingItem; item: RoutedItem }> = [];
   const residue: AdmittedRoutingItem[] = [];
   for (const source of input.admitted) {
-    if (!isTaskBound(source)) { residue.push(source); continue; }
+    if (isResidue(source)) { residue.push(source); continue; }
     const ownership = deriveTaskBoundOwner({
       taskIds: source.taskIds ?? source.gap.tasks.map((task) => task.id), envelope: input.envelope,
       planText: input.planText, appendedChildren: input.appendedChildren, declaredPositions: input.declaredPositions,
@@ -77,7 +120,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: ownership.owner as ChildId, host: host.host, reason: ownership.reason, fallback: [], ...(source.existingTask ? { restage: false } : {}) } });
   }
 
-  const judged = await runResidueRoutingCall({ items: residue.map((item) => ({ itemId: item.id })), declaredPositions: input.declaredPositions, judge: input.judge });
+  const judged = await runResidueRoutingCall({ items: residue.map(residueJudgeItem), declaredPositions: input.declaredPositions, judge: input.judge });
   if (judged.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: `Cannot route residue ${judged.itemId}: ${judged.detail}` };
   for (const answer of judged.answers) {
     const source = residue.find((item) => item.id === answer.itemId)!;

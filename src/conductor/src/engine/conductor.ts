@@ -4606,11 +4606,29 @@ export class Conductor {
             if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
             const planText = activePlanText || await readFile(planPath, 'utf8');
             const routed = await routeAdmittedRound({
-              admitted: routedFixes.map((gap) => ({
-                id: gap.id, gap, gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE,
-                taskIds: gap.tasks.map((task) => task.id), existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
-                residue: gap.tasks.length === 0,
-              })), envelope, planText,
+              admitted: routedFixes.map((gap) => {
+                const routedGap = gap as CriterionBoundRemediationGap;
+                const asBuiltFinding = asBuiltFindings.get(gap.id);
+                const provenance = refusalCriteriaByGapId.has(gap.id)
+                  ? {
+                    kind: 'refusal-rework' as const,
+                    governingEvidence: routedGap.governingClause ?? routedGap.criterion ?? gap.id,
+                  }
+                  : asBuiltFinding === undefined
+                    ? buildStallSource
+                      ? { kind: 'taskless-obligation' as const }
+                      : { kind: 'task-bound' as const }
+                    : {
+                      kind: 'as-built' as const,
+                      reference: asBuiltFinding.reference,
+                      summary: asBuiltRecordedFindings.get(gap.id)?.summary ?? gap.rationale,
+                };
+                return {
+                  id: gap.id, gap: routedGap, gateSource: routedGap.gateSource ?? PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+                  taskIds: gap.tasks.map((task) => task.id), existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
+                  provenance,
+                };
+              }), envelope, planText,
               appendedChildren: await readAppendedRemediationTaskChildren(this.projectRoot),
               declaredPositions, leafTip: leafBranchFor(this.featureSlug), roundId,
               judge: (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
