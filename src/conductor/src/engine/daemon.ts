@@ -1239,12 +1239,17 @@ export async function runDaemon(
   // The sole awaited startup I/O before a claim.  Later task work folds its
   // resolved base through rekick and the refresh throttle; Task 4 only keeps
   // this refreshed discovery ahead of the first eligibility pass.
-  const startupBacklog = await deps.discoverBacklog({ refresh: true });
-  maintenance.recordRefresh(now());
+  let startupBacklog: BacklogItem[] | undefined;
+  try {
+    startupBacklog = await deps.discoverBacklog({ refresh: true });
+    maintenance.recordRefresh(now());
+  } catch (err) {
+    log(`[daemon] startup origin refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   // The startup discovery has already refreshed origin. Resolve its local base
   // once so the deferred rekick can use this exact boundary without fetching.
   let startupBaseSha: string | null | undefined;
-  if (deps.resolveBaseSha) {
+  if (startupBacklog !== undefined && deps.resolveBaseSha) {
     try {
       startupBaseSha = await deps.resolveBaseSha({ refresh: false });
     } catch (err) {
@@ -1498,7 +1503,7 @@ export async function runDaemon(
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
         const parkedBeforeLocal = new Set(claims.listParked());
-        const items = firstFillPass
+        const items = firstFillPass && startupBacklog !== undefined
           ? startupBacklog
           : await deps.discoverBacklog({ refresh: false });
         next = await pickEligible({ items }, pickCtx);

@@ -1,5 +1,6 @@
 // Covers: task:4
 // Covers: task:5
+// Covers: task:6
 import { describe, expect, it } from 'vitest';
 import { runDaemon, type BacklogItem, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
 import { DaemonMaintenance } from '../../src/engine/daemon-maintenance.js';
@@ -38,6 +39,33 @@ function depsFor(
 }
 
 describe('dispatch-first startup maintenance', () => {
+  it('logs a failed startup refresh once and claims from local discovery before maintenance', async () => {
+    const log: string[] = [];
+    let atFirstDispatch: string[] = [];
+
+    await runDaemon(depsFor(log, [], {
+      discoverBacklog: async ({ refresh }) => {
+        log.push(`discover:${refresh}`);
+        if (refresh) throw new Error('origin unavailable');
+        return [{ slug: 'local-first' }];
+      },
+      runFeature: async (item) => {
+        atFirstDispatch = [...log];
+        log.push(`dispatch:${item.slug}`);
+        return done(item.slug);
+      },
+    }), { concurrency: 1, once: true, maxItems: 1 });
+
+    expect(log.filter((entry) => entry.includes('startup origin refresh failed'))).toEqual([
+      '[daemon] startup origin refresh failed: origin unavailable',
+    ]);
+    expect(atFirstDispatch).toContain('discover:false');
+    expect(atFirstDispatch).not.toEqual(expect.arrayContaining([
+      'dashboard', 'resume-auth', 'halt-prs', 'parked-reconcile', 'provider-scratch', 'mergeable-sweep',
+    ]));
+    expect(log).toContain('dispatch:local-first');
+  });
+
   it('reuses the startup base for rekick without a second refresh', async () => {
     const log: string[] = [];
     let startupRefreshes = 0;
