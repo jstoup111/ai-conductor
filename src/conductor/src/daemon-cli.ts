@@ -2247,6 +2247,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
     });
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
+  // The first discovery is the startup refresh that admits the first claim.
+  // The deferred dashboard is observational: retain that exact result so it
+  // neither repeats discovery nor performs another root refresh/fetch.
+  let cachedStartupDiscovery: BacklogItem[] | undefined;
+  const discoverBacklog = async (options: { refresh: boolean }): Promise<BacklogItem[]> => {
+    const result = await discoverTick(options);
+    cachedStartupDiscovery ??= result;
+    return result;
+  };
 
   const processedDir = join(projectRoot, '.daemon/processed');
 
@@ -2313,7 +2322,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const result = await runDaemon(
     {
       claims: workClaims,
-      discoverBacklog: discoverTick,
+      discoverBacklog,
       isHalted: (slug) => isHalted(worktreeBase, slug),
       sweepProviderScratch: () => sweepFeatureWorktreeScratch({
         worktreeBase,
@@ -2554,7 +2563,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         const state = await scanInheritedState({
           worktreeBase,
           processedDir,
-          discover: () => discoverTick({ refresh: true }),
+          discover: () => Promise.resolve(cachedStartupDiscovery ?? []),
           log,
           prStateProbe: async (prUrl) => {
             const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
