@@ -139,7 +139,7 @@ describe('ref-backed route record store', () => {
         args: ['update-ref', '--stdin'],
         input: expect.stringContaining(`start\nupdate ${routeRecordRefFor('demo', roundId)} `),
       });
-      expect(update?.input).toContain(` ${stored.blob}\nprepare\ncommit\n`);
+      expect(update?.input).toContain(` ${stored.blob}\nverify ${journalRefFor('demo')} ${'0'.repeat(40)}\nprepare\ncommit\n`);
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }

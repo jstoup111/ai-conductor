@@ -41,6 +41,19 @@ describe('routed repair durable record parsers', () => {
     expect(parseRouteRecord(JSON.stringify(routeRecord))).toEqual(routeRecord);
   });
 
+  it('round-trips routed rationale, restage state, and host retry hints', () => {
+    const enriched = structuredClone(routeRecord) as Record<string, unknown>;
+    const item = (enriched.items as Array<Record<string, unknown>>)[0]!;
+    const allocation = enriched.allocation as Record<string, Record<string, unknown>>;
+    item.rationale = 'implements D2';
+    item.restage = false;
+    allocation['2']!.retryHint = 'manual_test: FAIL';
+    expect(parseRouteRecord(JSON.stringify(enriched))).toEqual(enriched);
+
+    item.rationale = 7;
+    expect(parseRouteRecord(JSON.stringify(enriched))).toBeUndefined();
+  });
+
   it('rejects route records without an outbox or with an invalid round phase', () => {
     const { outbox: _outbox, ...withoutOutbox } = routeRecord;
     expect(parseRouteRecord(JSON.stringify(withoutOutbox))).toBeUndefined();

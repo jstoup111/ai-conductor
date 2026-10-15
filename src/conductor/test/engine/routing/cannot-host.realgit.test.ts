@@ -73,6 +73,7 @@ describe('cannot-host (real local Git)', () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
     const classified = await classifyCitedPaths(['src/b.ts'], leafTip, stack.git);
+    if ('kind' in classified) throw new Error(classified.detail);
     const selected = await selectHost({
       owner: child(1),
       inputs: classified.inputs,
@@ -100,6 +101,7 @@ describe('cannot-host (real local Git)', () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
     const classified = await classifyCitedPaths(['src/new.ts'], leafTip, stack.git);
+    if ('kind' in classified) throw new Error(classified.detail);
     const selected = await selectHost({
       owner: child(1),
       inputs: classified.inputs,
@@ -112,5 +114,31 @@ describe('cannot-host (real local Git)', () => {
       classified: { inputs: [], outputs: ['src/new.ts'] },
       selected: { host: child(1), reason: 'owner' },
     });
+  });
+
+  it('only moves upward and requires every input in the same closure', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    await writeFile(join(stack.repo, 'src', 'leaf-only.ts'), 'export const leaf = true;\n');
+    await mustSucceed(makeGitRunner(stack.repo), ['add', 'src/leaf-only.ts']);
+    await mustSucceed(makeGitRunner(stack.repo), ['commit', '-qm', 'leaf only']);
+    const classified = await classifyCitedPaths(['src/b.ts', 'src/leaf-only.ts'], leafTip, stack.git);
+    if ('kind' in classified) throw new Error(classified.detail);
+    expect(await selectHost({
+      owner: child(1), inputs: classified.inputs, positions: [child(1), child(2), child(3)], leafTip, git: stack.git,
+    })).toEqual({ host: child(3), reason: 'prerequisite-paths' });
+  });
+
+  it('returns halts for unreadable closure and leaf trees', async () => {
+    const stack = await threeChildStack();
+    const leafTip = leafBranchFor('demo');
+    const failingClosure: GitRunner = async (args, options) => args.includes(closureRefFor('demo', child(2)))
+      ? { exitCode: 1, stdout: '', stderr: 'missing closure' }
+      : stack.git(args, options);
+    expect(await selectHost({
+      owner: child(1), inputs: ['src/b.ts'], positions: [child(1), child(2), child(3)], leafTip, git: failingClosure,
+    })).toMatchObject({ kind: 'halt', detail: expect.stringContaining('2') });
+    expect(await classifyCitedPaths(['src/b.ts'], 'feat/daemon-missing', stack.git))
+      .toMatchObject({ kind: 'halt', detail: expect.stringContaining('feat/daemon-missing') });
   });
 });

@@ -50,4 +50,30 @@ describe('deriveTaskBoundOwner', () => {
       judge: () => 1,
     });
   });
+
+  it('halts instead of guessing for a missing or undeclared task owner', () => {
+    expect(deriveTaskBoundOwner({
+      taskIds: ['T2'],
+      envelope: { sliceMembership: { taskSlices: { T1: 1 }, titles: ['First'] } },
+      planText: '', appendedChildren: {}, declaredPositions: [1, 2, 3],
+    })).toMatchObject({ kind: 'halt', taskId: 'T2', detail: expect.stringContaining('T2') });
+
+    expect(deriveTaskBoundOwner({
+      taskIds: [remTaskId], envelope,
+      planText: `### Task ${remTaskId}: Repair audit finding\n**Child:** 7`,
+      appendedChildren: {}, declaredPositions: [1, 2, 3],
+    })).toMatchObject({ kind: 'halt', taskId: remTaskId, detail: expect.stringContaining('7') });
+
+    expect(deriveTaskBoundOwner({
+      taskIds: [remTaskId], envelope, planText: `### Task ${remTaskId}: Repair audit finding`,
+      appendedChildren: {}, declaredPositions: [1, 2, 3],
+    })).toMatchObject({ kind: 'halt', taskId: remTaskId });
+  });
+
+  it('rejects an undeclared cached remediation child too', () => {
+    expect(deriveTaskBoundOwner({
+      taskIds: [remTaskId], envelope, planText: `### Task ${remTaskId}: Repair audit finding`,
+      appendedChildren: { [remTaskId]: 7 }, declaredPositions: [1, 2, 3],
+    })).toMatchObject({ kind: 'halt', taskId: remTaskId, detail: expect.stringContaining('7') });
+  });
 });

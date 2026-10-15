@@ -6,6 +6,7 @@ import {
   access as accessFile,
   unlink as unlinkFile,
   stat,
+  rename,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
 import { withGateTier } from './gate-event-tier.js';
@@ -188,6 +189,14 @@ import {
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild } from './routing/execution-child.js';
 import { routingEligible } from './routing/route-types.js';
+import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
+import { readAppendedRemediationTaskChildren } from './artifacts.js';
+import { createRouteRecord } from './routing/route-record-store.js';
+import { routeAdmittedRound } from './routing/round-router.js';
+import { admitRound } from './routing/round-admission.js';
+import { routedRoundOpen } from './routing/round-admission.js';
+import { leafBranchFor } from './feature-branch-identity.js';
+import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
   advanceChildRegion,
@@ -4577,7 +4586,48 @@ export class Conductor {
     // routing namespace without duplicating eligibility checks downstream.
     if (routedFixes.length > 0 && this.featureSlug) {
       const cursor = await this.resolveActiveChild(this.projectRoot, this.featureSlug);
-      void routingEligible(cursor, this.config);
+      // Route only the same admitted BUILD-region work that the ordinary
+      // path would append.  All route failures return before a plan write,
+      // budget receipt, restage, or routing-ref allocation beyond admission.
+      if (routingEligible(cursor, this.config)) {
+        const ordinaryTarget = earliestRemediationTarget(routedFixes, steps);
+        if (ordinaryTarget.unresolved.length === 0 && ordinaryTarget.target === 'build' && planPath) {
+          const envelope = await readCoverageBindingEnvelope(this.projectRoot, {
+            readFile: (path) => readFile(path, 'utf8'), mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+            writeFile: (path, contents) => writeFile(path, contents, 'utf8'), rename,
+          });
+          if (!envelope?.sliceMembership) {
+            return { kind: 'halt', haltClass: 'needs-human', detail: 'routing cannot read the sealed task-slice ownership envelope' };
+          }
+          const declaredPositions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
+            .filter((position) => Number.isSafeInteger(position) && position > 0).sort((a, b) => a - b) as ChildId[];
+          if (declaredPositions.length > 1) {
+            const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
+            if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
+            const planText = activePlanText || await readFile(planPath, 'utf8');
+            const routed = await routeAdmittedRound({
+              admitted: routedFixes.map((gap) => ({
+                id: gap.id, gap, gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+                taskIds: gap.tasks.map((task) => task.id), existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
+                residue: gap.tasks.length === 0,
+              })), envelope, planText,
+              appendedChildren: await readAppendedRemediationTaskChildren(this.projectRoot),
+              declaredPositions, leafTip: leafBranchFor(this.featureSlug), roundId,
+              judge: this.stepRunner.dispatchResidueRoutingJudgement,
+              git: makeGitRunner(this.projectRoot), leafPlan: planText,
+              ...(hintSource.consolidatedManualTestFail ? { consolidatedManualTestFail: ['manual_test: FAIL'] } : {}),
+            });
+            if (routed.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
+            const created = await createRouteRecord(this.projectRoot, this.featureSlug, { roundId, kind: 'audit', items: routed.items, allocation: routed.allocation });
+            if (created.kind !== 'created') return { kind: 'halt', haltClass: 'needs-human', detail: `routing record creation failed: ${created.kind}` };
+            const firstHost = routed.hosts[0];
+            if (firstHost === undefined) return { kind: 'halt', haltClass: 'needs-human', detail: 'routing produced no host' };
+            const admission = await admitRound(this.projectRoot, this.featureSlug, created.record, firstHost);
+            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
+            return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
+          }
+        }
+      }
     }
     if (fixes.length > 0 && routedFixes.length === 0) {
       const rejectedAppendGapIds = fixes
@@ -15414,6 +15464,10 @@ export class Conductor {
           await emitRebaseEvent(this.events, outcome);
           await recordRebaseStepCompletion(this.stateFilePath, outcome);
           return { success: true };
+        }
+        if (await routedRoundOpen(this.projectRoot, stackSlug, { git })) {
+          await this.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+          return { success: false, output: 'stack base refresh deferred: routed round open' };
         }
         const restacked = await runRestack({
           worktree: this.projectRoot,

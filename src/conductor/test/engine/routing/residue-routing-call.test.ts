@@ -6,6 +6,7 @@ import {
   RESIDUE_ROUTING_CALL_SCHEMA,
   RESIDUE_ROUTING_MAX_ATTEMPTS,
   parseResidueRoutingAnswer,
+  resolveResidueOwner,
   runResidueRoutingCall,
 } from '../../../src/engine/routing/residue-routing-call.js';
 import { PRD_AUDIT_JUDGMENT_SCHEMA } from '../../../src/engine/prd-audit-contract.js';
@@ -70,7 +71,7 @@ describe('residue routing call', () => {
   });
 
   it('calls the judge once with every residue item when its first answer is valid', async () => {
-    const judge = vi.fn(async () => ({ success: true, output: validAnswer }));
+    const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({ success: true, output: validAnswer }));
 
     await expect(runResidueRoutingCall({ items, declaredPositions, judge })).resolves.toMatchObject({ kind: 'routed' });
 
@@ -80,12 +81,24 @@ describe('residue routing call', () => {
   });
 
   it('re-asks the complete round up to its independent two-attempt budget', async () => {
-    const judge = vi.fn(async () => ({ success: true, output: 'not JSON' }));
+    const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({ success: true, output: 'not JSON' }));
 
     await expect(runResidueRoutingCall({ items, declaredPositions, judge })).resolves.toMatchObject({
       kind: 'halt', itemId: 'finding-1',
     });
 
     expect(judge).toHaveBeenCalledTimes(RESIDUE_ROUTING_MAX_ATTEMPTS);
+  });
+
+  it('retains the judgement rationale for direct and default residue ownership', () => {
+    expect(resolveResidueOwner({ itemId: 'finding-1', child: 2, candidates: [2], rationale: 'implements D2' }))
+      .toEqual({ owner: 2, reason: 'residue-judged', rationale: 'implements D2' });
+    expect(resolveResidueOwner({ itemId: 'finding-1', child: 2, candidates: [1, 2], rationale: 'ambiguous ownership' }))
+      .toEqual({ owner: 1, reason: 'residue-default', rationale: 'ambiguous ownership' });
+  });
+
+  it('halts without a judge and preserves the independent routing-call budget', async () => {
+    await expect(runResidueRoutingCall({ items: [items[0]!], declaredPositions }))
+      .resolves.toEqual({ kind: 'halt', itemId: 'finding-1', detail: 'no residue routing judge available' });
   });
 });

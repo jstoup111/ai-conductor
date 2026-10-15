@@ -3,15 +3,15 @@ import { parseFeatureBranch } from '../feature-branch-identity.js';
 import type { GitRunner } from '../rebase.js';
 import { closureRefFor } from './routing-refs.js';
 
-export interface CitedPathClassification {
+export type CitedPathClassification = {
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
-}
+} | { readonly kind: 'halt'; readonly detail: string };
 
-export interface HostSelection {
+export type HostSelection = {
   readonly host: ChildId;
   readonly reason: 'owner' | 'prerequisite-paths';
-}
+} | { readonly kind: 'halt'; readonly detail: string };
 
 export interface SelectHostOptions {
   readonly owner: ChildId;
@@ -21,23 +21,24 @@ export interface SelectHostOptions {
   readonly git: GitRunner;
 }
 
-async function hasPath(git: GitRunner, tree: string, path: string): Promise<boolean> {
+async function hasPath(git: GitRunner, tree: string, path: string): Promise<boolean | undefined> {
   const result = await git(['ls-tree', tree, '--', path]);
-  if (result.exitCode !== 0) throw new Error(`cannot read tree ${tree}`);
+  if (result.exitCode !== 0) return undefined;
   return result.stdout.trim() !== '';
 }
 
-async function containsEveryPath(git: GitRunner, tree: string, paths: readonly string[]): Promise<boolean> {
+async function containsEveryPath(git: GitRunner, tree: string, paths: readonly string[]): Promise<boolean | undefined> {
   for (const path of paths) {
-    if (!await hasPath(git, tree, path)) return false;
+    const exists = await hasPath(git, tree, path);
+    if (exists === undefined) return undefined;
+    if (!exists) return false;
   }
   return true;
 }
 
-function slugForLeafTip(leafTip: string): string {
+function slugForLeafTip(leafTip: string): string | undefined {
   const identity = parseFeatureBranch(leafTip);
-  if (identity.kind !== 'leaf') throw new Error(`expected a leaf branch, got ${leafTip}`);
-  return identity.slug;
+  return identity.kind === 'leaf' ? identity.slug : undefined;
 }
 
 /** Separates prerequisite inputs already present on the leaf from repair outputs. */
@@ -49,7 +50,9 @@ export async function classifyCitedPaths(
   const inputs: string[] = [];
   const outputs: string[] = [];
   for (const path of paths) {
-    (await hasPath(git, leafTip, path) ? inputs : outputs).push(path);
+    const exists = await hasPath(git, leafTip, path);
+    if (exists === undefined) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
+    (exists ? inputs : outputs).push(path);
   }
   return { inputs, outputs };
 }
@@ -61,15 +64,20 @@ export async function classifyCitedPaths(
 export async function selectHost(options: SelectHostOptions): Promise<HostSelection> {
   const { owner, inputs, positions, leafTip, git } = options;
   const slug = slugForLeafTip(leafTip);
+  if (!slug) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
   const leaf = positions.at(-1);
-  if (leaf === undefined) throw new Error('cannot select a host without positions');
+  if (leaf === undefined) return { kind: 'halt', detail: 'cannot select a host without positions' };
 
   const ownerTree = owner === leaf ? leafTip : closureRefFor(slug, owner);
-  if (await containsEveryPath(git, ownerTree, inputs)) return { host: owner, reason: 'owner' };
+  const atOwner = await containsEveryPath(git, ownerTree, inputs);
+  if (atOwner === undefined) return { kind: 'halt', detail: `cannot read closure tree for child ${owner}` };
+  if (atOwner) return { host: owner, reason: 'owner' };
 
   const ownerIndex = positions.indexOf(owner);
   for (const candidate of positions.slice(ownerIndex + 1, -1)) {
-    if (await containsEveryPath(git, closureRefFor(slug, candidate), inputs)) {
+    const atCandidate = await containsEveryPath(git, closureRefFor(slug, candidate), inputs);
+    if (atCandidate === undefined) return { kind: 'halt', detail: `cannot read closure tree for child ${candidate}` };
+    if (atCandidate) {
       return { host: candidate, reason: 'prerequisite-paths' };
     }
   }

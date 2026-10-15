@@ -36,7 +36,7 @@ export function deriveTaskBoundOwner({
   envelope,
   planText,
   appendedChildren,
-  declaredPositions: _declaredPositions,
+  declaredPositions,
 }: TaskBoundOwnerInput): TaskBoundOwnerDerivation {
   const owners: Array<{ owner: number; reason: Exclude<TaskBoundOwnerReason, 'multi-task-earliest'> }> = [];
 
@@ -44,17 +44,26 @@ export function deriveTaskBoundOwner({
     if (isEngineAppendedRemediationTaskId(taskId)) {
       const committedChild = readRemTaskChildLine(planText, taskId);
       if (committedChild !== undefined) {
+        if (!declaredPositions.includes(committedChild)) {
+          return { kind: 'halt', taskId, detail: `Task-bound work cannot use child position ${committedChild} recorded for ${taskId}` };
+        }
         owners.push({ owner: committedChild, reason: 'rem-child-line' });
         continue;
       }
       const cachedChild = appendedChildren[taskId];
       if (cachedChild !== undefined) {
+        if (!declaredPositions.includes(cachedChild)) {
+          return { kind: 'halt', taskId, detail: `Task-bound work cannot use child position ${cachedChild} recorded for ${taskId}` };
+        }
         owners.push({ owner: cachedChild, reason: 'rem-cache' });
         continue;
       }
     } else {
       const slice = envelope.sliceMembership?.taskSlices[taskId];
       if (slice !== undefined) {
+        if (!declaredPositions.includes(slice)) {
+          return { kind: 'halt', taskId, detail: `Task-bound work cannot use child position ${slice} recorded for ${taskId}` };
+        }
         owners.push({ owner: slice, reason: 'task-slice' });
         continue;
       }

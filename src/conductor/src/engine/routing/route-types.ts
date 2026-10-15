@@ -153,12 +153,17 @@ export interface RoutedItem {
   readonly host: ChildId;
   readonly reason: string;
   readonly fallback: readonly ChildId[];
+  /** The placement judgement is durable context for the host. */
+  readonly rationale?: string;
+  /** Existing-task work is represented, but must not be re-staged. */
+  readonly restage?: boolean;
 }
 
 /** The immutable rem-* blocks to append when a host enters its region. */
 export interface FrozenHostAllocation {
   readonly remTaskIds: readonly string[];
   readonly blockBodies: readonly string[];
+  readonly retryHint?: string;
 }
 
 /** Frozen rem-* task ids and their exact block bodies, grouped by host child. */
@@ -279,7 +284,13 @@ function parseRoutedItem(value: unknown): RoutedItem | undefined {
   if (!findingId || !kind || !owner || !host || !reason || !Array.isArray(value.fallback)) return undefined;
   const fallback = value.fallback.map(parseChild);
   if (fallback.some((child) => child === undefined)) return undefined;
-  return { findingId, kind, owner, host, reason, fallback: fallback as ChildId[] };
+  if (value.rationale !== undefined && typeof value.rationale !== 'string') return undefined;
+  if (value.restage !== undefined && typeof value.restage !== 'boolean') return undefined;
+  return {
+    findingId, kind, owner, host, reason, fallback: fallback as ChildId[],
+    ...(value.rationale === undefined ? {} : { rationale: value.rationale }),
+    ...(value.restage === undefined ? {} : { restage: value.restage }),
+  };
 }
 
 function parseAllocation(value: unknown): FrozenAllocation | undefined {
@@ -290,8 +301,9 @@ function parseAllocation(value: unknown): FrozenAllocation | undefined {
     if (!child || !isRecord(rawAllocation)) return undefined;
     const remTaskIds = parseStringArray(rawAllocation.remTaskIds, (id) => id.startsWith('rem-'));
     const blockBodies = parseStringArray(rawAllocation.blockBodies);
-    if (!remTaskIds || !blockBodies || remTaskIds.length !== blockBodies.length) return undefined;
-    allocation[child] = { remTaskIds, blockBodies };
+    if (!remTaskIds || !blockBodies || remTaskIds.length !== blockBodies.length ||
+      (rawAllocation.retryHint !== undefined && typeof rawAllocation.retryHint !== 'string')) return undefined;
+    allocation[child] = { remTaskIds, blockBodies, ...(rawAllocation.retryHint === undefined ? {} : { retryHint: rawAllocation.retryHint }) };
   }
   return allocation;
 }

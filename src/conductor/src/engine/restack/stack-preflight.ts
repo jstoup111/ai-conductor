@@ -17,6 +17,7 @@ import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes } from '../routing/route-record-store.js';
+import { reconcileRounds, routedRoundOpen } from '../routing/round-admission.js';
 import { EventPersister } from '../event-persister.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
@@ -52,6 +53,9 @@ export interface RunStackPreflightOptions {
   readonly hasMatchingResumeAuthorization?: () => Promise<boolean>;
   /** Injectable only for the dispatch boundary tests. */
   readonly hasLiveHalt?: () => Promise<boolean>;
+  /** Routing recovery belongs between journal recovery and cursor resolution. */
+  readonly reconcileRounds?: typeof reconcileRounds;
+  readonly routedRoundOpen?: typeof routedRoundOpen;
 }
 
 async function deferredBaseRefresh(events: ConductorEventEmitter | undefined): Promise<void> {
@@ -111,6 +115,9 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     const persister = new EventPersister(join(options.worktree, '.pipeline', 'events.jsonl'), options.events ?? new ConductorEventEmitter());
     const drained = await drainRoutingOutboxes(options.worktree, options.slug, (event) => persister.persistDurably(event), { git: options.git });
     if (drained.kind !== 'drained') return { kind: 'unavailable', detail: `cannot drain routing outbox: ${drained.kind}` };
+    const reconciled = await (options.reconcileRounds ?? reconcileRounds)(options.worktree, options.slug, { git: options.git });
+    if (reconciled.kind === 'unavailable') return { kind: 'unavailable', detail: reconciled.detail };
+    if (reconciled.kind === 'navigate-leaf-to-build') return { kind: 'clear' };
   }
 
   const cursor = await resolveActiveChild(options.worktree, options.slug, { git: options.git });
@@ -123,6 +130,12 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     return cursor.kind === 'git-error' || cursor.kind === 'detached-head' || cursor.kind === 'envelope-missing'
       ? { kind: 'unavailable', detail: `cannot resolve stack cursor: ${cursor.kind}` }
       : { kind: 'clear' };
+  }
+
+  if (config.ok && routingSettingOn(config.config) &&
+    await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+    if (options.baseRefreshDue) await deferredBaseRefresh(options.events);
+    return { kind: 'clear' };
   }
 
   if (cursor.foreignRoundChildren?.length) {

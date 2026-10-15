@@ -57,6 +57,13 @@ function malformed(items: readonly ResidueRoutingItem[], detail: string): Parsed
   return items.map((item) => ({ kind: 'malformed', itemId: item.itemId, detail }));
 }
 
+/** Retain why residue is placed at a judgment or deterministic fallback. */
+export function resolveResidueOwner(answer: ResidueRoutingAnswer): { readonly owner: number; readonly reason: 'residue-judged' | 'residue-default'; readonly rationale: string } {
+  return answer.candidates.length === 1 && answer.candidates[0] === answer.child
+    ? { owner: answer.child, reason: 'residue-judged', rationale: answer.rationale }
+    : { owner: Math.min(...answer.candidates), reason: 'residue-default', rationale: answer.rationale };
+}
+
 function isPositivePosition(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
