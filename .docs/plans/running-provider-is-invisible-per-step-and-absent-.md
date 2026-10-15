@@ -425,3 +425,11 @@ Task 1 ─┬─▶ Task 2 ─▶ Task 3 ─┬─▶ Task 5
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-R1: src/conductor/src/engine/provider-execution.ts: drop `import type { ConductorEventEmitter } from '../ui/events.js'` and type providerExecutionEventCallbacks's eventTarget as `{ emit(event: ConductorEvent): unknown }`, with ConductorEvent imported from '../types/events.js'; confirm the build passes typecheck and that the existing providerExecutionEventCallbacks tests in src/conductor/test/engine/provider-execution.test.ts still pass unchanged
+**Gate:** as-built
+**Rationale:** Verified (99%, observed in the diff against main): this feature added `import type { ConductorEventEmitter } from '../ui/events.js'` at src/conductor/src/engine/provider-execution.ts:64. It is used only to type `providerExecutionEventCallbacks(eventTarget: Pick<ConductorEventEmitter, 'emit'>)`. adr-2026-10-12-enforced-source-layer-directions decision 1 forbids every upward import, type-only ones included. That ADR is approved and stays authoritative, so no architectural decision is needed. This is implementation drift that conforms to the architecture and can be fixed mechanically in BUILD. Plan Task 3 created this function in provider-execution.ts, so the plan already admits the repair. Fix: remove the ui/ import and type the parameter structurally against the lower layer. Use `{ emit(event: ConductorEvent): unknown }`, importing `ConductorEvent` from '../types/events.js' next to the existing ProviderStartIdentity import. Callers that pass a ConductorEventEmitter still type-check, so Task 3's callback behavior and its tests carry over unchanged. Excluded sibling sites: about 15 other engine/*.ts files import ConductorEventEmitter from ui/events.js. Those imports were already on main, ADR decisions 2 and 6 own them, and no task in this plan admits them, so they are left out of this repair.
+**Governing clause:** adr-2026-10-12-enforced-source-layer-directions decision 1
+**Done when:**
+- adr-2026-10-12-enforced-source-layer-directions decision 1 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.

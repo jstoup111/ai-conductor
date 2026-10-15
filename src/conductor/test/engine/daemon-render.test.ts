@@ -760,6 +760,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     // guard fails loudly if a new/other type starts unexpectedly rendering.
     const samples: ConductorEvent[] = [
       { type: 'step_started', step: 'build', index: 0 },
+      { type: 'provider_attempt_started', step: 'build', provider: { kind: 'known', id: 'claude' } },
       { type: 'step_completed', step: 'build', status: 'done' },
       { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
       { type: 'step_refused', step: 'build', kind: 'seal', reason: 'protected artifact changed' },
@@ -852,6 +853,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
 
     const previousRenderingTypes = new Set([
       'step_started',
+      'provider_attempt_started',
       'step_completed',
       'step_failed',
       'step_refused',

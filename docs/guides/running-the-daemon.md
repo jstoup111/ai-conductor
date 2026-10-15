@@ -213,12 +213,19 @@ remains line-oriented. Older redirect events without this evidence retain the sh
 
 ### Provider attribution and result summaries
 
-Three line kinds tell you what a step actually did, which provider ran it, and what the feature
-cost in total — the per-step attribution matters because
+Four line kinds tell you which provider is running a step, what the step actually did, which
+provider ran it, and what the feature cost in total — the per-step attribution matters because
 providers are routed per step (`llm_provider` top level plus per-step overrides; see
 [configuration](../reference/configuration.md)), so the provider executing a given step is not
 necessarily the repo default.
 
+- **`·   ▸ <step> on <provider> (<model>)`** is logged when a provider candidate starts, so a
+  long-running step names its provider while it is still in flight. A configured member renders
+  as `<group> / <member>`. The `(<model>)` suffix is omitted when no model was resolved.
+  `▸ <step> provider unknown` marks a start with a blank provider identity. Each fallback
+  candidate and model-fallback rung logs its own start line. Recovery sessions (rebase-autoresolve,
+  ci-fix) log the same line under their feature tag. The interactive terminal renderer prints the
+  same line without the `·` prefix.
 - **`<provider>: done — <turns>, <duration>, <cost>`** followed by the agent's own prose is the
   provider subprocess's captured result. Non-interactive Claude `--print --output-format stream-json`
   stdout and Codex `exec --json` stdout are machine envelopes; the daemon summarizes the telemetry and prints the

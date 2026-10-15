@@ -232,6 +232,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'monitor_session_opened',
   'monitor_item_deferred',
   'monitor_session_ended',
+  'provider_attempt_started',
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   'group_member_step',
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
@@ -387,6 +388,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'pipeline_tail_diagnostic',
   'renderer_error',
   'provider_attempt',
+  'provider_attempt_started',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
   'scratch_cleanup_failed',
@@ -1663,6 +1665,22 @@ describe('event sink subscriptions', () => {
 
   it('pins the exact persisted event set to halt-class additions', () => {
     expect(new Set(persistedEventTypes())).toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
+  });
+
+  it('renders and persists provider starts without audit or OpenTelemetry export', () => {
+    expect({
+      sink: EVENT_SINKS.provider_attempt_started,
+      persisted: persistedEventTypes().includes('provider_attempt_started'),
+      rendered: renderedEventTypes().includes('provider_attempt_started'),
+      audited: auditedEventTypes().includes('provider_attempt_started'),
+      otel: EVENT_SINKS.provider_attempt_started.otel,
+    }).toEqual({
+      sink: { render: true, persist: true, audit: false, otel: false },
+      persisted: true,
+      rendered: true,
+      audited: false,
+      otel: false,
+    });
   });
 
   it('declares sink policies for halt-record outcomes', () => {

@@ -50,6 +50,7 @@ import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
+import { formatProviderStartLine } from './ui/provider-start-line.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
@@ -57,7 +58,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
-import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary, providerExecutionEventCallbacks } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
 import {
   prepareManagedSessionContext,
@@ -1424,12 +1425,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // The per-feature Conductor composes self-host authority around this
     // resolved-candidate boundary; keep it present for every daemon context.
     withCandidateSafety: createCandidateSafetyBoundary(),
-    onAttempt: (step, { executionContext, ...attempt }) =>
-      eventTarget.emit({
-        type: 'provider_attempt', step, ...attempt,
-        ...(executionContext ? { executionContext } : {}),
-      }),
-    warn: (_message, transition) => eventTarget.emit(transition),
+    ...providerExecutionEventCallbacks(eventTarget),
     ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
   });
   // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
@@ -1449,9 +1445,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       (message) => log(message, true),
       formatDaemonFeatureTag(slug),
     );
-    scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
-    scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
+    subscribeScopedProviderRendering(scopedEvents, scopedLog);
     subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
     const providerExecution = createProviderExecution(scopedEvents, scopedLog);
     const provider = providerExecution.configuredProviders[0];
@@ -1475,6 +1469,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           })),
     };
   };
+  
   // Repair providers can write in a transient worktree, but their producer
   // records are projected through the retained feature's persistence scope.
   // Deriving this subscription from EVENT_SINKS keeps refusals and bypasses
@@ -3133,6 +3128,26 @@ export function resetRenderedReclaimRetentions(): void {
  * signal high: step boundaries, failures/retries, unsatisfied gates, kickbacks,
  * halts/convergence, and rate limits — not the full event firehose.
  */
+/**
+ * Render provider lifecycle observations on a recovery session's slug-scoped
+ * logger.  Recovery dispatches have their own event emitter, so subscribing
+ * here keeps their live provider identity on the same surface as a feature
+ * dispatch without forwarding it to the untagged daemon logger.
+ */
+export function subscribeScopedProviderRendering(
+  events: ConductorEventEmitter,
+  log: (msg: string) => void,
+): void {
+  for (const type of [
+    'provider_attempt',
+    'provider_fallback',
+    'session_policy',
+    'provider_attempt_started',
+  ] as const) {
+    events.on(type, (event) => renderDaemonEvent(event, log));
+  }
+}
+
 export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => void): void {
   // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
   // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
@@ -3404,6 +3419,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot}   ${renderedExecutionSubject(event, event.step)} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`);
       break;
     }
+    case 'provider_attempt_started':
+      log(`${dot}   ${formatProviderStartLine(event)}`);
+      break;
     case 'feature_usage_total':
       // The per-step provider lines above answer "what did this step cost?".
       // This one answers "what did the whole feature cost?" — the question an

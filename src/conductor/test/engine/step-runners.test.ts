@@ -25,7 +25,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { scanInheritedState } from '../../src/engine/daemon-dashboard.js';
-import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
+import { executeProviderCandidates, providerExecutionEventCallbacks } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
@@ -1265,6 +1265,50 @@ describe('DefaultStepRunner', () => {
 
     expect(prepared).toHaveBeenCalledOnce();
     expect(safety).toHaveBeenCalledOnce();
+  });
+
+  it('forwards the live candidate-start callback through provider-aware dispatch', async () => {
+    const onCandidateStart = vi.fn();
+    const executor = vi.fn(async (input: any) => {
+      input.onCandidateStart('build', {
+        provider: { kind: 'known', id: 'codex' },
+        executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+      });
+      return { success: true, output: 'done', exitCode: 0, preferredProvider: 'codex', actualProvider: 'codex', attempts: [] };
+    });
+    const context: any = {
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn())]),
+      sessions: new ProviderSessionStore(), executor, onCandidateStart,
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+
+    await runner.run('build', emptyState, {
+      executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+    });
+
+    expect(onCandidateStart).toHaveBeenCalledWith('build', expect.objectContaining({
+      executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+    }));
+  });
+
+  it('does not await a candidate-start listener before entering the provider runtime', async () => {
+    const events = new ConductorEventEmitter();
+    events.on('provider_attempt_started', async () => {
+      await new Promise<void>(() => {});
+    });
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
+        sessions: new ProviderSessionStore(),
+        ...providerExecutionEventCallbacks(events),
+      },
+    });
+
+    await expect(runner.run('build', emptyState)).resolves.toMatchObject({ success: true });
+    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it('retains terminal setup exhaustion when the real build runner maps an executor result', async () => {

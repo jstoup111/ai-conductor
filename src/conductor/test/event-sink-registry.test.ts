@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:4
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -60,6 +60,15 @@ describe('event sink registry', () => {
   it('persists provider stream progress without rendering or auditing it', () => {
     expect(EVENT_SINKS.provider_stream_progress).toEqual({
       render: false,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  });
+
+  it('renders and persists provider starts without audit or OpenTelemetry subscriptions', () => {
+    expect(EVENT_SINKS.provider_attempt_started).toEqual({
+      render: true,
       persist: true,
       audit: false,
       otel: false,

@@ -1,4 +1,4 @@
-// Covers: task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
+// Covers: task:3, task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
@@ -35,6 +35,17 @@ async function fixture(includeUncitedAdr = false): Promise<string> {
 }
 
 describe('runPlanReview', () => {
+  it('forwards its candidate-start callback into the provider executor', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    const onCandidateStart = vi.fn();
+    await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any, onCandidateStart,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls[0].onCandidateStart).toBe(onCandidateStart);
+  });
+
   it('dispatches one fresh, read-only, schema-constrained reviewer and writes only its validated findings', async () => {
     const root = await fixture(); const calls: any[] = []; const events: any[] = [];
     const artifact = await runPlanReview({

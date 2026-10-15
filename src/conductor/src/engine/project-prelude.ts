@@ -206,6 +206,7 @@ async function invokePreludeSkill(
     config,
     modelOverride: execution.modelOverride,
     onAttempt: execution.onAttempt,
+    onCandidateStart: execution.onCandidateStart,
     warn: execution.warn,
     options: {
       prompt: renderSkillInvocation(invocation, '/'),

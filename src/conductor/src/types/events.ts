@@ -315,6 +315,20 @@ export interface ProviderAttemptEvent {
   lifecycle?: ProviderLifecycleEventMetadata;
 }
 
+/** Explicit identity for a provider candidate at the moment it starts. */
+export type ProviderStartIdentity =
+  | { kind: 'known'; id: string }
+  | { kind: 'unknown' };
+
+/** A provider candidate has started invocation for a step. */
+export interface ProviderAttemptStartedEvent {
+  type: 'provider_attempt_started';
+  step: StepName;
+  provider: ProviderStartIdentity;
+  model?: string;
+  executionContext?: ExecutionContext;
+}
+
 /**
  * Live intra-step provider signal. An absent `activeChildren` is unobserved,
  * never zero; this observation carries no terminal usage authority.
@@ -996,6 +1010,7 @@ type ConductorEventBody =
   | GithubWriteCredentialFallbackEvent
   | ProviderDiscoveryEvent
   | ProviderAttemptEvent
+  | ProviderAttemptStartedEvent
   | ProviderStreamProgressEvent
   | {
       /** A provider scratch home was removed during a daemon sweep or legacy collection. */

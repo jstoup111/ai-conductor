@@ -41,7 +41,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
-import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary, providerExecutionEventCallbacks } from './engine/provider-execution.js';
 import { prepareManagedSessionContext } from './execution/managed-session-context.js';
 import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
@@ -1711,12 +1711,7 @@ async function dispatchCliCommand(): Promise<void> {
     // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
     // Conductor composes self-host authority around it when applicable.
     withCandidateSafety: createCandidateSafetyBoundary(),
-    onAttempt: (step, { executionContext, ...attempt }) =>
-      events.emit({
-        type: 'provider_attempt', step, ...attempt,
-        ...(executionContext ? { executionContext } : {}),
-      }),
-    warn: (_message, transition) => events.emit(transition),
+    ...providerExecutionEventCallbacks(events),
   };
   const compatibilityRuntime = providerExecution.runtimes.get(
     providerExecution.configuredProviders[0],

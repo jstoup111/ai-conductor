@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -369,6 +369,7 @@ describe('runProjectPrelude (happy paths)', () => {
     });
     const beginBranch = vi.spyOn(sessions, 'beginBranch');
     const onAttempt = vi.fn();
+    const onCandidateStart = vi.fn();
     const result = await runProjectPrelude(
       dir,
       provider(capturedInvoke, capturedInteractive),
@@ -387,6 +388,7 @@ describe('runProjectPrelude (happy paths)', () => {
           runtimes,
           sessions,
           onAttempt,
+          onCandidateStart,
         },
       },
     );
@@ -439,6 +441,10 @@ describe('runProjectPrelude (happy paths)', () => {
         provider: attempt.provider,
         outcome: attempt.outcome,
       })),
+      starts: onCandidateStart.mock.calls.map(([step, candidate]) => ({
+        step,
+        provider: candidate.provider,
+      })),
       result,
       bootstrapMarker: await readBootstrapMarker(dir),
       assessMarker: await readAssessMarker(dir),
@@ -474,6 +480,10 @@ describe('runProjectPrelude (happy paths)', () => {
       attempts: [
         { step: 'bootstrap', provider: 'codex', outcome: 'success' },
         { step: 'assess', provider: 'claude', outcome: 'success' },
+      ],
+      starts: [
+        { step: 'bootstrap', provider: { kind: 'known', id: 'codex' } },
+        { step: 'assess', provider: { kind: 'known', id: 'claude' } },
       ],
       result: {
         bootstrapExecuted: true,
