@@ -99,8 +99,8 @@ happened and corrupted daemon state:
    **Safe while a proven-contained dispatch runs.** Read-only commands (`git
    status`/`log`/`diff`, `conduct daemon status`, tailing `.daemon/daemon.log`), any change
    under an excluded path (`.git/`, `.daemon/`, `.worktrees/`, `.pipeline/`,
-   `.claude/worktrees/`, `src/conductor/dist-versions/`, or any `node_modules/` tree), and
-   operator changes to the root checkout. The guard still protects unrelated provider state.
+   `.claude/worktrees/`, `src/conductor/dist-versions/`, `src/conductor/.vitest-tmp/`, or any
+   `node_modules/` tree), and operator changes to the root checkout. The guard still protects unrelated provider state.
 
    **Containment unproven: unsafe.** Containment is unproven when it is disabled, `bwrap` is
    unavailable, or its two-sided probe cannot establish both a read-only live checkout and a

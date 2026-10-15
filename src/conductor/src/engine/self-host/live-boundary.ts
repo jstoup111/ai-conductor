@@ -59,6 +59,13 @@ export interface LiveBoundarySnapshot {
  *                — generated versioned distribution snapshots. Scoped to this
  *                  exact subtree so same-named source directories elsewhere
  *                  remain fingerprinted.
+ *   `src/conductor/.vitest-tmp`
+ *                — Vitest's disposable per-run storage (`scripts/vitest-temp.mjs`).
+ *                  Any test run in the live checkout creates, sweeps, and removes
+ *                  `ai-conductor-vitest-run-*` roots here, so a run that started
+ *                  before the baseline and finished during a build halted it as
+ *                  drift (a run root's removed `.owner` marker). Scoped
+ *                  to this exact subtree like `dist-versions`.
  *   `node_modules` — dependency and tool-cache trees at any nesting depth. The
  *                    exact directory basename is excluded; lookalikes remain
  *                    fingerprinted, and `.gitignore` is deliberately not used.
@@ -72,7 +79,7 @@ export interface LiveBoundarySnapshot {
  */
 export const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
-  'src/conductor/dist-versions',
+  'src/conductor/dist-versions', 'src/conductor/.vitest-tmp',
 ];
 const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_modules'];
 

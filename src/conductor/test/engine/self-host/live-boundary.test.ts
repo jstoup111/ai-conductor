@@ -225,7 +225,7 @@ describe('live self-host boundary', () => {
       }))).toEqual([
         {
           label: 'live checkout',
-          exclude: ['.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees', 'src/conductor/dist-versions'],
+          exclude: ['.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees', 'src/conductor/dist-versions', 'src/conductor/.vitest-tmp'],
           excludeDirectoryBasenames: ['node_modules'],
           manifest: [
             { path: 'nested/a.txt', digest: digest('a') },
@@ -1067,6 +1067,25 @@ describe('live self-host boundary', () => {
         'packages/engine/dist-versions/v1/lookalike.js',
         'sentinel',
       ]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('ignores a Vitest run root finishing in src/conductor/.vitest-tmp without excluding lookalikes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-vitest-tmp-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const runRoot = join(live, 'src', 'conductor', '.vitest-tmp', 'ai-conductor-vitest-run-QrMMAb');
+    await Promise.all([
+      mkdir(runRoot, { recursive: true }),
+      mkdir(join(live, 'packages', 'engine', '.vitest-tmp'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await writeFile(join(runRoot, '.owner'), '{"pid":1}');
+    await writeFile(join(live, 'packages', 'engine', '.vitest-tmp', 'lookalike.js'), 'source');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    try {
+      expect(baseline.surfaces[0].manifest.map(entry => entry.path)).toEqual(['packages/engine/.vitest-tmp/lookalike.js']);
+      await rm(runRoot, { recursive: true, force: true });
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
