@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:7, task:rem-prd-audit-R1
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -646,10 +646,11 @@ describe('provider scratch homes', () => {
     try {
       const sandbox = join(home, 'harness-selfbuild-interrupted');
       await mkdir(join(sandbox, 'projects', 'w'), { recursive: true });
-      await writeFile(join(sandbox, 'projects', 'w', 'session.jsonl'), '{"message":"interrupted"}\n');
+      await writeFile(join(sandbox, '.credentials.json'), '{"token":"claude-secret-value"}');
+      await writeFile(join(sandbox, 'projects', 'w', 'session.jsonl'), '{"message":"interrupted claude-secret-value"}\n');
       await sweepScratch({ worktreeRoot, events, ownerLiveness: () => 'dead' });
       await expect(readFile(join(worktreeRoot, '.pipeline', 'transcripts', 'build', 'claude-run-a1-claude', 'projects', 'w', 'session.jsonl'), 'utf8'))
-        .resolves.toContain('interrupted');
+        .resolves.toBe('{"message":"interrupted [REDACTED]"}\n');
       expect(captures).toEqual([expect.objectContaining({ provider: 'claude', interrupted: true })]);
       await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
