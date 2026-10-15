@@ -721,7 +721,13 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
     expect(env).toContain(`${NAMESPACE_VAR}=${sanitizeNamespace(dir.split('/').pop()!)}`);
   });
 
-  it('keys operator-only skill suppression by its frontmatter name while preserving operator overrides', async () => {
+  it.each([
+    ['adds the renamed frontmatter key without the source-directory key', {}],
+    ['preserves another override and replaces an enabled renamed override', {
+      'another-skill': 'on',
+      'ac-daemon-triage': 'on',
+    }],
+  ])('keys operator-only skill suppression by its frontmatter name: %s', async (_caseName, existingOverrides) => {
     const skillNameRoot = await mkdtemp(join(tmpdir(), 'wt-prepare-skill-names-'));
     try {
       const skillPath = join(skillNameRoot, 'skills', 'daemon-triage');
@@ -729,17 +735,17 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       await writeFile(join(skillPath, 'SKILL.md'), '---\nname: ac-daemon-triage\n---\n', 'utf-8');
       await mkdir(join(dir, '.claude'), { recursive: true });
       await writeFile(join(dir, '.claude', 'settings.local.json'), JSON.stringify({
-        skillOverrides: { 'another-skill': 'on', 'ac-daemon-triage': 'on' },
+        skillOverrides: existingOverrides,
       }), 'utf-8');
 
       await prepareWorktree(dir, undefined, { skillNameRoot });
 
       const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.local.json'), 'utf-8'));
-      expect(settings.skillOverrides).toMatchObject({
-        'another-skill': 'on',
-        'ac-daemon-triage': 'off',
-      });
+      expect(settings.skillOverrides['ac-daemon-triage']).toBe('off');
       expect(settings.skillOverrides).not.toHaveProperty('daemon-triage');
+      if ('another-skill' in existingOverrides) {
+        expect(settings.skillOverrides['another-skill']).toBe('on');
+      }
     } finally {
       await rm(skillNameRoot, { recursive: true, force: true });
     }

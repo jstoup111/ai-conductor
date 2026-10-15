@@ -1,9 +1,10 @@
 // Covers: task:1, task:rem-as-built-1
 // Covers: task:10
 // Covers: task:2
-import { describe, expect, it } from 'vitest';
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { describe, expect, it, afterEach } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   BUILD_REVIEW_RUBRIC_IDS,
@@ -11,6 +12,7 @@ import {
   fingerprintBuildReviewRubricPolicy,
   getBuildReviewRubricDescriptor,
   isRegisteredRubric,
+  readBuildReviewRubricSkill,
 } from '../../src/engine/build-review-registry.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { validateConfig } from '../../src/engine/config.js';
@@ -18,15 +20,23 @@ import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-
 import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/build-review-registry', () => {
-  it('keeps rubric source loading addressed by its directory, not its frontmatter name', async () => {
-    const descriptor = getBuildReviewRubricDescriptor('security');
-    const directoryPath = fileURLToPath(new URL(
-      `../../../../skills/${descriptor.skillName}/SKILL.md`,
-      import.meta.url,
-    ));
+  const roots: string[] = [];
 
-    await expect(readFile(directoryPath, 'utf8')).resolves.toMatch(/^name: build-review-security$/m);
-    expect(directoryPath).toContain('/skills/build-review-security/SKILL.md');
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it('loads a rubric from its directory when its frontmatter name differs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-review-registry-'));
+    roots.push(root);
+    const skillPath = join(root, 'skills', 'build-review-security', 'SKILL.md');
+    const content = '---\nname: ac-build-review-security\n---\nrenamed-security-rubric\n';
+    await mkdir(join(root, 'skills', 'build-review-security'), { recursive: true });
+    await writeFile(skillPath, content, 'utf8');
+
+    // Deliberately no `skills/ac-build-review-security/SKILL.md`: a semantic-name
+    // lookup would fail, while the production directory loader must succeed.
+    await expect(readBuildReviewRubricSkill(root, 'security')).resolves.toBe(content);
   });
 
   it('registers the default-on implementation-quality rubric with the versioned built-ins', () => {

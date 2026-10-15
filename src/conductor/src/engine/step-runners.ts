@@ -93,7 +93,12 @@ import { RESIDUE_ROUTING_CALL_MEMBER } from './routing/residue-routing-call.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { resolveSkillName } from './skill-names.js';
-import { BUILD_REVIEW_RUBRIC_IDS, fingerprintBuildReviewRubricPolicy, getBuildReviewRubricDescriptor } from './build-review-registry.js';
+import {
+  BUILD_REVIEW_RUBRIC_IDS,
+  fingerprintBuildReviewRubricPolicy,
+  getBuildReviewRubricDescriptor,
+  readBuildReviewRubricSkill,
+} from './build-review-registry.js';
 import { currentCommitSha } from './project-prelude.js';
 import { loadConfig, resolveGateCodeValidityConfig } from './config.js';
 import {
@@ -3042,7 +3047,7 @@ export class DefaultStepRunner implements StepRunner {
       try {
         skillDigests[rubric] = {
           kind: 'resolved',
-          digest: `sha256:${createHash('sha256').update(await readFile(path)).digest('hex')}`,
+          digest: `sha256:${createHash('sha256').update(await readBuildReviewRubricSkill(harnessRoot, registeredRubric)).digest('hex')}`,
         };
       } catch {
         skillDigests[rubric] = { kind: 'unavailable', path };
