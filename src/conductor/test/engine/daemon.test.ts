@@ -344,6 +344,9 @@ describe('engine/daemon — runDaemon', () => {
     );
 
     await dispatchedFeature;
+    await vi.waitFor(() => {
+      expect(isFeatureInFlight).toBeDefined();
+    });
     expect(isFeatureInFlight?.('f0')).toBe(true);
     expect(isFeatureInFlight?.('other-feature')).toBe(false);
 
@@ -1053,7 +1056,7 @@ describe('engine/daemon — runDaemon', () => {
 
   // ── refresh gating: fetch only between work, never while a build runs ─────────
 
-  it('discovers local work WITHOUT requesting a remote refresh (local-first)', async () => {
+  it('uses the required startup refresh to discover the first local candidate', async () => {
     const seq: Array<{ refresh: boolean; returned: number }> = [];
     let started = false;
     const deps: DaemonDeps = {
@@ -1069,10 +1072,10 @@ describe('engine/daemon — runDaemon', () => {
     };
     const res = await runDaemon(deps, { concurrency: 1, once: true });
     expect(res.processed).toHaveLength(1);
-    // The dispatched item was found on a refresh:false call — the daemon does not
-    // fetch from origin to discover work that is already local.
+    // ADR dispatch-first D1 requires one refreshed discovery before the first
+    // claim, so even work already local is selected from that snapshot.
     const dispatchCall = seq.find((s) => s.returned > 0)!;
-    expect(dispatchCall.refresh).toBe(false);
+    expect(dispatchCall.refresh).toBe(true);
   });
 
   it('reaches out to origin (refresh) only when idle with no local work, and still finds the merged spec', async () => {
