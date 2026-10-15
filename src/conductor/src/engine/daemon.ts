@@ -1289,6 +1289,9 @@ export async function runDaemon(
   // discovery can invoke consumer-owned work-source hooks, which must not run
   // while an operator has paused the daemon.
   pausedAtBoot = await checkPaused();
+  // The first fill pass consumes this reading instead of re-polling: the
+  // first claim has exactly one pause gate (ADR dispatch-first D1).
+  let unconsumedBootPause: boolean | undefined = pausedAtBoot;
   if (!pausedAtBoot) {
     try {
       if (deps.emitMaintenancePhase) {
@@ -1536,7 +1539,9 @@ export async function runDaemon(
       // (handled below/at drain) is completely unaffected.
       // A drain reaches this same boundary at zero active claims, but must not
       // select a replacement item before its pending restart action runs.
-      paused = maintenance.isDraining() || (await checkPaused());
+      const bootPause = unconsumedBootPause;
+      unconsumedBootPause = undefined;
+      paused = maintenance.isDraining() || (bootPause ?? (await checkPaused()));
       if (firstFillPass) pausedAtBoot = paused;
       buildAuthMissing = await checkBuildAuthMissing();
       ghVersionBlocked = await checkGhVersionFloor();

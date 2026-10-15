@@ -2252,7 +2252,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // The deferred dashboard is observational: retain that exact result so it
   // neither repeats discovery nor performs another root refresh/fetch.
   let cachedStartupDiscovery: BacklogItem[] | undefined;
-  const discoverBacklog = async (options: { refresh: boolean }): Promise<BacklogItem[]> => {
+  const discoverAndCacheStartup = async (options: { refresh: boolean }): Promise<BacklogItem[]> => {
     const result = await discoverTick(options);
     cachedStartupDiscovery ??= result;
     return result;
@@ -2357,7 +2357,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         queuedRepairRunners.delete(request.prUrl);
       },
       emitMaintenancePhase: (event) => events.emit(event),
-      discoverBacklog,
+      discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),
       sweepProviderScratch: () => sweepFeatureWorktreeScratch({
         worktreeBase,
