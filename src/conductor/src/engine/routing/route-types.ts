@@ -27,6 +27,115 @@ export function assertNever(value: never): never {
   throw new Error(`Unhandled routing value: ${JSON.stringify(value)}`);
 }
 
+/** Only ADR decision 6's host-state edges may advance a routed host. */
+export function isLegalHostTransition(from: HostState, to: HostState): boolean {
+  switch (from) {
+    case 'pending':
+      switch (to) {
+        case 'pending': return false;
+        case 'admitted': return true;
+        case 'repairing': return false;
+        case 'reroute-moved': return false;
+        case 'built': return false;
+        case 'restacked': return false;
+        case 'done': return false;
+        case 'rerouted': return false;
+      }
+      return assertNever(to);
+    case 'admitted':
+      switch (to) {
+        case 'pending': return false;
+        case 'admitted': return false;
+        case 'repairing': return true;
+        case 'reroute-moved': return false;
+        case 'built': return false;
+        case 'restacked': return false;
+        case 'done': return false;
+        case 'rerouted': return false;
+      }
+      return assertNever(to);
+    case 'repairing':
+      switch (to) {
+        case 'pending': return false;
+        case 'admitted': return false;
+        case 'repairing': return false;
+        case 'reroute-moved': return true;
+        case 'built': return true;
+        case 'restacked': return false;
+        case 'done': return true;
+        case 'rerouted': return false;
+      }
+      return assertNever(to);
+    case 'reroute-moved':
+      switch (to) {
+        case 'pending': return false;
+        case 'admitted': return false;
+        case 'repairing': return false;
+        case 'reroute-moved': return false;
+        case 'built': return false;
+        case 'restacked': return false;
+        case 'done': return false;
+        case 'rerouted': return true;
+      }
+      return assertNever(to);
+    case 'built':
+      switch (to) {
+        case 'pending': return false;
+        case 'admitted': return false;
+        case 'repairing': return false;
+        case 'reroute-moved': return false;
+        case 'built': return false;
+        case 'restacked': return true;
+        case 'done': return false;
+        case 'rerouted': return false;
+      }
+      return assertNever(to);
+    case 'restacked':
+    case 'done':
+    case 'rerouted':
+      switch (to) {
+        case 'pending': return false;
+        case 'admitted': return false;
+        case 'repairing': return false;
+        case 'reroute-moved': return false;
+        case 'built': return false;
+        case 'restacked': return false;
+        case 'done': return false;
+        case 'rerouted': return false;
+      }
+      return assertNever(to);
+  }
+  return assertNever(from);
+}
+
+/** Only ADR decision 6's round-phase edges may advance a routing round. */
+export function isLegalRoundPhaseTransition(from: RoundPhase, to: RoundPhase): boolean {
+  switch (from) {
+    case 'prepared':
+      switch (to) {
+        case 'prepared': return false;
+        case 'open': return true;
+        case 'closed': return false;
+      }
+      return assertNever(to);
+    case 'open':
+      switch (to) {
+        case 'prepared': return false;
+        case 'open': return false;
+        case 'closed': return true;
+      }
+      return assertNever(to);
+    case 'closed':
+      switch (to) {
+        case 'prepared': return false;
+        case 'open': return false;
+        case 'closed': return false;
+      }
+      return assertNever(to);
+  }
+  return assertNever(from);
+}
+
 /** The dark-launch setting is deliberately false unless explicitly enabled. */
 export function routingSettingOn(config: { readonly stacked_prs?: StackedPrsConfig } | undefined): boolean {
   return config?.stacked_prs?.route_whole_feature_fixes === true;

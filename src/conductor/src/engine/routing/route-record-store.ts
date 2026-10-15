@@ -3,6 +3,7 @@ import { readRestackJournal } from '../restack/restack-journal.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
 import {
+  MAX_ROUTE_ROUNDS,
   parseRepairMarker,
   parseRoundId,
   parseRevalidationQueueRecord,
@@ -19,6 +20,7 @@ export type ReadRouteRecordResult = { readonly kind: 'absent' } | { readonly kin
 export type ReadRepairMarkerResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | { readonly kind: 'marker'; readonly slug: string; readonly blob: CommitSha; readonly marker: RepairMarker };
 export type ReadRevalidationQueueResult = { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly blob?: CommitSha } | { readonly kind: 'queue'; readonly slug: string; readonly blob: CommitSha; readonly queue: RevalidationQueueRecord };
 export type WriteRouteRecordResult = { readonly kind: 'updated' } | { readonly kind: 'cas-failed' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
+export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { readonly kind: 'unavailable' };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
@@ -51,6 +53,27 @@ export async function readRevalidationQueue(worktree: string, slug: string, depe
   const value = await readBlob(revalidationQueueRefFor(slug), dependencies.git ?? makeGitRunner(worktree));
   if ('blob' in value) { const queue = parseRevalidationQueueRecord(value.content); return queue ? { kind: 'queue', slug, blob: value.blob, queue } : { kind: 'unreadable', blob: value.blob }; }
   return { kind: value.kind };
+}
+
+/** Allocates the next route namespace segment without mutating any ref. */
+export async function nextRoundId(worktree: string, slug: string, dependencies: RouteRecordStoreDependencies = {}): Promise<NextRoundIdResult> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const prefix = `refs/conductor/${slug}/routes/`;
+  try {
+    const listed = await git(['for-each-ref', '--format=%(refname)', prefix]);
+    if (listed.exitCode !== 0) return { kind: 'unavailable' };
+    let max = 0;
+    for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+      const roundId = parseRoundId(ref.slice(prefix.length));
+      if (!roundId) return { kind: 'unavailable' };
+      max = Math.max(max, Number(roundId.slice(1)));
+    }
+    if (max === MAX_ROUTE_ROUNDS) return { kind: 'round-limit' };
+    const next = parseRoundId(`r${max + 1}`);
+    return next ?? { kind: 'unavailable' };
+  } catch {
+    return { kind: 'unavailable' };
+  }
 }
 
 export async function writeRouteRecord(worktree: string, previous: StoredRouteRecord, next: RouteRecord, dependencies: RouteRecordStoreDependencies = {}): Promise<WriteRouteRecordResult> {
