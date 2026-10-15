@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Covers: task:1
+# Covers: task:1, task:2
 set -uo pipefail
 
 # test_model_table_presence.sh — Focused fixture spec for
@@ -59,6 +59,14 @@ run_fixture_checker() {
     bash "$CHECKER" 2>&1
 }
 
+run_fixture_checker_with() {
+  HARNESS_INTEGRITY_SKILLS_DIR="$SKILLS_DIR" \
+  HARNESS_INTEGRITY_ARCHITECTURE_FILE="$ARCHITECTURE_FILE" \
+  HARNESS_INTEGRITY_MODEL_TABLE_ALLOWLIST="$1" \
+  HARNESS_INTEGRITY_MODEL_TABLE_ALIASES="$2" \
+    bash "$CHECKER" 2>&1
+}
+
 echo ""
 echo "Model-table presence — fixture spec"
 
@@ -69,6 +77,37 @@ assert "exact rows, engine-gate rows, aliases, and an allowlisted skill pass" \
 assert "allowlisted row-less skill is identified as allowlisted" \
   "$(case "$OUT" in *'engineer — allowlisted:'*) echo 0;; *) echo 1;; esac)"
 [ "$CODE" -eq 0 ] || echo "$OUT" | sed 's/^/    /'
+
+mkdir -p "${SKILLS_DIR}/row-less"
+printf '%s\n' '---' 'name: row-less' '---' > "${SKILLS_DIR}/row-less/SKILL.md"
+OUT=$(run_fixture_checker)
+CODE=$?
+assert "row-less unlisted skill fails and names the skill" \
+  "$( [ "$CODE" -ne 0 ] && printf '%s\n' "$OUT" | grep -Fq 'row-less — not in' && echo 0 || echo 1)"
+rm -f "${SKILLS_DIR}/row-less/SKILL.md"
+rmdir "${SKILLS_DIR}/row-less"
+
+OUT=$(run_fixture_checker_with $'engineer|' '')
+CODE=$?
+assert "allowlist entry with an empty reason fails and names the entry" \
+  "$( [ "$CODE" -ne 0 ] && printf '%s\n' "$OUT" | grep -Fq 'engineer' && echo 0 || echo 1)"
+
+OUT=$(run_fixture_checker_with $'ghost|retired skill' '')
+CODE=$?
+assert "stale allowlist entry fails and reports the missing skill" \
+  "$( [ "$CODE" -ne 0 ] && printf '%s\n' "$OUT" | grep -Fq 'ghost' && echo 0 || echo 1)"
+
+OUT=$(run_fixture_checker_with '' $'tdd|tdd-red,tdd-green|')
+CODE=$?
+assert "alias entry with an empty reason fails and names the alias" \
+  "$( [ "$CODE" -ne 0 ] && printf '%s\n' "$OUT" | grep -Fq 'tdd' && echo 0 || echo 1)"
+
+sed -i '/| tdd-red |/d; /| tdd-green |/d' "$ARCHITECTURE_FILE"
+printf '%s\n' '| tdd-review | review phase |' >> "$ARCHITECTURE_FILE"
+OUT=$(run_fixture_checker_with '' $'tdd|tdd-red,tdd-green|phases')
+CODE=$?
+assert "prefix-only tdd-review row does not resolve tdd aliases" \
+  "$( [ "$CODE" -ne 0 ] && printf '%s\n' "$OUT" | grep -Fq 'tdd — not in' && echo 0 || echo 1)"
 
 OUT=$(bash "$CHECKER" 2>&1)
 CODE=$?

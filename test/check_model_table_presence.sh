@@ -7,6 +7,8 @@ set -uo pipefail
 # Environment seams (for fixture trees):
 #   HARNESS_INTEGRITY_SKILLS_DIR         — skills/ directory to inspect
 #   HARNESS_INTEGRITY_ARCHITECTURE_FILE  — ARCHITECTURE.md table to inspect
+#   HARNESS_INTEGRITY_MODEL_TABLE_ALLOWLIST — newline-separated skill|reason entries
+#   HARNESS_INTEGRITY_MODEL_TABLE_ALIASES   — newline-separated skill|rows|reason entries
 #
 # Usage: bash test/check_model_table_presence.sh
 # Exit:  0 = every skill has a model-table resolution
@@ -31,6 +33,16 @@ SKILL_NO_ROW_ALLOWLIST=(
   'engineer|pending removal of the retired engineer skill'
 )
 
+if [ "${HARNESS_INTEGRITY_MODEL_TABLE_ALLOWLIST+x}" = x ]; then
+  IFS=$'\n' read -r -d '' -a SKILL_NO_ROW_ALLOWLIST \
+    < <(printf '%s\0' "$HARNESS_INTEGRITY_MODEL_TABLE_ALLOWLIST") || true
+fi
+
+if [ "${HARNESS_INTEGRITY_MODEL_TABLE_ALIASES+x}" = x ]; then
+  IFS=$'\n' read -r -d '' -a ROW_ALIASES \
+    < <(printf '%s\0' "$HARNESS_INTEGRITY_MODEL_TABLE_ALIASES") || true
+fi
+
 if [ ! -d "$skills_dir" ]; then
   echo "Cannot inspect skills: missing directory $skills_dir"
   exit 1
@@ -40,6 +52,27 @@ if [ ! -f "$architecture_file" ]; then
   echo "Cannot inspect model table: missing file $architecture_file"
   exit 1
 fi
+
+failed=0
+for entry in "${SKILL_NO_ROW_ALLOWLIST[@]}"; do
+  IFS='|' read -r allowlisted_skill allowlist_reason <<< "$entry"
+  if [ -z "$allowlist_reason" ]; then
+    echo "${allowlisted_skill} — allowlist entry has an empty reason"
+    failed=1
+  fi
+  if [ ! -d "${skills_dir}/${allowlisted_skill}" ]; then
+    echo "${allowlisted_skill} — stale allowlist entry: missing skills/${allowlisted_skill}/"
+    failed=1
+  fi
+done
+
+for entry in "${ROW_ALIASES[@]}"; do
+  IFS='|' read -r alias_skill alias_rows alias_reason <<< "$entry"
+  if [ -z "$alias_reason" ]; then
+    echo "${alias_skill} — alias entry has an empty reason"
+    failed=1
+  fi
+done
 
 # A row name is its first table cell, with surrounding whitespace and a single
 # trailing parenthetical annotation removed. This makes the engine-gate row
@@ -82,7 +115,6 @@ allowlist_reason_for() {
   return 1
 }
 
-failed=0
 for skill_file in "$skills_dir"/*/SKILL.md; do
   [ -f "$skill_file" ] || continue
   skill_name=$(basename "$(dirname "$skill_file")")
