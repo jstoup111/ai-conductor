@@ -4806,7 +4806,7 @@ describe('engine/conductor', () => {
       }),
     });
     for (const [attempt, lease] of leases.entries()) {
-      expect(Object.keys(lease as object).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(Object.keys(lease as object).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
       expect(lease).toMatchObject({ repository: dir, featureSlug: 'self-host-identity', runId: 'held-conductor-run', attempt, ownerPid: process.pid });
       expect(new Date((lease as { startedAt: string }).startedAt).toISOString()).toBe((lease as { startedAt: string }).startedAt);
     }

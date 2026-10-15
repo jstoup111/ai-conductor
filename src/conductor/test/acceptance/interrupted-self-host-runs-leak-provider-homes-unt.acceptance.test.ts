@@ -97,7 +97,7 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
     expect(home.childEnv().CODEX_HOME).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
     const lease = JSON.parse(await readFile(join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json'), 'utf8'));
-    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt']);
     expect(lease).toMatchObject({ repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2, ownerPid: process.pid });
     expect(await git('status', '--porcelain')).toBe('');
 
@@ -124,7 +124,7 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
     expect(sandbox.childEnv().CLAUDE_CONFIG_DIR).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
     const lease = JSON.parse(await readFile(join(worktree, '.daemon', 'scratch', 'R', '2-claude', 'owner.json'), 'utf8'));
-    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt']);
     expect(lease).toMatchObject({ repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2, ownerPid: process.pid });
     expect(await git('status', '--porcelain')).toBe('');
 
