@@ -78,6 +78,28 @@ describe('per-command help router', () => {
       .toBe(commandHelp(['finish-record']));
   });
 
+  // Covers: rem-as-built-R2
+  it('does not treat option values as shipment-evidence subcommands', () => {
+    const expected = commandHelp(['shipment-evidence']);
+
+    expect(routeSubcommandHelp([
+      'node', 'bin', 'shipment-evidence', '--event', 'audit', '--pr',
+      'https://github.com/o/r/pull/1', '--help',
+    ])).toBe(expected);
+    expect(routeSubcommandHelp([
+      'node', 'bin', 'shipment-evidence', '--event', 'reconcile', '--help',
+    ])).toBe(expected);
+    expect(routeSubcommandHelp([
+      'node', 'bin', 'shipment-evidence', '--event=audit', '--help',
+    ])).toBe(expected);
+    expect(routeSubcommandHelp([
+      'node', 'bin', 'shipment-evidence', 'audit', '--help',
+    ])).toBe(commandHelp(['shipment-evidence', 'audit']));
+    expect(routeSubcommandHelp([
+      'node', 'bin', 'shipment-evidence', '--event', '/tmp/e.json', 'audit', '--help',
+    ])).toBe(commandHelp(['shipment-evidence', 'audit']));
+  });
+
   // Covers: task:5
   it('uses only the pre-dispatch registry to select command paths', () => {
     const withoutRegister = PRE_DISPATCH_COMMANDS.filter(

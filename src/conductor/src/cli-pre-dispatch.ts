@@ -77,18 +77,26 @@ export function routeSubcommandHelp(
   const helpArgs = optionTerminator < 0 ? args : args.slice(0, optionTerminator);
   if (!helpArgs.some((arg) => arg === '--help' || arg === '-h')) return null;
 
-  // The top-level argv token selects the dispatch owner. A command's path can
-  // include positional arguments and nested Commander commands after it.
+  // The top-level argv token selects the dispatch owner.
   const entry = registry.find((candidate) => candidate.commandPath[0] === args[0]);
   if (entry === undefined || entry.helpOwner !== 'router') {
     return null;
   }
 
   let command = program ?? createProgram();
-  for (const arg of helpArgs) {
-    if (arg.startsWith('-')) continue;
+  for (let index = 0; index < helpArgs.length; index += 1) {
+    const arg = helpArgs[index];
+    if (arg.startsWith('-')) {
+      const option = command.options.find((candidate) =>
+        (candidate.short === arg || candidate.long === arg)
+        && (candidate.required || candidate.optional),
+      );
+      if (option !== undefined && !arg.includes('=')) index += 1;
+      continue;
+    }
     const next = command.commands.find((candidate) => candidate.name() === arg);
-    if (next !== undefined) command = next;
+    if (next === undefined) break;
+    command = next;
   }
   return command.helpInformation();
 }
