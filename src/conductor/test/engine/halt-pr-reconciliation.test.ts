@@ -707,7 +707,7 @@ describe('reconcileHaltPrs (Task 15)', () => {
     expect(logs3.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(true);
   });
 
-  // Covers: Task 10 — an active feature owns its halt presentation until its claim releases.
+  // Covers: task:10 — an active feature owns its halt presentation until its claim releases.
   it('(Task 10) skips an in-flight marked PR through the delta cache, then preserves reconciliation after release', async () => {
     const inFlightSlug = 'in-flight-halt-pr';
     const resolvedInFlightSlug = 'in-flight-resolved-halt-pr';
