@@ -209,7 +209,11 @@ export class DaemonMaintenance {
       case 'drained':
         return this.isDrained();
       case 'busy-allowed':
-        return this.busyMaintenanceEnabled() || this.isDrained();
+        // A root refresh only moves the dispatcher checkout. Work orders pin
+        // their base at claim time, so it is safe to refresh beside a worker
+        // even at the serial width. The background maintenance job is the
+        // caller that now opts into this policy at width 1.
+        return true;
     }
   }
 
