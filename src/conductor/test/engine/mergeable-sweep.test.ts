@@ -1952,6 +1952,7 @@ describe('sweepMergeableLabels — Task 10: ciFix dispatch with disabled-config 
 describe('sweepMergeableLabels — Task 11: former inline dispatch seam', () => {
   it('does not dispatch or reserve attempts during the sweep', async () => {
     const dispatchCalls: WatchEntry[] = [];
+    const queue = new RepairQueue();
     const { gh } = makeFakeGh({
       [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
     });
@@ -1962,6 +1963,7 @@ describe('sweepMergeableLabels — Task 11: former inline dispatch seam', () => 
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
+      repairQueue: queue,
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -1974,6 +1976,7 @@ describe('sweepMergeableLabels — Task 11: former inline dispatch seam', () => 
     });
 
     expect(dispatchCalls).toHaveLength(0);
+    expect(queue.list()).toEqual([expect.objectContaining({ kind: 'ci-fix', prUrl: PR_URL })]);
     const result = await readWatch(tmpDir);
     expect(result).toHaveLength(1);
     expect(result[0].ciFixAttempts).toBe(0);
@@ -1988,10 +1991,12 @@ describe('sweepMergeableLabels — Task 11: former inline dispatch seam', () => 
 
     const now = new Date('2026-07-08T12:15:00Z');
     const logs: string[] = [];
+    const queue = new RepairQueue();
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
       log: (msg) => logs.push(msg),
+      repairQueue: queue,
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -2003,6 +2008,7 @@ describe('sweepMergeableLabels — Task 11: former inline dispatch seam', () => 
     });
 
     expect(logs.some((l) => l.includes('dispatch failed'))).toBe(false);
+    expect(queue.list()).toEqual([expect.objectContaining({ kind: 'ci-fix', prUrl: PR_URL })]);
     const result = await readWatch(tmpDir);
     expect(result).toHaveLength(1);
     expect(result[0].ciFixAttempts).toBe(1);
@@ -2069,6 +2075,7 @@ describe('sweepMergeableLabels — Task 12: former one-dispatch cap', () => {
   it('does not invoke the former inline dispatch seam', async () => {
     const dispatchCalls: WatchEntry[] = [];
     const logs: string[] = [];
+    const queue = new RepairQueue();
     const { gh } = makeFakeGh({
       [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
       [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
@@ -2080,6 +2087,7 @@ describe('sweepMergeableLabels — Task 12: former one-dispatch cap', () => {
       projectRoot: tmpDir,
       runGh: gh,
       log: (msg) => logs.push(msg),
+      repairQueue: queue,
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -2091,6 +2099,7 @@ describe('sweepMergeableLabels — Task 12: former one-dispatch cap', () => {
 
     expect(dispatchCalls).toHaveLength(0);
     expect(logs.some((l) => l.includes('deferring'))).toBe(false);
+    expect(queue.list()).toHaveLength(2);
     const result = await readWatch(tmpDir);
     const second = result.find((e) => e.prUrl === PR_URL_2);
     expect(second?.ciFixAttempts).toBe(0);

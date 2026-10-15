@@ -125,7 +125,7 @@ describe('daemon serial equivalence (Task 25)', () => {
     const deps: DaemonDeps = {
       discoverBacklog: async ({ refresh }) => {
         serialTrace.entries.push(`discover:${refresh ? 'refresh' : 'local'}`);
-        return refresh ? [] : backlog;
+        return backlog;
       },
       runFeature: async (item) => {
         serialTrace.entries.push(`dispatch:${item.slug}`);
