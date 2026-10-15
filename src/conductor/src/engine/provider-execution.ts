@@ -60,6 +60,7 @@ import {
   UNKNOWN_MANAGED_GH_OBSERVATION_COVERAGE,
 } from '../execution/managed-session-preparation.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
+import type { ProviderStartIdentity } from '../types/events.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -303,6 +304,14 @@ export interface ExecuteProviderCandidatesInput {
     step: StepName,
     attempt: ProviderAttemptMetadata,
   ) => void | Promise<void>;
+  onCandidateStart?: (
+    step: StepName,
+    candidate: {
+      provider: ProviderStartIdentity;
+      model?: string;
+      executionContext?: ExecutionContext;
+    },
+  ) => void | Promise<void>;
   /** Best-effort error reporting for attempt telemetry; never affects execution. */
   onTelemetryError?: (
     error: unknown,
@@ -346,6 +355,7 @@ export interface ProviderExecutionContext {
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
+  onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
   diagnosticLog?: (message: string) => void;
@@ -608,6 +618,7 @@ export interface InvokeProviderCandidateInput {
   /** Allocate invocation-only resources after any per-model cache lookup. */
   prepareInvocationOptions?: (options: InvokeOptions) => Promise<InvokeOptions>;
   onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>;
+  onCandidateStart?: (model: string | undefined) => void | Promise<void>;
 }
 
 interface SessionPolicySuppression {
@@ -627,6 +638,7 @@ export async function invokeProviderCandidate({
   modelFallbackLadder,
   onModelRung,
   prepareInvocationOptions,
+  onCandidateStart,
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
@@ -670,8 +682,18 @@ export async function invokeProviderCandidate({
   };
   // Each model-fallback-ladder attempt also gets its own fresh session.
   const prepareFallback = async () => ({ sessionId: randomUUID(), resume: false });
-  const invokeModel = async (rungOptions: InvokeOptions): Promise<InvokeResult> =>
-    runtime.provider.invoke(prepareInvocationOptions ? await prepareInvocationOptions(rungOptions) : rungOptions);
+  const invokeModel = async (rungOptions: InvokeOptions): Promise<InvokeResult> => {
+    const preparedOptions = prepareInvocationOptions
+      ? await prepareInvocationOptions(rungOptions)
+      : rungOptions;
+    try {
+      const result = onCandidateStart?.(rungOptions.model);
+      if (result) void result.catch(() => {});
+    } catch {
+      // Provider-start telemetry is observational and cannot affect invocation.
+    }
+    return runtime.provider.invoke(preparedOptions);
+  };
   const invocation = modelFallbackLadder
     ? await new ModelAvailability(
         modelFallbackLadder,
@@ -817,6 +839,7 @@ export async function executeProviderCandidates({
   taskAttribution: attributionInput,
   providerAvailability,
   onAttempt,
+  onCandidateStart,
   onTelemetryError,
   withCandidateSafety,
   prepareCandidateSelfHost,
@@ -1014,6 +1037,13 @@ export async function executeProviderCandidates({
             ? modelFallbackLadder
             : resolved.modelFallbackLadder,
           onModelRung,
+          onCandidateStart: (model) => onCandidateStart?.(step, {
+            provider: providerKey.trim()
+              ? { kind: 'known', id: providerKey }
+              : { kind: 'unknown' },
+            ...(model === undefined ? {} : { model }),
+            ...(executionContext === undefined ? {} : { executionContext }),
+          }),
         });
         return invocation.result;
       })();

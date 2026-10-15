@@ -2219,6 +2219,157 @@ describe('executeProviderCandidates', () => {
     );
   });
 
+  it('reports a known interactive candidate synchronously before invoking it without a stream observer', async () => {
+    const events: string[] = [];
+    const starts: Array<{ step: string; payload: unknown }> = [];
+    const observerForCandidate = vi.fn();
+    const executionContext = {
+      executionId: 'interactive-dispatch',
+      subject: { kind: 'lifecycle-step' as const },
+    };
+    const invoke = vi.fn(async (): Promise<InvokeResult> => {
+      events.push('invoke');
+      return { success: true, output: 'operator recovery session', exitCode: 0 };
+    });
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['claude'],
+      runtimes: new ProviderRuntimeSet([runtime('claude', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')),
+      executionContext,
+      options: {
+        prompt: 'build',
+        cwd: '/workspace',
+        interactive: true,
+        providerStreamObserverForCandidate: observerForCandidate,
+      },
+      onCandidateStart: (step, payload) => {
+        events.push('start');
+        starts.push({ step, payload });
+      },
+    });
+
+    expect(events).toEqual(['start', 'invoke']);
+    expect(starts).toEqual([{
+      step: 'build',
+      payload: { provider: { kind: 'known', id: 'claude' }, model: 'sonnet', executionContext },
+    }]);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(observerForCandidate).not.toHaveBeenCalled();
+  });
+
+  it('reports each invoked fallback candidate but not setup or cached-unavailable skips', async () => {
+    const starts: string[] = [];
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+    const setupSkipped = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: vi.fn() }), runtime('claude', { invoke: claudeInvoke }),
+      ]), sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace' },
+      onCandidateStart: (_step, candidate) => { starts.push(candidate.provider.kind === 'known' ? candidate.provider.id : 'unknown'); },
+      preparedCandidateOperation: async ({ candidate, invoke: invokeCandidate }) => candidate.providerKey === 'codex'
+        ? { kind: 'failure', result: { success: false, output: 'setup unavailable', exitCode: 1, providerUnavailable: true, providerInvocationSkipped: true } }
+        : { kind: 'judged', result: await invokeCandidate() },
+    });
+    const cachedCodex = runtime('codex', { invoke: vi.fn() });
+    cachedCodex.runWideUnavailable = { reason: 'cached unavailable' };
+    const cachedClaude = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+    const cachedSkipped = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([cachedCodex, runtime('claude', { invoke: cachedClaude })]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace' },
+      onCandidateStart: (_step, candidate) => { starts.push(candidate.provider.kind === 'known' ? candidate.provider.id : 'unknown'); },
+    });
+
+    expect({ starts, setupSkipped: setupSkipped.success, cachedSkipped: cachedSkipped.success }).toEqual({
+      starts: ['claude', 'claude'], setupSkipped: true, cachedSkipped: true,
+    });
+  });
+
+  it('reports claude then codex when an invoked Claude candidate fails over to Codex', async () => {
+    const starts: string[] = [];
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false, output: 'claude unavailable', exitCode: 127,
+      providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'claude unavailable',
+    }));
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: ['claude', 'codex'], preferredProvider: 'claude',
+      runtimes: new ProviderRuntimeSet([
+        runtime('claude', { invoke: claudeInvoke }), runtime('codex', { invoke: codexInvoke }),
+      ]), sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace' },
+      onCandidateStart: (_step, candidate) => { starts.push(candidate.provider.kind === 'known' ? candidate.provider.id : 'unknown'); },
+    });
+
+    expect({ starts, claudeInvokes: claudeInvoke.mock.calls.length, codexInvokes: codexInvoke.mock.calls.length }).toEqual({
+      starts: ['claude', 'codex'], claudeInvokes: 1, codexInvokes: 1,
+    });
+  });
+
+  it('reports every model rung and maps an empty provider key to unknown', async () => {
+    const starts: Array<{ provider: unknown; model?: string }> = [];
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: false, output: 'model unavailable', exitCode: 1, modelUnavailable: true })
+      .mockResolvedValueOnce({ success: true, output: 'done', exitCode: 0 });
+    const unknownRuntime = runtime('claude', { invoke });
+    unknownRuntime.key = '';
+
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: [''], preferredProvider: '',
+      runtimes: new ProviderRuntimeSet([unknownRuntime]), sessions: new ProviderSessionScope(vi.fn()),
+      modelOverride: 'first', modelFallbackLadder: ['first', 'second'],
+      options: { prompt: 'build', cwd: '/workspace' },
+      onCandidateStart: (_step, candidate) => { starts.push(candidate); },
+    });
+
+    expect(starts).toEqual([
+      { provider: { kind: 'unknown' }, model: 'first' },
+      { provider: { kind: 'unknown' }, model: 'second' },
+    ]);
+  });
+
+  it('keeps candidate-start callbacks out of runtime options and ignores throws and cached model-rung results', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'done', exitCode: 0 }));
+    const starts = vi.fn(() => { throw new Error('telemetry failure'); });
+    const thrownResult = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['claude'], runtimes: new ProviderRuntimeSet([runtime('claude', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace' }, onCandidateStart: starts,
+    });
+    const cachedStarts = vi.fn();
+    const cachedResult = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['claude'], runtimes: new ProviderRuntimeSet([runtime('claude', { invoke: vi.fn() })]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace' }, onCandidateStart: cachedStarts,
+      preparedCandidateOperation: async ({ invoke: invokeRung }) => ({
+        kind: 'judged', result: await invokeRung({}, async () => ({ success: true, output: 'cached', exitCode: 0 })),
+      }),
+    });
+
+    expect({
+      thrownResult: thrownResult.success,
+      runtimeHasCallback: Object.hasOwn(invoke.mock.calls[0]![0], 'onCandidateStart'),
+      starts: starts.mock.calls.length,
+      cachedResult: cachedResult.success,
+      cachedStarts: cachedStarts.mock.calls.length,
+    }).toEqual({ thrownResult: true, runtimeHasCallback: false, starts: 1, cachedResult: true, cachedStarts: 0 });
+  });
+
+  it('does not report a candidate start when invocation-option preparation fails', async () => {
+    const invoke = vi.fn();
+    const onCandidateStart = vi.fn();
+
+    await expect(invokeProviderCandidate({
+      providerKey: 'claude', runtime: runtime('claude', { invoke }),
+      sessions: new ProviderSessionScope(vi.fn()), resolved: { model: 'sonnet', effort: 'medium' },
+      options: { prompt: 'build', cwd: '/workspace' }, onCandidateStart,
+      prepareInvocationOptions: async () => { throw new Error('preparation failed'); },
+    })).rejects.toThrow('preparation failed');
+
+    expect({ starts: onCandidateStart.mock.calls.length, invokes: invoke.mock.calls.length }).toEqual({ starts: 0, invokes: 0 });
+  });
+
   it('never resumes into a freshly provisioned self-host home, even after the session was created earlier in the step', async () => {
     // Each self-host dispatch provisions its own throwaway provider home and
     // tears it down afterwards, so no rollout/session state survives into the
