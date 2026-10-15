@@ -1,50 +1,70 @@
 // Covers: task:8
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { renderDashboard } from '../../src/engine/daemon-dashboard.js';
-
-const source = readFileSync(resolve(process.cwd(), 'src/daemon-cli.ts'), 'utf8');
-
-function startupDashboardBinding(): string {
-  const start = source.indexOf('renderStartupDashboard: async () => {');
-  const end = source.indexOf('\n      // FR-4:', start);
-  if (start < 0 || end < 0) throw new Error('startup dashboard binding not found');
-  return source.slice(start, end);
-}
+import { createStartupDashboardBinding } from '../../src/daemon-cli.js';
 
 describe('daemon-cli startup dashboard wiring (Task 8)', () => {
-  it('reuses the first discovery result without a dashboard fetch, refresh, or second discovery', () => {
-    const binding = startupDashboardBinding();
-
-    expect(source).toMatch(/let cachedStartupDiscovery: BacklogItem\[\] \| undefined;/);
-    expect(source).toMatch(/const discoverAndCacheStartup = async \(options: \{ refresh: boolean \}\): Promise<BacklogItem\[\]> => \{[\s\S]*?cachedStartupDiscovery \?\?= result;[\s\S]*?return result;/);
-    expect(binding).toContain('discover: () => Promise.resolve(cachedStartupDiscovery ?? []),');
-    expect(binding).not.toContain('discoverTick(');
-    expect(binding).not.toContain('fastForwardRoot(');
-    expect(binding).not.toContain('fetch');
-  });
-
-  it('keeps parked classification informational and renders both reconciliation annotations', () => {
-    const binding = startupDashboardBinding();
-
-    expect(binding).toContain('autoCleanup: false,');
-    expect(binding).toContain('reclaimMergedWorktrees: false,');
-
-    const dashboard = renderDashboard({
-      halted: [],
-      inProgress: [],
-      eligible: [{ slug: 'cached-eligible' }],
-      processed: [],
-      processedCount: 0,
-      parked: [
-        { slug: 'merged-feature', annotation: 'merged-ready' },
-        { slug: 'orphan-feature', annotation: 'orphan' },
-      ],
+  it('renders the exact cached startup discovery without another discovery, root refresh, or git fetch', async () => {
+    const cachedDiscovery = [{ slug: 'cached-eligible' }];
+    const discoveryCalls: boolean[] = [];
+    let fastForwardRootCalls = 0;
+    let gitFetchCalls = 0;
+    let scannedDiscovery: unknown;
+    const reconciliationCalls: Array<{ autoCleanup: false; reclaimMergedWorktrees: false }> = [];
+    const rendered: string[] = [];
+    const binding = createStartupDashboardBinding({
+      pausedAtBoot: false,
+      projectRoot: '/project',
+      worktreeBase: '/project/.worktrees',
+      processedDir: '/project/.daemon/processed',
+      log: () => {},
+      discoverTick: async ({ refresh }) => {
+        discoveryCalls.push(refresh);
+        fastForwardRootCalls++;
+        gitFetchCalls++;
+        return cachedDiscovery;
+      },
+      scanInheritedState: async ({ discover }) => {
+        scannedDiscovery = await discover();
+        return {
+          halted: [], inProgress: [], eligible: [{ slug: 'cached-eligible' }],
+          processed: [], processedCount: 0,
+        };
+      },
+      listOperatorParkedSlugs: async () => ['merged-feature', 'orphan-feature'],
+      reconcileParkedFeatures: async ({ autoCleanup, reclaimMergedWorktrees }) => {
+        reconciliationCalls.push({ autoCleanup, reclaimMergedWorktrees });
+        return {
+          entries: [
+            { slug: 'merged-feature', classification: 'merged' },
+            { slug: 'orphan-feature', classification: 'orphan' },
+          ],
+          counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, refused: 0, skipped: 0 },
+          refusedByReason: {},
+        };
+      },
+      isOperatorParked: async (_root, slug) => slug !== 'cached-eligible',
+      getProvenanceType: async () => 'operator',
+      writeDashboard: (_persisted, consoleOutput) => rendered.push(consoleOutput),
     });
-    expect(dashboard).toContain('ELIGIBLE (1)');
-    expect(dashboard).toContain('cached-eligible');
-    expect(dashboard).toContain('merged — ready to reconcile');
-    expect(dashboard).toContain('orphan — needs manual review');
+
+    // This is the daemon's first dispatch discovery. Reset the counters so the
+    // assertion below is specifically about the deferred dashboard binding.
+    await binding.discoverAndCacheStartup({ refresh: true });
+    discoveryCalls.length = 0;
+    fastForwardRootCalls = 0;
+    gitFetchCalls = 0;
+
+    await binding.renderStartupDashboard();
+
+    expect(scannedDiscovery).toBe(cachedDiscovery);
+    expect(discoveryCalls).toEqual([]); // neither refresh:true nor refresh:false
+    expect(fastForwardRootCalls).toBe(0);
+    expect(gitFetchCalls).toBe(0);
+    expect(reconciliationCalls).toEqual([{ autoCleanup: false, reclaimMergedWorktrees: false }]);
+    expect(rendered).toHaveLength(1);
+    expect(rendered[0]).toContain('ELIGIBLE (1)');
+    expect(rendered[0]).toContain('cached-eligible');
+    expect(rendered[0]).toContain('merged — ready to reconcile');
+    expect(rendered[0]).toContain('orphan — needs manual review');
   });
 });
