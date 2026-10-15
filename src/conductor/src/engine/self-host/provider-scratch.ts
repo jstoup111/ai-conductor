@@ -508,7 +508,7 @@ async function harvestInterruptedHome(options: {
   ].filter((part): part is string => part !== undefined).join('-');
   const path = join('.pipeline', 'transcripts', step, captureName);
   const destination = join(options.worktreeRoot, path);
-  const childPrefixes = provider === 'claude'
+  const childPrefixes = descriptor.selfHostShape.isolation === 'claude-config-sandbox'
     ? ['harness-selfbuild-', `self-host-${provider}-`]
     : [`self-host-${provider}-`];
   const children = (await fsp.readdir(options.home, { withFileTypes: true }).catch(() => []))
