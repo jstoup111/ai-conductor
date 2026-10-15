@@ -701,34 +701,6 @@ export async function runDaemon(
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
 
-  /** Task 18 + FR-14: best-effort sweep; reconcile halt-PRs before merge-sweep; never throws, never disrupts the daemon loop. */
-  const sweepBestEffort = async (): Promise<void> => {
-    try {
-      await deps.reconcileHaltPrs?.();
-    } catch (err) {
-      log(`[daemon] reconcileHaltPrs error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      await deps.reconcileParkedFeatures?.({
-        disposeHaltWatcher: disposeWatcher,
-        isFeatureInFlight: (slug) => inFlight.has(slug),
-      });
-    } catch (err) {
-      log(`[daemon] reconcileParkedFeatures error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      await deps.sweepProviderScratch?.();
-    } catch (err) {
-      log(`[daemon] sweepProviderScratch error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      await deps.sweepMergeableLabels?.({
-        isFeatureInFlight: (slug) => inFlight.has(slug),
-      });
-    } catch (err) {
-      log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
   // FR-1 (Task 13): `isPaused` is a caller-injected predicate — it can throw
   // (unreadable marker, permissions, etc.), not just resolve. A throw must
   // fail closed (treated as paused, zero dispatch) rather than crash the loop
@@ -1061,7 +1033,9 @@ export async function runDaemon(
     if (workerIndex >= 0) workers.splice(workerIndex, 1);
     observeWorkerSet();
     await deps.onFeatureTerminalEffects?.(outcome);
-    if (outcome.terminalEffects?.sweep) await maintenance.afterTerminalCollection(sweepBestEffort);
+    // A terminal collection is a maintenance trigger, not an inline sweep:
+    // a slow reconciler must never hold the slot-release path hostage.
+    maintenanceJob.trigger();
     processed.push(outcome);
     if (outcome.costTokens) totalCost += outcome.costTokens;
     // A halted OR errored feature is parked for a human, not finished. Both now
@@ -1219,8 +1193,11 @@ export async function runDaemon(
   // former paused-at-boot behavior without adding another pause read after
   // the claim attempt.
   let pausedAtBoot = false;
+  let startupDashboardPending = true;
   const maintenanceJob = new MaintenanceJob([
     ['startup-dashboard', async () => {
+      if (!startupDashboardPending) return;
+      startupDashboardPending = false;
       if (!pausedAtBoot) await deps.renderStartupDashboard?.();
     }],
     ['rekick', async () => maybeRekick(false, startupBaseSha)],
@@ -1772,7 +1749,11 @@ export async function runDaemon(
         await Promise.race([sleep(idlePollMs), waker.armed()]);
         // FR-14: sweep once per idle poll tick, then recover episode-caused
         // HALTs if the maintenance scheduler observed the episode end.
-        await maintenance.afterIdlePoll(sweepBestEffort, async () => {
+        // The scheduler still owns episode-end observation, but the ordinary
+        // sweep is now a fire-and-forget MaintenanceJob trigger.
+        await maintenance.afterIdlePoll(async () => {
+          maintenanceJob.trigger();
+        }, async () => {
           if (deps.sweepEpisodeHalts) {
             try {
               await deps.sweepEpisodeHalts(deps.isParked);
@@ -1853,9 +1834,9 @@ export async function runDaemon(
     await yieldToEventLoop();
     if (wakeBusyPoll === resolveBusyPoll) wakeBusyPoll = undefined;
     if (!completedWorker) {
-      if (maintenance.busyMaintenanceEnabled()) {
-        await maintenance.afterBusyPoll(sweepBestEffort);
-      }
+      // A busy poll is a job trigger at every width. In particular, width 1
+      // may refresh root while its single pinned-base worker is in flight.
+      maintenanceJob.trigger();
       continue;
     }
 
