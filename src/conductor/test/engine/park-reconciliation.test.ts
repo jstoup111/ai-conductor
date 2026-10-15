@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  createParkedReconciliationMemo,
   proveByMergedPrHead,
   reconcileMergedPark,
   reconcileParkedFeatures,
@@ -32,6 +33,101 @@ vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
     ...actual,
     makeProductionGh: () => async () => ({ stdout: '[{"headRefOid":"deadbeef"}]' }),
   };
+});
+
+// Covers: task:17
+describe('engine/park-reconciliation — parked input memo', () => {
+  it('skips unchanged inputs, but re-runs for every fingerprint input and the ten-minute bound', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-memo-'));
+    const slug = 'memo-feature';
+    const otherSlug = 'memo-other';
+    let now = 0;
+    let refs = `feat/${slug} branch-one\nfeat/${otherSlug} branch-two\norigin/main main-one\n`;
+    let shipped = [slug, otherSlug];
+    let worktrees: Array<{ slug: string; branch?: string }> = [
+      { slug, branch: `feat/${slug}` },
+      { slug: otherSlug, branch: `feat/${otherSlug}` },
+    ];
+    let inFlight = new Set<string>();
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      switch (args[0]) {
+        case 'worktree': return { stdout: '' };
+        case 'for-each-ref': return { stdout: refs };
+        case 'ls-tree': return { stdout: `${shipped.map((stem) => `${stem}.md`).join('\n')}\n` };
+        case 'merge-base': return { stdout: '' };
+        case 'rev-parse': return { stdout: 'deadbeef\n' };
+        default: throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+      }
+    });
+    const runGh = vi.fn<GhRunner>();
+    const memo = createParkedReconciliationMemo();
+    const reconcile = () => reconcileParkedFeatures({
+      projectRoot,
+      runGit,
+      runGh,
+      worktreeListing: async () => worktrees,
+      autoCleanup: false,
+      reclaimMergedWorktrees: false,
+      isFeatureInFlight: (candidate) => inFlight.has(candidate),
+      inFlightSlugs: () => [...inFlight],
+      memo,
+      now: () => now,
+    });
+    const mergeBaseCalls = () => runGit.mock.calls.filter(([args]) => args[0] === 'merge-base').length;
+    const assertChangedRunsFullPass = async (change: () => Promise<void> | void) => {
+      memo.fingerprint = undefined;
+      memo.completedAt = undefined;
+      memo.result = undefined;
+      now = 0;
+      await reconcile();
+      const before = mergeBaseCalls();
+      await change();
+      now = 1;
+      await reconcile();
+      expect(mergeBaseCalls()).toBeGreaterThan(before);
+    };
+
+    try {
+      await reconcile();
+      const firstMergeBaseCalls = mergeBaseCalls();
+      now = 9 * 60 * 1000;
+      const skipped = await reconcile();
+      expect({ mergeBaseCalls: mergeBaseCalls(), ghCalls: runGh.mock.calls.length, counts: skipped.counts }).toEqual({
+        mergeBaseCalls: firstMergeBaseCalls,
+        ghCalls: 0,
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 2, refused: 0, skipped: 0 },
+      });
+
+      await assertChangedRunsFullPass(() => { refs = `feat/${slug} branch-one\nfeat/${otherSlug} branch-two\norigin/main main-two\n`; });
+      await assertChangedRunsFullPass(async () => {
+        await mkdir(join(projectRoot, '.daemon', 'parked'), { recursive: true });
+        await writeFile(join(projectRoot, '.daemon', 'parked', slug), 'changed marker\n');
+      });
+      await rm(join(projectRoot, '.daemon'), { recursive: true, force: true });
+      await assertChangedRunsFullPass(async () => {
+        await mkdir(join(projectRoot, '.worktrees', slug, '.pipeline'), { recursive: true });
+        await writeFile(join(projectRoot, '.worktrees', slug, '.pipeline', 'HALT'), 'halted\n');
+      });
+      await rm(join(projectRoot, '.worktrees'), { recursive: true, force: true });
+      await assertChangedRunsFullPass(() => { shipped = [otherSlug, 'different-record']; });
+      await assertChangedRunsFullPass(() => { worktrees = [...worktrees, { slug: 'third' }]; });
+      worktrees = [{ slug, branch: `feat/${slug}` }, { slug: otherSlug, branch: `feat/${otherSlug}` }];
+      await assertChangedRunsFullPass(() => { inFlight = new Set(['in-flight-outside-candidates']); });
+
+      memo.fingerprint = undefined;
+      memo.completedAt = undefined;
+      memo.result = undefined;
+      inFlight = new Set();
+      now = 0;
+      await reconcile();
+      const beforeTimeout = mergeBaseCalls();
+      now = 10 * 60 * 1000;
+      await reconcile();
+      expect(mergeBaseCalls()).toBeGreaterThan(beforeTimeout);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 /**
@@ -1265,7 +1361,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       outcome: { slug: 'recorded', steps: ['worktree-removed', 'branch-deleted'] },
       gitVerbs: [
         'ls-tree --name-only',
-        'for-each-ref --format=%(refname:short)',
+        'for-each-ref --format=%(refname:short) %(objectname)',
         'merge-base --is-ancestor',
         'branch -d',
       ],
