@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:9
 import { describe, expect, it, vi } from 'vitest';
 
 import { runDaemon, type BacklogItem, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
@@ -70,34 +70,120 @@ describe('daemon maintenance job wiring', () => {
     ]));
   });
 
-  it('starts maintenance from a width-1 busy poll without awaiting a pending job', async () => {
+  it('collects a worker and dispatches the next feature while a maintenance job is pending', async () => {
+    const calls: string[] = [];
+    const firstFeature = deferred<FeatureOutcome>();
+    const dashboard = deferred<void>();
+    const firstStarted = deferred<void>();
+
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'one' }, { slug: 'two' }], {
+      discoverBacklog: async () => [{ slug: 'one' }, { slug: 'two' }],
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}`);
+        if (item.slug === 'one') {
+          firstStarted.resolve();
+          return firstFeature.promise;
+        }
+        return done(item.slug);
+      },
+      renderStartupDashboard: async () => {
+        calls.push('dashboard');
+        return dashboard.promise;
+      },
+    }), { concurrency: 1, once: true, maxItems: 2, idlePollMs: 0 });
+
+    await firstStarted.promise;
+    await vi.waitFor(() => expect(calls).toEqual(['dispatch:one', 'dashboard']));
+    firstFeature.resolve(done('one'));
+    await vi.waitFor(() => expect(calls).toContain('dispatch:two'));
+    dashboard.resolve();
+    await daemon;
+  });
+
+  it('continues the remaining maintenance steps and dispatches after a failed step', async () => {
+    const calls: string[] = [];
+    let discoveries = 0;
+
+    await runDaemon(depsFor(calls, [], {
+      discoverBacklog: async () => {
+        discoveries++;
+        return discoveries === 1 ? [{ slug: 'one' }] : [{ slug: 'two' }];
+      },
+      renderStartupDashboard: async () => { throw new Error('dashboard failed'); },
+      log: (message) => calls.push(message),
+    }), { concurrency: 1, once: true, maxItems: 2, idlePollMs: 0 });
+
+    expect(calls).toContain('[daemon] startup-dashboard error: dashboard failed');
+    expect(calls).toEqual(expect.arrayContaining([
+      'dispatch:one', 'dispatch:two', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable',
+    ]));
+  });
+
+  it('closes a pending maintenance job before a stale-engine drain restart and suppresses later triggers', async () => {
     const calls: string[] = [];
     const feature = deferred<FeatureOutcome>();
     const dashboard = deferred<void>();
-    const poll = deferred<void>();
-    const firstStarted = deferred<void>();
+    const started = deferred<void>();
+    const restart = vi.fn(async () => { calls.push('restart'); return { fired: true }; });
+    let checks = 0;
 
     const daemon = runDaemon(depsFor(calls, [{ slug: 'one' }], {
       runFeature: async (item) => {
         calls.push(`dispatch:${item.slug}`);
-        firstStarted.resolve();
+        started.resolve();
         return feature.promise;
       },
       renderStartupDashboard: async () => {
         calls.push('dashboard');
         return dashboard.promise;
       },
-      sleep: async () => poll.promise,
-    }), { concurrency: 1, once: true, idlePollMs: 1 });
+      staleEngineChecker: {
+        check: () => (++checks === 1 ? 'fresh' : 'stale'),
+        targetIdentity: () => 'target',
+        capturedIdentity: () => 'captured',
+      },
+      requestRestart: restart,
+    }), { concurrency: 2, once: false, isSelfHost: true, autoRestartOnStaleEngine: true, idlePollMs: 0 });
 
-    await firstStarted.promise;
-    await vi.waitFor(() => expect(calls).toEqual(['dispatch:one', 'dashboard']));
-    poll.resolve();
-    await vi.waitFor(() => expect(calls).toEqual(['dispatch:one', 'dashboard']));
-
-    dashboard.resolve();
-    await vi.waitFor(() => expect(calls).toContain('mergeable'));
+    await started.promise;
+    await vi.waitFor(() => expect(calls).toEqual(expect.arrayContaining(['dispatch:one', 'dashboard'])));
     feature.resolve(done('one'));
+    await vi.waitFor(() => expect(checks).toBeGreaterThan(1));
+    await Promise.resolve();
+    expect(restart).not.toHaveBeenCalled();
+    dashboard.resolve();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+    expect(calls.indexOf('restart')).toBeGreaterThan(calls.indexOf('mergeable'));
     await daemon;
+  });
+
+  it('waits for a running maintenance job during shouldStop teardown without starting another step', async () => {
+    const calls: string[] = [];
+    const dashboard = deferred<void>();
+    let stop = false;
+
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'one' }], {
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}`);
+        stop = true;
+        return done(item.slug);
+      },
+      renderStartupDashboard: async () => {
+        calls.push('dashboard');
+        return dashboard.promise;
+      },
+      shouldStop: () => stop,
+    }), { concurrency: 1, once: false, idlePollMs: 0 });
+
+    await vi.waitFor(() => expect(calls).toEqual(['dispatch:one', 'dashboard']));
+    let returned = false;
+    void daemon.then(() => { returned = true; });
+    await Promise.resolve();
+    expect(returned).toBe(false);
+    dashboard.resolve();
+    await daemon;
+    expect(calls).toEqual([
+      'dispatch:one', 'dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable',
+    ]);
   });
 });
