@@ -2721,6 +2721,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           runGit: haltPrGit,
           operations: haltPrOperations,
           cache: haltPrSweepCache,
+          isFeatureInFlight: isWorkClaimActive,
         });
       },
       // adr-2026-07-27 Decisions 4 + 6: the sweep only converges if BOTH
