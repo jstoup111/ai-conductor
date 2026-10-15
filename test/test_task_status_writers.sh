@@ -39,29 +39,37 @@ run_fixture_checker() {
   HARNESS_INTEGRITY_SCAN_ROOT="$1" bash "$CHECKER" 2>&1
 }
 
-assert_writer_fails() {
-  local root=$1 path=$2 label=$3 output status
+writer_failure_is_reported() {
+  local root=$1 path=$2 output status
   output=$(run_fixture_checker "$root")
   status=$?
-  assert "${label} writer fails and names its file and line" \
-    "$(case "$output" in *"${path}:1:"*) [ "$status" -ne 0 ] && echo 0 || echo 1;; *) echo 1;; esac)"
-  [ "$status" -ne 0 ] || echo "$output" | sed 's/^/    /'
+  if [ "$status" -ne 0 ] && [[ "$output" == *"${path}:1:"* ]]; then
+    return 0
+  fi
+  echo "$output" | sed 's/^/    /'
+  return 1
 }
 
 skills_root="${WORKDIR}/skills-case"
 mkdir -p "${skills_root}/skills/x"
 printf "%s\n" "echo '{}' > .pipeline/task-status.json" > "${skills_root}/skills/x/run.sh"
-assert_writer_fails "$skills_root" "skills/x/run.sh" "skills/"
+writer_failure_is_reported "$skills_root" "skills/x/run.sh"
+skills_writer_status=$?
+assert "skills/x/run.sh writer exits non-zero and names skills/x/run.sh:1" "$skills_writer_status"
 
 hooks_root="${WORKDIR}/hooks-case"
 mkdir -p "${hooks_root}/hooks"
 printf "%s\n" "echo '{}' > .pipeline/task-status.json" > "${hooks_root}/hooks/write.sh"
-assert_writer_fails "$hooks_root" "hooks/write.sh" "hooks/"
+writer_failure_is_reported "$hooks_root" "hooks/write.sh"
+hooks_writer_status=$?
+assert "hooks/write.sh writer exits non-zero and names hooks/write.sh:1" "$hooks_writer_status"
 
 bin_root="${WORKDIR}/bin-case"
 mkdir -p "${bin_root}/bin"
 printf "%s\n" "echo '{}' > .pipeline/task-status.json" > "${bin_root}/bin/write.sh"
-assert_writer_fails "$bin_root" "bin/write.sh" "bin/"
+writer_failure_is_reported "$bin_root" "bin/write.sh"
+bin_writer_status=$?
+assert "bin/write.sh writer exits non-zero and names bin/write.sh:1" "$bin_writer_status"
 
 clean_root="${WORKDIR}/clean-case"
 mkdir -p "${clean_root}/hooks" "${clean_root}/bin" "${clean_root}/skills/x"
