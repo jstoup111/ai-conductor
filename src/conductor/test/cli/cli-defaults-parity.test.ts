@@ -11,6 +11,7 @@ import { buildDaemonModeOptions } from '../../src/index.js';
 const argv = (...args: string[]) => ['node', 'bin/ai-conductor', ...args];
 
 describe('daemon runtime fallback defaults', () => {
+  // Covers: task:8
   it('keeps the declared daemon defaults aligned with runtime fallbacks', () => {
     const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
     expect(daemon).toBeDefined();
@@ -23,6 +24,7 @@ describe('daemon runtime fallback defaults', () => {
     expect(defaultMismatches(RUNTIME_FALLBACK_FLAGS, daemon!)).toEqual([]);
   });
 
+  // Covers: task:8
   it('uses the idle-poll fallback in help and a flagless daemon command', async () => {
     const command = detectDaemonCommand(argv('daemon'));
     expect(command?.idlePollSeconds).toBe(DEFAULT_IDLE_POLL_SECONDS);
@@ -38,6 +40,7 @@ describe('daemon runtime fallback defaults', () => {
     expect(options.idlePollSeconds! * 1000).toBe(60_000);
   });
 
+  // Covers: task:8
   it('preserves an explicit idle-poll value through daemon mode options', async () => {
     const command = detectDaemonCommand(argv('daemon', '--idle-poll', '5'));
     expect(command?.idlePollSeconds).toBe(5);
@@ -50,6 +53,7 @@ describe('daemon runtime fallback defaults', () => {
     expect(options.idlePollSeconds).toBe(5);
   });
 
+  // Covers: task:8
   it('reports declared/runtime default drift and ignores flags with no declared default', () => {
     const daemon = createProgram().commands.find((command) => command.name() === 'daemon');
     expect(daemon).toBeDefined();
