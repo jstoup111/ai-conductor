@@ -17,12 +17,13 @@ import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
 import { routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes } from '../routing/route-record-store.js';
-import { reconcileRounds, routedRoundOpen } from '../routing/round-admission.js';
+import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { EventPersister } from '../event-persister.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
 export type StackPreflightResult =
   | { readonly kind: 'no-stack' | 'clear' | 'recovered' | 'repaired' }
+  | Extract<ReconcileRoundsResult, { readonly kind: 'navigate-leaf-to-build' }>
   | { readonly kind: 'halted' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
@@ -121,7 +122,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
       await deferredBaseRefresh(options.events);
       return { kind: 'clear' };
     }
-    if (reconciled.kind === 'navigate-leaf-to-build') return { kind: 'clear' };
+    if (reconciled.kind === 'navigate-leaf-to-build') return reconciled;
   }
 
   const cursor = await resolveActiveChild(options.worktree, options.slug, { git: options.git });

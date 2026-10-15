@@ -6332,6 +6332,7 @@ export class Conductor {
       // any in-progress record it wrote, so classifying it first would turn a
       // recoverable restack into an unrelated rebase HALT.
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      let routedLeafBuildResume = false;
       if (resumeSlug) {
         const preflight = await runStackPreflight({
           worktree: this.projectRoot,
@@ -6353,8 +6354,23 @@ export class Conductor {
           },
         });
         if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
+        if (preflight.kind === 'navigate-leaf-to-build') {
+          // Admission wrote the route and marker before its normal leaf
+          // rewind.  A crash in that gap is recovered by rewinding the leaf's
+          // own region state; the next BUILD entry adopts the marker-selected
+          // host.  Do not re-admit: the record/marker transaction is already
+          // the durable authority for this round.
+          const cursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
+          if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
+            await this.activateChildRegionState(state, cursor.position, cursor.isLeaf);
+            if (getStepStatus(state, 'build') !== 'pending') {
+              await this.navigateStateBack(state, 'build', steps);
+            }
+            routedLeafBuildResume = true;
+          }
+        }
       }
-      if (!await this.activateChildRegionStateForResume(state)) return;
+      if (!routedLeafBuildResume && !await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
