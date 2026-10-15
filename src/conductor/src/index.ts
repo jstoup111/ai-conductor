@@ -38,6 +38,7 @@ import {
 } from './engine/finish-publication-production.js';
 import { makeProductionGit } from './engine/pr-labels.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import { resolveHarnessRoot } from './engine/install-freshness.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
@@ -1791,6 +1792,7 @@ async function dispatchCliCommand(): Promise<void> {
     mode,
     providerExecution: preludeProviderExecution,
     events,
+    skillNameRoot: await resolveHarnessRoot(),
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and

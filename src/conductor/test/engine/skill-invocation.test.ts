@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
 import {
   STEP_SKILL_INVOCATIONS,
@@ -64,6 +65,14 @@ const EXPECTED_INVOCATIONS = {
 } as const satisfies Partial<Record<StepName, SkillInvocationDescriptor>>;
 
 describe('provider-native skill invocation', () => {
+  it.each([
+    ['claude', '/ac-explore'],
+    ['codex', '$ac-explore'],
+    ['pi', '/skill:ac-explore'],
+  ])('renders a resolved frontmatter name for %s', (providerKey, expected) => {
+    expect(renderSkillInvocation(STEP_SKILL_INVOCATIONS.explore!, providerKey, 'ac-explore')).toBe(expected);
+  });
+
   it('defines the exhaustive semantic invocation map', () => {
     expect(STEP_SKILL_INVOCATIONS).toEqual(EXPECTED_INVOCATIONS);
   });

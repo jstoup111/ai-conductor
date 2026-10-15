@@ -1,6 +1,9 @@
 // Covers: task:1, task:rem-as-built-1
 // Covers: task:10
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import {
   BUILD_REVIEW_RUBRIC_IDS,
@@ -15,6 +18,17 @@ import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-
 import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/build-review-registry', () => {
+  it('keeps rubric source loading addressed by its directory, not its frontmatter name', async () => {
+    const descriptor = getBuildReviewRubricDescriptor('security');
+    const directoryPath = fileURLToPath(new URL(
+      `../../../../skills/${descriptor.skillName}/SKILL.md`,
+      import.meta.url,
+    ));
+
+    await expect(readFile(directoryPath, 'utf8')).resolves.toMatch(/^name: build-review-security$/m);
+    expect(directoryPath).toContain('/skills/build-review-security/SKILL.md');
+  });
+
   it('registers the default-on implementation-quality rubric with the versioned built-ins', () => {
     expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality', 'security', 'implementationQuality']);
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toMatchObject({

@@ -1,3 +1,4 @@
+// Covers: task:8
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';

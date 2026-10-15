@@ -92,6 +92,7 @@ import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { RESIDUE_ROUTING_CALL_MEMBER } from './routing/residue-routing-call.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
+import { resolveSkillName } from './skill-names.js';
 import { BUILD_REVIEW_RUBRIC_IDS, fingerprintBuildReviewRubricPolicy, getBuildReviewRubricDescriptor } from './build-review-registry.js';
 import { currentCommitSha } from './project-prelude.js';
 import { loadConfig, resolveGateCodeValidityConfig } from './config.js';
@@ -646,6 +647,8 @@ export function parseRebaseResolutionOutput(output: string): ResolutionAttempt {
 }
 
 export interface StepRunnerOptions {
+  /** Tree whose skill frontmatter declares host-visible built-in names. */
+  skillNameRoot?: string | null;
   /** Feature-owned warning sink for daemon-dispatched runners. */
   log?: (message: string) => void;
   featureDesc?: string;
@@ -1065,6 +1068,7 @@ export class DefaultStepRunner implements StepRunner {
   /** Bounded per-run evidence cache; failed preflights never enter it. */
   private readonly tautologyPreflightCache = new Map<string, import('./build-review-test-quality-preflight.js').TautologyCompletedPreflight>();
   private readonly worktreeLifecycle: WorktreeLifecycleQueue | undefined;
+  private readonly skillNameRoot: string | null;
   callCount = 0;
 
   /** Route a shared-`.git` worktree mutation through the dispatcher queue when one is injected. */
@@ -1104,6 +1108,7 @@ export class DefaultStepRunner implements StepRunner {
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.usesInjectedBuildReviewGit = options?.gitRunner !== undefined;
     this.worktreeLifecycle = options?.worktreeLifecycle;
+    this.skillNameRoot = options?.skillNameRoot ?? null;
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewScopedLauncher = options?.buildReviewScopedLauncher ?? defaultBuildReviewScopedLauncher;
@@ -1278,8 +1283,17 @@ export class DefaultStepRunner implements StepRunner {
         output: `Cannot dispatch custom step ${customSkill.stepKey}: configured skill ${customSkill.configuredPath} is ${customSkill.kind}.`,
       };
     }
+    let resolvedSkillName: string | undefined;
+    if (skillInvocation?.kind === 'skill') {
+      try {
+        resolvedSkillName = await resolveSkillName(this.skillNameRoot, skillInvocation.skillName);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return { success: false, output: `Unable to resolve skill name for step ${step}: ${detail}` };
+      }
+    }
     const prompt = skillInvocation
-      ? renderSkillInvocation(skillInvocation, this.providerKey)
+      ? renderSkillInvocation(skillInvocation, this.providerKey, resolvedSkillName)
       : customSkill === undefined
         ? `/${step}`
         : renderAuxiliarySkillInvocation(customSkill, this.providerKey);
