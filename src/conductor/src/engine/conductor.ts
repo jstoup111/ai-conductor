@@ -195,7 +195,7 @@ import { createRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { admitRound } from './routing/round-admission.js';
 import { routedRoundOpen } from './routing/round-admission.js';
-import { leafBranchFor } from './feature-branch-identity.js';
+import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
@@ -4661,6 +4661,17 @@ export class Conductor {
             const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
             if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
             const planText = activePlanText || await readFile(planPath, 'utf8');
+            const hostPlans = [] as Array<{ branch: string; planPath: string }>;
+            for (const position of declaredPositions.slice(0, -1)) {
+              const branch = childBranchFor(this.featureSlug, position);
+              if (!branch.ok) {
+                return {
+                  kind: 'halt', haltClass: 'needs-human',
+                  detail: `routing cannot derive host branch for child ${position}: ${branch.reason}`,
+                };
+              }
+              hostPlans.push({ branch: branch.branch, planPath: relative(this.projectRoot, planPath) });
+            }
             const taskDoneWhen = parsePlanTaskDoneWhen(planText);
             const taskPaths = parsePlanTaskPaths(planText);
             const citedPathsFor = (
@@ -4717,7 +4728,7 @@ export class Conductor {
               appendedChildren: await readAppendedRemediationTaskChildren(this.projectRoot),
               declaredPositions, leafTip: leafBranchFor(this.featureSlug), roundId,
               judge: (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
-              git: makeGitRunner(this.projectRoot), leafPlan: planText,
+              git: makeGitRunner(this.projectRoot), leafPlan: planText, hostPlans,
               ...(hintSource.consolidatedManualTestFailRows !== undefined
                 ? { consolidatedManualTestFail: hintSource.consolidatedManualTestFailRows }
                 : {}),

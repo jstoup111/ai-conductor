@@ -9,6 +9,8 @@ const routingMutationSpy = vi.hoisted(() => ({
   calls: [] as string[],
   ownerTaskIds: [] as Array<readonly string[] | undefined>,
   citedPaths: [] as Array<readonly string[] | undefined>,
+  hostPlans: [] as Array<readonly { readonly branch: string; readonly planPath: string }[] | undefined>,
+  allocatedRemTaskIds: [] as string[],
   routedItems: [] as Array<{ readonly host: number; readonly reason: string }>,
   consolidatedManualTestFail: undefined as readonly string[] | undefined,
   routeResult: undefined as Awaited<ReturnType<typeof import('../../src/engine/routing/round-router.js').routeAdmittedRound>> | undefined,
@@ -58,10 +60,14 @@ vi.mock('../../src/engine/routing/round-router.js', async (importOriginal) => {
       routingMutationSpy.calls.push('route');
       routingMutationSpy.ownerTaskIds = args[0].admitted.map((item) => item.ownerTaskIds);
       routingMutationSpy.citedPaths = args[0].admitted.map((item) => item.citedPaths);
+      routingMutationSpy.hostPlans.push(args[0].hostPlans);
       routingMutationSpy.consolidatedManualTestFail = args[0].consolidatedManualTestFail;
       const result = routingMutationSpy.routeResult ?? await actual.routeAdmittedRound(...args);
       routingMutationSpy.routedItems = result.kind === 'routed'
         ? result.items.map(({ host, reason }) => ({ host, reason }))
+        : [];
+      routingMutationSpy.allocatedRemTaskIds = result.kind === 'routed'
+        ? Object.values(result.allocation).flatMap(({ remTaskIds }) => remTaskIds)
         : [];
       return result;
     }),
@@ -263,6 +269,8 @@ describe('Conductor residue routing judge binding', () => {
     routingMutationSpy.calls = [];
     routingMutationSpy.ownerTaskIds = [];
     routingMutationSpy.citedPaths = [];
+    routingMutationSpy.hostPlans = [];
+    routingMutationSpy.allocatedRemTaskIds = [];
     routingMutationSpy.routedItems = [];
     routingMutationSpy.consolidatedManualTestFail = undefined;
     routingMutationSpy.routeResult = undefined;
@@ -280,6 +288,18 @@ describe('Conductor residue routing judge binding', () => {
       version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
       sliceMembership: { taskSlices: { first: 1, second: 2 }, titles: ['first', 'second'] },
     }, envelopeFilesystem);
+    await initTestRepo(projectRoot);
+    const git = makeGitRunner(projectRoot);
+    const mustSucceed = async (args: string[]) => {
+      const result = await git(args);
+      if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+    };
+    const first = childBranchFor('demo', parseChildId(1)!);
+    if (!first.ok) throw new Error(first.reason);
+    await mustSucceed(['add', '.']);
+    await mustSucceed(['commit', '-qm', 'base']);
+    await mustSucceed(['checkout', '-qb', first.branch]);
+    await mustSucceed(['checkout', '-qb', leafBranchFor('demo'), 'main']);
   });
 
   afterEach(async () => {
@@ -435,7 +455,6 @@ describe('Conductor residue routing judge binding', () => {
   });
 
   it('routes a T1 repair citing a child-2 prerequisite to host 2', async () => {
-    await initTestRepo(projectRoot);
     const git = makeGitRunner(projectRoot);
     const mustSucceed = async (args: string[]) => {
       const result = await git(args);
@@ -449,18 +468,23 @@ describe('Conductor residue routing judge binding', () => {
       return result.branch;
     };
 
+    await mustSucceed(['checkout', childBranch(first)]);
     await mkdir(join(projectRoot, 'src'), { recursive: true });
     await writeFile(join(projectRoot, 'src', 'owner.ts'), 'export const owner = true;\n');
-    await mustSucceed(['add', '.']);
-    await mustSucceed(['commit', '-qm', 'base']);
-    await mustSucceed(['checkout', '-qb', childBranch(first)]);
+    await mustSucceed(['add', 'src/owner.ts']);
+    await mustSucceed(['commit', '-qm', 'child one']);
     await mustSucceed(['update-ref', closureRefFor('demo', first), 'HEAD']);
     await mustSucceed(['checkout', '-qb', childBranch(second)]);
     await writeFile(join(projectRoot, 'src', 'child-two.ts'), 'export const childTwo = true;\n');
     await mustSucceed(['add', 'src/child-two.ts']);
     await mustSucceed(['commit', '-qm', 'child two']);
     await mustSucceed(['update-ref', closureRefFor('demo', second), 'HEAD']);
-    await mustSucceed(['checkout', '-qb', leafBranchFor('demo')]);
+    await mustSucceed(['checkout', leafBranchFor('demo')]);
+    await mkdir(join(projectRoot, 'src'), { recursive: true });
+    await writeFile(join(projectRoot, 'src', 'owner.ts'), 'export const owner = true;\n');
+    await writeFile(join(projectRoot, 'src', 'child-two.ts'), 'export const childTwo = true;\n');
+    await mustSucceed(['add', 'src/owner.ts', 'src/child-two.ts']);
+    await mustSucceed(['commit', '-qm', 'leaf prerequisites']);
 
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
@@ -507,6 +531,72 @@ describe('Conductor residue routing judge binding', () => {
     expect(routingMutationSpy.citedPaths).toEqual([expect.arrayContaining(['src/child-two.ts', 'src/owner.ts'])]);
     expect(routingMutationSpy.routedItems).toEqual([{ host: 2, reason: 'prerequisite-paths' }]);
     expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
+  });
+
+  // Covers: task:rem-prd-audit-W6
+  it('reserves a rem id already held by a candidate child plan before allocating the routed block', async () => {
+    const git = makeGitRunner(projectRoot);
+    const mustSucceed = async (args: string[]) => {
+      const result = await git(args);
+      if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+    };
+    const first = parseChildId(1)!;
+    const second = parseChildId(2)!;
+    const child = childBranchFor('demo', first);
+    if (!child.ok) throw new Error(child.reason);
+
+    await mustSucceed(['checkout', child.branch]);
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task first: authored work\n\n### Task rem-as-built-repair-task-for-first: Existing child repair\n',
+      'utf8',
+    );
+    await mustSucceed(['add', '.docs/plans/feature.md']);
+    await mustSucceed(['commit', '-qm', 'child remediation']);
+    await mustSucceed(['checkout', leafBranchFor('demo')]);
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task first: authored work\n',
+      'utf8',
+    );
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: 'first' },
+        summary: 'The authored boundary needs repair.',
+      }],
+      violations: 'The task-bound implementation is incomplete.',
+      resolution: 'Repair the task boundary.',
+    }, { attemptId: 'fixture-child-rem-id', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltTaskBoundRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: leafBranchFor('demo'), nextChild: undefined,
+        }),
+      },
+    });
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'as-built task-bound finding collides with a child remediation id',
+      { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route' });
+    expect(routingMutationSpy.hostPlans).toEqual([[{ branch: child.branch, planPath: '.docs/plans/feature.md' }]]);
+    expect(routingMutationSpy.allocatedRemTaskIds).toEqual(['rem-as-built-repair-task-for-first-2']);
   });
 
   it('passes validation-group FAIL rows verbatim to the router and returns the stored host retry hint', async () => {
