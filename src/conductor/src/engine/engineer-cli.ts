@@ -180,6 +180,9 @@ function findUnknownFlag(argv: string[], allowed: string[]): string | null {
   return null;
 }
 
+/** Flags accepted by `compose worktree`; shared with its help contract. */
+export const WORKTREE_ACCEPTED_FLAGS = ['--project', '--idea', '--source-ref', '--body'] as const;
+
 function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null {
   // argv is process.argv: [node, entry, sub, ...]
   const sub = argv[2];
@@ -228,7 +231,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     // Absent for human-typed ideas (no staging, no error — Story 1 negative path).
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
     const body = parseFlag(argv, '--body') ?? undefined;
-    const unk = findUnknownFlag(argv, ['--project', '--idea', '--source-ref', '--body']);
+    const unk = findUnknownFlag(argv, [...WORKTREE_ACCEPTED_FLAGS]);
     if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
     return { kind: 'worktree', project, idea, sourceRef, body };
   }
@@ -858,19 +861,19 @@ export const SUBCOMMAND_HELP = {
     'Mutates: nothing (read-only tracker audit).\n' +
     'Loop fit: out-of-band maintenance report; it never creates, removes, or changes dependency links.',
   worktree:
-    'compose worktree --project <name> --idea "<idea>" [--source-ref <ref>] — create the per-idea worktree used to author a spec.\n' +
-    'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas).\n' +
+    'compose worktree --project <name> --idea "<idea>" [--source-ref <ref>] [--body <text>] — create the per-idea worktree used to author a spec.\n' +
+    'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas), --body <text> (optional — stages the intake body).\n' +
     'Mutates: creates a git worktree and branch on disk for the project.\n' +
     'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
   land:
-    'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — land the authored spec from the worktree onto the spec/<slug> branch and open the spec PR.\n' +
+    'compose land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — commit the authored .docs/ set on the spec/<slug> branch inside the worktree.\n' +
     'Flags: --project <name> (required), --idea "<text>" (required), --worktree <path> (required — strict isolation, never falls back to the primary checkout), --source-ref <ref> (optional — intake write-back anchor for github-issues-sourced ideas).\n' +
-    'Mutates: commits to the worktree, pushes the spec/<slug> branch, opens a PR.\n' +
+    'Mutates: commits the authored .docs/ set on the spec/<slug> branch inside the worktree.\n' +
     'Loop fit: third step — claim → worktree → land → handoff → resolve/forget.',
   handoff:
-    'compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>] — hand the landed spec off to the daemon/build phase.\n' +
+    'compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>] — push the spec branch, open the spec PR, and hand the landed spec off to the daemon/build phase.\n' +
     'Flags: --project <name> (required), --branch <branch> (required), --worktree <path> (required), --source-ref <ref> (optional — intake write-back anchor).\n' +
-    'Mutates: notifies/nudges the daemon for the target project; updates ledger write-back state when --source-ref is present.\n' +
+    'Mutates: pushes the spec branch; opens the spec PR or marks an existing draft spec PR ready for review; uses a local-commit fallback when no remote is configured; nudges the daemon and updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
   'plan-review':
     'compose plan-review --project <name> --worktree <path> [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +

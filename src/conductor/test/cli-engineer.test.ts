@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:6, task:10
+// Covers: task:1, task:2, task:3, task:6, task:7, task:10
 // Specs for the `conduct engineer` subcommand wiring (Phase 9.3, ADR-008 conformance).
 //
 // Mirrors the structural detection pattern used by the registry-cli tests:
@@ -12,7 +12,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
-import { ENGINEER_SUBCOMMANDS } from '../src/engine/engineer-cli.js';
+import {
+  ENGINEER_SUBCOMMANDS,
+  SUBCOMMAND_HELP,
+  WORKTREE_ACCEPTED_FLAGS,
+} from '../src/engine/engineer-cli.js';
 import { DEFAULT_PROVIDER, requireProviderCapability } from '../src/execution/provider-catalog.js';
 import { discoverInstalledProviders } from '../src/engine/provider-discovery.js';
 
@@ -40,6 +44,38 @@ describe('CLI surface — conduct engineer subcommand (FR-1 wiring)', () => {
       .commands.map((c) => c.name())
       .sort();
     expect(names).toContain('engineer');
+  });
+});
+
+describe('compose land, handoff, and worktree help', () => {
+  it('describes land as committing the authored docs set inside the worktree without claiming handoff work', () => {
+    expect(SUBCOMMAND_HELP.land).toMatch(/commit.*authored.*\.docs/i);
+    expect(SUBCOMMAND_HELP.land).toMatch(/spec\/<slug>.*worktree/i);
+    expect(SUBCOMMAND_HELP.land).not.toMatch(/push/i);
+    expect(SUBCOMMAND_HELP.land).not.toMatch(/opens? (a )?(spec )?PR/i);
+  });
+
+  it('describes handoff publication, local fallback, and daemon nudge', () => {
+    expect(SUBCOMMAND_HELP.handoff).toMatch(/push.*spec branch/i);
+    expect(SUBCOMMAND_HELP.handoff).toMatch(/open.*spec PR/i);
+    expect(SUBCOMMAND_HELP.handoff).toMatch(/draft spec PR.*ready for review/i);
+    expect(SUBCOMMAND_HELP.handoff).toMatch(/local.commit fallback/i);
+    expect(SUBCOMMAND_HELP.handoff).toMatch(/nudge.*daemon/i);
+  });
+
+  it('lists every worktree flag and identifies a missing flag in fixture help', () => {
+    const flagsLine = SUBCOMMAND_HELP.worktree.split('\n').find((line) => line.startsWith('Flags:'));
+    expect(flagsLine).toBeDefined();
+    for (const flag of WORKTREE_ACCEPTED_FLAGS) {
+      expect(flagsLine).toContain(flag);
+    }
+
+    const missingWorktreeFlags = (help: string, flags: readonly string[]): string[] =>
+      flags.filter((flag) => !help.includes(flag));
+    expect(missingWorktreeFlags(
+      'Flags: --project <name>, --idea <text>, --source-ref <ref>.',
+      WORKTREE_ACCEPTED_FLAGS,
+    )).toEqual(['--body']);
   });
 });
 

@@ -96,6 +96,7 @@ import {
   userConfigSetCommand,
   type CLIOptions,
 } from './cli.js';
+import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
@@ -831,6 +832,12 @@ export async function dispatchCliEntry(input: {
 // --- Main ---
 
 async function dispatchCliCommand(): Promise<void> {
+  const subcommandHelp = routeSubcommandHelp(process.argv);
+  if (subcommandHelp !== null) {
+    process.stdout.write(subcommandHelp);
+    process.exitCode = 0;
+    return;
+  }
 
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
     process.argv,
@@ -1312,12 +1319,13 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(0);
   }
 
+  // Per-command help is answered by routeSubcommandHelp at the start of
+  // dispatchCliCommand. engineer, halt-issues, daemon, and update own their help.
   // Top-level `--help` / `-h`: print the FULL command surface — every subcommand
   // (register/create/engineer/daemon) included — not just the bare-pipeline
   // flags. parseArgs uses the base program (no subcommands, so a bare feature
   // description is never mistaken for an unknown command); the discoverable
-  // surface lives in createProgram(). Subcommand-specific help is already handled
-  // by the dispatchers above, so any `--help` reaching here is top-level.
+  // surface lives in createProgram(). Any `--help` reaching here is top-level.
   if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
     process.stdout.write(renderCanonicalFullHelp());
     process.exit(0);

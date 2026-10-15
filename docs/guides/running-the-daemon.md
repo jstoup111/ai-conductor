@@ -112,7 +112,7 @@ ai-conductor daemon logs --follow         # stream new lines until Ctrl-C
 ai-conductor daemon logs --all            # every registered repo, with ==> path <== headers
 ```
 
-`--lines`/`-n`, `-f`, and `--repo=<path>` all work but are absent from `--help`. `--follow` with
+`--follow` with
 `--all` prints `--follow is not supported with --all; showing a static snapshot.` and does not
 follow. A missing log prints `(no daemon log yet for <path>)`.
 
@@ -840,7 +840,7 @@ which loses scrollback) is reported explicitly.
 
 `pause`, `resume`, and `restart` accept fleet selectors: `--all`, or one or more bare repo names
 after the verb. With a selector the verb iterates the project registry instead of acting on the
-current directory. None of these selectors appear in `--help`.
+current directory.
 
 ```bash
 ai-conductor daemon pause --all
@@ -882,9 +882,8 @@ Three things shape the run itself. Every flag, its default, and its exact parsin
    At `N=1`, the daemon preserves the recorded serial dispatch and maintenance ordering.
 2. **Bound a `--continuous` run.** With no `--max-items`, `--max-cost`, `--max-runtime`, or
    `--max-idle-polls` it warns and then runs until you `Ctrl-C` it. Dispatching a feature restarts
-   the consecutive empty-poll count used by `--max-idle-polls`.
-3. **Pass `--idle-poll` explicitly** if the polling interval matters. Its effective default does not
-   match its help text.
+   the consecutive empty-poll count used by `--max-idle-polls`. Without `--idle-poll`, empty polls
+   are 60 seconds apart.
 
 `ai-conductor daemon --help` (or `-h`) anywhere after `daemon` prints the daemon help and exits 0. That
 guard runs before every daemon dispatcher on purpose: without it, `--help` would be treated as an

@@ -14,6 +14,7 @@ import { loadMergedConfigForRead, projectConfigPath, validateConfig } from './en
 import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
 import { grantStorePath } from './engine/decide-entry-policy.js';
 import { resolveMainRepoRootStrict } from './engine/park-marker.js';
+import { DEFAULT_IDLE_POLL_SECONDS } from './cli-defaults.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -71,7 +72,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .argument('[feature]', 'Feature description')
     .option('--resume', 'Resume from last state')
     .option('--fresh', 'Start a new feature; skip auto-resume even if a worktree for this feature description already exists')
-    .option('--auto', 'Deprecated: use `ai-conductor daemon start` instead')
+    .option('--auto', 'Deprecated and rejected: use `ai-conductor daemon start` instead; cannot be combined with --interactive')
     .option('--status', 'Show dashboard only')
     .option('--from <step>', 'Start from specific step')
     .option('--cleanup', 'Clean up worktrees')
@@ -81,7 +82,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .option('--effort <level>', 'Override effort for every step: low | medium | high | xhigh | max')
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
-    .option('--interactive', `Run every step in interactive ${CLAUDE_DISPLAY_NAME} REPL mode (no -p flag)`)
+    .option('--interactive', `Run every step in interactive ${CLAUDE_DISPLAY_NAME} REPL mode (no -p flag); cannot be combined with --auto`)
     .option('--diagnose', 'Diagnose conductor state (non-mutating); reports SHIP-phase evidence gaps and exits non-zero if state is marked complete but evidence is missing')
     .option('--report', 'Print run summary from .pipeline/events.jsonl (step durations, retry hotspots, token spend) and exit');
 }
@@ -751,6 +752,76 @@ export function createProgram(): Command {
     .command('build-tail [worktree]')
     .description('Render a deterministic build task/remediation/closeout timing rollup');
 
+  // These commands are invoked by the engine and its hooks before normal CLI
+  // bootstrapping. They remain declared so Commander can provide their own
+  // help, but stay out of the operator-facing command reference.
+  for (const command of [
+    'scoped-run',
+    'halt-clear',
+    'missing-reseal-reason',
+    'test-suite',
+    'finish-record',
+    'manual-test-record',
+    'derive-feedback',
+    'github-boundary-audit',
+    'github-operation',
+    'scope-check',
+    'task-membership-check',
+  ]) {
+    program.command(command, { hidden: true });
+  }
+
+  // Operator-directed commands dispatch before normal CLI bootstrapping in
+  // index.ts. They are declarations only: Commander owns their help surface,
+  // while the existing pre-dispatch detectors retain runtime ownership.
+  program
+    .command('shipped-record')
+    .description('Write the shipped record that prevents a completed feature from being re-dispatched')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--pr <url>', 'Implementation pull request URL, or local');
+  program
+    .command('kpi')
+    .description('Report delivery metrics from committed shipped records');
+  const memory = program
+    .command('memory')
+    .description('Set up or migrate the project memory store');
+  memory
+    .command('setup [dir]')
+    .description('Create or migrate the memory store for this project directory');
+  const brain = program
+    .command('brain')
+    .description('Manage the background intake supervisor');
+  brain.command('start').description('Start the background intake supervisor');
+  brain.command('stop').description('Stop the background intake supervisor');
+  brain.command('status').description('Show background intake supervisor status');
+  program
+    .command('intake-loop')
+    .description('Run one intake pass or continuously poll configured intake sources')
+    .option('--continuous', 'Poll continuously')
+    .option('--once', 'Run one intake pass')
+    .option('--interval-ms <milliseconds>', 'Polling interval in milliseconds');
+  program
+    .command('render-diagrams [files...]')
+    .description('Render Mermaid diagrams in Markdown artifacts')
+    .option('--check', 'Parse-check diagrams without rendering');
+  program
+    .command('build-auth-status')
+    .description('Report the daemon build-auth mode and token health');
+  const shipmentEvidence = program
+    .command('shipment-evidence')
+    .description('Check or reconcile shipped-record evidence for implementation pull requests')
+    .requiredOption('--pr <url>', 'Implementation pull request URL')
+    .option('--event <path>', 'Pull-request event metadata path');
+  shipmentEvidence
+    .command('reconcile')
+    .description('Publish a missing shipped record for an implementation pull request')
+    .requiredOption('--pr <url>', 'Implementation pull request URL')
+    .requiredOption('--shipped <date>', 'Shipment date in YYYY-MM-DD format');
+  shipmentEvidence
+    .command('audit')
+    .description('Audit shipped-record evidence for every pull request')
+    .option('--report <path>', 'Audit report output path');
+
   // Operator budget recovery. Dispatch lives in index.ts
   // (detectKickbackBudgetCommand); declared here so `--help` documents it.
   program
@@ -852,8 +923,11 @@ export function createProgram(): Command {
     .option('--continuous', 'Keep idle-polling for new features instead of draining once and exiting (honors --max-* ceilings)')
     .option('--max-cost <tokens>', 'Ceiling: stop starting features after this many total output tokens')
     .option('--max-runtime <seconds>', 'Ceiling: stop starting features after this much wall-clock time')
-    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', '5')
-    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
+    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', String(DEFAULT_IDLE_POLL_SECONDS))
+    .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls')
+    .option('--no-watch', 'Disable filesystem watching for new features')
+    .option('--completed', 'Show completed features in daemon status output')
+    .option('--all', 'Show all features, including completed features, in daemon status output');
   // Read-only observability sub-subcommands.
   daemon
     .command('status')
@@ -861,8 +935,9 @@ export function createProgram(): Command {
   daemon
     .command('logs')
     .description('Print or follow a repo\'s .daemon/daemon.log')
-    .option('--repo <path>', 'Target repo (default: current directory)')
-    .option('--follow', 'Stream new log lines (tail -f); single repo only')
+    .option('--repo <path>', 'Target repo (default: current directory; also accepts --repo=<path>)')
+    .option('-f, --follow', 'Stream new log lines (tail -f); single repo only')
+    .option('-n, --lines <n>', 'Show the last n log lines')
     .option('--all', 'Show logs for every registered repo');
   // Filesystem-direct, pre-boot park/unpark verbs (detectDaemonParkCommand) —
   // no daemon/supervisor startup required. Declared here ONLY so `--help`
@@ -898,14 +973,17 @@ export function createProgram(): Command {
     .command('stop')
     .description('Stop this repo\'s tmux-supervised daemon');
   daemon
-    .command('restart')
-    .description('Restart this repo\'s tmux-supervised daemon');
+    .command('restart [repos...]')
+    .description('Restart this repo\'s tmux-supervised daemon; bare repo names select a named subset')
+    .option('--all', 'Act on every registered repo');
   daemon
-    .command('pause')
-    .description('Pause dispatch by writing the pause marker; running work finishes');
+    .command('pause [repos...]')
+    .description('Pause dispatch by writing the pause marker; bare repo names select a named subset; running work finishes')
+    .option('--all', 'Act on every registered repo');
   daemon
-    .command('resume')
-    .description('Resume dispatch by clearing the pause marker');
+    .command('resume [repos...]')
+    .description('Resume dispatch by clearing the pause marker; bare repo names select a named subset')
+    .option('--all', 'Act on every registered repo');
   daemon
     .command('connect')
     .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)')
@@ -917,6 +995,11 @@ export function createProgram(): Command {
     .option('--attach-into <target>', 'Deliver the attach into an already-open tmux pane elsewhere (session, session:window, or session:window.pane) instead of this process\'s own terminal');
 
   return program;
+}
+
+/** Commander stores its `{ hidden: true }` declaration on this runtime field. */
+function isHiddenCommand(command: Command): boolean {
+  return (command as Command & { _hidden?: boolean })._hidden === true;
 }
 
 /**
@@ -932,7 +1015,7 @@ export function renderFullHelp(program: Command = createProgram()): string {
 
   const walk = (cmd: Command, path: string[]): void => {
     for (const sub of cmd.commands) {
-      if (sub.name() === 'help') continue; // commander's auto `help [command]`
+      if (sub.name() === 'help' || isHiddenCommand(sub)) continue; // commander's auto `help [command]`
       const fullPath = ['ai-conductor', ...path, sub.name()].join(' ');
       sections.push(`${rule}\n${fullPath}\n${rule}\n${sub.helpInformation().trimEnd()}`);
       walk(sub, [...path, sub.name()]);
@@ -955,7 +1038,7 @@ export function renderDaemonHelp(program: Command = createProgram()): string {
   const rule = '─'.repeat(72);
   const sections = [daemon.helpInformation().trimEnd()];
   for (const sub of daemon.commands) {
-    if (sub.name() === 'help') continue; // commander's auto `help [command]`
+    if (sub.name() === 'help' || isHiddenCommand(sub)) continue; // commander's auto `help [command]`
     sections.push(
       `${rule}\nai-conductor daemon ${sub.name()}\n${rule}\n${sub.helpInformation().trimEnd()}`,
     );

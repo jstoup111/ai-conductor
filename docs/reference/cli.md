@@ -287,6 +287,11 @@ run exits 1.
 | `--tail-lines <n>` | integer | `20` | `0` disables the pane | Maximum lines of post-step stdout shown in the tail pane. |
 | `-h`, `--help` | boolean | — | — | Prints help and exits 0. |
 
+`ai-conductor <command> --help` (or `-h`) prints that command's own help, including nested paths such
+as `memory setup --help`, and exits 0 without running the command. `engineer`/`compose`,
+`halt-issues`, and `daemon` print their own help; `update` forwards `--help` to `bin/update`. An
+unknown command prints the root help. Options after `--` are not read as help requests.
+
 Passing both `--auto` and `--interactive` prints `Error: --auto and --interactive are mutually
 exclusive` and exits 1. Passing `--auto` alone prints its daemon-directed deprecation notice and
 exits 1.
@@ -420,13 +425,8 @@ ai-conductor daemon [--concurrency <n>] [--max-items <n>] [--continuous] [--max-
 | `--max-runtime <seconds>` | integer | unset | Wall-clock ceiling for the run. |
 | `--idle-poll <seconds>` | integer | `60` | Seconds between polls when the backlog is empty. |
 | `--max-idle-polls <n>` | integer | unbounded | Stop after this many consecutive empty polls; dispatching a feature restarts the count. |
-| `--no-watch` | boolean | watcher on | Drops the HALT-marker filesystem watcher and relies on polling alone. Not listed in `--help`. |
-| `--completed`, `--all` | boolean | `false` | Include already-processed features in the startup dashboard's console output. The persisted log sink never includes them. Not listed in `--help`. |
-
-> **Known limitation.** `--idle-poll`'s help string reports a default of 5 seconds; the code supplies
-> 60 when the flag is absent, so an unflagged `--continuous` daemon polls once a minute, not every five
-> seconds. Pass `--idle-poll` explicitly if the interval matters. Tracked in
-> [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+| `--no-watch` | boolean | watcher on | Drops the HALT-marker filesystem watcher and relies on polling alone. |
+| `--completed`, `--all` | boolean | `false` | Include already-processed features in the startup dashboard's console output. The persisted log sink never includes them. |
 
 Every integer flag reads the next token, and a token beginning with `--` is treated as absent. So
 `ai-conductor daemon --max-items --continuous` silently uses the default for `--max-items` rather than
@@ -531,9 +531,9 @@ Reads `.daemon/daemon.log`.
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `--repo <path>`, `--repo=<path>` | path | cwd | Repo whose log is read. |
-| `--follow`, `-f` | boolean | `false` | Streams appended lines from the current end of file until SIGINT. `-f` is not listed in `--help`. |
+| `--follow`, `-f` | boolean | `false` | Streams appended lines from the current end of file until SIGINT. |
 | `--all` | boolean | `false` | Iterates the registry, printing a `==> <path> <==` header per repo. |
-| `--lines <n>`, `-n <n>`, `--lines=<n>` | integer | whole file | Tail length. A non-integer or non-positive value is ignored and the whole file is printed. Not listed in `--help`. |
+| `--lines <n>`, `-n <n>`, `--lines=<n>` | integer | whole file | Tail length. A non-integer or non-positive value is ignored and the whole file is printed. |
 
 `--follow` with `--all` prints `--follow is not supported with --all; showing a static snapshot.` and
 does not follow. A missing log prints `(no daemon log yet for <path>)` and contributes 0. Exit 1 when a
@@ -684,8 +684,8 @@ under the root `.daemon/` directory even when invoked from a nested package or l
 | `-D`, `--detach` | `start` | Skips the auto-attach. Parsed on every verb but only meaningful here. |
 | `--write` | `connect` | Requests a read-write attach instead of the default read-only. Ignored elsewhere — `debug` is already read-write. |
 | `--attach-into <target>` | `start`, `connect`, `debug` | Delivers the attach into an already-open tmux pane elsewhere on the same tmux server — a session, `session:window`, or `session:window.pane` target string — instead of taking over this process's own controlling terminal. Fixes running any of these from a shell that is itself already inside a tmux client, which otherwise hits tmux's own nesting guard (`sessions should be nested with care, unset $TMUX to force`): the attach command is typed into the target pane via `tmux send-keys`, wrapped in `env -u TMUX` so tmux does not refuse it there. Never touches this process's own stdio, so it works with no TTY and bypasses `start`'s `--detach`/no-TTY skip. Example: `ai-conductor daemon connect --write --attach-into mywindow:1.0` to view-and-drive the daemon in a specific pane you already have open. |
-| `--all` | `pause`, `resume`, `restart` | Applies the verb to every registered repo instead of the cwd repo. Not listed in `--help`. |
-| `<name>…` | `pause`, `resume`, `restart` | Bare tokens after the verb select named repos from the registry. Not listed in `--help`. |
+| `--all` | `pause`, `resume`, `restart` | Applies the verb to every registered repo instead of the cwd repo. |
+| `<name>…` | `pause`, `resume`, `restart` | Bare tokens after the verb select named repos from the registry. |
 
 In fleet mode each repo gets its own error boundary, so one failure never aborts the sweep. Per-repo
 `restart` outcomes are paused → respawn, idle → respawn, busy → queued, stopped with no session →
@@ -746,8 +746,9 @@ returns 1.
 | `resolve` | `compose resolve <sourceRef> --pr-url <url> [--branch <branch>]` | Recovers a stranded entry that is `claimed` but never delivered by transitioning it to `done` with `{prUrl, branch}`. The branch is preserved when `--branch` is omitted. A missing entry reports `{found:false}`. | 0; 1 on a `--pr-url` that does not match `^https?://`; 1 on unknown flag |
 | `migrate-issue-deps` | `compose migrate-issue-deps [--confirm]` | One-time prose-to-structured-link dependency migration over open issues. Dry-run by default: prints the proposal, writes nothing, and reports `Dry run — no links written. Re-run with --confirm to apply.` With `--confirm`, applies the links and prints `N link(s) created, M already present.` | 0; 1 when the repo or issue list cannot be resolved; 1 on unknown flag |
 
-`--source-ref` on `worktree`, `--body` on `worktree`, and the `--idea` and free-text launch forms are
-all accepted by the code but absent from the root `--help` output. Likewise, `land`'s
+`--source-ref` and `--body` on `worktree` are listed by `compose worktree --help` but absent from the
+root `--help` output. The `--idea` and free-text launch forms are accepted by the code but absent
+from the root `--help` output. Likewise, `land`'s
 `--depends-on`, `--decline-dependency`, and `--skip-dependency-check` are absent from both the root
 guide and `compose land --help`.
 
@@ -795,11 +796,6 @@ under their original feature names. Those amendments remain in the commit and ap
 checks, but cannot replace the current feature's required artifacts. New paths, including rename
 destinations, must still satisfy the current feature's naming contract. Commit tracked amendments
 before invoking land; its clean-worktree guard remains in force.
-
-> **Known limitation.** `compose land --help` states that land pushes the branch and opens the spec
-> PR. It does not — `land` only commits spec artifacts onto `spec/<slug>`; opening the PR is
-> `compose handoff`. Run `handoff` after `land` or no PR is ever created. Tracked in
-> [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
 
 ## `ai-conductor register`
 
@@ -1059,8 +1055,6 @@ Every other failure exits **0** with one warning and no record written, so the e
 used to detect success. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
 
-Does not appear in `--help`.
-
 ## `ai-conductor kpi`
 
 ```bash
@@ -1069,7 +1063,7 @@ ai-conductor kpi
 
 Read-only report over the cost blocks in committed `.docs/shipped/*.md` records. Accepts and ignores
 any trailing arguments. Always exits 0: a missing or empty `.docs/shipped` prints a friendly message
-rather than an error, and malformed records do not throw. Does not appear in `--help`.
+rather than an error, and malformed records do not throw.
 
 Each per-feature row carries `engine=<id>`, the engine build that shipped it, so ships can be
 attributed to a daemon build. A record written before engine-version stamping reports
@@ -1107,8 +1101,7 @@ resolves against it.
 | Absent, or already a symlink | Creates the canonical store and symlink; idempotent |
 
 Prints `conduct memory setup: .memory/ is ready at <dir>` and exits 0. Exits 1 when the directory does
-not exist or anything throws. Only the exact two-token form `memory setup` matches. Does not appear in
-`--help`.
+not exist or anything throws. Only the exact two-token form `memory setup` matches.
 
 ## `ai-conductor halt-issues sweep`
 
@@ -1472,8 +1465,10 @@ full model.
 
 ## Internal commands, invoked by the engine
 
-These are dispatched by skills, hooks, and the daemon rather than typed by an operator. None appear in
-`--help`. They are listed so a name found in a log or a hook script is findable.
+These are dispatched by skills, hooks, and the daemon rather than typed by an operator. They are
+listed so a name found in a log or a hook script is findable. `intake-loop`, `brain`, `render-diagrams`,
+`rate-card`, `shipment-evidence`, and `build-auth-status` appear in the root `--help`; the rest are
+declared hidden and print only their own help on `<command> --help`.
 
 | Command | Syntax | Purpose | Exit codes |
 | --- | --- | --- | --- |

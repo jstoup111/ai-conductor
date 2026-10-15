@@ -154,10 +154,7 @@ instead. A resolved empty or bulletless body still creates an outcomes file with
 and zero bullets. An unreadable, missing, or unparseable source leaves no outcomes file, prints a
 diagnostic that names `--body`, and still creates the worktree. `--body` always takes precedence.
 
-> **Known limitation.** `--source-ref` and `--body` are both parsed and honoured by
-> `composer worktree`, but neither is declared in the commander tree, so help output omits them. If
-> you pass `--body "<text>"` it wins over the claim record or issue body. Tracked in
-> [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+`compose worktree --help` lists `--source-ref` and `--body`; the root `ai-conductor --help` omits them.
 
 ## Step 4 — Run DECIDE inside the worktree
 
@@ -282,13 +279,8 @@ If the check itself is unavailable, retry, or — with operator agreement — pa
 With `--source-ref`, `land` also comments "Routed to `<repo>`" on the originating issue and advances
 the ledger to `routed`. That write-back is advisory: a `gh` failure never fails a successful land.
 
-> **Known limitation.** `ai-conductor compose land --help` claims land will "open the spec PR" and
-> that it "pushes the `spec/<slug>` branch, opens a PR". The code does neither: the `land` dispatch
-> arm calls only `landSpec`, which commits in the worktree and returns. The push
-> (`git push -u origin <branch>`) and `gh pr create` happen in `handoff`. The commander description,
-> the `ai-conductor compose` guide text, and the source grammar comment all agree with the code —
-> only the per-subcommand help text disagrees. If you stop after `land`, nothing has been pushed and
-> no PR exists. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+`land` commits in the worktree and returns. The push and `gh pr create` happen in `handoff`; if you
+stop after `land`, nothing has been pushed and no PR exists.
 
 ## Step 6 — Hand off: push, PR, daemon nudge
 
