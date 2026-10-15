@@ -101,6 +101,14 @@ function missingDaemonRunFlags(
   return flags.filter((flag) => !declared.has(flag));
 }
 
+/** Commander keeps these declaration details as runtime fields, but omits them from its public types. */
+function commanderInternals(command: Command | undefined): {
+  _hidden?: boolean;
+  _actionHandler?: unknown;
+} | undefined {
+  return command as (Command & { _hidden?: boolean; _actionHandler?: unknown }) | undefined;
+}
+
 describe('CLI', () => {
   it('detects only the explicit read-only build-review findings grammar', () => {
     expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings', '--feature', 'review-rubrics', '--json']))
@@ -431,7 +439,7 @@ describe('CLI', () => {
     it('declares the four named engine-internal commands as hidden', () => {
       const commands = createProgram().commands;
       for (const name of ['test-suite', 'finish-record', 'manual-test-record', 'derive-feedback']) {
-        expect(commands.find((command) => command.name() === name)?._hidden, name).toBe(true);
+        expect(commanderInternals(commands.find((command) => command.name() === name))?._hidden, name).toBe(true);
       }
     });
 
@@ -446,10 +454,10 @@ describe('CLI', () => {
       )].sort();
       expect(declaredHiddenCommands).toEqual([...HIDDEN_PRE_DISPATCH_COMMANDS].sort());
       for (const name of HIDDEN_PRE_DISPATCH_COMMANDS) {
-        expect(commands.find((command) => command.name() === name)?._hidden, name).toBe(true);
+        expect(commanderInternals(commands.find((command) => command.name() === name))?._hidden, name).toBe(true);
       }
       for (const name of [...VISIBLE_PRE_DISPATCH_COMMANDS, ...OPERATOR_FACING_COMMANDS]) {
-        expect(commands.find((command) => command.name() === name)?._hidden, name).not.toBe(true);
+        expect(commanderInternals(commands.find((command) => command.name() === name))?._hidden, name).not.toBe(true);
       }
     });
 
@@ -524,7 +532,7 @@ describe('CLI', () => {
         expect(section).toMatch(/--all[\s\S]*every registered repo/i);
 
         const command = daemon!.commands.find((candidate) => candidate.name() === verb);
-        expect(command?._actionHandler).toBeNull();
+        expect(commanderInternals(command)?._actionHandler).toBeNull();
         expect(command?.options.map((option) => option.long)).not.toContain('--names');
       }
     });

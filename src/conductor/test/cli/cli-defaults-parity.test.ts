@@ -32,7 +32,7 @@ describe('daemon runtime fallback defaults', () => {
     const options = await buildDaemonModeOptions('/repo', command!, {
       sessionNameForRepo: () => 'daemon-repo',
       hasSession: async () => false,
-      respawnPane: async () => undefined,
+      respawnPane: async () => ({ scrollbackPreserved: false }),
     });
     expect(options.idlePollSeconds).toBe(DEFAULT_IDLE_POLL_SECONDS);
     // runDaemonMode converts this option from seconds to the daemon's milliseconds input.
@@ -47,7 +47,7 @@ describe('daemon runtime fallback defaults', () => {
     const options = await buildDaemonModeOptions('/repo', command!, {
       sessionNameForRepo: () => 'daemon-repo',
       hasSession: async () => false,
-      respawnPane: async () => undefined,
+      respawnPane: async () => ({ scrollbackPreserved: false }),
     });
     expect(options.idlePollSeconds).toBe(5);
   });
