@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   provisionSandboxBuildEnv,
   realSandboxFs,
+  sandboxLinkTargets,
   SandboxProvisionError,
   type SandboxFs,
   withSandboxBuildEnv,
@@ -75,7 +76,9 @@ describe('minimal Claude self-host sandbox', () => {
     try {
       const entries = await readdir(sandbox.configDir);
       expect(entries.sort()).toEqual(['settings.json', 'skills', 'write-fence.sh']);
-      expect((await lstat(join(sandbox.configDir, 'skills'))).isSymbolicLink()).toBe(true);
+      const skills = await lstat(join(sandbox.configDir, 'skills'));
+      expect(skills.isDirectory()).toBe(true);
+      expect(skills.isSymbolicLink()).toBe(false);
       expect(existsSync(join(sandbox.configDir, 'hooks'))).toBe(false);
       const generated = await readFile(join(sandbox.configDir, 'settings.json'), 'utf8');
       for (const [, sentinel] of sentinels) expect(generated).not.toContain(sentinel);
@@ -84,6 +87,35 @@ describe('minimal Claude self-host sandbox', () => {
       await sandbox.teardown();
     }
     await expect(Promise.all(sentinels.map(async ([relative]) => readFile(join(globalConfig, relative), 'utf8')))).resolves.toEqual(before);
+  });
+
+  it('links each worktree skill under its frontmatter name', async () => {
+    const renamedSkill = join(worktree, 'skills', 'legacy-skill');
+    const fallbackSkill = join(worktree, 'skills', 'plain-skill');
+    await Promise.all([
+      mkdir(renamedSkill),
+      mkdir(fallbackSkill),
+    ]);
+    await Promise.all([
+      writeFile(join(renamedSkill, 'SKILL.md'), '---\nname: ac-renamed-skill\n---\n'),
+      writeFile(join(fallbackSkill, 'SKILL.md'), '# no frontmatter name\n'),
+    ]);
+
+    const sandbox = await provisionSandboxBuildEnv(options());
+    try {
+      const skillsDir = join(sandbox.configDir, 'skills');
+      expect((await lstat(skillsDir)).isDirectory()).toBe(true);
+      expect((await lstat(skillsDir)).isSymbolicLink()).toBe(false);
+      expect((await readdir(skillsDir)).sort()).toEqual(['ac-renamed-skill', 'plain-skill']);
+      await expect(realpath(join(skillsDir, 'ac-renamed-skill'))).resolves.toBe(renamedSkill);
+      await expect(realpath(join(skillsDir, 'plain-skill'))).resolves.toBe(fallbackSkill);
+      await expect(sandboxLinkTargets(sandbox)).resolves.toEqual({
+        'ac-renamed-skill': renamedSkill,
+        'plain-skill': fallbackSkill,
+      });
+    } finally {
+      await sandbox.teardown();
+    }
   });
 
   it('creates an engine-owned executable write fence and never a worktree hooks link', async () => {
