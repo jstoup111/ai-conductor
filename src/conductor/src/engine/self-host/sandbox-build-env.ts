@@ -44,6 +44,10 @@ import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/p
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { resolveSkillName } from '../skill-names.js';
+import { harvestThenRemove, harvestTranscripts, type TranscriptHarvestResult } from './transcript-harvest.js';
+import { collectKnownSecrets } from './transcript-sanitize.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { StepName } from '../../types/steps.js';
 export {
   provisionProviderHome,
   type ProviderHome,
@@ -126,6 +130,8 @@ interface ProvisionOptionsBase {
    * config dir, Claude Code keeps state BESIDE the dir, not in it).
    */
   globalStateFile?: string;
+  /** Event-spine emitter for best-effort transcript lifecycle reporting. */
+  events?: ConductorEventEmitter;
 }
 
 type SandboxScratchLeaseIdentity = {
@@ -134,7 +140,7 @@ type SandboxScratchLeaseIdentity = {
   readonly runId: string;
   readonly attempt: number;
   /** Owning conductor step, retained in the scratch lease. */
-  readonly step?: string;
+  readonly step?: StepName;
   /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
   readonly member?: string;
 };
@@ -142,8 +148,17 @@ type SandboxScratchLeaseIdentity = {
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionOptions = ProvisionOptionsBase & (
   | (SandboxScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly step?: string; readonly member?: string }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly step?: StepName; readonly member?: string }
 );
+
+type TranscriptCapture = {
+  readonly worktreeRoot: string;
+  readonly step: StepName;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly member?: string;
+  readonly events?: ConductorEventEmitter;
+};
 
 const SETTINGS_FILE = 'settings.json';
 /** Claude Code state file — holds per-project workspace-trust grants. */
@@ -164,6 +179,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     private readonly parentEnv: NodeJS.ProcessEnv,
     private readonly fs: SandboxFs,
     private readonly releaseScratch?: () => Promise<void>,
+    private readonly transcriptCapture?: TranscriptCapture,
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
@@ -182,9 +198,66 @@ class ThrowawaySandbox implements SandboxBuildEnv {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
-    // force: true → ENOENT is not an error, so double teardown is a no-op.
-    await this.fs.rm(this.configDir, { recursive: true, force: true });
+    const capture = this.transcriptCapture;
+    if (capture) {
+      const name = [
+        `${capture.runId}-a${capture.attempt}`,
+        capture.member,
+        'claude',
+      ].filter((part): part is string => part !== undefined).join('-');
+      const path = join('.pipeline', 'transcripts', capture.step, name);
+      const destination = join(capture.worktreeRoot, path);
+      const credentials = await fsp.readFile(join(this.configDir, '.credentials.json'), 'utf8').catch(() => '');
+      await harvestThenRemove({
+        harvest: () => harvestTranscripts({
+          home: this.configDir,
+          globs: sandboxProvider().selfHostShape.transcripts.globs,
+          destination,
+          knownSecrets: collectKnownSecrets(credentials, process.env.CLAUDE_CODE_OAUTH_TOKEN === undefined ? [] : [process.env.CLAUDE_CODE_OAUTH_TOKEN]),
+        }),
+        // force: true → ENOENT is not an error, so double teardown is a no-op.
+        remove: () => this.fs.rm(this.configDir, { recursive: true, force: true }),
+        report: (result) => this.reportTranscriptHarvest(capture, path, result),
+      });
+    } else {
+      // force: true → ENOENT is not an error, so double teardown is a no-op.
+      await this.fs.rm(this.configDir, { recursive: true, force: true });
+    }
     if (this.releaseScratch) await this.releaseScratch();
+  }
+
+  private async reportTranscriptHarvest(
+    capture: TranscriptCapture,
+    path: string,
+    result: TranscriptHarvestResult,
+  ): Promise<void> {
+    if (result.kind === 'captured') {
+      await capture.events?.emit({
+        type: 'provider_transcripts_captured',
+        step: capture.step,
+        runId: capture.runId,
+        attempt: capture.attempt,
+        ...(capture.member === undefined ? {} : { member: capture.member }),
+        provider: 'claude',
+        path,
+        files: result.files,
+        bytes: result.bytes,
+        interrupted: false,
+        skipped: result.skipped.length,
+        omittedLines: result.omittedLines,
+      });
+      return;
+    }
+    await capture.events?.emit({
+      type: 'provider_transcripts_harvest_failed',
+      step: capture.step,
+      runId: capture.runId,
+      attempt: capture.attempt,
+      ...(capture.member === undefined ? {} : { member: capture.member }),
+      provider: 'claude',
+      path,
+      error: result.error,
+    });
   }
 }
 
@@ -309,6 +382,16 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         provider: provider.id,
       }).then(() => {})
       : undefined,
+    opts.step === undefined || opts.runId === undefined || opts.attempt === undefined
+      ? undefined
+      : {
+        worktreeRoot: opts.worktreeRoot,
+        step: opts.step,
+        runId: opts.runId,
+        attempt: opts.attempt,
+        ...(opts.member === undefined ? {} : { member: opts.member }),
+        events: opts.events,
+      },
   );
 }
 

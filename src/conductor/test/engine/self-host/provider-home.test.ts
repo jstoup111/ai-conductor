@@ -1,4 +1,4 @@
-// Covers: task:2, task:6, task:7
+// Covers: task:2, task:6, task:7, task:9
 import { describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile, chmod } from 'node:fs/promises';
@@ -13,6 +13,8 @@ import {
 } from '../../../src/engine/self-host/provider-home.js';
 import { ProviderSetupUnavailableError } from '../../../src/engine/provider-setup-failure.js';
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 
 const execFile = promisify(execFileCb);
 
@@ -48,6 +50,77 @@ describe('provider-aware self-host homes', () => {
     }
   });
 
+  it.each(['codex', 'pi'] as const)(
+    'captures and sanitizes %s transcripts before provider-home teardown',
+    async (provider) => {
+      const root = await mkdtemp(join(tmpdir(), `provider-home-transcript-${provider}-`));
+      const worktree = join(root, 'worktree');
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+      await mkdir(join(worktree, 'skills'), { recursive: true });
+      persister.start();
+      const home = await provisionProviderHome({
+        provider: { id: provider }, worktreeRoot: worktree, baseDir: root,
+        step: 'build', runId: 'run-9', attempt: 1, events,
+      });
+      const auth = '{"OPENAI_API_KEY":"sk-test-0123456789","refresh":"rt-abcdefgh"}';
+      const transcript = join(home.homeDir, 'sessions', '2026', '10', '10', 'rollout-x.jsonl');
+      try {
+        await mkdir(join(transcript, '..'), { recursive: true });
+        await Promise.all([
+          writeFile(join(home.homeDir, 'auth.json'), auth),
+          writeFile(transcript, JSON.stringify({ type: 'tool_result', content: auth }) + '\n'),
+        ]);
+
+        await home.teardown();
+
+        const capture = join(worktree, '.pipeline', 'transcripts', 'build', `run-9-a1-${provider}`);
+        expect(await readFile(join(capture, 'sessions', '2026', '10', '10', 'rollout-x.jsonl'), 'utf8')).not.toContain('sk-test-0123456789');
+        expect(await readFile(join(capture, 'sessions', '2026', '10', '10', 'rollout-x.jsonl'), 'utf8')).not.toContain('rt-abcdefgh');
+        await expect(access(join(capture, 'auth.json'))).rejects.toThrow();
+        await expect(access(home.homeDir)).rejects.toThrow();
+        expect((await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8'))).toContain('provider_transcripts_captured');
+      } finally {
+        persister.stop();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(['codex', 'pi'] as const)(
+    'keeps concurrent member and later-attempt %s captures separate',
+    async (provider) => {
+      const root = await mkdtemp(join(tmpdir(), `provider-home-captures-${provider}-`));
+      const worktree = join(root, 'worktree');
+      await mkdir(join(worktree, 'skills'), { recursive: true });
+      const provision = (attempt: number, member?: string) => provisionProviderHome({
+        provider: { id: provider }, worktreeRoot: worktree, baseDir: root,
+        step: 'build', runId: 'run-9', attempt, member,
+      });
+      try {
+        const [a, b] = await Promise.all([provision(1, 'rubric-a'), provision(1, 'rubric-b')]);
+        await Promise.all([
+          mkdir(join(a.homeDir, 'sessions'), { recursive: true }),
+          mkdir(join(b.homeDir, 'sessions'), { recursive: true }),
+        ]);
+        await Promise.all([
+          writeFile(join(a.homeDir, 'sessions', 'a.jsonl'), 'a\n'),
+          writeFile(join(b.homeDir, 'sessions', 'b.jsonl'), 'b\n'),
+        ]);
+        await Promise.all([a.teardown(), b.teardown()]);
+        const later = await provision(2);
+        await mkdir(join(later.homeDir, 'sessions'), { recursive: true });
+        await writeFile(join(later.homeDir, 'sessions', 'later.jsonl'), 'later\n');
+        await later.teardown();
+        const captures = join(worktree, '.pipeline', 'transcripts', 'build');
+        await expect(readFile(join(captures, `run-9-a1-rubric-a-${provider}`, 'sessions', 'a.jsonl'), 'utf8')).resolves.toBe('a\n');
+        await expect(readFile(join(captures, `run-9-a1-rubric-b-${provider}`, 'sessions', 'b.jsonl'), 'utf8')).resolves.toBe('b\n');
+        await expect(readFile(join(captures, `run-9-a2-${provider}`, 'sessions', 'later.jsonl'), 'utf8')).resolves.toBe('later\n');
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
   it('gives Pi an isolated child environment without any other provider state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-provider-home-env-'));
     const worktree = join(root, 'worktree');
@@ -141,7 +214,7 @@ describe('provider-aware self-host homes', () => {
         expect.stringMatching(new RegExp(`^${explicitBaseDir}/self-host-codex-`)),
       ]);
       const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
-      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt']);
       expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'provider-home', runId: 'run-11', attempt: 2, ownerPid: process.pid });
       expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
     } finally {

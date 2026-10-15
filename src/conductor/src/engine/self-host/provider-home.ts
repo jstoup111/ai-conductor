@@ -16,6 +16,11 @@ import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { resolveSkillName } from '../skill-names.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
+import { collectKnownSecrets } from './transcript-sanitize.js';
+import { harvestThenRemove, harvestTranscripts, type TranscriptHarvestResult } from './transcript-harvest.js';
+import type { ConductorEvent } from '../../types/events.js';
+import type { StepName } from '../../types/steps.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 
 export type SelfHostProvider = ProviderWith<'selfHost'>;
 export type SelfHostProviderId = Extract<BuiltInProviderId, SelfHostProvider['id']>;
@@ -85,6 +90,8 @@ interface ProvisionProviderHomeBaseOptions {
   installEngineControls?: (context: ProviderHomeContext) => Promise<ProviderHomeEnvironment | void>;
   /** Worktree-owned assets exposed inside the isolated home. */
   worktreeAssets?: readonly string[];
+  /** Existing event spine; provider-home retirement is observational only. */
+  events?: ConductorEventEmitter;
 }
 
 type ScratchLeaseIdentity = {
@@ -130,6 +137,7 @@ class ThrowawayProviderHome implements ProviderHome {
     private readonly additions: NodeJS.ProcessEnv,
     private readonly args: readonly string[],
     private readonly fs: ProviderHomeFs,
+    private readonly transcript: ProviderHomeTranscript | undefined,
     private readonly releaseScratch?: () => Promise<void>,
   ) {}
 
@@ -150,9 +158,70 @@ class ThrowawayProviderHome implements ProviderHome {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
-    await this.fs.rm(this.homeDir, { recursive: true, force: true });
+    if (this.transcript === undefined) {
+      await this.fs.rm(this.homeDir, { recursive: true, force: true });
+    } else {
+      const transcript = this.transcript;
+      await harvestThenRemove({
+        harvest: async () => {
+          const authText = await fsp.readFile(join(this.homeDir, transcript.selectedAuthPath), 'utf8')
+            .catch(() => '');
+          return harvestTranscripts({
+            home: this.homeDir,
+            globs: transcript.globs,
+            destination: transcript.destination,
+            knownSecrets: collectKnownSecrets(authText, []),
+          });
+        },
+        report: async (result) => { await transcript.report(result); },
+        remove: () => this.fs.rm(this.homeDir, { recursive: true, force: true }),
+      });
+    }
     if (this.releaseScratch) await this.releaseScratch();
   }
+}
+
+interface ProviderHomeTranscript {
+  readonly selectedAuthPath: string;
+  readonly globs: readonly string[];
+  readonly destination: string;
+  report(result: TranscriptHarvestResult): Promise<void>;
+}
+
+function providerHomeTranscript(options: ProvisionProviderHomeOptions, provider: SelfHostProvider): ProviderHomeTranscript {
+  const step = options.step ?? 'unknown-step';
+  const runId = options.runId ?? 'unknown-run';
+  const attempt = options.attempt ?? 0;
+  const capture = [
+    `${runId}-a${attempt}`,
+    options.member,
+    provider.id,
+  ].filter((part): part is string => part !== undefined).join('-');
+  const path = join('.pipeline', 'transcripts', step, capture);
+  const emit = async (event: ConductorEvent): Promise<void> => {
+    try { await options.events?.emit(event); } catch { /* teardown telemetry is best-effort */ }
+  };
+  return {
+    selectedAuthPath: provider.selfHostShape.selectedAuthPath,
+    globs: provider.selfHostShape.transcripts.globs,
+    destination: join(options.worktreeRoot, path),
+    report: async (result) => {
+      if (result.kind === 'captured') {
+        await emit({
+          type: 'provider_transcripts_captured', step: step as StepName,
+          runId, attempt, ...(options.member === undefined ? {} : { member: options.member }),
+          provider: provider.id, path, files: result.files, bytes: result.bytes,
+          interrupted: false, skipped: result.skipped.length, omittedLines: result.omittedLines,
+        });
+      } else {
+        await emit({
+          type: 'provider_transcripts_harvest_failed', step: step as StepName,
+          runId, attempt, ...(options.member === undefined ? {} : { member: options.member }),
+          provider: provider.id, path, error: result.error,
+        });
+      }
+    },
+  };
 }
 
 /**
@@ -244,6 +313,7 @@ export async function provisionProviderHome(
       { ...auth?.env, ...controls?.env },
       [...(auth?.args ?? []), ...(controls?.args ?? [])],
       fs,
+      providerHomeTranscript(options, provider),
       usesScratch
         ? () => releaseScratchHome({
           worktreeRoot: options.worktreeRoot,

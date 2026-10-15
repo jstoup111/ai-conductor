@@ -404,6 +404,7 @@ import {
   wrapForContainment,
 } from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
+import { TranscriptRetention } from './self-host/transcript-retention.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
 import { classifyRebaseOperation } from './gate-code-validity.js';
@@ -693,6 +694,8 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  /** Best-effort evidence retention; it must never alter a step verdict. */
+  private readonly transcriptRetention: TranscriptRetention;
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
@@ -2461,6 +2464,26 @@ export class Conductor {
       opts.effectiveDaemonConcurrency ?? resolveDaemonConcurrency(this.config);
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
+    this.transcriptRetention = new TranscriptRetention(this.projectRoot, this.events);
+    // Transcript capture completes in provider teardown before these terminal
+    // lifecycle events.  Keeping settlement on the existing event spine makes
+    // every ordinary terminal route (including configured steps) share it.
+    this.events.on('step_failed', (event) => {
+      if (event.type === 'step_failed') return this.transcriptRetention.settle(event.step, 'failed');
+    });
+    this.events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') return this.transcriptRetention.settle(event.step, 'stalled');
+    });
+    this.events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt' && event.step !== undefined) {
+        return this.transcriptRetention.settle(event.step, 'halted');
+      }
+    });
+    this.events.on('step_completed', (event) => {
+      if (event.type === 'step_completed' && event.step !== 'build') {
+        return this.transcriptRetention.settle(event.step, 'succeeded-with-progress');
+      }
+    });
     this.log = opts.log;
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
@@ -5771,6 +5794,8 @@ export class Conductor {
         featureSlug,
         runId,
         attempt: 1,
+        step: name,
+        events: this.events,
       });
       const priorConfig = process.env.CLAUDE_CONFIG_DIR;
       const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -5947,6 +5972,7 @@ export class Conductor {
               attempt: identity.attempt,
               step: name,
               member: identity.member,
+              events: this.events,
             });
             ownershipTransferred = true;
             return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, scratchRoot: this.projectRoot, teardown:async () => { try { await verify(); } finally { await home.teardown(); } } });
@@ -5960,6 +5986,7 @@ export class Conductor {
             attempt: identity.attempt,
             step: name,
             member: identity.member,
+            events: this.events,
           });
           ownershipTransferred = true;
           return prepareInvocation({
@@ -6368,6 +6395,7 @@ export class Conductor {
 
   async run(): Promise<OperatorParkedTermination | undefined> {
     this.shutdownRequested = false;
+    await this.transcriptRetention.ready();
     // #788 regression guard: the phase-active marker creates `.pipeline/`
     // via `mkdirSync` as a side effect ahead of any real init (worktree-
     // prepare provisioning session-hooks/, task-status.json, etc). Recorded
@@ -14609,6 +14637,7 @@ export class Conductor {
           lastSettledUnit = { kind: 'step', name: step.name };
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
           let completedBuildTreeAfter: string | null | undefined;
+          let completedBuildMadeProgress = false;
           if (step.name === 'build') {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
@@ -14617,6 +14646,7 @@ export class Conductor {
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             completedBuildTreeAfter = treeAfter;
+            completedBuildMadeProgress = resolvedAfter > resolvedTasksBefore;
             const gate = await pendingBuildKickbackGate();
             await writeBuildOutcomeBestEffort(this.projectRoot, {
               ...outcomeStore,
@@ -14652,6 +14682,12 @@ export class Conductor {
                 { test_suite: 'stale' },
               );
             }
+          }
+          if (step.name === 'build') {
+            await this.transcriptRetention.settle(
+              step.name,
+              completedBuildMadeProgress ? 'succeeded-with-progress' : 'succeeded-without-progress',
+            );
           }
           await emitTracked({
             type: 'step_completed',
