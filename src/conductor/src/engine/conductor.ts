@@ -6,6 +6,7 @@ import {
   access as accessFile,
   unlink as unlinkFile,
   stat,
+  rename,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
 import { withGateTier } from './gate-event-tier.js';
@@ -188,6 +189,14 @@ import {
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild } from './routing/execution-child.js';
 import { routingEligible } from './routing/route-types.js';
+import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
+import { readAppendedRemediationTaskChildren } from './artifacts.js';
+import { createRouteRecord } from './routing/route-record-store.js';
+import { routeAdmittedRound } from './routing/round-router.js';
+import { admitRound } from './routing/round-admission.js';
+import { routedRoundOpen } from './routing/round-admission.js';
+import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
+import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import {
   advanceChildRegion,
@@ -272,7 +281,7 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
-import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskPaths } from './plan-task-parse.js';
 import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
@@ -618,6 +627,7 @@ export {
 } from './remediation-hints.js';
 export type { ExistingTaskBindingResolution } from './remediation-hints.js';
 import { appendConductorRemediationTasks } from './remediation-task-append.js';
+import { citedRepositoryPaths } from './routing/cited-repository-paths.js';
 import {
   readAsBuiltRoutingOutcome,
   renderAsBuiltBlockedFindingDetail,
@@ -3633,7 +3643,10 @@ export class Conductor {
     state: ConductState,
     steps: StepDefinition[],
     dispatchContext: string,
-    hintSource: RemediationHintSource,
+    hintSource: RemediationHintSource & {
+      /** Raw rows remain durable routing evidence for a consolidated join. */
+      readonly consolidatedManualTestFailRows?: readonly string[];
+    },
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
     | {
@@ -3961,7 +3974,7 @@ export class Conductor {
     const asBuiltEvidenceExists = asBuiltRemediation && asBuiltEvidenceFile !== undefined;
     const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
     const asBuiltLapCap = remediationLapCapForGate('architecture_review_as_built', this.config);
-    const prdAuditFindings = new Map<string, { criterion: string; parentTask: string }>();
+    const prdAuditFindings = new Map<string, { criterion: string; parentTask: string; evidence: string }>();
     // Both appended and existing-task repairs retain the criteria that
     // authorized them. The pending receipt is the only durable context at a
     // later BUILD-boundary cap halt, so keep this derivation shared.
@@ -3989,6 +4002,7 @@ export class Conductor {
         const boundFinding = {
           criterion: judgment.criterionId,
           parentTask: judgment.ownerTaskId,
+          evidence: judgment.evidence,
         };
         // Only an active criterion owns repair admission. Requirement
         // associations remain traceability evidence; they never authorize an
@@ -4368,6 +4382,18 @@ export class Conductor {
       };
     }
 
+    const fixes = gaps.filter((g) => g.disposition !== 'halt');
+    const halts = gaps.filter((g) => g.disposition === 'halt');
+    const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
+    const routedFixes = buildStallSource ? fixes : admittedFixes;
+    // ADR D7: a routed round is admitted by its prepared record and marker
+    // before this leaf can append, seed, commit, or create any repair receipt.
+    // The resolver below is declared later so it can retain the routing
+    // inputs beside their ordinary fallback, but function declarations are
+    // hoisted within this remediation transaction.
+    const stackedRoutingOutcome = await resolveStackedRoute.call(this);
+    if (stackedRoutingOutcome !== undefined) return stackedRoutingOutcome;
+
     // Tracks whether the append attempt (when one was needed) actually ran
     // and succeeded — used below to gate the D1 no-op guard. When there was
     // nothing to append (`allTasks.length === 0`) there is nothing the
@@ -4554,8 +4580,137 @@ export class Conductor {
       await this.persistPendingAsBuiltRemediationFindings();
     }
 
-    const fixes = gaps.filter((g) => g.disposition !== 'halt');
-    const halts = gaps.filter((g) => g.disposition === 'halt');
+    async function resolveStackedRoute(this: Conductor): Promise<
+      | { kind: 'route'; target: StepName; hint: string; evidence: string }
+      | {
+        kind: 'halt';
+        detail: string;
+        haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
+      }
+      | undefined
+    > {
+    // A mixed or unresolvable work order belongs to the ordinary remediation
+    // path, which owns its existing halt detail. Do not admit a routed round
+    // for only the resolvable subset.
+    if (halts.length > 0) return undefined;
+    // This is the single dark-launch decision point for an admitted repair
+    // lap.  The existing remediation route remains byte-for-byte authoritative
+    // on either result until the route writer/settler feature lands; making
+    // the decision here keeps an unsliced or flag-off feature out of the
+    // routing namespace without duplicating eligibility checks downstream.
+    if (routedFixes.length > 0 && this.featureSlug) {
+      const cursor = await this.resolveActiveChild(this.projectRoot, this.featureSlug);
+      // Route only the same admitted BUILD-region work that the ordinary
+      // path would append.  All route failures return before a plan write,
+      // budget receipt, restage, or routing-ref allocation beyond admission.
+      if (routingEligible(cursor, this.config)) {
+        const ordinaryTarget = earliestRemediationTarget(routedFixes, steps);
+        if (ordinaryTarget.unresolved.length > 0) return undefined;
+        if (ordinaryTarget.target === 'build' && planPath) {
+          const envelope = await readCoverageBindingEnvelope(this.projectRoot, {
+            readFile: (path) => readFile(path, 'utf8'), mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+            writeFile: (path, contents) => writeFile(path, contents, 'utf8'), rename,
+          });
+          if (!envelope?.sliceMembership) {
+            return { kind: 'halt', haltClass: 'needs-human', detail: 'routing cannot read the sealed task-slice ownership envelope' };
+          }
+          const declaredPositions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
+            .filter((position) => Number.isSafeInteger(position) && position > 0).sort((a, b) => a - b) as ChildId[];
+          if (declaredPositions.length > 1) {
+            const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
+            if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
+            const planText = activePlanText || await readFile(planPath, 'utf8');
+            const hostPlans = [] as Array<{ branch: string; planPath: string }>;
+            for (const position of declaredPositions.slice(0, -1)) {
+              const branch = childBranchFor(this.featureSlug, position);
+              if (!branch.ok) {
+                return {
+                  kind: 'halt', haltClass: 'needs-human',
+                  detail: `routing cannot derive host branch for child ${position}: ${branch.reason}`,
+                };
+              }
+              hostPlans.push({ branch: branch.branch, planPath: relative(this.projectRoot, planPath) });
+            }
+            const taskDoneWhen = parsePlanTaskDoneWhen(planText);
+            const taskPaths = parsePlanTaskPaths(planText);
+            const citedPathsFor = (
+              ownerTaskIds: readonly string[] | undefined,
+              evidence: readonly string[],
+              workOrder: readonly string[],
+            ): string[] => {
+              const paths = [...new Set((ownerTaskIds ?? []).flatMap((taskId) => Array.from(taskPaths.get(taskId) ?? [])))];
+              const ownerDoneWhen = (ownerTaskIds ?? []).flatMap((taskId) => taskDoneWhen.get(taskId) ?? []);
+              for (const text of [...ownerDoneWhen, ...evidence, ...workOrder]) {
+                for (const path of citedRepositoryPaths(text)) if (!paths.includes(path)) paths.push(path);
+              }
+              return paths;
+            };
+            const routed = await routeAdmittedRound({
+              admitted: routedFixes.map((gap) => {
+                const routedGap = gap as CriterionBoundRemediationGap;
+                const asBuiltFinding = asBuiltFindings.get(gap.id);
+                const prdAuditFinding = prdAuditFindings.get(gap.id.toUpperCase());
+                const provenance = refusalCriteriaByGapId.has(gap.id)
+                  ? {
+                    kind: 'refusal-rework' as const,
+                    governingEvidence: routedGap.governingClause ?? routedGap.criterion ?? gap.id,
+                  }
+                  : asBuiltFinding === undefined
+                    ? buildStallSource
+                      ? { kind: 'taskless-obligation' as const }
+                      : { kind: 'task-bound' as const }
+                    : {
+                      kind: 'as-built' as const,
+                      reference: asBuiltFinding.reference,
+                      summary: asBuiltRecordedFindings.get(gap.id)?.summary ?? gap.rationale,
+                };
+                const ownerTaskIds = gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+                  ? resolvedExistingTaskIdsByGapId.get(gap.id)
+                  : routedGap.parentTask === undefined
+                    ? undefined
+                    : String(routedGap.parentTask).split(',');
+                const findingEvidence = refusalCriteriaByGapId.has(gap.id)
+                  ? [routedGap.governingClause ?? routedGap.criterion ?? gap.id]
+                  : asBuiltFinding === undefined
+                    ? prdAuditFinding === undefined ? [] : [prdAuditFinding.evidence]
+                    : [asBuiltRecordedFindings.get(gap.id)?.summary ?? gap.rationale];
+                return {
+                  id: gap.id, gap: routedGap, gateSource: routedGap.gateSource ?? PRD_AUDIT_REMEDIATION_GATE_SOURCE,
+                  ownerTaskIds,
+                  citedPaths: citedPathsFor(ownerTaskIds, findingEvidence, [
+                    routedGap.criterion ?? '', routedGap.rationale, ...routedGap.tasks.map((task) => task.title),
+                  ]),
+                  existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
+                  provenance,
+                };
+              }), envelope, planText,
+              appendedChildren: await readAppendedRemediationTaskChildren(this.projectRoot),
+              declaredPositions, leafTip: leafBranchFor(this.featureSlug), roundId,
+              judge: (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
+              git: makeGitRunner(this.projectRoot), leafPlan: planText, hostPlans,
+              ...(hintSource.consolidatedManualTestFailRows !== undefined
+                ? { consolidatedManualTestFail: hintSource.consolidatedManualTestFailRows }
+                : {}),
+            });
+            if (routed.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
+            const created = await createRouteRecord(this.projectRoot, this.featureSlug, { roundId, kind: 'audit', items: routed.items, allocation: routed.allocation });
+            if (created.kind !== 'created') return { kind: 'halt', haltClass: 'needs-human', detail: `routing record creation failed: ${created.kind}` };
+            const firstHost = routed.hosts[0];
+            if (firstHost === undefined) return { kind: 'halt', haltClass: 'needs-human', detail: 'routing produced no host' };
+            const admission = await admitRound(this.projectRoot, this.featureSlug, created.record, firstHost, {
+              persist: async (event) => {
+                await this.events.emitOrThrow(event);
+                return 'persisted';
+              },
+            });
+            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
+            return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
+          }
+        }
+      }
+    }
+    return undefined;
+    }
     // Task 23: a 'halt' disposition must never be silently dropped in favor
     // of a sibling 'route' disposition. Even when the SAME plan also names
     // routable fixes for other gaps, a halt gap means at least one blocking
@@ -4567,17 +4722,6 @@ export class Conductor {
         kind: 'halt',
         detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; ') + droppedSuffix,
       };
-    }
-    const admittedFixes = admittedGaps.filter((gap) => gap.disposition !== 'halt');
-    const routedFixes = buildStallSource ? fixes : admittedFixes;
-    // This is the single dark-launch decision point for an admitted repair
-    // lap.  The existing remediation route remains byte-for-byte authoritative
-    // on either result until the route writer/settler feature lands; making
-    // the decision here keeps an unsliced or flag-off feature out of the
-    // routing namespace without duplicating eligibility checks downstream.
-    if (routedFixes.length > 0 && this.featureSlug) {
-      const cursor = await this.resolveActiveChild(this.projectRoot, this.featureSlug);
-      void routingEligible(cursor, this.config);
     }
     if (fixes.length > 0 && routedFixes.length === 0) {
       const rejectedAppendGapIds = fixes
@@ -6164,6 +6308,7 @@ export class Conductor {
       // any in-progress record it wrote, so classifying it first would turn a
       // recoverable restack into an unrelated rebase HALT.
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      let routedLeafBuildResume = false;
       if (resumeSlug) {
         const preflight = await runStackPreflight({
           worktree: this.projectRoot,
@@ -6185,8 +6330,23 @@ export class Conductor {
           },
         });
         if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
+        if (preflight.kind === 'navigate-leaf-to-build') {
+          // Admission wrote the route and marker before its normal leaf
+          // rewind.  A crash in that gap is recovered by rewinding the leaf's
+          // own region state; the next BUILD entry adopts the marker-selected
+          // host.  Do not re-admit: the record/marker transaction is already
+          // the durable authority for this round.
+          const cursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
+          if (cursor.kind === 'active' || cursor.kind === 'repair-pending') {
+            await this.activateChildRegionState(state, cursor.position, cursor.isLeaf);
+            if (getStepStatus(state, 'build') !== 'pending') {
+              await this.navigateStateBack(state, 'build', steps);
+            }
+            routedLeafBuildResume = true;
+          }
+        }
       }
-      if (!await this.activateChildRegionStateForResume(state)) return;
+      if (!routedLeafBuildResume && !await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
@@ -8830,6 +8990,9 @@ export class Conductor {
                     {
                     source: 'validation-group',
                     consolidatedManualTestFail: manualTestFailRows.length > 0,
+                    ...(manualTestFailRows.length > 0
+                      ? { consolidatedManualTestFailRows: manualTestFailRows }
+                      : {}),
                     evidence: [
                       { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
                       ...(asBuiltEvidenceIsTerminal
@@ -9017,6 +9180,9 @@ export class Conductor {
                     return await this.planRemediation(state, steps, dispatchContext, {
                       source: 'validation-group',
                       consolidatedManualTestFail: manualTestFailRows.length > 0,
+                      ...(manualTestFailRows.length > 0
+                        ? { consolidatedManualTestFailRows: manualTestFailRows }
+                        : {}),
                       evidence,
                     });
                   } catch (error) {
@@ -15414,6 +15580,10 @@ export class Conductor {
           await emitRebaseEvent(this.events, outcome);
           await recordRebaseStepCompletion(this.stateFilePath, outcome);
           return { success: true };
+        }
+        if (await routedRoundOpen(this.projectRoot, stackSlug, { git })) {
+          await this.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+          return { success: false, output: 'stack base refresh deferred: routed round open' };
         }
         const restacked = await runRestack({
           worktree: this.projectRoot,

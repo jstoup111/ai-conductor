@@ -37,6 +37,8 @@ import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
 import { runRestack } from './restack/restack-executor.js';
+import { routedRoundOpen } from './routing/round-admission.js';
+import { emitRestackRefused } from './restack/restack-events.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
@@ -821,6 +823,13 @@ export async function resumeRebaseFirst(opts: {
 }): Promise<RekickResumeResult> {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
   if (!(await exists(sentinel))) return 'skipped';
+
+  // An open routed round owns the stack.  Keep the sentinel so its eventual
+  // close can perform the deferred refresh instead of silently losing it.
+  if (opts.slug && await routedRoundOpen(opts.worktreePath, opts.slug)) {
+    await opts.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+    return 'skipped';
+  }
 
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });

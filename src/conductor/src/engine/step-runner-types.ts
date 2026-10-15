@@ -402,6 +402,8 @@ export interface StepRunner {
    * Optional: a runner without it makes a changed replay fail closed.
    */
   dispatchRebaseRegradeJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
+  /** Dispatch the engine-owned, bounded residue-routing judgement. */
+  dispatchResidueRoutingJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
   /**
    * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
    * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes

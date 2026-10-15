@@ -105,7 +105,7 @@ import {
   parseCoverageBindingEnvelope,
   projectChildOwnership,
 } from './coverage-binding-envelope.js';
-import { pipelinePathFor, type ChildId } from './child-context.js';
+import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -837,6 +837,32 @@ export async function readAppendedRemediationTaskIds(projectRoot: string): Promi
     // absent/invalid → no recorded ids
   }
   return [];
+}
+
+/**
+ * Read the child membership recorded alongside engine-appended remediation
+ * tasks. Missing or malformed state has no membership; callers decide whether
+ * that absence is recoverable for their operation.
+ */
+export async function readAppendedRemediationTaskChildren(
+  projectRoot: string,
+): Promise<Record<string, ChildId>> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const recorded = parsed?.appendedRemediationTaskChildren;
+    if (typeof recorded === 'object' && recorded !== null && !Array.isArray(recorded)) {
+      return Object.fromEntries(
+        Object.entries(recorded).flatMap(([taskId, value]): Array<[string, ChildId]> => {
+          const child = typeof value === 'number' ? parseChildId(value) : undefined;
+          return child === undefined ? [] : [[taskId, child]];
+        }),
+      );
+    }
+  } catch {
+    // absent/invalid → no recorded membership
+  }
+  return {};
 }
 
 export type FeaturePlanSelection =

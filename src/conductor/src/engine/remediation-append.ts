@@ -25,6 +25,9 @@
 //                                     suffix (`…-2`, `…-3`, …) instead.
 
 import type { RemediationGap } from './artifacts.js';
+import { parseChildId, type ChildId } from './child-context.js';
+import type { GitRunner } from './rebase.js';
+import type { FrozenAllocation, FrozenHostAllocation } from './routing/route-types.js';
 
 /** Canonical source label for remediation admitted by the PRD-audit gate. */
 export const PRD_AUDIT_REMEDIATION_GATE_SOURCE = 'prd-audit';
@@ -80,6 +83,29 @@ export interface AppendRemediationResult {
   planText: string;
   /** One resolved plan-task id per input gap task (existing or newly appended). */
   ids: string[];
+}
+
+/** One admitted remediation gap, ready to render into a routed host's frozen allocation. */
+export interface FrozenRemediationItem {
+  readonly gap: CriterionBoundRemediationGap;
+  readonly gateSource: string;
+}
+
+/** A host plan is read from its branch; allocation never checks it out or writes it. */
+export interface FrozenHostPlan {
+  readonly branch: string;
+  readonly planPath: string;
+}
+
+export interface AllocateFrozenBlocksInput {
+  readonly itemsByHost: Readonly<Record<number, readonly FrozenRemediationItem[]>>;
+  /** The already-read leaf plan at admission. */
+  readonly leafPlan: string;
+  /** Every non-leaf host plan that can contribute an existing rem-* id. */
+  readonly hostPlans: readonly FrozenHostPlan[];
+  readonly roundId: string;
+  /** Read-only Git seam used only for `git show <branch>:<planPath>`. */
+  readonly git: GitRunner;
 }
 
 /** Sanitize a raw segment into the H9 grammar; empty result is a caller error. */
@@ -185,6 +211,78 @@ function renderTaskBlock(
     ...checks.map((check) => `- ${check}`),
     '',
   ].join('\n');
+}
+
+function remediationIds(planText: string): Set<string> {
+  return new Set([...existingTaskTitles(planText).keys()].filter(isEngineAppendedRemediationTaskId));
+}
+
+function nextFrozenId(canonical: string, used: Set<string>): string {
+  if (!used.has(canonical)) return canonical;
+  let ordinal = 2;
+  while (used.has(`${canonical}-${ordinal}`)) ordinal += 1;
+  return `${canonical}-${ordinal}`;
+}
+
+function appendRouteLines(block: string, host: number, roundId: string): string {
+  return `${block.replace(/\n$/, '')}\n**Child:** ${host}\n**Round:** ${roundId}\n`;
+}
+
+/**
+ * Produce the exact remediation blocks a routed host will later append.
+ *
+ * This admission-time renderer reads other branch plans with `git show` only;
+ * it neither checks out nor writes any plan.  IDs reserve every existing rem-*
+ * heading across the leaf and host plans, then every ID allocated in this
+ * round, so the durable bodies can be replayed verbatim at region entry.
+ */
+export async function allocateFrozenBlocks({
+  itemsByHost,
+  leafPlan,
+  hostPlans,
+  roundId,
+  git,
+}: AllocateFrozenBlocksInput): Promise<FrozenAllocation> {
+  const used = remediationIds(leafPlan);
+  for (const { branch, planPath } of hostPlans) {
+    const shown = await git(['show', `${branch}:${planPath}`]);
+    if (shown.exitCode !== 0) {
+      throw new Error(`remediation-append: could not read host plan ${branch}:${planPath}: ${shown.stderr}`);
+    }
+    for (const id of remediationIds(shown.stdout)) used.add(id);
+  }
+
+  const allocation: Record<ChildId, FrozenHostAllocation> = {} as Record<ChildId, FrozenHostAllocation>;
+  for (const [rawHost, items] of Object.entries(itemsByHost)) {
+    const host = parseChildId(Number(rawHost));
+    if (host === undefined) throw new Error(`remediation-append: invalid frozen allocation host ${rawHost}`);
+    const remTaskIds: string[] = [];
+    const blockBodies: string[] = [];
+    for (const { gap, gateSource } of items) {
+      const source = sanitizeSegment(gateSource, 'gate source');
+      const gapTasks = gap.tasks.length > 0 ? gap.tasks : [{ id: gap.id, title: gap.rationale }];
+      const refusalIds = refusalTaskIds(gap);
+      for (const [taskIndex, task] of gapTasks.entries()) {
+        const base = refusalIds?.[taskIndex]
+          ?? sanitizeSegment(task.id !== '' ? task.id : gap.id, 'gap task id');
+        const id = nextFrozenId(`rem-${source}-${base}`, used);
+        const title = collapseToOneLine(task.title) ?? collapseToOneLine(gap.rationale) ?? '';
+        remTaskIds.push(id);
+        blockBodies.push(appendRouteLines(renderTaskBlock(
+          id,
+          title,
+          source,
+          gap.rationale,
+          gap.criterion,
+          gap.parentTask,
+          gap.governingClause,
+        ), host, roundId));
+        used.add(id);
+      }
+    }
+    allocation[host] = { remTaskIds, blockBodies };
+  }
+  return allocation;
 }
 
 /**

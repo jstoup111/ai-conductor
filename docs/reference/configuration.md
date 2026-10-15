@@ -1479,7 +1479,8 @@ Opts a project into stacked delivery of a sliced plan. Plan-slice grammar valida
 `true`. An admitted plan builds
 [child by child](#child-by-child-build). Child publication remains reserved for the stacked
 child-plans chain (#2945). Routing whole-feature fixes to the owning child is dark-launched behind
-`route_whole_feature_fixes`; the route writer lands with #3210–#3212.
+`route_whole_feature_fixes`. Round admission is implemented; writing a round's tasks into its host
+plan, settlement, and the exit restack land with #3211–#3212.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
@@ -1497,6 +1498,34 @@ preflight drains pending route-record events into `events.jsonl` before resolvin
 While a repair host is recorded, a closed child other than the host whose post-closure commits carry
 a `Round: r<n>` line halts `needs-human` with `routing foreign-round commit`. With the setting
 `false`, or for a feature without children, the engine never reads or writes a routing ref.
+
+With the setting on and two or more slice positions in the sealed `coverage_binding` envelope, an
+admitted remediation lap that the ordinary path would send to `build` is admitted as
+a routed round instead of appended to the leaf plan:
+
+- **Owner.** Task-bound work is owned by the earliest child among its bound tasks, taken from the
+  task's slice, its committed `**Child:**` line, or the child recorded for an engine-appended
+  remediation task. Work with no owner task goes to a residue judgement dispatched with the
+  `remediate` step's provider, at most two attempts.
+- **Host.** Cited paths already on the leaf tip are prerequisite inputs. The host is the owner when
+  its closure holds every input, else the first closed child above it that does, else the leaf.
+- **Admission.** The engine allocates the next round id `r<n>` and writes a `prepared` route record.
+  One transaction, fenced on the restack journal, then opens the round and writes the `repairing`
+  marker. The engine persists `remediation_routed` and `routed_repair_phase`, records one kickback,
+  and navigates back to `build`. No leaf plan append, budget receipt, or commit happens first.
+- **Fallback.** A lap with any `halt` disposition, an unresolved target, or a target other than
+  `build` takes the ordinary remediation path unchanged.
+- **Halts.** A routing refusal halts `needs-human` with its detail, for example
+  `routing round limit r999 reached`, `routing round r<n> is already open; cannot admit r<m>`,
+  `routing cannot read the sealed task-slice ownership envelope`, or
+  `leaf branch <branch> is missing prerequisite paths: <paths>`.
+- **Recovery.** After journal recovery and the outbox drain, the stack preflight deletes a
+  `prepared` record that no marker names. For an admitted round, conductor resume rewinds the leaf
+  region to `build` without re-admitting.
+- **Base refresh.** While any route record is not `closed` or the `revalidate` queue exists, the
+  stack preflight, the daemon re-kick rebase, and the finish-time `rebase` step defer the base
+  refresh and emit `restack_refused` with reason `deferred-base-refresh`. The re-kick keeps its
+  sentinel for a later run.
 
 When `enabled` is `true` and the plan declares a `## Slices` manifest, the `stacked-delivery` land
 gate at `engineer/land` refuses the plan unless all of these hold:

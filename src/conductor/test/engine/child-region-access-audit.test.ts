@@ -55,20 +55,6 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/state.ts:ConductStateStore.replace': 2,
 };
 
-/** Feature-wide rebase, re-kick, and pure in-memory ledger accesses have no child path. */
-const WHOLE_FEATURE_ONLY_SITES = new Set([
-  'engine/daemon-rekick.ts:272:readKickbackLedger',
-  'engine/rebase-transition.ts:244:readVerdict',
-  'engine/rebase-transition.ts:288:writeVerdict',
-  'engine/rebase-transition.ts:363:writeVerdict',
-  'engine/rebase-transition.ts:388:readVerdict',
-  'engine/rebase-transition.ts:389:readVerdict',
-  'engine/rebase.ts:2430:writeVerdict',
-  'engine/rebase.ts:2490:writeVerdict',
-  'engine/kickback-ledger.ts:1068:bumpKickbackGate',
-  'engine/kickback-ledger.ts:1086:bumpKickbackGate',
-]);
-
 /**
  * `conductor.ts` owns both a whole-feature `prd_audit` reconciliation write
  * and a region-sensitive completion write.  Keep their classifications at
@@ -177,6 +163,24 @@ function restackAccessIdentity({ site, arguments: args }: CallSite): string {
   return `${path}:${accessor}(${args.map((argument) => argument.replace(/\s+/g, '')).join(',')})`;
 }
 
+/**
+ * Feature-wide rebase, re-kick, and pure in-memory ledger accesses have no
+ * child path.  Classify by path, operation, and gate rather than source line:
+ * harmless insertions must not turn a known whole-feature access into an
+ * unlabelled child-aware one.
+ */
+function isWholeFeatureOnly(call: CallSite): boolean {
+  const { site, arguments: args } = call;
+  const [path, _line, accessor] = site.split(':');
+  const gate = args[1]?.replace(/\s+/g, '');
+  return (path === 'engine/daemon-rekick.ts' &&
+      RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] === 'whole-feature-only') ||
+    ((path === 'engine/rebase-transition.ts' || path === 'engine/rebase.ts') &&
+      (accessor === 'readVerdict' || accessor === 'writeVerdict') &&
+      (gate === "'rebase'" || gate === "'coverage_binding'")) ||
+    (path === 'engine/kickback-ledger.ts' && accessor === 'bumpKickbackGate');
+}
+
 function childArgumentCarriesActiveRegionChild({ arguments: args, source }: CallSite): boolean {
   const childArgument = args[3];
   if (childArgument === undefined) return false;
@@ -240,7 +244,7 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
   if (unclassifiedRestackAccesses.length > 0) {
     throw new Error(`unclassified restack region access sites: ${unclassifiedRestackAccesses.join(', ')}`);
   }
-  return calls.map((call) => WHOLE_FEATURE_ONLY_SITES.has(call.site)
+  return calls.map((call) => isWholeFeatureOnly(call)
     ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'The rebase and coverage-binding gates remain feature-wide.' }
     : {
       site: call.site,
