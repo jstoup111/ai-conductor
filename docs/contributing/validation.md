@@ -38,23 +38,21 @@ instead, the script stops before the summary and prints
 defect, not a check result: capture the command's status and pass it to `assert` or `warn_check`
 (check 29 enforces this).
 
-Install engine dependencies first, or three checks silently degrade:
+Install engine dependencies and `jq` first, or checks 5a, 5b, and 5c fail:
 
 ```bash
 cd src/conductor && npm ci
 ```
 
-Without `src/conductor/node_modules`, checks 5a, 5b, and 5c WARN-skip with these exact lines, and you
-lose local coverage that CI still enforces:
+`test/check_integrity_prerequisites.sh` guards those checks. Without `src/conductor/node_modules`, each
+of 5a, 5b, and 5c reports a `FAIL` that includes this line, and the run continues to later sections:
 
 ```text
-src/conductor/node_modules absent — skipping model-table drift check
-model-table checks skipped — run npm install in src/conductor
-src/conductor/node_modules absent — skipping docs-guard hook drift check
+Missing src/conductor/node_modules; run npm ci in src/conductor before running integrity model-table checks.
 ```
 
-Check 5b additionally needs `jq` on `PATH`; without it you get
-`model-table pin check skipped — jq not installed`.
+Check 5b also needs `jq` on `PATH`; without it, the check fails with
+`Missing jq; install jq before running the model-table pin integrity check.`
 
 ## The checks
 
@@ -70,10 +68,10 @@ In file order. Sections 1, 2, 5, and 9 carry lettered sub-checks, and four check
 | 2a | `test/check_skill_invocation_policy.sh` verifies every shipped and repository-local skill has exactly one invocation classification, and `test/test_skill_invocation_policy.sh` mutation-tests that audit. The fixed implicit-required set carries one canonical `implicit_invocation: required` marker and no host disable; every other skill carries Claude `disable-model-invocation: true` plus Codex `policy.allow_implicit_invocation: false`. The observed exception set must exactly equal the verified same-session dependency allowlist. | A host policy is missing, duplicated, noncanonical, or contradictory; a local skill is omitted; the implicit-required set drifts in either direction; or the checker accepts a representative invalid mutation. | Classify the caller first. Keep implicit invocation only when another loaded skill must activate the workflow in the same session; otherwise add both host disable controls. Update the fixed allowlist and [skills reference](../reference/skills.md#invocation-policy) together when a verified composition dependency changes. |
 | 3 | Every `agents/[a-z_-]*.md` string appearing in `skills/`, `HARNESS.md`, or `ARCHITECTURE.md` exists on disk. | A referenced agent file is missing. | Create the agent file or fix the reference. |
 | 4 | Every backticked `` `/name` `` reference in `skills/*/SKILL.md` maps to a `skills/<name>/` directory, or is named in the script's `KNOWN_NON_SKILL_REFS` allowlist (`quit`, `skill-name`). | A reference resolves to no skill directory and is not allowlisted — a dangling pointer left behind by a renamed or deleted skill. | Fix the reference to name a real skill, or — if it genuinely names a host command or a syntax placeholder, not a skill — add it to `KNOWN_NON_SKILL_REFS` with a comment naming where it is used. |
-| 5 | Every `skills/*/` directory name matches `\| <name>[ (\|]` somewhere in `ARCHITECTURE.md`. | Never — this is a `warn_check`. | Add a model-table row and regenerate. |
+| 5 | `test/check_model_table_presence.sh` resolves every `skills/*/SKILL.md` to an `ARCHITECTURE.md` table row by exact first-cell name, ignoring a trailing parenthetical. A skill without its own row passes through a reasoned `ROW_ALIASES` entry whose rows all exist (`tdd` → `tdd-red`,`tdd-green`; `coverage-binding` → `coverage_binding`) or a reasoned `SKILL_NO_ROW_ALLOWLIST` entry. `test/test_model_table_presence.sh` runs fixtures that cover each resolution path. | A skill resolves to no row, alias, or allowlist entry; an alias or allowlist entry has an empty reason; an allowlist entry names a missing skill directory; or the fixture spec fails. | Add a model-table row and regenerate. Use an alias only when the row is spelled differently, and use the allowlist only for a skill that has no row on purpose. Give every entry a reason. |
 | 5a | `bin/generate-model-table --check` reports no drift between the generated ARCHITECTURE.md table region and `model-table-metadata.ts` + `resolved-config.ts`. Plus a fixture sub-test that corrupts a temp copy's Codex provider label and requires exit 1 *and* a unified diff naming both the changed and the canonical header line. | Exit 1 (drift), exit 2 (environment error), or any other non-zero exit. The fixture fails if `--check` cannot produce a useful diff. | Run `bin/generate-model-table` and commit the rewritten ARCHITECTURE.md region. Never hand-edit rows between the `BEGIN GENERATED: model-selection-table` and `END GENERATED` markers. |
-| 5b | For every `skills/*/SKILL.md` carrying a `model:` frontmatter line, the pin equals `.expected` from `bin/generate-model-table --pins`. Entries with `.exempt == true` pass without comparison. | The pin disagrees with expected; a pinned skill is absent from `--pins` (reported as "unmapped"); or `--pins` emits unparseable JSON. | Fix the pin, or map the skill in `SKILL_STEP_MAP` / exempt it in `PIN_EXEMPT_SKILLS` (`src/conductor/src/engine/model-table-metadata.ts`). |
-| 5c | `bin/generate-docs-guard-hook --check` reports no drift between the committed `hooks/claude/docs-guard.sh` and `src/conductor/src/engine/session-hook-assets.ts`. Plus a fixture sub-test that appends a corrupting comment to the hook and requires exit 1. | Exit 1, 2, or any other non-zero exit; or the corrupted fixture is not detected. | Edit the TypeScript source, run `bin/generate-docs-guard-hook`, commit the regenerated `.sh`. Never hand-edit the hook. |
+| 5b | `test/check_skill_model_pins.sh` compares SKILL.md `model:` frontmatter pins with `bin/generate-model-table --pins` in both directions. Every pin must equal its entry's `.expected`, and every non-exempt `--pins` entry must have a `skills/<name>/SKILL.md` pinned to `.expected`. Entries with `.exempt == true` pass without comparison. `test/test_skill_model_pins.sh` runs the fixture spec. | Any pin disagrees with its expected value; a pinned skill is absent from `--pins` (reported as "unmapped"); an expected skill has no SKILL.md or no `model:` pin; `--pins` emits unparseable JSON; the fixture spec fails; or `node_modules` or `jq` is missing. | Fix the pin, or map the skill in `SKILL_STEP_MAP` / exempt it in `PIN_EXEMPT_SKILLS` (`src/conductor/src/engine/model-table-metadata.ts`). |
+| 5c | `bin/generate-docs-guard-hook --check` reports no drift between the committed `hooks/claude/docs-guard.sh` and `src/conductor/src/engine/session-hook-assets.ts`. Plus `test/check_docs_guard_drift_fixture.sh`, which appends a corrupting comment to a temporary copy of the hook and requires `--check` against that copy (via `GENERATE_DOCS_GUARD_HOOK_OUT`) to exit 1. The tracked hook is never modified. `test/test_docs_guard_drift_fixture.sh` verifies that the fixture leaves the tracked hook intact and fails on a broken generator override or a failed temporary copy. | Exit 1, 2, or any other non-zero exit; the corrupted copy is not detected; the fixture spec fails; or `node_modules` is missing. | Edit the TypeScript source, run `bin/generate-docs-guard-hook`, commit the regenerated `.sh`. Never hand-edit the hook. |
 | 6 | Every `templates/[a-z_.-]*.template` string in `skills/`, `HARNESS.md`, or `ARCHITECTURE.md` exists on disk. | A referenced template is missing. | Create it or fix the reference. |
 | 7 | Per SKILL.md, no two `### <n>` headings share an identifier. Sub-markers are kept, so `### 2.` and `### 2.5` — or `### 3.` and `### 3a.` — do not collide. | Two headings resolve to the same identifier. | Renumber. |
 | 8 | Zero matches for `embed(`, `cosineSimilarity`, `vectorSearch`, `relevanceScore`, or `rankScore` across `src/conductor/src`, `bin`, `hooks`, and `skills`, excluding any `engineer` directory. | Any harness-side embedding, vector-search, or relevance/rank-scoring logic exists for the memory subsystem. | Remove it. Recall is performed by the LLM reading the store, not by harness-side retrieval. |
@@ -84,7 +82,7 @@ In file order. Sections 1, 2, 5, and 9 carry lettered sub-checks, and four check
 | 9f | `templates/adr.md.template`'s `**Status:**` line offers only pipe-delimited values whose leading word (uppercased) is `APPROVED` or `SUPERSEDED` — a terminal annotation like `SUPERSEDED by <slug>` stays valid. | Any offered status normalizes to something else, e.g. `Proposed` or `Accepted`. | Restore the template to offer only `APPROVED \| SUPERSEDED by {{superseding-adr-slug}}`. An offered value the `adrApprovalStatus` parser rejects would fail every new ADR at land and at daemon discovery. |
 | 9g | `skills/architecture-review/SKILL.md` contains all four of `ai-conductor overlap-scan`, `Wiring Surface`, `advisory` (any case), and `/plan`. | Any one is missing. | Restore all four. |
 | 9c | Every `git tag -l 'v*.*.*'` has a matching `^## \[<version>\]` section in `CHANGELOG.md`. Runs only when `.git` is a directory and `CHANGELOG.md` exists. | A released tag has no changelog section. | Add the section. |
-| 10 | No write to `.pipeline/task-status.json` outside the engine. Greps `task-status` in `hooks/` and `bin/` (`*.sh`, `*.ts`, `*.js`), drops comment/console/log/`readFile` lines and quoted literals, then flags anything matching `writeFile`, `.write`, `fs.write`, `fs.appendFile`, `>>`, or `>`. | A non-engine writer is found. | Route the write through `src/conductor/src/engine/`. The engine is the sole authority on task-completion state. |
+| 10 | `test/check_task_status_writers.sh` checks that nothing outside the engine writes `.pipeline/task-status.json`. It greps `task-status` in `hooks/`, `bin/`, and `skills/` (`*.sh`, `*.ts`, `*.js`), drops comment/console/log/`readFile` lines and quoted literals, then flags anything matching `writeFile`, `.write`, `fs.write`, `fs.appendFile`, `>>`, or `>`. It also flags any `skills/*/SKILL.md` line that names `task-status.json` and `completed` or `skipped` and starts with an imperative verb such as `set`, `mark`, `write`, or `update`. `test/test_task_status_writers.sh` runs the fixture spec. | A non-engine writer or a non-allowlisted SKILL.md write instruction is found; a prose allowlist entry has an empty reason; or the fixture spec fails. | Route the write through `src/conductor/src/engine/`, and rewrite the skill text so it no longer tells agents to write task state. The engine is the sole authority on task-completion state. |
 | — | `skills/pipeline/SKILL.md` does **not** match `(^\|[^\`])Run \`ai-conductor task (start\|done)`. | Imperative per-task CLI stamping text is present. | Rewrite descriptively — the skill documents session-hook machinery, not an imperative step. Mentions of the CLI as operator or recovery machinery are fine. |
 | — | `skills/pipeline/SKILL.md` keeps an evaluator-free batch boundary: it names `BATCH_AFFECTED_TESTS`, `simplify`, the linter, and the orphaned-caller check, and contains none of `HARD GATE: Evaluator dispatch`, `closeout-event`, or `batches_with_evaluator`. Fixtures that re-add the evaluator hard gate or a `closeout-event` call must fail the predicate. | A required batch-boundary term is missing, a retired evaluator or closeout term is present, or a re-added-term fixture still passes. | Restore the batch-boundary checks and remove the retired evaluator gate or `closeout-event` text. Post-build review belongs to `build_review`. |
 | — | No `skills/*/SKILL.md`, `agents/*.md`, `templates/*.template`, or `HARNESS.md` claims that a pipeline or batch evaluator satisfies the code-review gate, or that it will catch a defect. A fixture appending such a claim must fail the predicate. | The file and line holding the claim are printed. | Reword the claim. Pipeline and batch evaluators are advisory; they substitute for neither `/code-review` nor `build_review`. |
@@ -114,50 +112,13 @@ not third. Four checks carry no number at all.
 `AGENT_INSTRUCTIONS.md` (and therefore `CLAUDE.md` and `AGENTS.md`, which symlink to it) spells out only
 the first seven checks in detail and names this page as the canonical enumeration.
 
-## Checks that cannot fail
-
-> **Known limitation.** Check 5 uses `warn_check`, so it can never fail the suite or change its exit
-> code — it is reported as validation in prose but implemented as advisory. (Check 4 was advisory for
-> the same reason until it was made fail-closed behind an allowlist; check 5 has no equivalent fix
-> yet.) Check 5 also has a permanent WARN that no edit will clear: the `tdd` skill directory has no model-table row of its own
-> because `HARNESS.md:186-187` lists `tdd-red` and `tdd-green`, and the check's regex `\| tdd[ (|]` does
-> not match `| tdd-red`. Expect `tdd — not in ARCHITECTURE.md model selection table` in every run.
-> Tracked in [#1014](https://github.com/jstoup111/ai-conductor/issues/1014).
-
-> **Known limitation.** Check 5b enforces one direction only. `AGENT_INSTRUCTIONS.md` describes it as
-> "Every skill marked opus-tier in the model table pins `model: opus` in its SKILL.md frontmatter, and
-> vice versa", but the implementation skips any skill with no `model:` line (`if [ -z "$pinned" ]; then
-> continue; fi`). A skill the table marks opus-tier while its SKILL.md carries no pin passes silently —
-> only the pin-to-expected direction is enforced, never expected-to-pin. Tracked in
-> [#1014](https://github.com/jstoup111/ai-conductor/issues/1014).
-
-> **Known limitation.** Check 10's own comments say the audit covers "hooks, skills, or bin/" and would
-> go red on unauthorized writers in `hooks/`, `skills/`, or `bin/`. The grep covers only
-> `${HARNESS_DIR}/hooks` and `${HARNESS_DIR}/bin` — `skills/` is never scanned. A skill that instructs an
-> agent to write `.pipeline/task-status.json` will not be caught here. Tracked in
-> [#1014](https://github.com/jstoup111/ai-conductor/issues/1014).
-
 ## Environment-dependent behavior
 
-> **Known limitation.** Checks 5a, 5b, and 5c degrade to WARN-skip when `src/conductor/node_modules` is
-> absent, and 5b also skips when `jq` is missing. In a fresh clone the run reports green while three
-> generated-artifact drift gates never executed — and CI, which runs `npm ci` first, will catch the drift
-> you did not. Run `cd src/conductor && npm ci` before treating a local integrity pass as meaningful.
-> Tracked in [#1014](https://github.com/jstoup111/ai-conductor/issues/1014).
-
 > **Known limitation.** Check 1b degrades to WARN-skip when `shellcheck` is not on `PATH`, with the line
-> `shellcheck not installed — skipping shell static analysis`. Same shape as the 5a/5b/5c gap above: the
-> run reports green while the shell static-analysis gate never executed. CI installs the tool explicitly
+> `shellcheck not installed — skipping shell static analysis`. The run reports green even though the
+> shell static-analysis gate never ran. CI installs the tool explicitly
 > in both the `integrity` and `shellcheck` jobs, so it always enforces there. Locally, install it
 > (`sudo apt-get install shellcheck`, `brew install shellcheck`) before treating a pass as meaningful.
-
-> **Known limitation.** Check 5c mutates a tracked file during the run. It backs up
-> `hooks/claude/docs-guard.sh` to a temp file, appends
-> `# deliberately corrupted for drift-detection fixture test` to the committed path in place, runs
-> `--check` expecting exit 1, then restores byte-for-byte — via a `trap` so a failed assertion still
-> restores. If the process is hard-killed mid-check, your working tree is left with a corrupted committed
-> hook. Recover with `git checkout -- hooks/claude/docs-guard.sh`. Tracked in
-> [#1014](https://github.com/jstoup111/ai-conductor/issues/1014).
 
 ## Where else the suite runs
 
