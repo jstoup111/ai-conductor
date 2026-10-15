@@ -44,6 +44,7 @@ import {
   routeShippedReadiness,
   type ShippedReadinessVerdict,
 } from './shipped-readiness.js';
+import { type RepairQueue, type RepairRequest } from './repair-queue.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -416,6 +417,10 @@ export interface SweepOpts {
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
+  /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
+  repairQueue?: RepairQueue;
+  /** True while a pooled repair has already claimed this PR. */
+  isRepairRunning?: (prUrl: string) => boolean;
   /**
    * Optional worktree teardown seam for the shipped-record gate.
    * MERGED and CLOSED may use this dependency; NOTFOUND never does.
@@ -459,6 +464,8 @@ export async function sweepMergeableLabels({
   operations,
   autoresolve,
   ciFix,
+  repairQueue,
+  isRepairRunning,
   teardownWorktree,
   shippedRecordProbe,
   canRemoveWorktree,
@@ -485,13 +492,9 @@ export async function sweepMergeableLabels({
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
-    // Task 17 (AC1/AC2): PRs whose `mergeable` field is CONFLICTING, gathered
-    // during the label pass so the autoresolve dispatch below never re-fetches
-    // PR state. Only populated/consulted when autoresolve is configured.
+    // Repair candidates are gathered from the one merge-state read per entry;
+    // the sweep neither re-reads state nor awaits a repair session.
     const conflictingCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
-    // Task 10 (AC1/AC2): PRs whose `checksOutcome` is 'failed', gathered
-    // during the label pass so the ciFix dispatch below never re-fetches
-    // PR state. Only populated/consulted when ciFix is configured.
     const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
     for (let entry of entries) {
@@ -899,134 +902,36 @@ export async function sweepMergeableLabels({
       }
     }
 
-    // Task 17: after the label pass, dispatch resolution for the first
-    // eligible CONFLICTING PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastResolveAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // autoresolve is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
+    const enqueue = (request: RepairRequest): void => {
+      if (!repairQueue) return;
+      if (isRepairRunning?.(request.prUrl)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
+        return;
+      }
+      if (!repairQueue.enqueue(request)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already queued)`);
+      }
+    };
+
+    // Task 13: enqueue every eligible conflict; dispatch owns claim-time
+    // counters and execution, so this intentionally changes neither field.
     if (autoresolve?.enabled) {
-      let dispatched = false;
       for (const { entry, state } of conflictingCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
         const elig = await autoresolve.isEligible(entry, state);
         if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-          continue;
-        }
-
-        dispatched = true;
-        const now = autoresolve.now ? autoresolve.now() : new Date();
-        const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
-          lastResolveAt: now.toISOString(),
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        const dispatchResult = await autoresolve.dispatch(updated);
-        if (dispatchResult?.kind === 'refreshed') {
-          survivors[idx] = { ...updated, resolveAttempts: 0 };
-        } else if (dispatchResult?.kind === 'escalated') {
-          survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
-        } else if (dispatchResult?.kind === 'published-stack') {
-          // A stacked branch is intentionally escalated before any replay.
-          // That is not an exhausted resolution attempt, so preserve the
-          // counter which existed when this sweep began.
-          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-        } else if (dispatchResult?.kind === 'setup-stop') {
-          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-          try {
-            await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-            await upsertComment(
-              entryGh,
-              entry.repoCwd,
-              entry.prUrl,
-              '<!-- conductor:rebase-setup -->',
-              '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-              log,
-            );
-          } catch (err) {
-            log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
-          }
-        }
+        const queuedAt = now().toISOString();
+        enqueue({ kind: 'autoresolve', prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt });
       }
     }
 
-    // Task 10: after the label pass, dispatch CI fix for the first
-    // eligible failed PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastCiFixAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // ciFix is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
+    // Task 13: a failed startup preflight leaves ciFix absent, so it cannot
+    // enqueue a CI repair. Counters are intentionally untouched here.
     if (ciFix?.enabled) {
-      let dispatched = false;
       for (const { entry, state } of failedCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
         const elig = await ciFix.isEligible(entry, state);
         if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-          continue;
-        }
-
-        dispatched = true;
-        const now = ciFix.now ? ciFix.now() : new Date();
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        // The label pass may have set ciFailureDetected since this candidate
-        // was collected. Reserve from that current survivor so a later refund
-        // cannot discard the observed failure transition.
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
-          lastCiFixAt: now.toISOString(),
-          ciFailureDetected: true,
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        try {
-          const dispatchResult = await ciFix.dispatch(updated, state);
-          // Only an affirmative pre-provider refusal can restore the exact
-          // reservation. A local publication is not GitHub green; remote green
-          // is reconciled by the normal state transition on a later sweep.
-          if (dispatchResult?.kind === 'needs-human') {
-            survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
-            try {
-              await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-              await upsertComment(
-                entryGh,
-                entry.repoCwd,
-                entry.prUrl,
-                '<!-- conductor:ci-fix-setup -->',
-                '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-                log,
-              );
-            } catch (err) {
-              log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
-            }
-          } else if (dispatchResult?.kind === 'not-started' || dispatchResult?.kind === 'branch-gone') {
-            survivors[idx] = {
-              // Preserve the state transition from the label pass (notably a
-              // newly detected CI failure), while refunding only the fields
-              // this reservation changed.
-              ...current,
-              ciFixAttempts: entry.ciFixAttempts,
-              ...(entry.lastCiFixAt === undefined
-                ? { lastCiFixAt: undefined }
-                : { lastCiFixAt: entry.lastCiFixAt }),
-            };
-          }
-        } catch (err) {
-          // Task 11: dispatch error is logged but not propagated (AC1b)
-          // The bumped counter persists (already written to survivors[idx])
-          log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
-        }
+        const queuedAt = now().toISOString();
+        enqueue({ kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt });
       }
     }
 

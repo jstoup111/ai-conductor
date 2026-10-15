@@ -298,6 +298,8 @@ export type PrCheckContextFailure =
 export interface PrMergeState {
   state: string;
   mergeable: string;
+  /** GitHub's PR creation timestamp, used to order pooled repairs. */
+  createdAt?: string;
   /** GitHub's detailed merge-state classification when present. */
   mergeStateStatus?: string;
   /** The target branch name when present. */
@@ -472,6 +474,7 @@ export function classifyChecksOutcome(
 interface GhPrViewJson {
   state?: string;
   mergeable?: string;
+  createdAt?: string;
   mergeStateStatus?: string;
   baseRefName?: string;
   headRefOid?: string;
@@ -568,7 +571,7 @@ export async function prMergeState(
   log?: (msg: string) => void,
 ): Promise<PrMergeState> {
   try {
-    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid']);
+    const stdout = await runTrackerUrlRead(runGh, cwd, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'state,mergeable,createdAt,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid']);
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
@@ -599,6 +602,7 @@ export async function prMergeState(
     return {
       state,
       mergeable,
+      ...(typeof data.createdAt === 'string' ? { createdAt: data.createdAt } : {}),
       mergeStateStatus: data.mergeStateStatus,
       baseRefName: data.baseRefName,
       headRefOid: data.headRefOid,
