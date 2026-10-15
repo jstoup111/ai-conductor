@@ -61,6 +61,7 @@ import {
 } from '../execution/managed-session-preparation.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
 import type { ProviderStartIdentity } from '../types/events.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -362,6 +363,27 @@ export interface ProviderExecutionContext {
   /** Immutable identity established by the daemon before provider dispatch. */
   managedSessionContext?: ManagedSessionContext;
   prepareManagedSessionObservation?: ExecuteProviderCandidatesInput['prepareManagedSessionObservation'];
+}
+
+/**
+ * Maps provider execution observations onto the single conductor event spine.
+ * Candidate starts are intentionally fire-and-forget: a slow renderer or
+ * persister must never delay the provider process entering its invocation.
+ */
+export function providerExecutionEventCallbacks(
+  eventTarget: Pick<ConductorEventEmitter, 'emit'>,
+): Pick<ProviderExecutionContext, 'onAttempt' | 'onCandidateStart' | 'warn'> {
+  return {
+    onAttempt: (step, { executionContext, ...attempt }) =>
+      eventTarget.emit({
+        type: 'provider_attempt', step, ...attempt,
+        ...(executionContext ? { executionContext } : {}),
+    }),
+    onCandidateStart: (step, candidate) => {
+      void eventTarget.emit({ type: 'provider_attempt_started', step, ...candidate }).catch(() => {});
+    },
+    warn: (_message, transition) => eventTarget.emit(transition),
+  };
 }
 
 /**

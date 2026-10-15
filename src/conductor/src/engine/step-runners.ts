@@ -1048,6 +1048,7 @@ export class DefaultStepRunner implements StepRunner {
   private configuredProviders: readonly string[];
   private providerExecutor: typeof executeProviderCandidates;
   private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
+  private providerCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
   private providerLifecycleTimer: ProviderLifecycleTimer;
   private providerLifecycleEpisodeStore: ProviderLifecycleEpisodeStore;
@@ -1132,6 +1133,7 @@ export class DefaultStepRunner implements StepRunner {
       options?.providerLifecycleEpisodeStore ?? createProviderLifecycleEpisodeStore();
     this.providerAttempt =
       options?.providerAttempt ?? options?.providerExecution?.onAttempt;
+    this.providerCandidateStart = options?.providerExecution?.onCandidateStart;
     this.taskAttribution = options?.providerExecution?.taskAttribution;
     this.providerExecutionContext = options?.providerExecution;
     this.withCandidateSafety = options?.providerExecution?.withCandidateSafety;
@@ -1234,6 +1236,7 @@ export class DefaultStepRunner implements StepRunner {
           worktreePath: this.projectDir, canonicalPath: this.projectRoot, planStem, config: this.config,
           runtimes: this.providerRuntimes, sessions: this.sessionStore,
           configuredProviders: this.configuredProviders, providerExecutor: this.providerExecutor,
+          onCandidateStart: this.providerCandidateStart,
           emit: async (event) => { await this.events?.emit(event); },
           onNotice: (notice) => this.log(notice),
         });
@@ -1866,6 +1869,7 @@ export class DefaultStepRunner implements StepRunner {
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
             prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
+            onCandidateStart: this.providerCandidateStart,
             warn: this.providerWarn,
             options,
             ...(invocationKind === 'skill' && (Object.prototype.hasOwnProperty.call(
@@ -1969,6 +1973,7 @@ export class DefaultStepRunner implements StepRunner {
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
           prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
           onAttempt: this.providerAttempt,
+          onCandidateStart: this.providerCandidateStart,
           warn: this.providerWarn,
           options,
           ...(request.kind === 'skill'
@@ -2649,7 +2654,7 @@ export class DefaultStepRunner implements StepRunner {
           config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
           providerAvailability: this.providerExecutionContext?.providerAvailability,
           withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
-          onAttempt: this.providerAttempt, warn: this.providerWarn,
+          onAttempt: this.providerAttempt, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn,
           options,
           optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation(REBASE_REGRADE_SKILL, providerKey)}\n\n${prompt}` }),
         }),
@@ -3676,7 +3681,7 @@ export class DefaultStepRunner implements StepRunner {
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
-      onAttempt: this.providerAttempt, warn: this.providerWarn, options,
+      onAttempt: this.providerAttempt, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn, options,
       abortSignal: controller.signal, deadlineAt,
       ...(Array.isArray(entry.policy.llm_provider) && entry.policy.llm_provider.length > 1 ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
         if (lapGate?.hasOpened) return;
@@ -4511,6 +4516,7 @@ export class DefaultStepRunner implements StepRunner {
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
             prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
+            onCandidateStart: this.providerCandidateStart,
             warn: this.providerWarn,
             abortSignal: controller.signal,
             deadlineAt,

@@ -1,3 +1,4 @@
+// Covers: task:3
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -78,11 +79,11 @@ it('composes one ordered provider context across the interactive run after regis
       : undefined;
   const contextProperties = new Map(
     contextObject?.properties
-      .filter(ts.isPropertyAssignment)
-      .map((property) => [
-        property.name.getText(sourceFile),
-        property.initializer.getText(sourceFile),
-      ]) ?? [],
+      .flatMap((property) => ts.isPropertyAssignment(property)
+        ? [[property.name.getText(sourceFile), property.initializer.getText(sourceFile)] as const]
+        : ts.isSpreadAssignment(property)
+          ? [['...providerExecutionEventCallbacks', property.expression.getText(sourceFile)] as const]
+          : []) ?? [],
   );
   const compatibilityRuntime = binding('compatibilityRuntime');
   const runnerConstruction = constructions.find(
@@ -188,9 +189,7 @@ it('composes one ordered provider context across the interactive run after regis
       config: 'config',
       modelOverride: 'opts.model',
       effortOverride: 'opts.effort',
-      onAttempt:
-        "(step, { executionContext, ...attempt }) =>\n      events.emit({\n        type: 'provider_attempt', step, ...attempt,\n        ...(executionContext ? { executionContext } : {}),\n      })",
-      warn: '(_message, transition) => events.emit(transition)',
+      '...providerExecutionEventCallbacks': 'providerExecutionEventCallbacks(events)',
       withCandidateSafety: 'createCandidateSafetyBoundary()',
     },
     compatibilityRuntime:

@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * Acceptance specs for .docs/stories/setup-before-dispatch-wedge-deterministic-setup-fa.md
  * (TS-2..TS-5) — "Setup-before-dispatch wedge: deterministic setup-failure
@@ -152,6 +153,9 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
                     property.name.getText(sourceFile),
                     property.initializer.getText(sourceFile),
                   ] as const]
+                : ts.isSpreadAssignment(property) &&
+                    property.expression.getText(sourceFile) === 'providerExecutionEventCallbacks(eventTarget)'
+                  ? [['...providerExecutionEventCallbacks', property.expression.getText(sourceFile)] as const]
                 : ts.isShorthandPropertyAssignment(property)
                   ? [[property.name.text, property.name.text] as const]
                   : [],
@@ -247,9 +251,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       providerAvailability: 'providerAvailability',
       onProviderSuppressed:
         "(provider, deadline) => events.emit({\n      type: 'provider_suppressed', provider, deadline,\n    })",
-      onAttempt:
-        "(step, { executionContext, ...attempt }) =>\n      eventTarget.emit({\n        type: 'provider_attempt', step, ...attempt,\n        ...(executionContext ? { executionContext } : {}),\n      })",
-      warn: '(_message, transition) => eventTarget.emit(transition)',
+      '...providerExecutionEventCallbacks': 'providerExecutionEventCallbacks(eventTarget)',
       withCandidateSafety: 'createCandidateSafetyBoundary()',
     },
     contextOwner:

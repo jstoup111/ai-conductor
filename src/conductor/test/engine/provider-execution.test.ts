@@ -30,12 +30,14 @@ import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-li
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { ProviderAttemptEvent } from '../../src/types/events.js';
 import { parseEvents } from '../../src/engine/report-renderer.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import {
   createCandidateSafetyBoundary,
   executeAuxiliaryProviderCandidates,
   executeProviderCandidates,
   formatProviderCapabilityGapMessages,
   invokeProviderCandidate,
+  providerExecutionEventCallbacks,
   type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
 import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
@@ -2217,6 +2219,26 @@ describe('executeProviderCandidates', () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.not.objectContaining({ streamConsumer: expect.anything() }),
     );
+  });
+
+  it('maps candidate starts to nonawaited provider-start events', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: unknown[] = [];
+    events.on('provider_attempt_started', async (event) => {
+      seen.push(event);
+      await new Promise<void>(() => {});
+    });
+    const callbacks = providerExecutionEventCallbacks(events);
+    const result = callbacks.onCandidateStart?.('build', {
+      provider: { kind: 'known', id: 'claude' }, model: 'sonnet',
+      executionContext: { executionId: 'member-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+    });
+
+    expect(result).toBeUndefined();
+    expect(seen).toEqual([expect.objectContaining({
+      type: 'provider_attempt_started', step: 'build', provider: { kind: 'known', id: 'claude' }, model: 'sonnet',
+      executionContext: { executionId: 'member-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+    })]);
   });
 
   it('reports a known interactive candidate synchronously before invoking it without a stream observer', async () => {

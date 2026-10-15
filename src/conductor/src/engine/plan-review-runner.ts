@@ -116,6 +116,7 @@ function promptCandidates(candidates: readonly unknown[]): unknown[] {
 export interface RunPlanReviewInput {
   worktreePath: string; canonicalPath?: string; planStem: string; config: HarnessConfig; runtimes: ProviderRuntimeSet; sessions: ProviderSessionStore;
   env?: NodeJS.ProcessEnv; configuredProviders?: readonly string[]; emit?: (event: Extract<ConductorEvent, { type: 'plan_review_dispatched' | 'plan_review_completed' | 'plan_review_finding_accepted' }>) => Promise<void>; onNotice?: (notice: string) => void; providerExecutor?: typeof executeProviderCandidates;
+  onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   /** Prompt budget; defaults to {@link PLAN_REVIEW_MAX_PROMPT_CHARS}. */
   maxPromptChars?: number;
 }
@@ -156,7 +157,7 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   let used: string | undefined;
   for (const provider of candidates) {
     await input.emit?.({ type: 'plan_review_dispatched', round: previous && !('kind' in previous) ? previous.round + 1 : 1, reviewerProvider: provider, independence: classifyIndependence(host, provider) });
-    const attempted = await executor({ step: 'plan_review', configuredProviders: [provider], runtimes: input.runtimes, sessions: input.sessions, config: input.config, nativeSchemaScratch: { worktreeRoot: input.worktreePath, repository: input.worktreePath, featureSlug: input.planStem }, options: { prompt, cwd: input.worktreePath, interactive: false, readOnlyReview: true, nativeSchema: PLAN_REVIEW_RESULT_SCHEMA } } as ExecuteProviderCandidatesInput);
+    const attempted = await executor({ step: 'plan_review', configuredProviders: [provider], runtimes: input.runtimes, sessions: input.sessions, config: input.config, onCandidateStart: input.onCandidateStart, nativeSchemaScratch: { worktreeRoot: input.worktreePath, repository: input.worktreePath, featureSlug: input.planStem }, options: { prompt, cwd: input.worktreePath, interactive: false, readOnlyReview: true, nativeSchema: PLAN_REVIEW_RESULT_SCHEMA } } as ExecuteProviderCandidatesInput);
     if (!attempted.success || attempted.finalStructuredResult === undefined) continue;
     const raw = attempted.finalStructuredResult;
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw) || Object.keys(raw as Record<string, unknown>).length !== 1 || !Array.isArray((raw as { findings?: unknown }).findings)) continue;

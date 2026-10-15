@@ -58,7 +58,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
-import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary, providerExecutionEventCallbacks } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
 import {
   prepareManagedSessionContext,
@@ -1425,12 +1425,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // The per-feature Conductor composes self-host authority around this
     // resolved-candidate boundary; keep it present for every daemon context.
     withCandidateSafety: createCandidateSafetyBoundary(),
-    onAttempt: (step, { executionContext, ...attempt }) =>
-      eventTarget.emit({
-        type: 'provider_attempt', step, ...attempt,
-        ...(executionContext ? { executionContext } : {}),
-      }),
-    warn: (_message, transition) => eventTarget.emit(transition),
+    ...providerExecutionEventCallbacks(eventTarget),
     ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
   });
   // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
