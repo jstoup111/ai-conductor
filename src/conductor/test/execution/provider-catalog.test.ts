@@ -1,4 +1,7 @@
 // Covers: task:1, task:2, task:13
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BUILT_IN_PROVIDERS,
@@ -13,6 +16,7 @@ import {
   type ProviderCapability,
   type ProviderCapabilityFlags,
   type ProviderWith,
+  validateProviderCatalog,
 } from '../../src/execution/provider-catalog.js';
 import { parsePiModelId, parsePiModelListing } from '../../src/execution/pi-provider.js';
 import { rateCardModelIds } from '../../src/engine/provider-model-policy.js';
@@ -21,6 +25,38 @@ const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUT
 const originalExecutableOverrides = new Map(
   executableOverrides.map((name) => [name, process.env[name]]),
 );
+const conductorRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
+const providerCatalogPath = join(conductorRoot, 'src/execution/provider-catalog.ts');
+
+function typeDiagnosticsForMissingTranscriptDeclaration(): readonly ts.Diagnostic[] {
+  const fixturePath = join(conductorRoot, 'test/fixtures/self-host-shape-missing-transcripts.ts');
+  const fixture = [
+    "import type { SelfHostShape } from '../../src/execution/provider-catalog.js';",
+    'const shape: SelfHostShape = {',
+    "  isolation: 'provider-home',",
+    "  selectedAuthPath: 'auth.json',",
+    '  claudeBuildPreflights: false,',
+    '  agentsSkillsLink: false,',
+    '  scrubVariables: [],',
+    '};',
+    'void shape;',
+  ].join('\n');
+  const config = ts.readConfigFile(join(conductorRoot, 'tsconfig.json'), ts.sys.readFile);
+  const options = ts.parseJsonConfigFileContent(config.config, ts.sys, conductorRoot).options;
+  const host = ts.createCompilerHost(options, true);
+  const readFile = host.readFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+
+  host.fileExists = (fileName) => fileName === fixturePath || fileExists(fileName);
+  host.readFile = (fileName) => fileName === fixturePath ? fixture : readFile(fileName);
+
+  const program = ts.createProgram({
+    rootNames: [fixturePath, providerCatalogPath],
+    options,
+    host,
+  });
+  return ts.getPreEmitDiagnostics(program).filter((diagnostic) => diagnostic.file?.fileName === fixturePath);
+}
 
 function interactiveLaunchFor(provider: (typeof BUILT_IN_PROVIDERS)[number] | undefined) {
   return provider && 'interactiveLaunch' in provider ? provider.interactiveLaunch : undefined;
@@ -268,6 +304,7 @@ describe('built-in provider catalog', () => {
         claude: {
           isolation: 'claude-config-sandbox',
           selectedAuthPath: '.credentials.json',
+          transcripts: { globs: ['projects/**/*.jsonl'] },
           claudeBuildPreflights: true,
           agentsSkillsLink: false,
           scrubVariables: ['CLAUDE_CODE_OAUTH_TOKEN'],
@@ -275,6 +312,7 @@ describe('built-in provider catalog', () => {
         codex: {
           isolation: 'provider-home',
           selectedAuthPath: 'auth.json',
+          transcripts: { globs: ['sessions/**/*.jsonl'] },
           claudeBuildPreflights: false,
           agentsSkillsLink: true,
           scrubVariables: [],
@@ -282,12 +320,46 @@ describe('built-in provider catalog', () => {
         pi: {
           isolation: 'provider-home',
           selectedAuthPath: 'auth.json',
+          transcripts: { globs: ['sessions/**/*.jsonl'] },
           claudeBuildPreflights: false,
           agentsSkillsLink: false,
           scrubVariables: ['PI_CODING_AGENT_SESSION_DIR'],
         },
       },
     });
+  });
+
+  it('declares a transcript allowlist for every self-host provider and rejects an empty one', () => {
+    const claude = requireProviderCapability('claude', 'selfHost');
+    const invalidClaude = {
+      ...claude,
+      selfHostShape: {
+        ...claude.selfHostShape,
+        transcripts: { globs: [] },
+      },
+    };
+
+    expect({
+      claude: claude.selfHostShape.transcripts.globs,
+      codex: requireProviderCapability('codex', 'selfHost').selfHostShape.transcripts.globs,
+      pi: requireProviderCapability('pi', 'selfHost').selfHostShape.transcripts.globs,
+    }).toEqual({
+      claude: ['projects/**/*.jsonl'],
+      codex: ['sessions/**/*.jsonl'],
+      pi: ['sessions/**/*.jsonl'],
+    });
+    expect(() => validateProviderCatalog([invalidClaude])).toThrow(
+      'self-host provider claude: transcripts.globs transcript allowlist is empty',
+    );
+  });
+
+  it('requires every SelfHostShape to declare transcripts', () => {
+    const diagnostics = typeDiagnosticsForMissingTranscriptDeclaration();
+
+    expect(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')))
+      .toEqual(expect.arrayContaining([
+        expect.stringContaining("Property 'transcripts' is missing in type"),
+      ]));
   });
 
   it('declares Pi\'s agent home and keeps its review-policy capability with its follow-up intake', () => {
