@@ -29,7 +29,13 @@ export interface AdmittedRoutingItem {
   readonly gap: CriterionBoundRemediationGap;
   readonly gateSource: string;
   readonly provenance: AdmittedFindingProvenance;
-  readonly taskIds?: readonly string[];
+  /**
+   * The task binding admitted with the finding.  This is deliberately
+   * separate from `gap.tasks`: those are proposed repair task ids, whereas
+   * ADR D2 assigns task-bound work to the authored (or prior rem) task that
+   * authorized its admission.
+   */
+  readonly ownerTaskIds?: readonly string[];
   readonly citedPaths?: readonly string[];
   readonly existingTask?: boolean;
 }
@@ -108,8 +114,14 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   const residue: AdmittedRoutingItem[] = [];
   for (const source of input.admitted) {
     if (isResidue(source)) { residue.push(source); continue; }
+    if (source.ownerTaskIds === undefined || source.ownerTaskIds.length === 0) {
+      return {
+        kind: 'halt', haltClass: 'needs-human',
+        detail: `Task-bound work ${source.id} has no admitted owner-task binding`,
+      };
+    }
     const ownership = deriveTaskBoundOwner({
-      taskIds: source.taskIds ?? source.gap.tasks.map((task) => task.id), envelope: input.envelope,
+      taskIds: source.ownerTaskIds, envelope: input.envelope,
       planText: input.planText, appendedChildren: input.appendedChildren, declaredPositions: input.declaredPositions,
     });
     if (ownership.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: ownership.detail };

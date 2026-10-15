@@ -7,6 +7,7 @@ import { join } from 'node:path';
 
 const routingMutationSpy = vi.hoisted(() => ({
   calls: [] as string[],
+  ownerTaskIds: [] as Array<readonly string[] | undefined>,
   routeResult: undefined as unknown,
 }));
 
@@ -52,6 +53,7 @@ vi.mock('../../src/engine/routing/round-router.js', async (importOriginal) => {
     ...actual,
     routeAdmittedRound: vi.fn(async (...args: Parameters<typeof actual.routeAdmittedRound>) => {
       routingMutationSpy.calls.push('route');
+      routingMutationSpy.ownerTaskIds = args[0].admitted.map((item) => item.ownerTaskIds);
       return routingMutationSpy.routeResult ?? actual.routeAdmittedRound(...args);
     }),
   };
@@ -215,6 +217,25 @@ class AsBuiltResidueRunner implements StepRunner {
   }
 }
 
+class AsBuiltTaskBoundRunner implements StepRunner {
+  constructor(private readonly projectRoot: string) {}
+
+  async run(_step: string, _state: ConductState, options: Parameters<StepRunner['run']>[2]) {
+    const request = options?.remediationRequest;
+    if (request?.mode !== 'gap-plan' || options?.runId === undefined) {
+      throw new Error('fixture requires a remediation gap-plan request');
+    }
+    const finding = request.projection.requiredReferences[0];
+    if (finding?.kind !== 'as-built-finding') throw new Error('fixture requires an as-built finding');
+    await persistFixtureProjectedRemediationPlan(this.projectRoot, options, [{
+      id: finding.id, referenceKind: 'as-built-finding', disposition: 'build', category: null,
+      rationale: 'Repair the authored task boundary.',
+      tasks: [{ id: 'repair-task-for-first', title: 'Repair the authored task boundary' }],
+    }]);
+    return { success: true };
+  }
+}
+
 const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'fixture' },
   planGap: { enabled: true, reason: 'fixture' },
@@ -227,6 +248,7 @@ describe('Conductor residue routing judge binding', () => {
 
   beforeEach(async () => {
     routingMutationSpy.calls = [];
+    routingMutationSpy.ownerTaskIds = [];
     routingMutationSpy.routeResult = undefined;
     projectRoot = await mkdtemp(join(tmpdir(), 'conductor-residue-routing-judge-'));
     const planPath = join(projectRoot, '.docs', 'plans', 'feature.md');
@@ -345,6 +367,55 @@ describe('Conductor residue routing judge binding', () => {
         governingEvidence: { kind: 'adr-decision', stem: 'adr-boundary', decision: 3 },
       })],
     });
+  });
+
+  // Covers: task:rem-as-built-W3
+  it('routes a proposed repair task to its admitted authored parent host', async () => {
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task first: authored work\n',
+      'utf8',
+    );
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: 'first' },
+        summary: 'The authored boundary needs repair.',
+      }],
+      violations: 'The task-bound implementation is incomplete.',
+      resolution: 'Repair the task boundary.',
+    }, { attemptId: 'fixture-task-bound', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltTaskBoundRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: 'feat/daemon-demo', nextChild: undefined,
+        }),
+      },
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'as-built task-bound finding requires owner routing',
+      { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route' });
+    expect(routingMutationSpy.ownerTaskIds).toEqual([['first']]);
+    expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
   });
 
   // Covers: task:rem-as-built-W12

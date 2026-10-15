@@ -4575,7 +4575,15 @@ export class Conductor {
       await this.persistPendingAsBuiltRemediationFindings();
     }
 
-    async function resolveStackedRoute(this: Conductor) {
+    async function resolveStackedRoute(this: Conductor): Promise<
+      | { kind: 'route'; target: StepName; hint: string; evidence: string }
+      | {
+        kind: 'halt';
+        detail: string;
+        haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
+      }
+      | undefined
+    > {
     // Task 23: a 'halt' disposition must never be silently dropped in favor
     // of a sibling 'route' disposition. Even when the SAME plan also names
     // routable fixes for other gaps, a halt gap means at least one blocking
@@ -4634,7 +4642,12 @@ export class Conductor {
                 };
                 return {
                   id: gap.id, gap: routedGap, gateSource: routedGap.gateSource ?? PRD_AUDIT_REMEDIATION_GATE_SOURCE,
-                  taskIds: gap.tasks.map((task) => task.id), existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
+                  ownerTaskIds: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+                    ? resolvedExistingTaskIdsByGapId.get(gap.id)
+                    : routedGap.parentTask === undefined
+                      ? undefined
+                      : [String(routedGap.parentTask)],
+                  existingTask: gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION,
                   provenance,
                 };
               }), envelope, planText,
