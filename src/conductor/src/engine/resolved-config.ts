@@ -21,7 +21,7 @@ import { DEFAULT_PROVIDER, providerDescriptor } from '../execution/provider-cata
 import { selectFallbackLadder } from './model-availability.js';
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
-import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
+import { BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED, BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import { resolveBuildReviewCustomContract } from './build-review-policy-resolver.js';
 import { resolveBuildReviewContractCatalog, type RubricContractDescriptor } from './build-review-contract.js';
 import type { BuildReviewCustomReviewerPayload } from './build-review-domain.js';
@@ -826,21 +826,6 @@ const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'hi
   implementationQuality: 'medium',
 };
 
-/**
- * Per-rubric default enablement; an explicit `rubrics.<id>.enabled` always
- * wins. Test quality is opt-in: its scoped-run preflight classifies test output
- * with framework-specific patterns, and on frameworks it does not recognize
- * (e.g. RSpec, #1682) every run — pass or fail — becomes an unretriable
- * infrastructure failure, so the rubric can never return a verdict and the
- * gate deadlocks. Projects whose framework the preflight understands enable
- * it explicitly (this repository does, in `.ai-conductor/config.yml`).
- */
-const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
-  testQuality: false,
-  security: true,
-  implementationQuality: true,
-};
-
 function freezeProviderSelection(selection: ProviderSelection): ProviderSelection {
   return Array.isArray(selection)
     ? Object.freeze([...selection]) as unknown as string[]
@@ -944,7 +929,7 @@ export function resolveBuildReviewConfig(
     rubricId,
     resolveRubricPolicy(
       block?.rubrics?.[rubricId],
-      DEFAULT_RUBRIC_ENABLED[rubricId],
+      BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId],
       DEFAULT_RUBRIC_EFFORT[rubricId],
     ),
   ])) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
