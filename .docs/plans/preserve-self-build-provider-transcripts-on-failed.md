@@ -565,3 +565,71 @@ Authoritative edges are the per-task `**Dependencies:**` lines.
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-R1: provider-scratch.ts: harvest dead-owner Claude scratch children (harness-selfbuild-* prefix) with Claude globs/known secrets before reclaim; add provider-scratch.test.ts case asserting an interrupted Claude home is captured with interrupted:true then removed
+**Gate:** prd-audit
+**Rationale:** Verified (100%): provider-scratch.ts harvestInterruptedHome filters children by `self-host-${provider}-` while sandbox-build-env.ts:288 creates Claude config dirs via mkdtemp(join(base,'harness-selfbuild-')). Task 10 Step 2 requires harvesting each provider-home child directory of a dead-owner home; Claude homes are in scope. Implementation + missing Claude test, no architectural decision needed.
+**Criterion:** S5.1
+**Parent task:** 10
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2: transcript-retention.ts: key pending captures by step+runId+attempt+member and add attempt-scoped settle; conductor.ts: settle the failing attempt as failed/stalled/needs-human before every step_retry site (incl. configured-member retry) and settle needs-human/HALT against the dispatching step, not lastAdvancedStep
+**Gate:** prd-audit
+**Rationale:** Task 12 Step 2 requires each attempt settled exactly once at its own verdict; in-step retries emit only step_retry and needs-human halts settle against lastAdvancedStep, so failed-attempt captures are left pending and later pruned. Implementation drift against approved Task 11/12 design (ADR decision 4), not an architecture change.
+**Criterion:** S6.2
+**Parent task:** 12
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3: conductor-transcript-retention.test.ts: add Task 12 case (d) — attempt 1 of build fails and is retried in-step, attempt 2 succeeds with progress; assert attempt-1 capture stays on disk with a retained event and only attempt-2 is pruned; plus a member-retry case for build_review
+**Gate:** prd-audit
+**Rationale:** Task 12 Step 2 requires each attempt settled exactly once at its own verdict; in-step retries emit only step_retry and needs-human halts settle against lastAdvancedStep, so failed-attempt captures are left pending and later pruned. Implementation drift against approved Task 11/12 design (ADR decision 4), not an architecture change.
+**Criterion:** S6.2
+**Parent task:** 12
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: sandbox-build-env.ts + conductor.ts: pass the actually-injected CLAUDE_CODE_OAUTH_TOKEN into the sandbox's capture known-secrets for both sandbox and legacy dispatch paths (captured before credential restore); add sandbox-build-env.test.ts case asserting an echoed injected token is absent from the capture
+**Gate:** as-built
+**Rationale:** Task 8 Step 2 explicitly requires known secrets to include the injected CLAUDE_CODE_OAUTH_TOKEN; the implementation reads ambient process.env, which lacks the child-injected daemon token (and legacy path restores ambient creds before teardown). Conforming implementation fix.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 3
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-R5: transcript-sanitize.ts: apply known-secret masking to decoded JSON string leaves before JSON.stringify (keep raw-fallback masking); add transcript-sanitize.test.ts cases with secrets containing quote, backslash, and newline characters
+**Gate:** as-built
+**Rationale:** Verified at transcript-sanitize.ts:45: known-secret masking runs on the JSON-serialized string, so secrets with quotes/backslashes/control chars are escaped and escape masking. Task 3 requires known secrets absent from sanitized lines; fix is to mask decoded string leaves before stringify.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 3
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R5 is committed and its targeted tests pass.
+
+### Task rem-as-built-R6: transcript-retention.ts enforceCap: restrict eviction candidates to retained captures only; add transcript-retention.test.ts case asserting a pending (unsettled) capture is never evicted when over the count/byte cap
+**Gate:** as-built
+**Rationale:** Task 13 Step 2 specifies the cap lists retained capture dirs; transcript-retention.ts:198 includes every capture dir, allowing eviction of pending captures before their verdict. Conforming implementation fix.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 4
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
+- The repair for task rem-as-built-R6 is committed and its targeted tests pass.
+
+### Task rem-as-built-R7: provider-scratch.ts sweep: construct a TranscriptRetention on the sweep's worktree-scoped emitter/persistence scope so interrupted captures get provider_transcripts_retained and cap enforcement immediately, and stop it at scope end; add provider-scratch.test.ts assertion for the retained event and visibility via transcripts list
+**Gate:** as-built
+**Rationale:** Task 11 requires interrupted captures to be retained immediately (retained event) and Task 13 requires cap enforcement after every retention; the daemon sweep (Task 10) emits captured events in a feature persistence scope with no TranscriptRetention subscriber. Wiring retention into the sweep's worktree-scoped lifetime is within approved tasks.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 4
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
+- The repair for task rem-as-built-R7 is committed and its targeted tests pass.
+
+### Task rem-as-built-R8: conductor.ts: call transcriptRetention.stop() in the conductor run's production cleanup/dispose path; add a conductor test asserting no retention listener remains on the emitter after the run ends
+**Gate:** as-built
+**Rationale:** TranscriptRetention.stop (Task 11 lifecycle) has only test callers; Task 12 makes the conductor the production owner of one retention per run, so its cleanup must call stop. Conforming wiring fix.
+**Parent task:** 11
+**Governing clause:** Task 11
+**Done when:**
+- Task 11 is satisfied by this task.
+- The repair for task rem-as-built-R8 is committed and its targeted tests pass.
