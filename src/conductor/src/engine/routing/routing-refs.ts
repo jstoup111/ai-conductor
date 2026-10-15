@@ -35,6 +35,11 @@ export function redRefFor(slug: string, child: ChildId): string {
   return `${root(slug)}/red/c${child}`;
 }
 
+/** The immutable tree recorded when a child region closes. */
+export function closureRefFor(slug: string, child: ChildId): string {
+  return `${root(slug)}/closed/c${child}`;
+}
+
 /**
  * Every routing ref that can belong to a feature. This intentionally remains
  * a finite enumeration: teardown must never discover a namespace by prefix.
