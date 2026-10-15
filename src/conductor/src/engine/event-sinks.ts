@@ -137,7 +137,7 @@ export const EVENT_SINKS = {
   bot_co_author_skipped: { render: true, persist: true, audit: false, otel: false },
   provider_discovery: { render: false, persist: true, audit: false, otel: false },
   provider_attempt: { render: true, persist: true, audit: false, otel: true },
-  provider_attempt_started: { render: false, persist: true, audit: false, otel: false },
+  provider_attempt_started: { render: true, persist: true, audit: false, otel: false },
   // Daemon-origin only: this is the durable restart projection, not a second
   // rendering of a feature's rate-limit event.
   provider_suppressed: { render: false, persist: true, audit: false, otel: false },

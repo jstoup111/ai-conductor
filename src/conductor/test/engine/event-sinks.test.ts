@@ -388,6 +388,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'pipeline_tail_diagnostic',
   'renderer_error',
   'provider_attempt',
+  'provider_attempt_started',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
   'scratch_cleanup_failed',
@@ -1666,7 +1667,7 @@ describe('event sink subscriptions', () => {
     expect(new Set(persistedEventTypes())).toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
   });
 
-  it('persists provider starts without rendering, audit, or OpenTelemetry export', () => {
+  it('renders and persists provider starts without audit or OpenTelemetry export', () => {
     expect({
       sink: EVENT_SINKS.provider_attempt_started,
       persisted: persistedEventTypes().includes('provider_attempt_started'),
@@ -1674,9 +1675,9 @@ describe('event sink subscriptions', () => {
       audited: auditedEventTypes().includes('provider_attempt_started'),
       otel: otelEventTypes().includes('provider_attempt_started'),
     }).toEqual({
-      sink: { render: false, persist: true, audit: false, otel: false },
+      sink: { render: true, persist: true, audit: false, otel: false },
       persisted: true,
-      rendered: false,
+      rendered: true,
       audited: false,
       otel: false,
     });

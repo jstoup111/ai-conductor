@@ -50,6 +50,7 @@ import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
+import { formatProviderStartLine } from './ui/provider-start-line.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
@@ -3404,6 +3405,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot}   ${renderedExecutionSubject(event, event.step)} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`);
       break;
     }
+    case 'provider_attempt_started':
+      log(`${dot}   ${formatProviderStartLine(event)}`);
+      break;
     case 'feature_usage_total':
       // The per-step provider lines above answer "what did this step cost?".
       // This one answers "what did the whole feature cost?" — the question an
