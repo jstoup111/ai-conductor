@@ -1099,69 +1099,38 @@ fi
 rm -rf "$bootstrap_publish_dir"
 
 # ── 10. Writer-audit for task-status.json single authority ──────────────────
-# Task #302 enforces that ONLY the engine (src/conductor/src/engine/) writes to
-# `.pipeline/task-status.json`. This is the single source of truth for task
-# completion state. Any writes from hooks, skills, or bin/ scripts are violations
-# of the completion derivation authority model.
-#
-# The check greps for task-status.json references that appear to be WRITES
-# (writeFile calls, file redirection patterns, etc.) and ensures they are only
-# found in the engine code. References that are clearly READ-ONLY (comments,
-# error messages, docs) are filtered out to avoid false positives.
-#
-# This check is expected to:
-#  - RED (fail): if any unauthorized writers are found in hooks/, skills/, or bin/
-#  - GREEN (pass): once Task 15 removes the old post-commit hook and no other
-#    unauthorized writers exist
+# The checker scans *.sh, *.ts, and *.js files under hooks/, bin/, and skills/
+# for write-like task-status references outside the engine's sole authority.
 
 echo ""
 echo -e "${BOLD}10. Writer-audit for task-status.json single authority${NC}"
 
-# Grep for task-status.json references in hooks and bin, excluding engine code.
-# Only flag actual write operations (writeFile, .write, etc.), not documentation
-# or read-only operations.
-_writer_audit_hits=$(grep -rn "task-status" \
-  "${HARNESS_DIR}/hooks" \
-  "${HARNESS_DIR}/bin" \
-  --include="*.sh" --include="*.ts" --include="*.js" \
-  2>/dev/null || true)
+task_status_writer_checker="${HARNESS_DIR}/test/check_task_status_writers.sh"
+task_status_writer_fixture="${HARNESS_DIR}/test/test_task_status_writers.sh"
 
-# Filter to keep only lines that look like write operations
-_writer_audit_violations=""
-if [ -n "$_writer_audit_hits" ]; then
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-
-    # Extract the file path and the code line
-    filepath=$(echo "$line" | cut -d: -f1)
-    content=$(echo "$line" | cut -d: -f3-)
-
-    # Skip read-only patterns: comments, console logs, error messages, documentation
-    if echo "$content" | grep -qE '^\s*(//|#|\*|\/\*|console|error|log|readFile)'; then
-      continue
-    fi
-
-    # Skip string literals that are clearly just documenting task-status
-    if echo "$content" | grep -qE '("|'"'"').*task-status.*\.("|'"'"')'; then
-      continue
-    fi
-
-    # Now check for write operations: writeFile, .write, fs.write, appendFile
-    if echo "$content" | grep -qE 'writeFile|\.write|fs\.write|fs\.appendFile|>> |> '; then
-      _writer_audit_violations="${_writer_audit_violations}${line}
-"
-    fi
-  done <<< "$_writer_audit_hits"
-fi
-
-if [ -z "$_writer_audit_violations" ]; then
-  assert "task-status.json — only engine writes (no unauthorized writers)" 0
+if [ ! -f "$task_status_writer_checker" ] || [ ! -f "$task_status_writer_fixture" ]; then
+  assert "task-status writer checker and fixtures exist" 1
 else
-  assert "task-status.json — unauthorized writers detected" 1
-  echo "$_writer_audit_violations" | while read -r violation; do
-    [ -z "$violation" ] && continue
-    echo -e "    ${RED}Violation:${NC} ${violation}"
-  done
+  set +e
+  task_status_writer_output=$(bash "$task_status_writer_checker" 2>&1)
+  task_status_writer_exit=$?
+  task_status_writer_fixture_output=$(bash "$task_status_writer_fixture" 2>&1)
+  task_status_writer_fixture_exit=$?
+  set -e
+
+  if [ "$task_status_writer_exit" -eq 0 ]; then
+    assert "task-status.json — only engine writes (no unauthorized writers)" 0
+  else
+    echo "$task_status_writer_output" | sed 's/^/    /'
+    assert "task-status.json — only engine writes (no unauthorized writers)" 1
+  fi
+
+  if [ "$task_status_writer_fixture_exit" -eq 0 ]; then
+    assert "task-status writer fixtures cover hooks/, bin/, and skills/" 0
+  else
+    echo "$task_status_writer_fixture_output" | sed 's/^/    /'
+    assert "task-status writer fixtures cover hooks/, bin/, and skills/" 1
+  fi
 fi
 
 # ── Pipeline SKILL.md — no imperative CLI stamping text ────────────────────────

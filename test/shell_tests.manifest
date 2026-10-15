@@ -6,6 +6,7 @@ check_halt_writers.sh integrity integrity validates its contract directly
 check_interpreter_source.sh integrity integrity validates its contract directly
 check_migration_block_authoring.sh integrity integrity validates its contract directly
 check_model_table_presence.sh integrity integrity validates its contract directly
+check_task_status_writers.sh integrity integrity validates its contract directly
 check_shell_test_classification.sh integrity integrity validates the delivered shell-test classifications
 check_skill_invocation_policy.sh integrity integrity validates its contract directly
 check_update_flow_config_ownership.sh integrity integrity validates its contract directly
@@ -22,6 +23,7 @@ test_legacy_cli_guard_backends.sh integrity integrity runs its fixture suite
 test_lint_shell_enumeration.sh integrity integrity runs its fixture suite
 test_migration_block_authoring.sh integrity integrity runs its fixture suite
 test_model_table_presence.sh integrity integrity runs its fixture suite
+test_task_status_writers.sh integrity integrity runs its fixture suite
 test_no_legacy_cli_references.sh integrity integrity runs its fixture suite
 test_provider_skill_contracts.sh integrity integrity runs its fixture suite
 test_release_pr_workflow.sh integrity integrity runs its fixture suite
