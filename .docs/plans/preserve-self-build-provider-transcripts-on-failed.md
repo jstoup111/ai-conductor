@@ -633,3 +633,46 @@ Authoritative edges are the per-task `**Dependencies:**` lines.
 **Done when:**
 - Task 11 is satisfied by this task.
 - The repair for task rem-as-built-R8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-S2.10: provider-execution.ts/step-runners.ts/conductor.ts: derive the self-host capture `attempt` from the step's lifecycle attempt (the step_retry/dispatch counter for this step in the session), not the provider-candidate index; keep the candidate index out of the capture identity or make it a separate path component. Add a conductor-level test that two same-session dispatches of one step write distinct `-a1-` and `-a2-` capture directories and leave attempt 1's files byte-identical.
+**Gate:** prd-audit
+**Rationale:** Verified (100%): provider-execution.ts:867 and :1035 pass `attempt: index`, the provider-candidate index, as the capture attempt. With the stable runId from step-runners.ts, every same-session dispatch of a step therefore captures to `<runId>-a0-...`. ADR decision 4 and task 9 already require attempt-distinct capture directories, so this is conforming implementation drift and needs no architecture decision.
+**Criterion:** S2.10
+**Parent task:** 9
+**Done when:**
+- [test] S2.10 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-S2.10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-S6.2: transcript-retention.ts settleBeforeRetry + conductor.ts:2396-2400: when retrying with no configured-member context, settle every pending capture for the step with attempt < nextAttempt regardless of member, including auxiliary rubric members. With a configured member, still match that member's captures. Add a conductor test asserting that a failed build_review retry retains each rubric member's capture with a provider_transcripts_retained event, and that the later success settle does not prune them.
+**Gate:** prd-audit
+**Rationale:** Verified (100%): transcript-retention.ts:119 requires `capture.member === member`, and conductor.ts:2400 passes a member only in configured-member contexts. A build_review retry therefore never settles the auxiliary rubric-member captures, which the later success settle then prunes. This is a defect inside the approved rem-prd-audit-R2 scope.
+**Criterion:** S6.2
+**Parent task:** rem-prd-audit-R2
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-S6.2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-S6.4: conductor test (task 12 case d): drive a real step retry through the conductor and provider-execution path, without injected attempt numbers. Attempt 1 fails and attempt 2 succeeds with progress. Assert that attempt 1's capture directory remains on disk with a retained event, and that only attempt 2's directory is removed with a pruned event.
+**Gate:** prd-audit
+**Rationale:** Verified (99%): S6.4 is a consequence of the shared capture path (S2.10), and task 12's case (d) lacks a conductor-level test that drives a real retry. The existing tests inject distinct attempts directly. Adding the end-to-end test is BUILD work within task 12; it depends on rem-vg-S2.10.
+**Criterion:** S6.4
+**Parent task:** 12
+**Done when:**
+- [test] S6.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-S6.4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-ab1: conductor.ts:5564 legacy sandbox provisioning: replace the constant `attempt: 1` with the same lifecycle attempt identity used in rem-vg-S2.10. Add a test that two same-session legacy-path dispatches capture to distinct attempt directories.
+**Gate:** as-built
+**Rationale:** Verified (99%): conductor.ts:5564 hardcodes `attempt: 1` on the legacy sandbox path, and the member-matching defect is confirmed at transcript-retention.ts:119. The approved ADR decision 4 stays authoritative and the fix is conforming code. The provider-execution identity and the member matching are covered by rem-vg-S2.10 and rem-vg-S6.2; this task closes the remaining legacy sibling site.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 4
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-ab1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-ab2: self-host/provider-scratch.ts + transcript-retention.ts: scope sweep-time retention to captures the sweep itself recovered from interrupted homes, or to worktrees proven not owned by a live worker, instead of reconciling every unsettled capture as abandoned. Leave live pending captures pending and not cap-eligible. Add a test: a sweep running beside a live pending capture neither retains nor evicts it, and still emits a retained event for a capture the sweep harvested from an interrupted home.
+**Gate:** as-built
+**Rationale:** Verified (99%): provider-scratch.ts:159-164 constructs a TranscriptRetention and calls ready() for every worktree before establishing ownership. Reconciliation treats unsettled captures as abandoned and makes them cap-eligible, so a sweep can settle captures that a live worker still owns. ADR decision 4 already states the intended semantics, so the fix is conforming code; it is a regression from the R7 repair.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 4
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-ab2 is committed and its targeted tests pass.
