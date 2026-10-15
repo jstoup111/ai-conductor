@@ -18,7 +18,7 @@ describe('daemon-cli startup dashboard wiring (Task 8)', () => {
     const binding = startupDashboardBinding();
 
     expect(source).toMatch(/let cachedStartupDiscovery: BacklogItem\[\] \| undefined;/);
-    expect(source).toMatch(/const discoverBacklog = async \(options: \{ refresh: boolean \}\): Promise<BacklogItem\[\]> => \{[\s\S]*?cachedStartupDiscovery \?\?= result;[\s\S]*?return result;/);
+    expect(source).toMatch(/const discoverAndCacheStartup = async \(options: \{ refresh: boolean \}\): Promise<BacklogItem\[\]> => \{[\s\S]*?cachedStartupDiscovery \?\?= result;[\s\S]*?return result;/);
     expect(binding).toContain('discover: () => Promise.resolve(cachedStartupDiscovery ?? []),');
     expect(binding).not.toContain('discoverTick(');
     expect(binding).not.toContain('fastForwardRoot(');
