@@ -92,6 +92,8 @@ type ScratchLeaseIdentity = {
   readonly featureSlug: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Owning conductor step, retained in the scratch lease. */
+  readonly step?: string;
   /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
   readonly member?: string;
 };
@@ -99,7 +101,7 @@ type ScratchLeaseIdentity = {
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionProviderHomeOptions = ProvisionProviderHomeBaseOptions & (
   | (ScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly member?: string }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly step?: string; readonly member?: string }
 );
 
 export class ProviderHomeProvisionError extends Error {
@@ -171,6 +173,7 @@ export async function provisionProviderHome(
     featureSlug: options.featureSlug,
     runId: options.runId,
     attempt: options.attempt,
+    step: options.step,
     member: options.member,
     provider: provider.id,
   });

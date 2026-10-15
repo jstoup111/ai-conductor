@@ -13,6 +13,8 @@ export interface ResolveScratchHomeOptions {
   readonly worktreeRoot: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Owning conductor step, retained for post-interruption transcript capture. */
+  readonly step?: string;
   readonly provider: SelfHostProviderId;
   /**
    * Concurrent auxiliary member (e.g. a build_review rubric) sharing this run
@@ -76,6 +78,10 @@ export interface ScratchLease {
   readonly featureSlug: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Optional so leases written before transcript retention remain readable. */
+  readonly step?: string;
+  readonly provider?: SelfHostProviderId;
+  readonly member?: string;
   readonly ownerPid: number;
   readonly startedAt: string;
 }
@@ -308,6 +314,9 @@ export async function acquireScratchHome(options: AcquireScratchHomeOptions): Pr
     featureSlug: options.featureSlug,
     runId: options.runId,
     attempt: options.attempt,
+    ...(options.step === undefined ? {} : { step: options.step }),
+    provider: options.provider,
+    ...(options.member === undefined ? {} : { member: options.member }),
     ownerPid: options.ownerPid ?? process.pid,
     startedAt: (options.now ?? (() => new Date()))().toISOString(),
   };
@@ -468,6 +477,9 @@ function serializeScratchLease(lease: ScratchLease): string {
     featureSlug: lease.featureSlug,
     runId: lease.runId,
     attempt: lease.attempt,
+    ...(lease.step === undefined ? {} : { step: lease.step }),
+    ...(lease.provider === undefined ? {} : { provider: lease.provider }),
+    ...(lease.member === undefined ? {} : { member: lease.member }),
     ownerPid: lease.ownerPid,
     startedAt: lease.startedAt,
   });
@@ -499,6 +511,9 @@ function isScratchLease(value: unknown): value is ScratchLease {
     typeof lease.featureSlug === 'string' &&
     typeof lease.runId === 'string' &&
     typeof lease.attempt === 'number' &&
+    (lease.step === undefined || typeof lease.step === 'string') &&
+    (lease.provider === undefined || typeof lease.provider === 'string') &&
+    (lease.member === undefined || typeof lease.member === 'string') &&
     typeof lease.ownerPid === 'number' &&
     typeof lease.startedAt === 'string';
 }

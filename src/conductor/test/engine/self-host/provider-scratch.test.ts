@@ -1,3 +1,4 @@
+// Covers: task:7
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -274,6 +275,7 @@ describe('provider scratch homes', () => {
         featureSlug: 'provider-scratch',
         runId: 'R',
         attempt: 2,
+        provider: 'codex',
         ownerPid: 1234,
         startedAt: '2026-08-11T12:34:56.000Z',
       },
@@ -284,7 +286,68 @@ describe('provider scratch homes', () => {
     ]);
   });
 
-  it('serializes only the six scratch-home identity fields into an owner lease', async () => {
+  it('round-trips the owning step, provider, and member with the scratch lease identity', async () => {
+    const files = new Map<string, string>();
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async (path, content) => { files.set(path, content); },
+      readFile: async (path) => files.get(path) ?? null,
+      readdir: async () => [],
+      rm: async () => {},
+      rmdir: async () => {},
+    };
+
+    const home = await acquireScratchHome({
+      worktreeRoot: '/wt',
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      step: 'build',
+      provider: 'codex',
+      member: 'rubric-a',
+      ownerPid: 1234,
+      now: () => new Date('2026-08-11T12:34:56.000Z'),
+      fs,
+    });
+
+    await expect(readScratchLease(home, { fs })).resolves.toEqual({
+      kind: 'present',
+      lease: {
+        repository: 'owner/repository',
+        featureSlug: 'provider-scratch',
+        runId: 'R',
+        attempt: 2,
+        step: 'build',
+        provider: 'codex',
+        member: 'rubric-a',
+        ownerPid: 1234,
+        startedAt: '2026-08-11T12:34:56.000Z',
+      },
+    });
+  });
+
+  it('reads pre-upgrade leases without transcript ownership metadata as present', async () => {
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => JSON.stringify({
+        repository: 'owner/repository',
+        featureSlug: 'provider-scratch',
+        runId: 'R',
+        attempt: 2,
+        ownerPid: 1234,
+        startedAt: '2026-08-11T12:34:56.000Z',
+      }),
+      readdir: async () => [],
+      rm: async () => {},
+      rmdir: async () => {},
+    };
+
+    await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toMatchObject({ kind: 'present' });
+  });
+
+  it('serializes only scratch-home identity fields into an owner lease', async () => {
     const files = new Map<string, string>();
     const fs: ScratchFs = {
       mkdir: async () => {},
@@ -316,6 +379,7 @@ describe('provider scratch homes', () => {
       'featureSlug',
       'runId',
       'attempt',
+      'provider',
       'ownerPid',
       'startedAt',
     ]);

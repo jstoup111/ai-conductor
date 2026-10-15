@@ -133,6 +133,8 @@ type SandboxScratchLeaseIdentity = {
   readonly featureSlug: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Owning conductor step, retained in the scratch lease. */
+  readonly step?: string;
   /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
   readonly member?: string;
 };
@@ -140,7 +142,7 @@ type SandboxScratchLeaseIdentity = {
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionOptions = ProvisionOptionsBase & (
   | (SandboxScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly member?: string }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly step?: string; readonly member?: string }
 );
 
 const SETTINGS_FILE = 'settings.json';
@@ -204,6 +206,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     featureSlug: opts.featureSlug,
     runId: opts.runId,
     attempt: opts.attempt,
+    step: opts.step,
     member: opts.member,
     provider: provider.id,
   });
