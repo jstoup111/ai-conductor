@@ -12,6 +12,8 @@ const routingMutationSpy = vi.hoisted(() => ({
   hostPlans: [] as Array<readonly { readonly branch: string; readonly planPath: string }[] | undefined>,
   allocatedRemTaskIds: [] as string[],
   routedItems: [] as Array<{ readonly host: number; readonly reason: string }>,
+  storedRouteItems: [] as Array<{ readonly owner: number; readonly host: number }>,
+  projectionResult: undefined as Awaited<ReturnType<typeof import('../../src/engine/remediation-projection.js').buildRemediationProjection>> | undefined,
   consolidatedManualTestFail: undefined as readonly string[] | undefined,
   routeResult: undefined as Awaited<ReturnType<typeof import('../../src/engine/routing/round-router.js').routeAdmittedRound>> | undefined,
 }));
@@ -25,11 +27,21 @@ vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => 
   })),
 }));
 
+vi.mock('../../src/engine/remediation-projection.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/remediation-projection.js')>();
+  return {
+    ...actual,
+    buildRemediationProjection: vi.fn(async (...args: Parameters<typeof actual.buildRemediationProjection>) =>
+      routingMutationSpy.projectionResult ?? actual.buildRemediationProjection(...args)),
+  };
+});
+
 vi.mock('../../src/engine/routing/route-record-store.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/routing/route-record-store.js')>(),
   nextRoundId: vi.fn(async () => 'r1'),
   createRouteRecord: vi.fn(async (_worktree, _slug, input) => {
     routingMutationSpy.calls.push('create-record');
+    routingMutationSpy.storedRouteItems = input.items.map(({ owner, host }) => ({ owner, host }));
     return {
       kind: 'created' as const,
       record: {
@@ -312,6 +324,8 @@ describe('Conductor residue routing judge binding', () => {
     routingMutationSpy.hostPlans = [];
     routingMutationSpy.allocatedRemTaskIds = [];
     routingMutationSpy.routedItems = [];
+    routingMutationSpy.storedRouteItems = [];
+    routingMutationSpy.projectionResult = undefined;
     routingMutationSpy.consolidatedManualTestFail = undefined;
     routingMutationSpy.routeResult = undefined;
     projectRoot = await mkdtemp(join(tmpdir(), 'conductor-residue-routing-judge-'));
@@ -528,6 +542,92 @@ describe('Conductor residue routing judge binding', () => {
     expect(outcome).toMatchObject({ kind: 'route' });
     expect(routingMutationSpy.ownerTaskIds).toEqual([['first']]);
     expect(routingMutationSpy.calls).toEqual(['route', 'create-record', 'admit-marker']);
+  });
+
+  // Covers: task:rem-prd-audit-rem-prd-audit-W14
+  it('routes a contract-canonicalized multi-task as-built finding to its earliest owner', async () => {
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      '# Implementation plan\n\n### Task T2: second authored work\n\n### Task T3: third authored work\n',
+      'utf8',
+    );
+    await writeCoverageBindingEnvelope(projectRoot, {
+      version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { T2: 1, T3: 2 }, titles: ['second', 'third'] },
+    }, envelopeFilesystem);
+    const { resolveAsBuiltReferences } = await import('../../src/engine/as-built-contract.js');
+    const canonicalized = await resolveAsBuiltReferences({
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: 'task-T2,task-T3' },
+        summary: 'The shared authored boundary needs repair.',
+      }],
+      violations: 'The shared task-bound implementation is incomplete.',
+      resolution: 'Repair the shared task boundary.',
+    }, projectRoot, '.docs/plans/feature.md');
+    if (!canonicalized.ok) throw new Error(`fixture contract resolution failed: ${canonicalized.requirement}`);
+    await expect(canonicalized.verdict.findings[0]?.reference).toEqual({ kind: 'plan-task', taskId: 'T2,T3' });
+    await persistAsBuiltVerdict(projectRoot, canonicalized.verdict, {
+      attemptId: 'fixture-multi-task', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY,
+    });
+    // Task-context projection currently treats a canonical multi-task binding
+    // as one active-plan id. It is outside W14's routing-handoff scope; pin
+    // the actual contract output while isolating this conductor routing seam.
+    routingMutationSpy.projectionResult = {
+      ok: true,
+      projection: {
+        version: 1,
+        source: 'as-built',
+        requiredReferences: [{
+          kind: 'as-built-finding', id: 'as-built:fixture-multi-task:1',
+          sourceGate: 'architecture_review_as_built',
+          reference: { kind: 'plan-task', taskId: 'T2,T3' },
+          summary: 'The shared authored boundary needs repair.',
+        }],
+        evidence: { excerpts: [], omittedFiles: [] },
+        tasks: [
+          { id: 'T2', title: 'second authored work', doneWhen: [] },
+          { id: 'T3', title: 'third authored work', doneWhen: [] },
+        ],
+        pendingAsBuiltFindings: [], priorLaps: [], refusals: [],
+        vocabulary: {
+          dispositions: ['build', 'acceptance_specs', 'architecture_review', 'plan', 'publication', 'existing-task', 'halt'],
+          haltCategories: ['architectural-clarity', 'product-scope', 'unsupported', 'policy'],
+        },
+      },
+    };
+
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltTaskBoundRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: 'feat/daemon-demo', nextChild: undefined,
+        }),
+      },
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'as-built multi-task finding requires earliest-owner routing',
+      { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(outcome.detail).toBeUndefined();
+    expect(routingMutationSpy.ownerTaskIds).toEqual([['T2', 'T3']]);
+    expect(routingMutationSpy.storedRouteItems).toEqual([{ owner: 1, host: 1 }]);
   });
 
   it('routes a T1 repair citing a child-2 prerequisite to host 2', async () => {

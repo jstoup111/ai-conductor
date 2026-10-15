@@ -4663,7 +4663,7 @@ export class Conductor {
                   ? resolvedExistingTaskIdsByGapId.get(gap.id)
                   : routedGap.parentTask === undefined
                     ? undefined
-                    : [String(routedGap.parentTask)];
+                    : String(routedGap.parentTask).split(',');
                 const findingEvidence = refusalCriteriaByGapId.has(gap.id)
                   ? [routedGap.governingClause ?? routedGap.criterion ?? gap.id]
                   : asBuiltFinding === undefined
