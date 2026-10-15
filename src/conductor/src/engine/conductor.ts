@@ -696,6 +696,8 @@ export class Conductor {
   private events: ConductorEventEmitter;
   /** Best-effort evidence retention; it must never alter a step verdict. */
   private readonly transcriptRetention: TranscriptRetention;
+  /** Legacy runner dispatches have no provider-execution attempt identity. */
+  private readonly legacyTranscriptAttempts = new Map<StepName, number>();
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
@@ -5800,13 +5802,15 @@ export class Conductor {
       if (!runId || !featureSlug) {
         throw new Error('Self-host scratch provisioning requires the held runId and featureSlug.');
       }
+      const attempt = (this.legacyTranscriptAttempts.get(name) ?? 0) + 1;
+      this.legacyTranscriptAttempts.set(name, attempt);
       const sandbox = await this.guardrails.provisionSandbox({
         worktreeRoot: this.projectRoot,
         harnessRoot,
         repository: this.projectRoot,
         featureSlug,
         runId,
-        attempt: 1,
+        attempt,
         step: name,
         events: this.events,
         injectedToken: daemonToken,
