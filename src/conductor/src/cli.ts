@@ -14,6 +14,7 @@ import { loadMergedConfigForRead, projectConfigPath, validateConfig } from './en
 import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
 import { grantStorePath } from './engine/decide-entry-policy.js';
 import { resolveMainRepoRootStrict } from './engine/park-marker.js';
+import { DEFAULT_IDLE_POLL_SECONDS } from './cli-defaults.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -852,7 +853,7 @@ export function createProgram(): Command {
     .option('--continuous', 'Keep idle-polling for new features instead of draining once and exiting (honors --max-* ceilings)')
     .option('--max-cost <tokens>', 'Ceiling: stop starting features after this many total output tokens')
     .option('--max-runtime <seconds>', 'Ceiling: stop starting features after this much wall-clock time')
-    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', '5')
+    .option('--idle-poll <seconds>', 'Continuous mode: seconds to wait between polls when the backlog is empty', String(DEFAULT_IDLE_POLL_SECONDS))
     .option('--max-idle-polls <n>', 'Continuous mode: stop after this many consecutive empty polls');
   // Read-only observability sub-subcommands.
   daemon

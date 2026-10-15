@@ -7,6 +7,8 @@
 // without eagerly loading the daemon runtime (execa, the provider layer, …).
 // The actual `runDaemonMode` is imported lazily by index.ts only on a match.
 
+import { DEFAULT_IDLE_POLL_SECONDS } from '../cli-defaults.js';
+
 /**
  * Options carried from `conduct daemon …` into `runDaemonMode`. A subset of
  * DaemonModeOptions (projectRoot/baseBranch are supplied by the dispatcher).
@@ -255,7 +257,7 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
     continuous: argv.includes('--continuous'),
     maxCostTokens: intFlag(argv, '--max-cost'),
     maxRuntimeSeconds: intFlag(argv, '--max-runtime'),
-    idlePollSeconds: intFlag(argv, '--idle-poll', 60),
+    idlePollSeconds: intFlag(argv, '--idle-poll', DEFAULT_IDLE_POLL_SECONDS),
     maxIdlePolls: intFlag(argv, '--max-idle-polls'),
     showCompleted: argv.includes('--completed') || argv.includes('--all'),
     operatorFlagArgs,
