@@ -339,3 +339,19 @@ Task 9 ──▶ Task 10
 **Done when:**
 - Task 8 is satisfied by this task.
 - The repair for task rem-as-built-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R5: step-runners.ts: at both runProviderAwareNormal call sites (~:1697 ordinary-step and ~:1739) pass 'skill' as invocationKind before resolvedSkillName so it lands in the resolvedSkillName parameter; tighten step-runners-skill-name.test.ts so a multi-candidate provider MUST produce optionsForCandidate (no fallback to the original prompt) rendering /ac-explore for claude and $ac-explore for codex under a renamed skillNameRoot
+**Gate:** as-built
+**Rationale:** Verified (99%): step-runners.ts:1697 and :1739 call runProviderAwareNormal with resolvedSkillName in the ninth argument, invocationKind (signature :1831-1832), so ordinary skills lose candidate-specific re-rendering. ADR decision 2 and its architecture stay authoritative. This is conforming implementation and test drift, admitted by Task 2 (built-in step dispatch renders the resolved name) and the incomplete rem-as-built-R1. The fix passes 'skill' before resolvedSkillName at both calls. The masking test must require optionsForCandidate to exist and render the resolved name per candidate provider. Completed coverage from Task 2 and R1 is kept and strengthened, not relaxed.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 2
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R5 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R6: bin/install skill_frontmatter_name: recognise a quoted scalar by its leading quote, find the matching closing quote (handling \" escapes in double quotes and '' in single quotes), take the unescaped content, and allow only whitespace or a ' #' comment after it, matching skill-names.ts YAML parsing; add test/test_install_skill_names.sh scenarios for name: "ac-plan" # comment and name: 'ac-plan' # comment, each linking ~/.claude/skills/ac-plan and ~/.agents/skills/ac-plan
+**Gate:** as-built
+**Rationale:** Verified (99%): in bin/install skill_frontmatter_name, the case patterns \"*\" and \'*\' only match values that end with a quote. So name: "ac-plan" # comment and name: 'ac-plan' # comment fall to the plain branch, which strips the comment but keeps the quotes. The resulting catalog key differs from skill-names.ts YAML parsing, which ADR decision 3 requires to agree. This is conforming implementation drift, admitted by Task 9 and the incomplete rem-as-built-R3. The existing quoted-form and plain-comment scenarios from R3 are kept.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 3
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R6 is committed and its targeted tests pass.
