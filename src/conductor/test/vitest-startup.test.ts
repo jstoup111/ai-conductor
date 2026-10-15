@@ -116,6 +116,16 @@ describe('run-vitest startup', () => {
     expect(observation.managedGhObserverBypass).toBeUndefined();
   });
 
+  it('raises an inherited low old-space heap limit for Vitest workers', async () => {
+    const result = await launch({ NODE_OPTIONS: '--trace-warnings --max-old-space-size=4096' });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string | undefined>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.nodeOptions).toContain('--trace-warnings');
+    expect(observation.nodeOptions).toContain('--max-old-space-size=6144');
+    expect(observation.nodeOptions).not.toContain('--max-old-space-size=4096');
+  });
+
   it('fails without either Vitest binary and reclaims its run root', async () => {
     await rm(join(fixtureRoot, 'bin', 'vitest'));
 

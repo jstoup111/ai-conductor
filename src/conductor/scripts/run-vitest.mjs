@@ -9,6 +9,17 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
+const VITEST_WORKER_HEAP_LIMIT_MB = 6144;
+
+function workerHeapOptions(nodeOptions = '') {
+  const match = /(?:^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)(\d+)(?=\s|$)/.exec(nodeOptions);
+  if (match && Number(match[1]) >= VITEST_WORKER_HEAP_LIMIT_MB) return nodeOptions;
+
+  const withoutHeapLimit = nodeOptions
+    .replace(/(?:^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)\d+(?=\s|$)/g, ' ')
+    .trim();
+  return `${withoutHeapLimit}${withoutHeapLimit ? ' ' : ''}--max-old-space-size=${VITEST_WORKER_HEAP_LIMIT_MB}`;
+}
 // A managed daemon process uses this private bypass to keep its PATH-level gh
 // observer from recursing.  Test fixtures own their own gh boundary, so passing
 // the bypass through makes production adapters escape those fixtures.
@@ -23,6 +34,7 @@ const child = spawn(vitestCommand, process.argv.slice(2), {
     // cannot bypass the global tmpdir leak guard.
     TMP: runRoot,
     TEMP: runRoot,
+    NODE_OPTIONS: workerHeapOptions(testEnvironment.NODE_OPTIONS),
   },
   stdio: 'inherit',
 });
