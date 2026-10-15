@@ -110,9 +110,11 @@ async function findFiles(root: string, prefix: string, files: string[] = []): Pr
 
 async function sessionFile(worktree: string, capture: Capture): Promise<string | undefined> {
   const captureRoot = join(worktree, capture.path);
-  const source = capture.provider === 'claude' ? 'projects' : 'sessions';
+  const provider = findBuiltInProviderDescriptor(capture.provider);
+  const sandboxProvider = provider?.selfHostShape?.isolation === 'claude-config-sandbox';
+  const source = sandboxProvider ? 'projects' : 'sessions';
   const candidates = await findFiles(join(captureRoot, source), source);
-  const topLevel = capture.provider === 'claude'
+  const topLevel = sandboxProvider
     ? candidates.filter((path) => !relative(captureRoot, path).split(sep).includes('subagents'))
     : candidates;
   if (topLevel.length === 0) return undefined;

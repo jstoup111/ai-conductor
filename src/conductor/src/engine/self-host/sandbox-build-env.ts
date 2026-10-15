@@ -203,7 +203,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
       const name = [
         `${capture.runId}-a${capture.attempt}`,
         capture.member,
-        'claude',
+        sandboxProvider().id,
       ].filter((part): part is string => part !== undefined).join('-');
       const path = join('.pipeline', 'transcripts', capture.step, name);
       const destination = join(capture.worktreeRoot, path);
@@ -238,7 +238,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
         runId: capture.runId,
         attempt: capture.attempt,
         ...(capture.member === undefined ? {} : { member: capture.member }),
-        provider: 'claude',
+        provider: sandboxProvider().id,
         path,
         files: result.files,
         bytes: result.bytes,
@@ -254,7 +254,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
       runId: capture.runId,
       attempt: capture.attempt,
       ...(capture.member === undefined ? {} : { member: capture.member }),
-      provider: 'claude',
+      provider: sandboxProvider().id,
       path,
       error: result.error,
     });

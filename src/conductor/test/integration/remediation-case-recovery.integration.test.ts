@@ -17,6 +17,7 @@ import { reconcileRemediationCases } from '../../src/engine/remediation-case-rec
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 import { Conductor } from '../test-conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const directories: string[] = [];
 const feature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'restart-recovery' };
@@ -229,6 +230,7 @@ describe('remediation case recovery', () => {
     await mkdir(pipeline, { recursive: true });
     const recovery = (rootPath: string) => new Conductor({
       projectRoot: rootPath, stateFilePath: join(rootPath, '.pipeline/state.json'), stepRunner: {} as never,
+      events: new ConductorEventEmitter(),
       config: { build_review: { adjudication: { enabled: true } } },
     } as never) as unknown as { durableBuildReviewRetryContext(hint: string | undefined): Promise<{ kind: string; reason?: string }> };
 
@@ -311,6 +313,7 @@ describe('remediation case recovery', () => {
       projectRoot,
       stateFilePath: join(projectRoot, '.pipeline/state.json'),
       stepRunner: {} as never,
+      events: new ConductorEventEmitter(),
       config: { build_review: { adjudication: { enabled: true } } },
     } as never);
     const retry = await (freshConductor as unknown as {
@@ -401,6 +404,7 @@ describe('remediation case recovery', () => {
 
     const freshConductor = new Conductor({
       projectRoot, stateFilePath: join(projectRoot, '.pipeline/state.json'), stepRunner: {} as never,
+      events: new ConductorEventEmitter(),
       config: { build_review: { adjudication: { enabled: true } } },
     } as never);
     const retry = await (freshConductor as unknown as {
