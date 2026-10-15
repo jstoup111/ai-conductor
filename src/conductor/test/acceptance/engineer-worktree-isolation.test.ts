@@ -324,6 +324,27 @@ describe('FR-11 leftover worktree/branch reconcile', () => {
 
     await expect(createEngineerWorktree(repo, 'dirty leftover')).rejects.toThrow(/dirty|stale|remove/i);
   });
+  it('reuses a leftover worktree whose only untracked change is its uncommitted plan-review artifact', async () => {
+    const repo = await makeRepo('r');
+    const wt = await createEngineerWorktree(repo, 'reviewed leftover');
+    await mkdir(join(wt.worktreePath, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(join(wt.worktreePath, '.docs', 'plan-review', 'reviewed-leftover.md'), '# Plan review\n');
+
+    const again = await createEngineerWorktree(repo, 'reviewed leftover');
+    expect(again.reconcile).toBe('reused');
+    expect(again.worktreePath).toBe(wt.worktreePath);
+  });
+
+  it('still refuses a leftover worktree with other untracked authored artifacts beside its plan review', async () => {
+    const repo = await makeRepo('r');
+    const wt = await createEngineerWorktree(repo, 'stale leftover');
+    await mkdir(join(wt.worktreePath, '.docs', 'plan-review'), { recursive: true });
+    await writeFile(join(wt.worktreePath, '.docs', 'plan-review', 'stale-leftover.md'), '# Plan review\n');
+    await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(wt.worktreePath, '.docs', 'plans', 'stale-leftover.md'), '# Plan\n');
+
+    await expect(createEngineerWorktree(repo, 'stale leftover')).rejects.toThrow(/dirty|stale|remove/i);
+  });
 });
 
 // ── Real-git smoke: the full lifecycle end-to-end ───────────────────────────────

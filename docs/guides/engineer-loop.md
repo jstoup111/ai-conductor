@@ -39,8 +39,9 @@ There are two surfaces and you use both:
 Every primitive prints a single JSON line on success, so each step's output feeds the next.
 
 For Medium and Large work, authoring runs `coherence_check` immediately after `plan`, then
-`compose plan-review`, and commits `.docs/coherence/<plan-stem>.md` and
-`.docs/plan-review/<plan-stem>.md` with the spec artifacts. `plan-review` prints plain text, not JSON.
+`compose plan-review`. Land verifies `.docs/plan-review/<plan-stem>.md` in the authoring worktree and
+commits `.docs/coherence/<plan-stem>.md` with the spec artifacts; the plan-review record itself is
+never committed. `plan-review` prints plain text, not JSON.
 Small work skips both gates and both artifacts, allowing the daemon to begin at BUILD after the spec
 PR merges.
 

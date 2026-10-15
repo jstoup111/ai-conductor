@@ -64,10 +64,11 @@ The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 
 Per phase: SETUP 1, UNDERSTAND 1, DECIDE 10, BUILD 5, SHIP 5.
 
-`plan_review` has a legacy carve-out. When a daemon run reaches it without an operator grant and this
-feature's `.docs/plan-review/<plan-stem>.md` is absent — a spec landed before the step existed — the
-engine records the step `skipped` and writes `landed-before-plan-review` under `step_reasons` in
-`conduct-state.json` instead of authoring a review.
+`plan_review` is skipped for landed specs. When a daemon run reaches it without an operator grant and
+this feature's `.docs/plan-review/<plan-stem>.md` is absent, the engine records the step `skipped` and
+writes `landed-before-plan-review` under `step_reasons` in `conduct-state.json` instead of authoring a
+review. This is the normal path for a composer-landed spec: land verifies the record in the authoring
+worktree but never commits it.
 
 `test_suite` is the sole engine-native BUILD verifier. Static wiring reachability is retired.
 `build_review` runs the default-on `implementationQuality` rubric plus any enabled `testQuality`,

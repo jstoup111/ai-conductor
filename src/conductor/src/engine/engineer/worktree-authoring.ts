@@ -26,17 +26,19 @@ import {
 } from '../worktree-shared.js';
 import { deriveDefaultBranch, slugify } from './spec-branch.js';
 import { stageIntakeOutcomes } from './outcome-staging.js';
+import { PLAN_REVIEW_ARTIFACT_DIR } from '../plan-review-artifact.js';
 
 /**
- * Like `worktreeStatus`, but excludes the given pathspec from the porcelain
- * output — used to keep the FR-14 coherence stamp (which every creation call
- * writes unconditionally, including the one that produced a leftover) from
- * itself tripping the FR-11 dirty-leftover refusal.
+ * Like `worktreeStatus`, but excludes the given pathspecs from the porcelain
+ * output — used to keep engine-owned, never-committed paths from tripping the
+ * FR-11 dirty-leftover refusal: the FR-14 coherence stamp (which every creation
+ * call writes unconditionally, including the one that produced a leftover) and
+ * the plan-review record, which land verifies but never commits.
  */
-async function worktreeStatusExcluding(path: string, excludePathspec: string): Promise<string> {
+async function worktreeStatusExcluding(path: string, excludePathspecs: readonly string[]): Promise<string> {
   const { stdout } = await execa(
     'git',
-    ['status', '--porcelain', '--', '.', `:(exclude)${excludePathspec}`],
+    ['status', '--porcelain', '--', '.', ...excludePathspecs.map((spec) => `:(exclude)${spec}`)],
     { cwd: path },
   );
   return stdout.trim();
@@ -103,9 +105,11 @@ export async function createEngineerWorktree(
   // below on every creation call, including the one that produced this leftover)
   // is excluded from the dirty check — it is engine-written, content-invariant,
   // and reused verbatim by this same call, so it must never itself trip the
-  // stale-artifact refusal.
+  // stale-artifact refusal. The plan-review record is excluded too: land leaves it
+  // uncommitted by design, and land's gate re-checks its digest against the current
+  // plan, so a stale leftover record can never land.
   if (res.reconcile !== 'created') {
-    const status = await worktreeStatusExcluding(worktreePath, '.docs/coherence');
+    const status = await worktreeStatusExcluding(worktreePath, ['.docs/coherence', PLAN_REVIEW_ARTIFACT_DIR]);
     if (status !== '') {
       throw new Error(
         `engineer worktree: leftover worktree at "${worktreePath}" (${res.reconcile}) is dirty:\n${status}\n` +
