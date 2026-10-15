@@ -1252,6 +1252,10 @@ export async function runDaemon(
     const wasDraining = maintenance.isDraining();
     const drain = maintenance.beginDrain(reason);
     if (!wasDraining) {
+      // A drain owns the next quiescent boundary. Prevent maintenance from
+      // starting another pass while workers finish; the already-running pass
+      // is deliberately allowed to settle before that boundary acts.
+      maintenanceJob.close();
       if (drain.reason === 'restart-pending' && deps.recordRestartPendingDrain) {
         try {
           await deps.recordRestartPendingDrain(drain.slugs);
@@ -1542,6 +1546,11 @@ export async function runDaemon(
       // Nothing new to start.
       triggerStartupMaintenance();
       if (maintenance.isDrained()) {
+        // Restart/rebuild actions change the root checkout. If a drain was
+        // requested while the maintenance job was running, let that one
+        // bounded pass finish first, but never await maintenance during an
+        // ordinary dispatch or worker collection path.
+        if (maintenance.isDraining()) await maintenanceJob.settled();
         // Task T28/T30: at idle boundary, check for pending restart marker and either
         // fire the supervisor trigger (T28) or consume in bare-run (T30).
         // This check happens BEFORE the once/idle-timeout checks so restart is honored
@@ -1851,6 +1860,10 @@ export async function runDaemon(
   // provider windows; await it so shutdown never orphans a root mutation.
   // Its result is discarded — no dispatch follows.
   if (refreshJob) await refreshJob;
+  // Final teardown must not orphan a background reconciler. Closing first
+  // suppresses a coalesced rerun before waiting for the active pass.
+  maintenanceJob.close();
+  await maintenanceJob.settled();
 
   // Dispose all remaining watchers before exiting
   for (const dispose of watchers.values()) {
