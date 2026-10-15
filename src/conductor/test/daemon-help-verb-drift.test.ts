@@ -1,3 +1,5 @@
+// Covers: task:3
+
 import { describe, expect, it } from 'vitest';
 import { renderDaemonHelp } from '../src/cli.js';
 import { DAEMON_SUBVERBS, MANAGEMENT_VERBS } from '../src/engine/daemon-command.js';
