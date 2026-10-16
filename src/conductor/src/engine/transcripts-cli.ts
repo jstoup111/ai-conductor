@@ -3,6 +3,7 @@ import { join, relative, sep } from 'node:path';
 import { findBuiltInProviderDescriptor } from '../execution/provider-catalog.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { sanitizeTranscriptLine } from './self-host/transcript-sanitize.js';
+import { foldTranscriptLedger } from './self-host/transcript-retention.js';
 
 export type TranscriptsDispatch =
   | { readonly kind: 'list'; readonly slug: string }
@@ -19,7 +20,9 @@ type Capture = {
   readonly timestamp: number;
 };
 
-type LedgerEvent = Record<string, unknown>;
+function isEvent(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export function detectTranscriptsCommand(argv: string[]): TranscriptsDispatch | null {
   if (argv[2] !== 'transcripts') return null;
@@ -32,25 +35,6 @@ export function detectTranscriptsCommand(argv: string[]): TranscriptsDispatch | 
   return { kind: 'guide' };
 }
 
-function isEvent(value: unknown): value is LedgerEvent {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function captureFrom(event: LedgerEvent, fallbackTimestamp: number): Capture | undefined {
-  if (event.type !== 'provider_transcripts_captured') return undefined;
-  if (typeof event.path !== 'string' || typeof event.step !== 'string' || typeof event.attempt !== 'number'
-    || typeof event.provider !== 'string' || typeof event.interrupted !== 'boolean') return undefined;
-  return {
-    path: event.path,
-    step: event.step,
-    attempt: event.attempt,
-    ...(typeof event.member === 'string' ? { member: event.member } : {}),
-    provider: event.provider,
-    interrupted: event.interrupted,
-    timestamp: typeof event.ts === 'number' ? event.ts : fallbackTimestamp,
-  };
-}
-
 async function readRetainedCaptures(worktree: string): Promise<Capture[]> {
   let content: string;
   try {
@@ -59,28 +43,17 @@ async function readRetainedCaptures(worktree: string): Promise<Capture[]> {
     return [];
   }
 
-  const captures = new Map<string, Capture>();
-  const retained = new Set<string>();
-  const removed = new Set<string>();
-  for (const [index, line] of content.split('\n').entries()) {
-    try {
-      const event: unknown = JSON.parse(line);
-      if (!isEvent(event) || typeof event.path !== 'string') continue;
-      const capture = captureFrom(event, index);
-      if (capture) captures.set(capture.path, capture);
-      if (event.type === 'provider_transcripts_retained') retained.add(event.path);
-      if (event.type === 'provider_transcripts_pruned' || event.type === 'provider_transcripts_evicted') removed.add(event.path);
-    } catch {
-      // An interrupted append must not make the read-only diagnostic unavailable.
-    }
-  }
-
   const result: Capture[] = [];
-  for (const [path, capture] of captures) {
-    if (!retained.has(path) || removed.has(path) || !isCapturePath(path)) continue;
+  for (const capture of foldTranscriptLedger(content).values()) {
+    if (capture.state !== 'retained' || !isCapturePath(capture.path)) continue;
     try {
-      await access(join(worktree, path));
-      result.push(capture);
+      await access(join(worktree, capture.path));
+      result.push({
+        path: capture.path, step: capture.step, attempt: capture.attempt,
+        ...(capture.member === undefined ? {} : { member: capture.member }),
+        provider: capture.provider, interrupted: capture.interrupted,
+        timestamp: capture.capturedAt ?? capture.order,
+      });
     } catch {
       // The retention ledger is historical; only captures still on disk are readable.
     }

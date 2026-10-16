@@ -1,13 +1,16 @@
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import type { StepName } from '../../types/steps.js';
 import type { SelfHostProviderId } from './provider-home.js';
 import { isBuiltInProviderId, providerDescriptor } from '../../execution/provider-catalog.js';
-import type { ConductorEvent } from '../../types/events.js';
+import { LEGACY_TRANSCRIPT_OWNER_STEP, type ConductorEvent, type TranscriptOwnerStep } from '../../types/events.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
+  emitTranscriptHarvest as emitTranscriptHarvestEvent,
   harvestThenRemove,
   harvestTranscripts,
+  transcriptCapture,
   type HarvestTranscriptsOptions,
   type TranscriptHarvestResult,
 } from './transcript-harvest.js';
@@ -23,7 +26,7 @@ export interface ResolveScratchHomeOptions {
   readonly runId: string;
   readonly attempt: number;
   /** Owning conductor step, retained for post-interruption transcript capture. */
-  readonly step?: string;
+  readonly step?: StepName;
   readonly provider: SelfHostProviderId;
   /**
    * Concurrent auxiliary member (e.g. a build_review rubric) sharing this run
@@ -88,7 +91,7 @@ export interface ScratchLease {
   readonly runId: string;
   readonly attempt: number;
   /** Optional so leases written before transcript retention remain readable. */
-  readonly step?: string;
+  readonly step?: StepName;
   readonly provider?: SelfHostProviderId;
   readonly member?: string;
   readonly ownerPid: number;
@@ -479,7 +482,7 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
 
 type InterruptedHarvest = {
   readonly result: TranscriptHarvestResult;
-  readonly step: string;
+  readonly step: TranscriptOwnerStep;
   readonly runId: string;
   readonly attempt: number;
   readonly member?: string;
@@ -503,14 +506,8 @@ async function harvestInterruptedHome(options: {
   const provider = options.lease.provider ?? providerFromAttemptDirectory(options.attemptDirectory);
   if (provider === undefined) return [];
   const descriptor = providerDescriptor(provider);
-  const step = options.lease.step ?? 'unknown-step';
-  const captureName = [
-    `${options.lease.runId}-a${options.lease.attempt}`,
-    options.lease.member,
-    provider,
-  ].filter((part): part is string => part !== undefined).join('-');
-  const path = join('.pipeline', 'transcripts', step, captureName);
-  const destination = join(options.worktreeRoot, path);
+  const step: TranscriptOwnerStep = options.lease.step ?? LEGACY_TRANSCRIPT_OWNER_STEP;
+  const capture = transcriptCapture({ worktreeRoot: options.worktreeRoot, step, runId: options.lease.runId, attempt: options.lease.attempt, ...(options.lease.member === undefined ? {} : { member: options.lease.member }), provider });
   const childPrefixes = descriptor.selfHostShape.isolation === 'claude-config-sandbox'
     ? ['harness-selfbuild-', `self-host-${provider}-`]
     : [`self-host-${provider}-`];
@@ -526,7 +523,7 @@ async function harvestInterruptedHome(options: {
       result: await harvest({
         home: childHome,
         globs: descriptor.selfHostShape.transcripts.globs,
-        destination,
+        destination: capture.destination,
         knownSecrets: collectKnownSecrets(authText, options.daemonBuildToken === undefined ? [] : [options.daemonBuildToken]),
       }),
       step,
@@ -534,7 +531,7 @@ async function harvestInterruptedHome(options: {
       attempt: options.lease.attempt,
       ...(options.lease.member === undefined ? {} : { member: options.lease.member }),
       provider,
-      path,
+      path: capture.path,
     };
   }));
 }
@@ -548,33 +545,11 @@ async function emitTranscriptHarvest(
   events: ConductorEventEmitter | undefined,
   harvest: InterruptedHarvest,
 ): Promise<void> {
-  if (harvest.result.kind === 'captured') {
-    await emitScratchCleanup(events, {
-      type: 'provider_transcripts_captured',
-      step: harvest.step as import('../../types/steps.js').StepName,
-      runId: harvest.runId,
-      attempt: harvest.attempt,
-      ...(harvest.member === undefined ? {} : { member: harvest.member }),
-      provider: harvest.provider,
-      path: harvest.path,
-      files: harvest.result.files,
-      bytes: harvest.result.bytes,
-      interrupted: true,
-      skipped: harvest.result.skipped.length,
-      omittedLines: harvest.result.omittedLines,
-    });
-    return;
-  }
-  await emitScratchCleanup(events, {
-    type: 'provider_transcripts_harvest_failed',
-    step: harvest.step as import('../../types/steps.js').StepName,
-    runId: harvest.runId,
-    attempt: harvest.attempt,
+  await emitTranscriptHarvestEvent(events, {
+    step: harvest.step, runId: harvest.runId, attempt: harvest.attempt,
     ...(harvest.member === undefined ? {} : { member: harvest.member }),
-    provider: harvest.provider,
-    path: harvest.path,
-    error: harvest.result.error,
-  });
+    provider: harvest.provider, path: harvest.path, interrupted: true,
+  }, harvest.result);
 }
 
 function scratchCleanupIdentity(lease: ScratchLease | undefined): {

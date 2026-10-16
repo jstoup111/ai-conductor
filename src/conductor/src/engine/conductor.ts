@@ -10896,6 +10896,8 @@ export class Conductor {
                             }
                           })());
           } finally {
+            // A later loop-level halt is no longer owned by this settled attempt.
+            this.dispatchingStep = undefined;
             buildAttemptSettled = true;
             buildWatcher?.stop();
             stepInFlightTicker?.stop();

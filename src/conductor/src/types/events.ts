@@ -38,6 +38,10 @@ import type { HostState, RoundId, RouteKind } from '../engine/routing/route-type
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Legacy leases written before a conductor step was recorded own this bucket. */
+export const LEGACY_TRANSCRIPT_OWNER_STEP = 'unknown-step' as const;
+export type TranscriptOwnerStep = StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
+
 /** Closed disposition of pull-request publication for a completed run. */
 export type RunPrDisposition = 'opened' | 'none' | 'unrecorded';
 
@@ -1144,7 +1148,7 @@ type ConductorEventBody =
   | {
       /** Allowlisted provider transcripts were captured before a scratch home was retired. */
       type: 'provider_transcripts_captured';
-      step: StepName;
+      step: TranscriptOwnerStep;
       runId: string;
       attempt: number;
       member?: string;
@@ -1159,7 +1163,7 @@ type ConductorEventBody =
   | {
       /** Provider transcript capture failed, but scratch-home retirement continued. */
       type: 'provider_transcripts_harvest_failed';
-      step: StepName;
+      step: TranscriptOwnerStep;
       runId: string;
       attempt: number;
       member?: string;

@@ -13,7 +13,7 @@ async function capture(
   name: string,
   provider: 'claude' | 'codex' | 'pi',
   lines: readonly string[],
-  capturedAt: number,
+  capturedAt: string,
 ): Promise<string> {
   if (!repo) throw new Error('repo not initialized');
   const relative = `.pipeline/transcripts/build/${name}`;
@@ -25,7 +25,7 @@ async function capture(
   await writeFile(session, lines.join('\n'));
   const events = [
     { type: 'provider_transcripts_captured', ts: capturedAt, step: 'build', runId: name, attempt: 1, member: `${provider}-member`, provider, path: relative, files: 1, bytes: 1, interrupted: provider === 'pi', skipped: 0, omittedLines: 0 },
-    { type: 'provider_transcripts_retained', ts: capturedAt + 1, path: relative },
+    { type: 'provider_transcripts_retained', ts: capturedAt, path: relative },
   ];
   await mkdir(join(repo, '.worktrees', slug, '.pipeline'), { recursive: true });
   await writeFile(join(repo, '.worktrees', slug, '.pipeline', 'events.jsonl'), `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, { flag: 'a' });
@@ -72,9 +72,10 @@ afterEach(async () => {
 describe('ai-conductor transcripts', () => {
   it('lists retained captures newest first with their event-ledger identity', async () => {
     repo = await mkdtemp(join(tmpdir(), 'transcripts-cli-'));
-    const claude = await capture('claude-capture', 'claude', [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Claude final' }] } })], 10);
-    const codex = await capture('codex-capture', 'codex', [JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Codex final' }] } })], 30);
-    const pi = await capture('pi-capture', 'pi', [JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Pi final' }] } })], 20);
+    // Persist the newest capture first to prove ordering follows ISO capture time, not line order.
+    const codex = await capture('codex-capture', 'codex', [JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Codex final' }] } })], '2026-10-14T00:00:30.000Z');
+    const claude = await capture('claude-capture', 'claude', [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Claude final' }] } })], '2026-10-14T00:00:10.000Z');
+    const pi = await capture('pi-capture', 'pi', [JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Pi final' }] } })], '2026-10-14T00:00:20.000Z');
 
     const result = await run([]);
 
@@ -94,7 +95,7 @@ describe('ai-conductor transcripts', () => {
     ['pi', JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Pi final' }] } })],
   ] as const)('prints the final %s assistant message and sanitizes it', async (provider, line) => {
     repo = await mkdtemp(join(tmpdir(), 'transcripts-cli-'));
-    const path = await capture(`${provider}-capture`, provider, [line, '{malformed', 'token=abc123'], 10);
+    const path = await capture(`${provider}-capture`, provider, [line, '{malformed', 'token=abc123'], '2026-10-14T00:00:10.000Z');
 
     const result = await run(['--show', path]);
 
@@ -121,9 +122,9 @@ describe('ai-conductor transcripts', () => {
 
   it('rejects empty and assistant-free captures while redacting a hand-placed token without writing', async () => {
     repo = await mkdtemp(join(tmpdir(), 'transcripts-cli-'));
-    const empty = await capture('empty-capture', 'codex', [], 10);
-    const noAssistant = await capture('no-assistant-capture', 'pi', [JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'question' }] } })], 20);
-    const token = await capture('token-capture', 'claude', [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'token=abc123' }] } })], 30);
+    const empty = await capture('empty-capture', 'codex', [], '2026-10-14T00:00:10.000Z');
+    const noAssistant = await capture('no-assistant-capture', 'pi', [JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'question' }] } })], '2026-10-14T00:00:20.000Z');
+    const token = await capture('token-capture', 'claude', [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'token=abc123' }] } })], '2026-10-14T00:00:30.000Z');
     const worktree = join(repo, '.worktrees', slug);
     const before = await snapshot(worktree);
 
