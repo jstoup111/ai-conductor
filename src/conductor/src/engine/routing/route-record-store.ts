@@ -25,11 +25,23 @@ export type WriteRouteRecordResult = { readonly kind: 'updated' } | { readonly k
 export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { readonly kind: 'unavailable' };
 
 const ZERO_SHA = '0'.repeat(40);
+
+function isFeatureBranchRef(ref: string): boolean {
+  return /^refs\/heads\/feat\/(?:c[1-9]\/|daemon-)[a-z0-9][a-z0-9-]*$/.test(ref);
+}
+
+function isRejectedPinRef(slug: string, ref: string): boolean {
+  const escapedSlug = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^refs/conductor/${escapedSlug}/rejected/r[1-9][0-9]*/[1-9][0-9]*$`).test(ref);
+}
 export type RoutingTransactionOp =
   | { readonly kind: 'create-record'; readonly record: RouteRecord }
   | { readonly kind: 'update-record'; readonly previous: StoredRouteRecord; readonly record: RouteRecord }
   | { readonly kind: 'delete-record'; readonly previous: StoredRouteRecord }
-  | { readonly kind: 'create-marker'; readonly marker: RepairMarker };
+  | { readonly kind: 'create-marker'; readonly marker: RepairMarker }
+  | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
+  | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
+  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
@@ -142,6 +154,17 @@ export async function writeRoutingTransaction(
           lines.push(`update ${repairMarkerRefFor(slug)} ${blob} ${ZERO_SHA}`);
           break;
         }
+        case 'update-branch':
+          if (!isFeatureBranchRef(op.ref)) return { kind: 'unavailable' };
+          lines.push(`update ${op.ref} ${op.new} ${op.old}`);
+          break;
+        case 'create-pin':
+          if (!isRejectedPinRef(slug, op.ref)) return { kind: 'unavailable' };
+          lines.push(`update ${op.ref} ${op.new} ${ZERO_SHA}`);
+          break;
+        case 'update-marker':
+          lines.push(`update ${repairMarkerRefFor(slug)} ${op.new} ${op.old}`);
+          break;
       }
     }
     // Keep the ordinary record update first for compatibility with Git's
