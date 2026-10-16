@@ -14,13 +14,23 @@ const routeRecord = {
   roundId: 'r1',
   kind: 'audit',
   phase: 'open',
-  items: [{ findingId: 'finding-1', kind: 'audit', owner: 1, host: 2, reason: 'task ownership', fallback: [3] }],
+  items: [{
+    findingId: 'finding-1', kind: 'audit', owner: 1, host: 2, reason: 'task ownership', fallback: [3],
+    taskIds: ['T1'],
+    obligation: { branch: 'feat/c2/demo', head: 'a'.repeat(40), tree: 'b'.repeat(40) },
+  }],
   allocation: {
     2: { remTaskIds: ['rem-4'], blockBodies: ['### Task 4\n'] },
   },
   hosts: { 1: 'restacked', 2: 'repairing', 3: 'pending' },
   currentHostIndex: 1,
-  receipt: { settlementId: 'settlement-1' },
+  receipt: {
+    laps: { prd_audit: 1 }, growth: 2, taskless: { manual_test: 1 }, echo: { 'lint-docs': 3 },
+    settlementId: 'settlement-1', acks: { 2: true },
+  },
+  entry: { pinnedBase: 'c'.repeat(40), tree: 'd'.repeat(40) },
+  fallback: [{ from: 1, to: 2, evidence: ['src/b.ts'], branch: 'feat/c1/demo', head: 'e'.repeat(40) }],
+  reroute: { sourceBranch: 'feat/c1/demo', rejectedTip: 'f'.repeat(40), resetTip: 'a'.repeat(40), destination: 2 },
   outbox: [{
     eventId: 'event-1', occurredAt: '2026-10-12T00:00:00.000Z',
     event: { type: 'routed_repair_phase', eventId: 'event-1', occurredAt: '2026-10-12T00:00:00.000Z' },
@@ -37,8 +47,29 @@ describe('routed repair durable record parsers', () => {
     }
   });
 
-  it('parses a route record carrying every declared field', () => {
+  it('round-trips the typed settled receipt, entry pin, obligation, fallback and reroute state', () => {
     expect(parseRouteRecord(JSON.stringify(routeRecord))).toEqual(routeRecord);
+  });
+
+  it('normalizes the legacy empty receipt as an unsettled receipt with zero charges', () => {
+    const unsettled = { ...routeRecord, receipt: {} };
+    expect(parseRouteRecord(JSON.stringify(unsettled))?.receipt).toEqual({
+      laps: {}, growth: 0, taskless: {}, echo: {}, acks: {},
+    });
+  });
+
+  it('fails closed on malformed receipts, existing-task bindings without ids, and invalid obligation branches', () => {
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { laps: 'x' } }))).toBeUndefined();
+
+    const existingWithoutTaskIds = structuredClone(routeRecord);
+    const existing = existingWithoutTaskIds.items[0]! as Record<string, unknown>;
+    delete existing.taskIds;
+    existing.restage = false;
+    expect(parseRouteRecord(JSON.stringify(existingWithoutTaskIds))).toBeUndefined();
+
+    const invalidBranch = structuredClone(routeRecord);
+    (invalidBranch.items[0]!.obligation as Record<string, unknown>).branch = 'feat/../x';
+    expect(parseRouteRecord(JSON.stringify(invalidBranch))).toBeUndefined();
   });
 
   it('round-trips routed rationale, restage state, and host retry hints', () => {
@@ -46,7 +77,7 @@ describe('routed repair durable record parsers', () => {
     const item = (enriched.items as Array<Record<string, unknown>>)[0]!;
     const allocation = enriched.allocation as Record<string, Record<string, unknown>>;
     item.rationale = 'implements D2';
-    item.restage = false;
+    item.restage = true;
     allocation['2']!.retryHint = 'manual_test: FAIL';
     expect(parseRouteRecord(JSON.stringify(enriched))).toEqual(enriched);
 
