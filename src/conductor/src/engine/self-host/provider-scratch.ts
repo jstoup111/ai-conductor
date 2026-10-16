@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import type { StepName } from '../../types/steps.js';
 import type { SelfHostProviderId } from './provider-home.js';
 import { isBuiltInProviderId, providerDescriptor } from '../../execution/provider-catalog.js';
+import { isStepName } from '../execution-identity.js';
 import { LEGACY_TRANSCRIPT_OWNER_STEP, type ConductorEvent, type TranscriptOwnerStep } from '../../types/events.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
@@ -538,7 +539,13 @@ async function harvestInterruptedHome(options: {
 
 function providerFromAttemptDirectory(attemptDirectory: string): SelfHostProviderId | undefined {
   const candidate = attemptDirectory.slice(attemptDirectory.lastIndexOf('-') + 1);
-  return isBuiltInProviderId(candidate) ? candidate as SelfHostProviderId : undefined;
+  return isSelfHostProviderId(candidate) ? candidate : undefined;
+}
+
+function isSelfHostProviderId(value: unknown): value is SelfHostProviderId {
+  return typeof value === 'string'
+    && isBuiltInProviderId(value)
+    && providerDescriptor(value).capabilities.selfHost === true;
 }
 
 async function emitTranscriptHarvest(
@@ -627,8 +634,8 @@ function isScratchLease(value: unknown): value is ScratchLease {
     typeof lease.featureSlug === 'string' &&
     typeof lease.runId === 'string' &&
     typeof lease.attempt === 'number' &&
-    (lease.step === undefined || typeof lease.step === 'string') &&
-    (lease.provider === undefined || typeof lease.provider === 'string') &&
+    (lease.step === undefined || isStepName(lease.step)) &&
+    (lease.provider === undefined || isSelfHostProviderId(lease.provider)) &&
     (lease.member === undefined || typeof lease.member === 'string') &&
     typeof lease.ownerPid === 'number' &&
     typeof lease.startedAt === 'string';

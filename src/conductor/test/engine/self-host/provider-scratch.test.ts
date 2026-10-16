@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, write
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as providerCatalog from '../../../src/execution/provider-catalog.js';
 import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
 import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -345,6 +346,26 @@ describe('provider scratch homes', () => {
     };
 
     await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toMatchObject({ kind: 'present' });
+  });
+
+  it.each([
+    ['step', 'bogus'],
+    ['provider', 'bogus'],
+  ])('rejects a lease with an out-of-domain %s identity', async (field, value) => {
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => JSON.stringify({
+        repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 2,
+        step: 'build', provider: 'codex', ownerPid: 1234, startedAt: '2026-08-11T12:34:56.000Z',
+        [field]: value,
+      }),
+      readdir: async () => [],
+      rm: async () => {},
+      rmdir: async () => {},
+    };
+
+    await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toStrictEqual({ kind: 'incomplete' });
   });
 
   it('serializes only scratch-home identity fields into an owner lease', async () => {
@@ -692,6 +713,34 @@ describe('provider scratch homes', () => {
       await expect(readdir(join(worktreeRoot, '.pipeline', 'transcripts'))).rejects.toMatchObject({ code: 'ENOENT' });
       expect(captures).toStrictEqual([]);
     } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['step', 'bogus'],
+    ['provider', 'bogus'],
+  ])('does not harvest or select a provider for a dead lease with an out-of-domain %s', async (field, value) => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-invalid-lease-'));
+    const home = join(worktreeRoot, '.daemon', 'scratch', 'R', '1-codex');
+    const harvest = vi.fn(async () => ({ kind: 'captured' as const, files: 0, bytes: 0, skipped: [], omittedLines: 0 }));
+    const descriptor = vi.spyOn(providerCatalog, 'providerDescriptor');
+
+    try {
+      await mkdir(join(home, 'self-host-codex-invalid', 'sessions'), { recursive: true });
+      await writeFile(join(home, 'owner.json'), JSON.stringify({
+        repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1,
+        step: 'build', provider: 'codex', ownerPid: 1001, startedAt: '2026-08-11T12:34:56.000Z',
+        [field]: value,
+      }));
+
+      await expect(sweepScratch({ worktreeRoot, ownerLiveness: () => 'dead', harvest }))
+        .resolves.toStrictEqual([{ kind: 'retained', home, reason: 'incomplete-lease' }]);
+
+      expect(harvest).not.toHaveBeenCalled();
+      expect(descriptor).not.toHaveBeenCalled();
+    } finally {
+      descriptor.mockRestore();
       await rm(worktreeRoot, { recursive: true, force: true });
     }
   });
