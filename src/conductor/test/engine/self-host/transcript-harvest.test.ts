@@ -279,6 +279,27 @@ describe('harvestTranscripts', () => {
     }
   });
 
+  it('fails and removes the partial destination when a target transcript already exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'transcript-harvest-collision-'));
+    const home = join(root, 'home');
+    const destination = join(root, 'destination');
+    await mkdir(join(home, 'projects', 'w'), { recursive: true });
+    await mkdir(join(destination, 'projects', 'w'), { recursive: true });
+    await Promise.all([
+      writeFile(join(home, 'projects', 'w', 's.jsonl'), '{"message":"source"}\n'),
+      writeFile(join(destination, 'projects', 'w', 's.jsonl'), '{"message":"existing"}\n'),
+    ]);
+
+    try {
+      await expect(harvestTranscripts({
+        home, globs: ['projects/**/*.jsonl'], destination, knownSecrets: [],
+      })).resolves.toMatchObject({ kind: 'failed', error: 'transcript destination already exists: projects/w/s.jsonl' });
+      await expect(access(destination)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('reports harvest results before removing the provider home', async () => {
     const calls: string[] = [];
 

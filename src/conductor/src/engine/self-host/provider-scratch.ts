@@ -505,7 +505,7 @@ async function harvestInterruptedHome(options: {
   // provider-home contents, so preserve their existing cleanup-only boundary.
   if (!options.useProductionFilesystem && options.harvest === undefined) return [];
 
-  const provider = options.lease.provider ?? providerFromAttemptDirectory(options.attemptDirectory);
+  const provider = options.lease.provider ?? providerFromAttemptDirectory(options.attemptDirectory, options.lease.attempt);
   if (provider === undefined) return [];
   const descriptor = providerDescriptor(provider);
   const step: TranscriptOwnerStep = options.lease.step ?? LEGACY_TRANSCRIPT_OWNER_STEP;
@@ -517,30 +517,57 @@ async function harvestInterruptedHome(options: {
     .filter((entry) => entry.isDirectory() && childPrefixes.some((prefix) => entry.name.startsWith(prefix)));
   const harvest = options.harvest ?? harvestTranscripts;
 
-  return Promise.all(children.map(async (child) => {
+  if (children.length === 0) return [];
+
+  let files = 0;
+  let bytes = 0;
+  let omittedLines = 0;
+  const skipped: string[] = [];
+  for (const child of children) {
     const childHome = join(options.home, child.name);
     const authText = await fsp.readFile(join(childHome, descriptor.selfHostShape.selectedAuthPath), 'utf8')
       .catch(() => '');
-    return {
-      result: await harvest({
+    const result = await harvest({
         home: childHome,
         globs: descriptor.selfHostShape.transcripts.globs,
         destination: capture.destination,
         knownSecrets: collectKnownSecrets(authText, options.daemonBuildToken === undefined ? [] : [options.daemonBuildToken]),
-      }),
-      step,
-      runId: options.lease.runId,
-      attempt: options.lease.attempt,
-      ...(options.lease.member === undefined ? {} : { member: options.lease.member }),
-      provider,
-      path: capture.path,
-    };
-  }));
+    });
+    if (result.kind === 'failed') {
+      return [{
+        result,
+        step,
+        runId: options.lease.runId,
+        attempt: options.lease.attempt,
+        ...(options.lease.member === undefined ? {} : { member: options.lease.member }),
+        provider,
+        path: capture.path,
+      }];
+    }
+    files += result.files;
+    bytes += result.bytes;
+    omittedLines += result.omittedLines;
+    skipped.push(...result.skipped);
+  }
+
+  return [{
+    result: { kind: 'captured', files, bytes, skipped, omittedLines },
+    step,
+    runId: options.lease.runId,
+    attempt: options.lease.attempt,
+    ...(options.lease.member === undefined ? {} : { member: options.lease.member }),
+    provider,
+    path: capture.path,
+  }];
 }
 
-function providerFromAttemptDirectory(attemptDirectory: string): SelfHostProviderId | undefined {
-  const candidate = attemptDirectory.slice(attemptDirectory.lastIndexOf('-') + 1);
-  return isSelfHostProviderId(candidate) ? candidate : undefined;
+/** Inverse of resolveScratchHome's `<attempt>-<provider>[-<member>]` leaf. */
+function providerFromAttemptDirectory(attemptDirectory: string, attempt: number): SelfHostProviderId | undefined {
+  const prefix = `${attempt}-`;
+  if (!attemptDirectory.startsWith(prefix)) return undefined;
+  const remainder = attemptDirectory.slice(prefix.length);
+  const providers: readonly SelfHostProviderId[] = ['claude', 'codex', 'pi'];
+  return providers.find((provider) => remainder === provider || remainder.startsWith(`${provider}-`));
 }
 
 function isSelfHostProviderId(value: unknown): value is SelfHostProviderId {
