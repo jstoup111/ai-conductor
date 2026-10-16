@@ -11,7 +11,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import { resolveChildBase } from '../../src/engine/child-cursor.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
-import { createRouteRecord, readRouteRecord, writeRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord, writeRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { resolveBuildReviewExecutionChild } from '../../src/engine/step-runners.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
@@ -84,7 +84,7 @@ async function createRoutedFixture(): Promise<RoutedFixture> {
     ...stored.record,
     phase: 'open',
     hosts: { ...stored.record.hosts, [c1]: 'repairing' },
-    entry: { pinnedBase: parseCommitSha(pinnedBase)!, tree: parseCommitSha(pinnedBase)! },
+    entry: { host: c1, pinnedBase: parseCommitSha(pinnedBase)!, tree: parseCommitSha(pinnedBase)! },
   });
   if (updated.kind !== 'updated') throw new Error(`route record update failed: ${updated.kind}`);
   const marker = await writeRoutingTransaction(root, 'demo', [{ kind: 'create-marker', marker: { host: c1, roundId } }]);
@@ -189,6 +189,37 @@ describe('build_review routed repair base', () => {
       await inputs.sourceMaterialization?.settle('custom');
       await inputs.sourceMaterialization?.finish?.();
     }
+  });
+
+  it('uses the rerouted destination host entry instead of the source host closure', async () => {
+    const fixture = await createRoutedFixture();
+    const gitRunner = makeGitRunner(fixture.root);
+    await git(fixture.root, ['checkout', '-qb', 'feat/c2/demo', fixture.pinnedBase]);
+    await writeFile(join(fixture.root, 'destination.ts'), 'export const destination = true;\n');
+    await git(fixture.root, ['add', 'destination.ts']);
+    await git(fixture.root, ['commit', '-qm', 'destination closure']);
+    const destinationBase = (await git(fixture.root, ['rev-parse', 'HEAD'])).trim();
+    await git(fixture.root, ['update-ref', 'refs/conductor/demo/closed/c2', destinationBase]);
+
+    const stored = await readRouteRecord(fixture.root, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('route record unavailable');
+    const updated = await writeRouteRecord(fixture.root, stored, {
+      ...stored.record,
+      hosts: { [c1]: 'rerouted', [c2]: 'repairing' },
+      currentHostIndex: 1,
+      entry: { host: c2, pinnedBase: parseCommitSha(destinationBase)!, tree: parseCommitSha(destinationBase)! },
+    });
+    if (updated.kind !== 'updated') throw new Error(`route record update failed: ${updated.kind}`);
+    const currentMarker = await readRepairMarker(fixture.root, 'demo');
+    if (currentMarker.kind !== 'marker') throw new Error('repair marker unavailable');
+    const marker = await writeRoutingTransaction(fixture.root, 'demo', [{
+      kind: 'replace-marker', previous: currentMarker, marker: { host: c2, roundId },
+    }]);
+    if (marker.kind !== 'updated') throw new Error(`repair marker update failed: ${marker.kind}`);
+
+    await expect(resolveChildBase(fixture.root, 'demo', c2, { git: gitRunner })).resolves.toEqual({
+      kind: 'routed-repair', child: c2, sha: destinationBase,
+    });
   });
 
   it('keeps N=1 and non-routed child base resolution unchanged', async () => {

@@ -214,7 +214,9 @@ async function bindHostObligations(
   branch: string,
   head: CommitSha,
 ): Promise<{ readonly kind: 'bound'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string }> {
-  if (record.entry === undefined) return { kind: 'refused', detail: 'routing host entry is missing its durable tree baseline' };
+  if (record.entry === undefined || record.entry.host !== input.host) {
+    return { kind: 'refused', detail: `routing host ${input.host} entry is missing its durable tree baseline` };
+  }
   const bindings = new Map<string, RoutedObligation>();
   for (const item of record.items) {
     if (item.host !== input.host || item.taskIds === undefined) continue;
@@ -285,7 +287,7 @@ export async function hostNoOpEvidence(
   host: ChildId,
   git: GitRunner,
 ): Promise<{ readonly headMoved: boolean; readonly treeChanged: boolean }> {
-  if (record.hosts[host] === undefined || record.entry === undefined) {
+  if (record.hosts[host] === undefined || record.entry === undefined || record.entry.host !== host) {
     throw new Error(`routing host ${host} has no entry baseline`);
   }
   const [head, tree] = await Promise.all([gitSha(git, 'HEAD'), gitSha(git, 'HEAD^{tree}')]);
@@ -316,9 +318,9 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
 
   const resolved = await hostTarget(git, input.slug, input.host);
   if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
-  let pinnedBase = stored.record.entry?.pinnedBase;
-  if (stored.record.entry === undefined) {
-    const next = { ...stored.record, entry: { pinnedBase: resolved.pinnedBase, tree: resolved.tree } };
+  let pinnedBase = stored.record.entry?.host === input.host ? stored.record.entry.pinnedBase : undefined;
+  if (stored.record.entry?.host !== input.host) {
+    const next = { ...stored.record, entry: { host: input.host, pinnedBase: resolved.pinnedBase, tree: resolved.tree } };
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
       { kind: 'update-record', previous: stored, record: next },
     ], { git });

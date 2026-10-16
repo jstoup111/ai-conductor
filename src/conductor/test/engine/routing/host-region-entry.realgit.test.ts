@@ -10,6 +10,7 @@ import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { writeFrozenBlocks } from '../../../src/engine/remediation-append.js';
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
+import { completeRerouteSync, rerouteRound } from '../../../src/engine/routing/prerequisite-claim.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
@@ -20,6 +21,7 @@ import { seedTaskStatus } from '../../../src/engine/task-seed.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const child = parseChildId(1)!;
+const child2 = parseChildId(2)!;
 const roundId = parseRoundId('r1')!;
 const planPath = '.docs/plans/demo.md';
 const roots: string[] = [];
@@ -146,6 +148,35 @@ describe('routed host region entry (real local Git)', () => {
     await expect(subject.git(['symbolic-ref', '--short', 'HEAD'])).resolves.toMatchObject({ stdout: 'feat/c1/demo' });
     await expect(readFile(join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8')).resolves.toBe(before);
     await expect(subject.git(['rev-list', '--count', 'HEAD'])).resolves.toMatchObject({ stdout: commits });
+  });
+
+  it('pins the reroute destination against its own closed base, not the source entry', async () => {
+    const subject = await fixture();
+    await subject.git(['checkout', '-qb', 'feat/c2/demo', subject.closure]);
+    await writeFile(join(subject.repo, 'child-2.txt'), 'closed child 2\n');
+    await subject.git(['add', 'child-2.txt']);
+    await subject.git(['commit', '-qm', 'closed child 2']);
+    const closed2 = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await subject.git(['update-ref', closureRefFor('demo', child2), closed2]);
+    await subject.git(['switch', leafBranchFor('demo')]);
+    await mkdir(join(subject.repo, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+
+    await expect(entered(subject)).resolves.toMatchObject({ kind: 'entered', pinnedBase: subject.closure });
+    await expect(rerouteRound({ worktree: subject.repo, slug: 'demo', roundId, from: child, to: child2, evidence: ['child-2'], git: subject.git }))
+      .resolves.toMatchObject({ kind: 'rerouted' });
+    await expect(completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git }))
+      .resolves.toMatchObject({ kind: 'completed' });
+
+    await expect(enterHostRegion({
+      worktree: subject.repo, slug: 'demo', roundId, host: child2,
+      emitter: new ConductorEventEmitter(), git: subject.git, planPath,
+    })).resolves.toMatchObject({ kind: 'entered', pinnedBase: closed2 });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { entry: { host: 2, pinnedBase: closed2 } },
+    });
   });
 
   // Covers: task:48

@@ -226,11 +226,19 @@ export async function rerouteRound(input: RerouteRoundInput): Promise<RerouteRou
   };
   const transitioned = transitionHost(stored, input.from, 'reroute-moved', { credit: false });
   if (transitioned.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} cannot enter reroute-moved` };
+  const hosts = Object.fromEntries(
+    Object.entries({ ...transitioned.record.hosts, ...(transitioned.record.hosts[input.to] === undefined ? { [input.to]: 'pending' as const } : {}) })
+      .sort(([left], [right]) => Number(left) - Number(right)),
+  ) as RouteRecord['hosts'];
+  const currentHostIndex = Object.keys(hosts).map(Number).indexOf(Number(input.to));
+  if (currentHostIndex < 0) return { kind: 'refused', detail: `routing round ${input.roundId} destination is unavailable` };
   const rejectedRef = rejectedPinRefFor(input.slug, input.roundId, Number(input.from));
   let next: RouteRecord = {
     ...transitioned.record,
+    hosts,
     allocation: nextAllocation,
-    currentHostIndex: Number(input.to) - 1,
+    currentHostIndex,
+    entry: undefined,
     items: transitioned.record.items.map((item) => item.host !== input.from ? item : {
       ...item, host: input.to,
       obligation: item.obligation === undefined ? undefined : { ...item.obligation, branch: destinationBranch, head: destinationHead },

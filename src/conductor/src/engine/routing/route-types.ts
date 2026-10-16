@@ -172,6 +172,8 @@ export interface RoutedObligation {
 
 /** The base and tree captured before a host region can mutate its branch. */
 export interface HostEntry {
+  /** The only host permitted to consume this entry baseline. */
+  readonly host: ChildId;
   readonly pinnedBase: CommitSha;
   readonly tree: CommitSha;
 }
@@ -357,10 +359,20 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
   }
   const settlementId = value.settlementId === undefined ? undefined : nonEmptyString(value.settlementId);
   if (value.settlementId !== undefined && settlementId === undefined) return undefined;
-  return {
-    laps, growth, taskless, echo, acks,
-    ...(settlementId === undefined ? {} : { settlementId }),
-  };
+  // Preserve the durable record's serialized field order: route blobs are
+  // compared as bytes by recovery callers as well as parsed structurally.
+  const parsed: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    switch (key) {
+      case 'laps': parsed.laps = laps; break;
+      case 'growth': parsed.growth = growth; break;
+      case 'taskless': parsed.taskless = taskless; break;
+      case 'echo': parsed.echo = echo; break;
+      case 'settlementId': if (settlementId !== undefined) parsed.settlementId = settlementId; break;
+      case 'acks': parsed.acks = acks; break;
+    }
+  }
+  return parsed as RoundReceipt;
 }
 
 /** Mirrors the reject conditions of `git check-ref-format --branch` without a subprocess. */
@@ -374,9 +386,10 @@ function validBranchName(value: unknown): value is string {
 
 function parseHostEntry(value: unknown): HostEntry | undefined {
   if (!isRecord(value)) return undefined;
+  const host = parseChild(value.host);
   const pinnedBase = typeof value.pinnedBase === 'string' ? parseCommitSha(value.pinnedBase) : undefined;
   const tree = typeof value.tree === 'string' ? parseCommitSha(value.tree) : undefined;
-  return pinnedBase && tree ? { pinnedBase, tree } : undefined;
+  return host && pinnedBase && tree ? { host, pinnedBase, tree } : undefined;
 }
 
 function parseRoutedObligation(value: unknown): RoutedObligation | undefined {
@@ -497,7 +510,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const currentHostIndex = value.currentHostIndex;
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
-    || (value.entry !== undefined && !entry) || (fallback?.some((item) => item === undefined) ?? false)
+    || (value.entry !== undefined && (!entry || hosts[entry.host] === undefined)) || (fallback?.some((item) => item === undefined) ?? false)
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)) return undefined;
   const items = value.items.map(parseRoutedItem);
   if (items.some((item) => item === undefined)) return undefined;
