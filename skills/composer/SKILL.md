@@ -1,7 +1,7 @@
 ---
 name: composer
 disable-model-invocation: true
-description: "Interactive, phone-drivable idea→spec loop: hands a raw idea to the right repo, runs the full DECIDE phase there, and opens a spec PR. Use when capturing and routing new work, NOT when building inside one repo (that is plain conduct)."
+description: "Interactive, phone-drivable idea→spec loop: hands a raw idea to the right repo, runs the full DECIDE phase there, and opens a spec PR — or, for an operator-approved minor fix, opens a hotfix PR directly. Use when capturing and routing new work, NOT when building inside one repo (that is plain conduct)."
 enforcement: advisory
 phase: decide
 standalone: true
@@ -39,7 +39,8 @@ for registry reads, guarded commits, PR opening, and daemon nudges, and runs DEC
 ## Boundaries
 
 - **Never build, never merge.** The composer opens spec PRs; the operator merges them; the daemon
-  builds them. Do not run `/pipeline`, `/tdd`, `conduct` (build mode), or `gh pr merge`.
+  builds them. The one build exception is the operator-approved hotfix route (§3b), which still
+  never merges. Do not run `/pipeline`, `/tdd`, `conduct` (build mode), or `gh pr merge`.
 - **Route artifacts to the target repo, never the composer's cwd.** `AuthoringGuard` enforces this.
 - **Author in a per-idea worktree, never the primary checkout.** Authoring, `land`, and `handoff`
   use `<target>/.worktrees/engineer-<slug>`; never fall back to the shared checkout.
@@ -89,6 +90,10 @@ It prints `{ slug, branch, worktreePath, reconcile }` and creates the isolated
 `land`, and `handoff` action. If creation fails, strict-abort with zero mutation to the primary tree;
 report `reconcile` (`created`, `reused`, or `attached`) and refuse a dirty leftover.
 
+Before running DECIDE, read the code the idea touches and screen it against the hotfix eligibility
+conditions in §3b. If every condition holds, propose the hotfix route with its evidence; on explicit
+operator approval follow §3b instead of the DECIDE list below.
+
 From `worktreePath`, run the genuine skills in canonical conduct order, honoring each skill's gates
 and writing the complete build-ready `.docs/` set only inside the worktree:
 
@@ -125,6 +130,50 @@ operator this exact command to run in their own terminal:
 close the issue another way. Without both preconditions, do not use `--resolved-by`
 and do not close anything. End the session after the successful resolved-by action; this path
 authors and lands nothing.
+
+### 3b. Hotfix a minor idea instead of specifying it
+
+An idea that is a few minor edits inside an existing feature does not need a spec and a daemon
+build. The hotfix route makes the fix in the per-idea worktree and opens a code PR directly,
+skipping `land`, `handoff`, and the daemon loop.
+
+**Eligibility — every condition must hold, each stated with its evidence:**
+
+- The work would assess as Small, and the fix is a few localized edits: at most two production
+  files and about 15 changed production lines, forming one logical change, provable with one or
+  two focused tests.
+- It stays inside the existing architecture: no new module, layer, service, dependency, or
+  cross-boundary call; it contradicts no APPROVED ADR or architecture diagram; it needs no new ADR.
+- It changes no contract surface: public API, schema, persisted data format, CLI flags, hook
+  wiring, settings schema, or anything that would need a migration.
+- It needs no product decision: it restores or minimally refines behavior an existing accepted
+  story already intends.
+- It rests on no unconfirmed load-bearing assumption (Correctness & Assumption Gate).
+
+If a condition fails at any point — the diff grows, an ADR conflict appears, or tests reveal wider
+impact — stop, tell the operator, and either run the full DECIDE in the same worktree or abandon.
+
+**Procedure, entirely inside `worktreePath`:**
+
+1. Write one or two focused failing tests for the behavior first, then the minimal fix (`/tdd`),
+   following the target repo's conventions. Needing more tests than that means it is not a hotfix.
+2. Update the stories. Amend in place the accepted `.docs/stories/` file that owns the behavior so
+   its acceptance criteria specify the fixed behavior, keeping `Status: Accepted`. If no story owns
+   it, add `.docs/stories/<slug>.md` with one accepted story. Author no plan, complexity, or track
+   artifact: with no `.docs/plans/` entry the daemon has nothing to dispatch.
+3. Run targeted checks for the changed behavior plus whatever validation the target repo requires
+   for an out-of-lifecycle hotfix. Report exact pass and fail counts; do not publish on a failure.
+4. Commit the code, tests, and story update together on the worktree branch with a local
+   `git commit`.
+5. Publish. `land` rejects a hotfix (no plan) and `handoff` refuses one (no `land` provenance
+   marker), so push the branch and open the PR from the worktree with `gh pr create --base main`,
+   using `/pr` for the title and body. The body carries `Closes <owner/repo#N>` for an intake idea
+   (this PR is the implementation), the target repo's release-disposition metadata when it requires
+   one, and the eligibility evidence. Never merge and do not nudge the daemon.
+6. For an intake idea, record delivery with
+   `ai-conductor compose resolve <owner/repo#N> --pr-url <url> --branch <branch>`.
+7. Remove only this idea's worktree with `git worktree remove <worktreePath>`; keep it on any
+   failure. Report `✅ Hotfix PR opened for <slug> → <PR url>.` and end the session as in §6.
 
 ### 4. Land the authored spec
 
@@ -164,7 +213,8 @@ Report `✅ Spec delivered for <slug> → <PR url / branch>.` Do not ask for ano
 
 ## Non-negotiable gates
 
-- No idea reaches a build without an operator-merged spec PR.
+- No idea reaches a build without an operator-merged spec PR, except an operator-approved hotfix
+  (§3b) that meets every eligibility condition and ships as a code PR the operator merges.
 - No authoring subprocess or Node readline REPL; routing stays in chat.
 - Cross-repo isolation: authoring repo A never mutates repo B.
 - Per-idea worktree isolation: remove on success, keep on failure, and strict-abort if unavailable.
@@ -183,6 +233,8 @@ Report `✅ Spec delivered for <slug> → <PR url / branch>.` Do not ask for ano
 - [ ] `handoff` reported its guarded publication outcome; no host issued a raw remote Git or
       GitHub write before it.
 - [ ] The spec PR (or local fallback) was delivered, and nothing built or merged.
+- [ ] A hotfix (§3b) had explicit operator approval, met every eligibility condition, updated the
+      owning accepted story, passed its checks, and opened a PR without merging or nudging the daemon.
 - [ ] The daemon received only the fire-and-forget `ensureRunning` nudge.
 - [ ] Sibling repos left byte-for-byte unchanged.
 <!-- /ai-conductor:session-command-context -->

@@ -201,6 +201,25 @@ Do not hand-write stub or DRAFT artifacts. See [steps reference](../reference/st
 per-step tier-skip and enforcement table, and [SDLC phases](../explanation/sdlc-phases.md) for why
 the order is fixed.
 
+### Hotfix route: skip the spec for a minor fix
+
+Before running DECIDE, the composer reads the code the idea touches. When the idea is a few minor
+edits inside an existing feature, it proposes a hotfix instead of a spec and waits for your
+approval. Every condition must hold:
+
+- The work is tiny: one logical change of at most two production files and about 15 changed
+  production lines, provable with one or two focused tests.
+- It stays inside the existing architecture and every APPROVED ADR, and needs no new ADR.
+- It changes no API, schema, data format, CLI, hook, or settings contract.
+- It refines behavior an existing accepted story already intends.
+
+On approval the composer writes a failing test, makes the fix, and amends the owning accepted story
+in the worktree. It then runs the target repo's checks, commits, and opens a PR with `gh pr create`.
+For an intake idea it also runs `ai-conductor compose resolve <ref> --pr-url <url>`. It skips
+Steps 5 and 6 entirely: no plan is landed, so the daemon never dispatches the work. You review and
+merge the PR yourself. If the fix grows past these limits, the composer stops and returns to full
+DECIDE.
+
 ## Step 5 — Land the spec
 
 ```bash
