@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:21, task:rem-as-built-rem-vg-ab1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm,} from 'fs/promises';
 import { join } from 'path';
@@ -4812,15 +4812,21 @@ describe('engine/conductor', () => {
     }
   });
 
-  it('writes the authoritative lease before cleanup on the legacy Claude self-host path', async () => {
+  it('captures same-session legacy Claude dispatches in distinct attempt directories', async () => {
     await mkdir(join(dir, 'skills'), { recursive: true });
     const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
-    const leasePath = join(dir, '.daemon', 'scratch', 'legacy-held-run', '1-claude', 'owner.json');
-    let lease: unknown;
+    const captures: string[] = [];
+    events.on('provider_transcripts_captured', (event) => {
+      if (event.type === 'provider_transcripts_captured') captures.push(event.path);
+    });
     const runner: StepRunner = {
       selfHostRunId: () => 'legacy-held-run',
       run: vi.fn(async () => {
-        lease = JSON.parse(await readFile(leasePath, 'utf8'));
+        const configDir = process.env.CLAUDE_CONFIG_DIR;
+        expect(configDir).toBeDefined();
+        const transcript = join(configDir!, 'projects', 'legacy-project', 'session.jsonl');
+        await mkdir(join(configDir!, 'projects', 'legacy-project'), { recursive: true });
+        await writeFile(transcript, '{"type":"assistant","message":"legacy dispatch"}\n');
         return { success: true };
       }),
     };
@@ -4849,14 +4855,18 @@ describe('engine/conductor', () => {
     await (conductor as unknown as {
       runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
     }).runSelfBuildDispatch('build', {} as ConductState);
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
 
-    expect(lease).toMatchObject({
-      repository: dir,
-      featureSlug: 'legacy-self-host-identity',
-      runId: 'legacy-held-run',
-      attempt: 1,
-    });
-    await expect(readFile(leasePath, 'utf8')).rejects.toThrow();
+    expect(captures).toEqual([
+      join('.pipeline', 'transcripts', 'build', 'legacy-held-run-a1-claude'),
+      join('.pipeline', 'transcripts', 'build', 'legacy-held-run-a2-claude'),
+    ]);
+    for (const capture of captures) {
+      await expect(readFile(join(dir, capture, 'projects', 'legacy-project', 'session.jsonl'), 'utf8'))
+        .resolves.toContain('legacy dispatch');
+    }
   });
 
   it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {
