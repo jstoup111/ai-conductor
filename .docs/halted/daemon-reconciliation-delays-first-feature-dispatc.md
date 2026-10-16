@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-16T12:03:31.880Z
 Slug: daemon-reconciliation-delays-first-feature-dispatc
 Class: needs-human
 Halting step: unknown
