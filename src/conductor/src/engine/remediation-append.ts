@@ -24,8 +24,12 @@
 //                                     mutated; the new content gets an ordinal
 //                                     suffix (`…-2`, `…-3`, …) instead.
 
+import { readFile, writeFile } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
+
 import type { RemediationGap } from './artifacts.js';
 import { parseChildId, type ChildId } from './child-context.js';
+import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import type { GitRunner } from './rebase.js';
 import type { FrozenAllocation, FrozenHostAllocation } from './routing/route-types.js';
 
@@ -107,6 +111,21 @@ export interface AllocateFrozenBlocksInput {
   /** Read-only Git seam used only for `git show <branch>:<planPath>`. */
   readonly git: GitRunner;
 }
+
+export interface WriteFrozenBlocksInput {
+  readonly worktree: string;
+  readonly planPath: string;
+  readonly roundId: string;
+  readonly host: ChildId;
+  readonly allocation: FrozenHostAllocation;
+  readonly slug: string;
+  readonly git: GitRunner;
+}
+
+export type WriteFrozenBlocksResult =
+  | { readonly kind: 'written' }
+  | { readonly kind: 'noop' }
+  | { readonly kind: 'refused'; readonly detail: string };
 
 /** Sanitize a raw segment into the H9 grammar; empty result is a caller error. */
 function sanitizeSegment(raw: string, what: string): string {
@@ -226,6 +245,82 @@ function nextFrozenId(canonical: string, used: Set<string>): string {
 
 function appendRouteLines(block: string, host: number, roundId: string): string {
   return `${block.replace(/\n$/, '')}\n**Child:** ${host}\n**Round:** ${roundId}\n`;
+}
+
+const TASK_BLOCK_HEADER = /^### Task ([A-Za-z0-9._-]+):.*$/gm;
+
+function canonicalFrozenBlock(block: string): string {
+  return block.replace(/\r\n/g, '\n').replace(/\n+$/, '\n');
+}
+
+function planTaskBlocks(planText: string): Map<string, string> {
+  const headers = [...planText.matchAll(TASK_BLOCK_HEADER)];
+  const blocks = new Map<string, string>();
+  for (const [index, header] of headers.entries()) {
+    const id = header[1]!;
+    const start = header.index!;
+    const end = headers[index + 1]?.index ?? planText.length;
+    blocks.set(id, canonicalFrozenBlock(planText.slice(start, end)));
+  }
+  return blocks;
+}
+
+/**
+ * Append a routed host's admission-time frozen blocks without regenerating
+ * their body.  A retry accepts only the allocation's exact canonical block;
+ * ordinary remediation appends retain their separate title-drift semantics.
+ */
+export async function writeFrozenBlocks(input: WriteFrozenBlocksInput): Promise<WriteFrozenBlocksResult> {
+  const bodies = new Map<string, string>();
+  for (const body of input.allocation.blockBodies) {
+    const match = /^### Task ([A-Za-z0-9._-]+):/m.exec(body);
+    const id = match?.[1];
+    if (!id || !input.allocation.remTaskIds.includes(id) || bodies.has(id)) {
+      return { kind: 'refused', detail: `frozen remediation block ${id ?? '(unreadable)'} is absent from host ${input.host}'s allocation` };
+    }
+    bodies.set(id, body);
+  }
+  if (bodies.size !== input.allocation.remTaskIds.length || input.allocation.remTaskIds.some((id) => !bodies.has(id))) {
+    return { kind: 'refused', detail: `frozen remediation allocation for host ${input.host} has unreadable task ids` };
+  }
+
+  const absolutePlanPath = isAbsolute(input.planPath) ? input.planPath : join(input.worktree, input.planPath);
+  let planText: string;
+  try {
+    planText = await readFile(absolutePlanPath, 'utf8');
+  } catch {
+    return { kind: 'refused', detail: `cannot read routed host plan ${input.planPath}` };
+  }
+  const existing = planTaskBlocks(planText);
+  const missing: string[] = [];
+  for (const [id, body] of bodies) {
+    const present = existing.get(id);
+    if (present === undefined) {
+      missing.push(body);
+    } else if (present !== canonicalFrozenBlock(body)) {
+      return { kind: 'refused', detail: `frozen remediation block ${id} differs from its stored allocation` };
+    }
+  }
+  if (missing.length === 0) return { kind: 'noop' };
+
+  const separator = planText.endsWith('\n') ? '\n' : '\n\n';
+  const next = planText + separator + missing.join('');
+  await writeFile(absolutePlanPath, next, 'utf8');
+  const committed = await commitEngineChangeWhenStacked({
+    worktree: input.worktree,
+    slug: input.slug,
+    pathspec: [input.planPath],
+    message: `chore(plan): append routed remediation for ${input.roundId}\n\nRound: ${input.roundId}`,
+  });
+  if (committed?.kind === 'written' || committed?.kind === 'noop') return { kind: 'written' };
+
+  await writeFile(absolutePlanPath, planText, 'utf8');
+  return {
+    kind: 'refused',
+    detail: committed === undefined
+      ? 'routed frozen remediation requires durable child state'
+      : `cannot commit routed frozen remediation: ${committed.reason}`,
+  };
 }
 
 /**

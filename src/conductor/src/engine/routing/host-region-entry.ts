@@ -1,4 +1,7 @@
 import type { ConductorEventEmitter } from '../../ui/events.js';
+import { resolveFeaturePlanPath } from '../artifacts.js';
+import { writeFrozenBlocks } from '../remediation-append.js';
+import { seedTaskStatus } from '../task-seed.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { createRoutedConductStateStore } from '../conduct-state-store.js';
 import type { ChildId } from '../child-context.js';
@@ -7,7 +10,8 @@ import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { switchToChild, type ChildLifecycleTarget } from '../child-lifecycle.js';
 import type { StateMutation } from '../conduct-state-store.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
-import { readRouteRecord, writeRoutingTransaction } from './route-record-store.js';
+import { grantRoutedRepairCredit } from './round-receipt.js';
+import { readRouteRecord, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
 import { assertNever, type RouteKind, type RoundId } from './route-types.js';
 import type { ConductState } from '../../types/state.js';
@@ -23,6 +27,8 @@ export interface EnterHostRegionInput {
   readonly roundId: RoundId;
   readonly host: ChildId;
   readonly emitter: ConductorEventEmitter;
+  /** The conductor-resolved plan path; direct callers may use feature resolution. */
+  readonly planPath?: string;
   readonly git?: GitRunner;
 }
 
@@ -114,9 +120,8 @@ async function restageHostRegion(worktree: string, host: ChildId, kind: RouteKin
 
 /**
  * Pins and enters the selected routed host exactly once before its BUILD
- * region can run. Appending frozen blocks and moving to `repairing` belong to
- * the following task, so this boundary intentionally leaves an admitted host
- * admitted after its audit restage.
+ * region can run.  Frozen blocks are committed before the host becomes
+ * repairing, so a resume cannot dispatch an unseeded, uncommitted repair.
  */
 export async function enterHostRegion(input: EnterHostRegionInput): Promise<EnterHostRegionResult> {
   const git = input.git ?? makeGitRunner(input.worktree);
@@ -148,9 +153,51 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
 
   const switched = await verifyOrSwitch(input, resolved.target, git);
   if (switched.kind === 'refused') return switched;
-  if (stored.record.hosts[input.host] === 'repairing') return { kind: 'resume', pinnedBase: pinnedBase! };
+  if (stored.record.hosts[input.host] === 'repairing') {
+    const credit = await grantRoutedRepairCredit({
+      projectRoot: input.worktree,
+      child: input.host,
+      roundId: input.roundId,
+    });
+    return credit.kind === 'refused'
+      ? { kind: 'refused', detail: `cannot reconcile routed repair credit: ${credit.detail}` }
+      : { kind: 'resume', pinnedBase: pinnedBase! };
+  }
 
   const restaged = await restageHostRegion(input.worktree, input.host, stored.record.kind);
   if (restaged.kind === 'refused') return restaged;
+
+  const planPath = input.planPath ?? await resolveFeaturePlanPath(input.worktree, input.slug);
+  if (!planPath) return { kind: 'refused', detail: `cannot resolve routed host plan for ${input.slug}` };
+  const allocation = stored.record.allocation[input.host];
+  if (!allocation) return { kind: 'refused', detail: `routing round ${input.roundId} has no frozen allocation for host ${input.host}` };
+  const appended = await writeFrozenBlocks({
+    worktree: input.worktree,
+    planPath,
+    roundId: input.roundId,
+    host: input.host,
+    allocation,
+    slug: input.slug,
+    git,
+  });
+  if (appended.kind === 'refused') return appended;
+
+  await seedTaskStatus(input.worktree, planPath, undefined, {
+    childBase: { slug: input.slug, child: input.host },
+  });
+  stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
+  const repairing = transitionHost(stored, input.host, 'repairing', { credit: true });
+  if (repairing.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
+  const transitioned = await writeRoutingTransaction(input.worktree, input.slug, [
+    { kind: 'update-record', previous: stored, record: repairing.record },
+  ], { git });
+  if (transitioned.kind !== 'updated') return { kind: 'refused', detail: `cannot enter repairing: ${transitioned.kind}` };
+  const credit = await grantRoutedRepairCredit({
+    projectRoot: input.worktree,
+    child: input.host,
+    roundId: input.roundId,
+  });
+  if (credit.kind === 'refused') return { kind: 'refused', detail: `cannot grant routed repair credit: ${credit.detail}` };
   return { kind: 'entered', pinnedBase: pinnedBase! };
 }
