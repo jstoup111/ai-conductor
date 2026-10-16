@@ -137,6 +137,19 @@ describe('custom-v1 strict result parsing', () => {
     expect(parseBuildReviewCustomReviewerPayload({ kind: 'custom-findings', version: 'v1', findings })).toBeUndefined();
   });
 
+  it('discards a non-null flat-schema requirement beside custom findings', () => {
+    // Codex filled the unsupported-policy sibling on a real eventSpine finding.
+    const finding = {
+      concernId: 'stamped-artifact-field', summary: 'A stamped trailer is read back as coordination.',
+      evidenceLocations: ['src/a.ts:1'],
+      sourceRegions: [{ path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'a'.repeat(64)}`, display: 'a' }],
+    };
+    const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
+      kind: 'custom-findings', version: 'v1', findings: [{ ...finding, confidence: null }], requirement: 'Event-spine policy contract: v1',
+    });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v1', findings: [finding] });
+  });
+
   it('preserves unsupported-policy without inventing findings', () => {
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
       kind: 'unsupported-policy', version: null, findings: null, requirement: 'Needs network access',

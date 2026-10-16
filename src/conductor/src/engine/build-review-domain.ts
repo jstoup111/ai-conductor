@@ -692,6 +692,8 @@ function hasDuplicateJudgedFindingIdentity(findings: readonly BuildReviewFinding
 export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; const contractVersion = parseBuildReviewRubricContractVersion(source?.contractVersion); if ((rubric === 'security' || rubric === 'implementationQuality') && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security' && rubric !== 'implementationQuality') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !contractVersion || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || hasDuplicateJudgedFindingIdentity(findings as BuildReviewFinding[], contractVersion) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && (source.reason === 'disabled' || (source.rubric === 'testQuality' && source.reason === 'test_quality_empty_scope') || (source.rubric === 'security' && source.reason === 'leaf-only')) ? { kind: 'skipped', rubric: source.rubric, reason: source.reason } : undefined; }
 export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: source.rubric, reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
+const CUSTOM_FINDINGS_PAYLOAD_KEYS: readonly string[] = ['kind', 'version', 'findings'];
+const CUSTOM_FINDING_KEYS: readonly string[] = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'confidence'];
 function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
   const source = object(value);
   const requiredKeys = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'];
@@ -732,6 +734,10 @@ function reviewerOwnedCustomPayload(value: Record<string, unknown>): Record<stri
   // For custom-findings, both empty representations mean no reported concerns;
   // version, non-null findings, and all finding contents remain validated below.
   if (payload.kind === 'custom-findings' && payload.findings == null) payload.findings = [];
+  // The same flat schema offers `requirement` beside custom findings; Codex
+  // strict mode can fill it with a non-null string the adapter cannot strip.
+  // It only carries meaning for unsupported-policy, so discard it here.
+  if (payload.kind === 'custom-findings') delete payload.requirement;
   return payload;
 }
 
@@ -748,7 +754,7 @@ export function parseBuildReviewCustomReviewerPayload(value: unknown): BuildRevi
       ? Object.freeze({ kind: 'unsupported-policy', requirement: source.requirement })
       : undefined;
   }
-  if (source.kind !== 'custom-findings' || source.version !== 'v1' || !exactKeys(source, ['kind', 'version', 'findings']) || !Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) return undefined;
+  if (source.kind !== 'custom-findings' || source.version !== 'v1' || !exactKeys(source, CUSTOM_FINDINGS_PAYLOAD_KEYS) || !Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) return undefined;
   const findings = source.findings.map(customFinding);
   return findings.some((entry) => !entry)
     ? undefined
@@ -775,6 +781,9 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
   } else {
     if (source.kind !== 'custom-findings') problems.push(rejectionProblem('kind', 'must be "custom-findings" or "unsupported-policy"'));
     if (source.version !== 'v1') problems.push(rejectionProblem('version', 'must be "v1" for custom-findings'));
+    for (const field of Object.keys(source)) {
+      if (!CUSTOM_FINDINGS_PAYLOAD_KEYS.includes(field)) problems.push(rejectionProblem(field, 'must not be present in a custom-findings payload'));
+    }
     if (!Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) {
       problems.push(rejectionProblem('findings', `must be an array of at most ${MAX_CUSTOM_FINDINGS} findings`));
     } else {
@@ -793,6 +802,9 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
         }
         if (!text(findingSource.summary) || findingSource.summary.length > MAX_CUSTOM_SUMMARY_LENGTH) {
           problems.push(rejectionProblem(`${prefix}.summary`, `must be a non-empty string no longer than ${MAX_CUSTOM_SUMMARY_LENGTH} characters`));
+        }
+        for (const field of Object.keys(findingSource)) {
+          if (!CUSTOM_FINDING_KEYS.includes(field)) problems.push(rejectionProblem(`${prefix}.${field}`, 'must not be present in a custom finding'));
         }
         const evidenceLocations = findingSource.evidenceLocations;
         if (!Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.length > MAX_CUSTOM_EVIDENCE_LOCATIONS) {
