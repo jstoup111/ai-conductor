@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -889,6 +889,21 @@ async function writeKickbackLedgerUnsafe(
   }
 }
 
+/**
+ * Write a feature ledger while its caller already owns the ledger lease.
+ *
+ * Routing receipt settlement needs to atomically coordinate a ref CAS with a
+ * ledger update.  Exporting the unlocked half keeps that operation from
+ * accidentally taking the non-reentrant lease a second time; callers must
+ * therefore be inside `withKickbackLedgerLease`.
+ */
+export async function writeKickbackLedgerUnlocked(
+  projectRoot: string,
+  ledger: KickbackLedger,
+): Promise<void> {
+  await writeKickbackLedgerUnsafe(projectRoot, ledger);
+}
+
 /** Remove the ledger when a genuinely fresh feature session begins. */
 export async function clearKickbackLedger(projectRoot: string): Promise<void> {
   await withKickbackLedgerLease(projectRoot, async () => {
@@ -954,9 +969,29 @@ export async function readGrowthAccounting(
     requireReadableGrowth(ledger);
     const pendingGrowth = Object.values(ledger.pendingRepair?.charges ?? {})
       .some((charge) => charge.growth > 0);
+    // Routed rounds deliberately keep their frozen rem blocks off the active
+    // leaf plan until their host enters.  Their allocation, not the current
+    // checkout's plan text, is the authority for excluding uncharged work.
+    const stateForRouting = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
+    const slug = stateForRouting.ok ? stateForRouting.value.feature_desc : undefined;
+    let routedPending = new Set<string>();
+    const hasChildState = await access(join(projectRoot, '.pipeline', 'children')).then(() => true).catch(() => false);
+    if (slug && hasChildState) {
+      try {
+        const { pendingAllocationTaskIds } = await import('./routing/round-receipt.js');
+        routedPending = new Set(await pendingAllocationTaskIds(projectRoot, slug));
+      } catch {
+        // Route records are a fail-closed accounting input.  Leave the count
+        // unreconciled rather than manufacture a denominator from the leaf.
+        return { growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap), authoredSource: 'unresolved' };
+      }
+    }
     const derived = await deriveGrowthFromActivePlan(
       projectRoot,
-      pendingGrowth ? new Set(ledger.pendingRepair?.taskIds ?? []) : new Set(),
+      new Set([
+        ...(pendingGrowth ? ledger.pendingRepair?.taskIds ?? [] : []),
+        ...routedPending,
+      ]),
     );
     const stored = ledger.growth;
     const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';

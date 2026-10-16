@@ -254,7 +254,7 @@ describe('routed host region entry (real local Git)', () => {
     await subject.git(['switch', leafBranchFor('demo')]);
 
     await expect(entered(subject)).resolves.toMatchObject({
-      kind: 'refused', detail: expect.stringContaining('rem-prd-audit-T1'),
+      kind: 'halted', detail: expect.stringContaining('rem-prd-audit-T1'),
     });
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
       kind: 'record', record: { hosts: { 1: 'admitted' } },
@@ -271,7 +271,7 @@ describe('routed host region entry (real local Git)', () => {
     await chmod(hook, 0o755);
 
     await expect(entered(subject)).resolves.toMatchObject({
-      kind: 'refused', detail: expect.stringContaining('pre-commit hook failed'),
+      kind: 'halted', detail: expect.stringContaining('pre-commit hook failed'),
     });
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
       kind: 'record', record: { hosts: { 1: 'admitted' } },

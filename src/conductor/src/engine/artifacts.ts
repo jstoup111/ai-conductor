@@ -1308,6 +1308,8 @@ export interface CompletionContext {
    * region; absent preserves the legacy feature-root evidence paths.
    */
   activeChild?: ChildId;
+  /** Routed verify-green has already captured the exact host tip; this keeps the predicate process-free. */
+  routedVerifyGreen?: { readonly roundId: string; readonly host: ChildId; readonly headSha: string };
   /**
    * Whether this BUILD lap has already spent its one retry for explicit
    * unverified Done-when closes. Task 9 persists and supplies this flag.
@@ -2234,6 +2236,13 @@ async function validatePriorChildGreenAttribution(
       done: false,
       acceptanceRedRefusalClass: 'shape',
       reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use parent child ${childBase.parent} closure tip ${childBase.sha}: it is not an ancestor of HEAD`,
+    };
+  }
+  if (childBase.kind === 'routed-repair') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use a routed repair's pinned base ${childBase.sha}`,
     };
   }
   if (attribution !== childBase.sha) {
@@ -3242,6 +3251,24 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // criterion below this layer and therefore must have no spec files or RED-run
   // contract. Both shapes are validated before completion.
   acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
+    if (ctx.routedVerifyGreen !== undefined) {
+      const expected = ctx.routedVerifyGreen;
+      try {
+        const recorded = JSON.parse(await readFile(
+          pipelinePathFor(dir, 'acceptance-verify-green.json', expected.host),
+          'utf-8',
+        )) as Record<string, unknown>;
+        if (
+          recorded.roundId === expected.roundId &&
+          recorded.host === expected.host &&
+          recorded.headSha === expected.headSha &&
+          recorded.done === true
+        ) return { done: true, viaException: false };
+      } catch {
+        // A missing/stale record is an ordinary failed routed verification.
+      }
+      return { done: false, reason: 'routed verify-green result is missing, stale, or belongs to another host/round' };
+    }
     // A stack-eligible child can own implementation tasks while owning no
     // stories.  Its acceptance gate is therefore already complete from the
     // sealed ownership baseline; asking the acceptance author to invent work

@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { resolveFeaturePlanPath } from '../artifacts.js';
 import { checkStepCompletion, type CompletionContext } from '../artifacts.js';
@@ -15,6 +18,7 @@ import { readRestackJournal } from '../restack/restack-journal.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
 import { readRouteRecord, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
+import { redRefFor } from './routing-refs.js';
 import { assertNever, type RouteKind, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
 import type { ConductState } from '../../types/state.js';
 
@@ -22,7 +26,7 @@ export type EnterHostRegionResult =
   | { readonly kind: 'entered'; readonly pinnedBase: CommitSha }
   | { readonly kind: 'resume'; readonly pinnedBase: CommitSha }
   /** The audit route has no runnable host-local BUILD work. */
-  | { readonly kind: 'halted'; readonly detail: string; readonly outcome: 'derived-already-complete' }
+  | { readonly kind: 'halted'; readonly detail: string; readonly outcome?: 'derived-already-complete' }
   | { readonly kind: 'refused'; readonly detail: string };
 
 export interface EnterHostRegionInput {
@@ -38,6 +42,83 @@ export interface EnterHostRegionInput {
   /** Injectable completion boundary for the host-entry no-op decision. */
   readonly checkCompletion?: typeof checkStepCompletion;
   readonly git?: GitRunner;
+}
+
+export interface VerifyGreenAcceptanceInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly exec: (command: string, cwd: string) => Promise<unknown>;
+  readonly git?: GitRunner;
+}
+
+export type VerifyGreenAcceptanceResult =
+  | { readonly kind: 'verified'; readonly headSha: string }
+  | { readonly kind: 'refused'; readonly reason: string };
+
+const VERIFY_GREEN_RECORD = 'acceptance-verify-green.json';
+
+/**
+ * Re-runs an already-closed routed child's recorded acceptance contract.  It
+ * intentionally does not create or heal RED evidence: a routed repair proves
+ * its own current green result, while the retained RED marker is only an
+ * optional integrity comparison with the close-time ref.
+ */
+export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): Promise<VerifyGreenAcceptanceResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+  const childDir = join(input.worktree, '.pipeline', 'children', String(input.host));
+  const recordPath = join(childDir, VERIFY_GREEN_RECORD);
+  let contract: { command?: unknown; cwd?: unknown };
+  try {
+    contract = JSON.parse(await readFile(join(childDir, 'acceptance-specs-run.json'), 'utf8')) as { command?: unknown; cwd?: unknown };
+  } catch {
+    return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing or invalid` };
+  }
+  if (typeof contract.command !== 'string' || contract.command === '' || typeof contract.cwd !== 'string' || contract.cwd === '') {
+    return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing command or cwd` };
+  }
+  let observed: Record<string, unknown>;
+  try {
+    const value = await input.exec(contract.command, resolve(input.worktree, contract.cwd));
+    observed = typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  } catch (error) {
+    return { kind: 'refused', reason: `child ${input.host} verify-green execution failed: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const executed = observed.executed;
+  const passed = observed.passed;
+  const failed = observed.failed;
+  const skipped = observed.skipped;
+  const errors = observed.errors;
+  if (!(typeof executed === 'number' && executed >= 1 && typeof passed === 'number' && passed === executed &&
+    failed === 0 && skipped === 0 && errors === 0)) {
+    return { kind: 'refused', reason: `child ${input.host} verify-green requires every spec to pass (executed >= 1, failed/skipped/errors == 0)` };
+  }
+  try {
+    const marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8');
+    const parsed = JSON.parse(marker) as Record<string, unknown>;
+    // Older markers did not contain the provenance needed to identify a RED
+    // proof.  They remain compatible evidence, not a routing refusal.
+    if (Array.isArray(parsed.failingTests) && typeof parsed.intentRationale === 'string') {
+      const ref = redRefFor(input.slug, input.host);
+      const refResult = await git(['rev-parse', '-q', '--verify', ref]);
+      if (refResult.exitCode === 0) {
+        const blob = await git(['cat-file', '-p', refResult.stdout.trim()]);
+        const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
+        if (blob.exitCode !== 0 || blob.stdout.trim() !== digest) {
+          return { kind: 'refused', reason: `child ${input.host} RED marker digest differs from ${ref}` };
+        }
+      }
+    }
+  } catch {
+    // Missing, malformed, and legacy no-provenance markers do not prevent a
+    // routed verify-green run.  The current contract result is authoritative.
+  }
+  const head = await gitSha(git, 'HEAD');
+  if (!head) return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
+  await mkdir(childDir, { recursive: true });
+  await writeFile(recordPath, JSON.stringify({ roundId: input.roundId, host: input.host, headSha: head, done: true }) + '\n');
+  return { kind: 'verified', headSha: head };
 }
 
 function terminalJournal(journal: Awaited<ReturnType<typeof readRestackJournal>>): boolean {
@@ -287,6 +368,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     slug: input.slug,
     git,
   });
+  if (appended.kind === 'halted') return appended;
   if (appended.kind === 'refused') return appended;
 
   const bound = await bindHostObligations(input, stored.record, planPath, resolved.target.branch, entryHead);

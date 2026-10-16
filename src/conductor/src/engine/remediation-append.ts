@@ -125,6 +125,8 @@ export interface WriteFrozenBlocksInput {
 export type WriteFrozenBlocksResult =
   | { readonly kind: 'written' }
   | { readonly kind: 'noop' }
+  /** A persisted/committable allocation cannot be safely reconciled automatically. */
+  | { readonly kind: 'halted'; readonly detail: string }
   | { readonly kind: 'refused'; readonly detail: string };
 
 /** Sanitize a raw segment into the H9 grammar; empty result is a caller error. */
@@ -298,7 +300,7 @@ export async function writeFrozenBlocks(input: WriteFrozenBlocksInput): Promise<
     if (present === undefined) {
       missing.push(body);
     } else if (present !== canonicalFrozenBlock(body)) {
-      return { kind: 'refused', detail: `frozen remediation block ${id} differs from its stored allocation` };
+      return { kind: 'halted', detail: `frozen remediation block ${id} differs from its stored allocation` };
     }
   }
   if (missing.length === 0) return { kind: 'noop' };
@@ -316,7 +318,9 @@ export async function writeFrozenBlocks(input: WriteFrozenBlocksInput): Promise<
 
   await writeFile(absolutePlanPath, planText, 'utf8');
   return {
-    kind: 'refused',
+    // A journal or durable-state refusal can clear on a later preflight;
+    // only a failed commit (including a rejected hook) needs human action.
+    kind: committed?.kind === 'failed' ? 'halted' : 'refused',
     detail: committed === undefined
       ? 'routed frozen remediation requires durable child state'
       : `cannot commit routed frozen remediation: ${committed.reason}`,

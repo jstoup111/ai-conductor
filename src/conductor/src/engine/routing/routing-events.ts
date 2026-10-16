@@ -27,6 +27,19 @@ export function routedRepairPhaseEvent(
   return { type: 'routed_repair_phase', ...occurrence(), roundId, host, phase, credit, child: host };
 }
 
+/** Creates the durable occurrence paired with an upward host movement. */
+export function remediationReroutedEvent(
+  roundId: RoundId,
+  from: ChildId,
+  to: ChildId,
+  rejectedRef: string,
+): Extract<ConductorEvent, { type: 'remediation_rerouted' }> {
+  return {
+    type: 'remediation_rerouted', ...occurrence(), roundId, from, to,
+    evidence: rejectedRef, child: to,
+  };
+}
+
 /** Place an occurrence in the same durable record transaction as its state. */
 export function withOutboxEvent(record: RouteRecord, event: ConductorEvent): RouteRecord {
   if (!('eventId' in event) || !('occurredAt' in event)) throw new Error('routing occurrence must carry durable identity');

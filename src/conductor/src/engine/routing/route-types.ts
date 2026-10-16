@@ -336,10 +336,11 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
     if (!child || acknowledged !== true) return undefined;
     acks[child] = true;
   }
-  if (value.settlementId !== undefined && !nonEmptyString(value.settlementId)) return undefined;
+  const settlementId = value.settlementId === undefined ? undefined : nonEmptyString(value.settlementId);
+  if (value.settlementId !== undefined && settlementId === undefined) return undefined;
   return {
     laps, growth, taskless, echo, acks,
-    ...(value.settlementId === undefined ? {} : { settlementId: value.settlementId }),
+    ...(settlementId === undefined ? {} : { settlementId }),
   };
 }
 

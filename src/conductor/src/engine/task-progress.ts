@@ -260,7 +260,14 @@ export async function resolveTaskIdsWithDiagnostics(
     let allOpenObligationsEvidenced = true;
     for (const obligation of obligations) {
       if (obligation.tasks[canonicalId].status === 'resolved') continue;
-      const strictRange = await listCommitsWithTrailersAfterRepairBoundary(projectRoot, obligation.baseline.head);
+      // Routed obligations are bound to their host branch.  Never let a leaf
+      // commit satisfy a host repair merely because the current checkout is
+      // on the leaf.
+      const strictRange = await listCommitsWithTrailersAfterRepairBoundary(
+        projectRoot,
+        obligation.baseline.head,
+        obligation.baseline.branch,
+      );
       if (strictRange.kind !== 'available') {
         allOpenObligationsEvidenced = false;
         unavailableReasons.set(planId, strictRange.reason);
