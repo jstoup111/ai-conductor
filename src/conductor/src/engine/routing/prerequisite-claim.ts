@@ -7,7 +7,7 @@ import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { closureRefFor, rejectedPinRefFor } from './routing-refs.js';
 import { readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction, type RouteRecordStoreDependencies } from './route-record-store.js';
 import { remediationReroutedEvent, withOutboxEvent } from './routing-events.js';
-import type { RouteRecord, RoundId } from './route-types.js';
+import { validatedReroute, type RouteRecord, type RoundId } from './route-types.js';
 
 /**
  * Engine-owned terminal result requested from a routed BUILD provider.  It is
@@ -263,20 +263,21 @@ export async function completeRerouteSync(
   ]);
   if (stored.kind !== 'record') return { kind: 'refused', detail: `routing round ${input.roundId} is unavailable` };
   const reroute = stored.record.reroute;
+  const endpoints = validatedReroute(stored.record);
   if (!reroute) return { kind: 'completed', record: stored.record };
-  if (stored.record.hosts[reroute.destination] !== 'admitted') {
+  if (!endpoints) return { kind: 'refused', detail: `routing round ${input.roundId} reroute record is inconsistent` };
+  if (stored.record.hosts[endpoints.destination] !== 'admitted') {
     try { await syncRestackedWorktree(input.worktree, reroute.rejectedTip, reroute.resetTip, { git }); }
     catch (error) { return { kind: 'refused', detail: `routing round ${input.roundId} worktree sync failed: ${error instanceof Error ? error.message : String(error)}` }; }
   }
-  const source = stored.record.fallback?.at(-1)?.from;
-  if (!source || marker.kind !== 'marker' || marker.marker.roundId !== input.roundId || marker.marker.host !== reroute.destination) {
+  if (marker.kind !== 'marker' || marker.marker.roundId !== input.roundId || marker.marker.host !== endpoints.destination) {
     return { kind: 'refused', detail: `routing round ${input.roundId} marker changed before reroute sync` };
   }
-  if (stored.record.hosts[reroute.destination] === 'admitted') return { kind: 'completed', record: stored.record };
-  const sourceTransition = transitionHost(stored, source, 'rerouted', { credit: false });
+  if (stored.record.hosts[endpoints.destination] === 'admitted') return { kind: 'completed', record: stored.record };
+  const sourceTransition = transitionHost(stored, endpoints.source, 'rerouted', { credit: false });
   if (sourceTransition.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} source cannot complete reroute` };
   const afterSource = { ...stored, record: sourceTransition.record };
-  const destinationTransition = transitionHost(afterSource, reroute.destination, 'admitted', { credit: false });
+  const destinationTransition = transitionHost(afterSource, endpoints.destination, 'admitted', { credit: false });
   if (destinationTransition.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} destination cannot be admitted` };
   const next = { ...destinationTransition.record, reroute: undefined };
   const wrote = await writeRoutingTransaction(input.worktree, input.slug, [

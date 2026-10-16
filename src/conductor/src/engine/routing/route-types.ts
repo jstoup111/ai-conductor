@@ -216,6 +216,12 @@ export interface ReroutePhase {
   readonly destination: ChildId;
 }
 
+/** The source and destination proven by a parsed in-progress reroute. */
+export interface ValidatedReroute {
+  readonly source: ChildId;
+  readonly destination: ChildId;
+}
+
 /** A complete event waits in the durable route or queue outbox until persisted. */
 export interface OutboxEntry {
   readonly eventId: string;
@@ -239,6 +245,19 @@ export interface RouteRecord {
   /** Present only while a rerouted worktree still needs tree synchronization. */
   readonly reroute?: ReroutePhase;
   readonly outbox: readonly OutboxEntry[];
+}
+
+/**
+ * Returns the reroute endpoints only from a record whose parser has proven
+ * that its latest fallback movement and in-progress reroute agree.
+ */
+export function validatedReroute(record: RouteRecord): ValidatedReroute | undefined {
+  if (!record.reroute) return undefined;
+  const fallback = record.fallback?.at(-1);
+  if (!fallback || fallback.to !== record.reroute.destination) return undefined;
+  const sourceState = record.hosts[fallback.from];
+  if (sourceState !== 'reroute-moved' && sourceState !== 'rerouted') return undefined;
+  return { source: fallback.from, destination: record.reroute.destination };
 }
 
 /** The marker is written before changing the routed host's region state. */
@@ -482,7 +501,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)) return undefined;
   const items = value.items.map(parseRoutedItem);
   if (items.some((item) => item === undefined)) return undefined;
-  return {
+  const record: RouteRecord = {
     roundId,
     kind,
     phase,
@@ -496,6 +515,8 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     ...(reroute === undefined ? {} : { reroute }),
     outbox,
   };
+  if (reroute && !validatedReroute(record)) return undefined;
+  return record;
 }
 
 /** Parses the marker that identifies the routed host before region mutation. */
