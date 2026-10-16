@@ -2,6 +2,8 @@ import * as fsp from 'node:fs/promises';
 import { matchesGlob, join, relative, sep } from 'node:path';
 
 import { sanitizeTranscriptLine } from './transcript-sanitize.js';
+import type { ConductorEvent, TranscriptOwnerStep } from '../../types/events.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 
 export interface HarvestTranscriptsOptions {
   readonly home: string;
@@ -30,6 +32,41 @@ export interface FailedTranscriptHarvest {
 }
 
 export type TranscriptHarvestResult = CapturedTranscriptHarvest | FailedTranscriptHarvest;
+
+export interface TranscriptCaptureIdentity {
+  readonly step: TranscriptOwnerStep;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly member?: string;
+  readonly provider: string;
+}
+
+/** The one naming scheme used by every self-host transcript producer. */
+export function transcriptCapture(identity: TranscriptCaptureIdentity & { readonly worktreeRoot: string }): {
+  readonly path: string;
+  readonly destination: string;
+} {
+  const name = [`${identity.runId}-a${identity.attempt}`, identity.member, identity.provider]
+    .filter((part): part is string => part !== undefined).join('-');
+  const path = join('.pipeline', 'transcripts', identity.step, name);
+  return { path, destination: join(identity.worktreeRoot, path) };
+}
+
+/** Project a harvest result onto the event spine; teardown telemetry is best-effort. */
+export async function emitTranscriptHarvest(
+  events: ConductorEventEmitter | undefined,
+  identity: TranscriptCaptureIdentity & { readonly path: string; readonly interrupted: boolean },
+  result: TranscriptHarvestResult,
+): Promise<void> {
+  const { interrupted, ...identityFields } = identity;
+  const event: ConductorEvent = result.kind === 'captured'
+    ? {
+        type: 'provider_transcripts_captured', ...identityFields, interrupted,
+        files: result.files, bytes: result.bytes, skipped: result.skipped.length, omittedLines: result.omittedLines,
+      }
+    : { type: 'provider_transcripts_harvest_failed', ...identityFields, error: result.error };
+  try { await events?.emit(event); } catch { /* teardown telemetry is best-effort */ }
+}
 
 function relativePosix(home: string, path: string): string {
   return relative(home, path).split(sep).join('/');

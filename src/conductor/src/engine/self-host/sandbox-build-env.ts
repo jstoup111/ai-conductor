@@ -44,7 +44,7 @@ import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/p
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { resolveSkillName } from '../skill-names.js';
-import { harvestThenRemove, harvestTranscripts, type TranscriptHarvestResult } from './transcript-harvest.js';
+import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, type TranscriptHarvestResult } from './transcript-harvest.js';
 import { collectKnownSecrets } from './transcript-sanitize.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { StepName } from '../../types/steps.js';
@@ -205,24 +205,18 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     this.tornDown = true;
     const capture = this.transcriptCapture;
     if (capture) {
-      const name = [
-        `${capture.runId}-a${capture.attempt}`,
-        capture.member,
-        sandboxProvider().id,
-      ].filter((part): part is string => part !== undefined).join('-');
-      const path = join('.pipeline', 'transcripts', capture.step, name);
-      const destination = join(capture.worktreeRoot, path);
+      const transcript = transcriptCapture({ ...capture, provider: sandboxProvider().id });
       const credentials = await fsp.readFile(join(this.configDir, '.credentials.json'), 'utf8').catch(() => '');
       await harvestThenRemove({
         harvest: () => harvestTranscripts({
           home: this.configDir,
           globs: sandboxProvider().selfHostShape.transcripts.globs,
-          destination,
+          destination: transcript.destination,
           knownSecrets: collectKnownSecrets(credentials, this.injectedToken === undefined ? [] : [this.injectedToken]),
         }),
         // force: true → ENOENT is not an error, so double teardown is a no-op.
         remove: () => this.fs.rm(this.configDir, { recursive: true, force: true }),
-        report: (result) => this.reportTranscriptHarvest(capture, path, result),
+        report: (result) => this.reportTranscriptHarvest(capture, transcript.path, result),
       });
     } else {
       // force: true → ENOENT is not an error, so double teardown is a no-op.
@@ -236,33 +230,11 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     path: string,
     result: TranscriptHarvestResult,
   ): Promise<void> {
-    if (result.kind === 'captured') {
-      await capture.events?.emit({
-        type: 'provider_transcripts_captured',
-        step: capture.step,
-        runId: capture.runId,
-        attempt: capture.attempt,
-        ...(capture.member === undefined ? {} : { member: capture.member }),
-        provider: sandboxProvider().id,
-        path,
-        files: result.files,
-        bytes: result.bytes,
-        interrupted: false,
-        skipped: result.skipped.length,
-        omittedLines: result.omittedLines,
-      });
-      return;
-    }
-    await capture.events?.emit({
-      type: 'provider_transcripts_harvest_failed',
-      step: capture.step,
-      runId: capture.runId,
-      attempt: capture.attempt,
+    await emitTranscriptHarvest(capture.events, {
+      step: capture.step, runId: capture.runId, attempt: capture.attempt,
       ...(capture.member === undefined ? {} : { member: capture.member }),
-      provider: sandboxProvider().id,
-      path,
-      error: result.error,
-    });
+      provider: sandboxProvider().id, path, interrupted: false,
+    }, result);
   }
 }
 

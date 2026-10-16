@@ -3,6 +3,7 @@ import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { StepName } from '../../types/steps.js';
+import type { TranscriptOwnerStep } from '../../types/events.js';
 import { ConductorEventEmitter, type EventHandler } from '../../ui/events.js';
 
 /** Every terminal step disposition that decides an attempt's captured transcripts. */
@@ -26,7 +27,7 @@ export interface TranscriptRetentionDependencies {
 }
 
 type CapturedTranscript = {
-  readonly step: StepName;
+  readonly step: TranscriptOwnerStep;
   readonly runId: string;
   readonly attempt: number;
   readonly member?: string;
@@ -44,6 +45,52 @@ type TranscriptEventRecord = {
   readonly member?: unknown;
   readonly ts?: unknown;
 };
+
+export type TranscriptLedgerState = 'pending' | 'retained' | 'pruned' | 'evicted';
+export interface TranscriptLedgerCapture {
+  readonly step: TranscriptOwnerStep;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly member?: string;
+  readonly provider: string;
+  readonly path: string;
+  readonly interrupted: boolean;
+  /** Parsed persisted ISO timestamp, absent only for malformed legacy rows. */
+  readonly capturedAt?: number;
+  readonly order: number;
+  readonly state: TranscriptLedgerState;
+}
+
+/** Fold the canonical event ledger into each capture's identity, time, and lifecycle state. */
+export function foldTranscriptLedger(content: string): Map<string, TranscriptLedgerCapture> {
+  const captures = new Map<string, TranscriptLedgerCapture>();
+  let order = 0;
+  for (const line of content.split('\n')) {
+    if (!line) continue;
+    let event: TranscriptEventRecord;
+    try { event = JSON.parse(line) as TranscriptEventRecord; } catch { continue; }
+    if (typeof event.path !== 'string') continue;
+    if (event.type === 'provider_transcripts_captured' && isTranscriptOwnerStep(event.step)) {
+      const capturedAt = typeof event.ts === 'string' ? Date.parse(event.ts) : Number.NaN;
+      captures.set(event.path, {
+        step: event.step, runId: typeof event.runId === 'string' ? event.runId : 'unknown',
+        attempt: typeof event.attempt === 'number' ? event.attempt : 0,
+        ...(typeof event.member === 'string' ? { member: event.member } : {}),
+        provider: typeof (event as { provider?: unknown }).provider === 'string' ? (event as { provider: string }).provider : 'unknown',
+        path: event.path, interrupted: event.interrupted === true,
+        ...(Number.isNaN(capturedAt) ? {} : { capturedAt }), order: order++, state: 'pending',
+      });
+      continue;
+    }
+    const capture = captures.get(event.path);
+    if (!capture) continue;
+    const state = event.type === 'provider_transcripts_retained' ? 'retained'
+      : event.type === 'provider_transcripts_pruned' ? 'pruned'
+        : event.type === 'provider_transcripts_evicted' ? 'evicted' : undefined;
+    if (state) captures.set(event.path, { ...capture, state });
+  }
+  return captures;
+}
 
 type RetainedCapture = {
   readonly path: string;
@@ -171,37 +218,8 @@ export class TranscriptRetention {
       return;
     }
 
-    const captures = new Map<string, CapturedTranscript>();
-    const settled = new Set<string>();
-    for (const line of content.split('\n')) {
-      if (!line) continue;
-      let event: TranscriptEventRecord;
-      try {
-        event = JSON.parse(line) as TranscriptEventRecord;
-      } catch {
-        continue;
-      }
-      if (typeof event.path !== 'string') continue;
-      if (event.type === 'provider_transcripts_captured' && isStepName(event.step)) {
-        captures.set(event.path, {
-          step: event.step,
-          runId: typeof event.runId === 'string' ? event.runId : 'unknown',
-          attempt: typeof event.attempt === 'number' ? event.attempt : 0,
-          ...(typeof event.member === 'string' ? { member: event.member } : {}),
-          path: event.path,
-          interrupted: event.interrupted === true,
-        });
-      } else if (
-        event.type === 'provider_transcripts_retained'
-        || event.type === 'provider_transcripts_pruned'
-        || event.type === 'provider_transcripts_evicted'
-      ) {
-        settled.add(event.path);
-      }
-    }
-
-    for (const capture of captures.values()) {
-      if (!settled.has(capture.path) && existsSync(join(this.worktreePath, capture.path))) {
+    for (const capture of foldTranscriptLedger(content).values()) {
+      if (capture.state === 'pending' && existsSync(join(this.worktreePath, capture.path))) {
         await this.retain(capture.path);
       }
     }
@@ -236,7 +254,7 @@ export class TranscriptRetention {
   }
 
   private async listRetainedCaptures(): Promise<RetainedCapture[]> {
-    const timestamps = this.retainedCaptureTimestamps();
+    const ledger = this.readTranscriptLedger();
     const transcriptsPath = join(this.worktreePath, '.pipeline', 'transcripts');
     let steps;
     try {
@@ -260,14 +278,14 @@ export class TranscriptRetention {
         const absolutePath = join(this.worktreePath, path);
         const metadata = await stat(absolutePath).catch(() => undefined);
         if (metadata === undefined) continue;
-        const timestamp = timestamps.get(path);
+        const timestamp = ledger.get(path);
         // The cap applies only to captures already retained by a terminal
         // verdict. Pending attempts remain recoverable until their own verdict.
         if (timestamp === undefined) continue;
         captures.push({
           path,
           size: await directorySize(absolutePath),
-          capturedAt: timestamp?.timestamp ?? metadata.mtimeMs,
+          capturedAt: timestamp?.capturedAt ?? metadata.mtimeMs,
           order: timestamp?.order ?? Number.MAX_SAFE_INTEGER,
         });
       }
@@ -277,7 +295,7 @@ export class TranscriptRetention {
     ));
   }
 
-  private retainedCaptureTimestamps(): Map<string, { timestamp?: number; order: number }> {
+  private readTranscriptLedger(): Map<string, TranscriptLedgerCapture> {
     const eventsPath = join(this.worktreePath, '.pipeline', 'events.jsonl');
     let content: string;
     try {
@@ -285,26 +303,7 @@ export class TranscriptRetention {
     } catch {
       return new Map();
     }
-    const captures = new Map<string, { timestamp?: number; order: number }>();
-    const retained = new Set<string>();
-    let order = 0;
-    for (const line of content.split('\n')) {
-      if (!line) continue;
-      try {
-        const event = JSON.parse(line) as TranscriptEventRecord;
-        if (typeof event.path !== 'string') continue;
-        if (event.type === 'provider_transcripts_captured') {
-          const timestamp = typeof event.ts === 'string' ? Date.parse(event.ts) : Number.NaN;
-          captures.set(event.path, { ...(Number.isNaN(timestamp) ? {} : { timestamp }), order });
-          order += 1;
-        } else if (event.type === 'provider_transcripts_retained') {
-          retained.add(event.path);
-        }
-      } catch {
-        // A malformed historic row cannot order a capture; directory mtime is the fallback.
-      }
-    }
-    return new Map([...captures].filter(([path]) => retained.has(path)));
+    return new Map([...foldTranscriptLedger(content)].filter(([, capture]) => capture.state === 'retained'));
   }
 
   private async prune(path: string): Promise<void> {
@@ -341,7 +340,7 @@ async function directorySize(path: string): Promise<number> {
   return total;
 }
 
-function isStepName(value: unknown): value is StepName {
+function isTranscriptOwnerStep(value: unknown): value is TranscriptOwnerStep {
   return typeof value === 'string';
 }
 

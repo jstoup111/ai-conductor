@@ -17,8 +17,8 @@ import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { resolveSkillName } from '../skill-names.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { collectKnownSecrets } from './transcript-sanitize.js';
-import { harvestThenRemove, harvestTranscripts, type TranscriptHarvestResult } from './transcript-harvest.js';
-import type { ConductorEvent } from '../../types/events.js';
+import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, type TranscriptHarvestResult } from './transcript-harvest.js';
+import { LEGACY_TRANSCRIPT_OWNER_STEP, type TranscriptOwnerStep } from '../../types/events.js';
 import type { StepName } from '../../types/steps.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 
@@ -100,7 +100,7 @@ type ScratchLeaseIdentity = {
   readonly runId: string;
   readonly attempt: number;
   /** Owning conductor step, retained in the scratch lease. */
-  readonly step?: string;
+  readonly step?: StepName;
   /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
   readonly member?: string;
 };
@@ -108,7 +108,7 @@ type ScratchLeaseIdentity = {
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionProviderHomeOptions = ProvisionProviderHomeBaseOptions & (
   | (ScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly step?: string; readonly member?: string }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly step?: StepName; readonly member?: string }
 );
 
 export class ProviderHomeProvisionError extends Error {
@@ -189,37 +189,16 @@ interface ProviderHomeTranscript {
 }
 
 function providerHomeTranscript(options: ProvisionProviderHomeOptions, provider: SelfHostProvider): ProviderHomeTranscript {
-  const step = options.step ?? 'unknown-step';
+  const step: TranscriptOwnerStep = options.step ?? LEGACY_TRANSCRIPT_OWNER_STEP;
   const runId = options.runId ?? 'unknown-run';
   const attempt = options.attempt ?? 0;
-  const capture = [
-    `${runId}-a${attempt}`,
-    options.member,
-    provider.id,
-  ].filter((part): part is string => part !== undefined).join('-');
-  const path = join('.pipeline', 'transcripts', step, capture);
-  const emit = async (event: ConductorEvent): Promise<void> => {
-    try { await options.events?.emit(event); } catch { /* teardown telemetry is best-effort */ }
-  };
+  const capture = transcriptCapture({ worktreeRoot: options.worktreeRoot, step, runId, attempt, ...(options.member === undefined ? {} : { member: options.member }), provider: provider.id });
   return {
     selectedAuthPath: provider.selfHostShape.selectedAuthPath,
     globs: provider.selfHostShape.transcripts.globs,
-    destination: join(options.worktreeRoot, path),
+    destination: capture.destination,
     report: async (result) => {
-      if (result.kind === 'captured') {
-        await emit({
-          type: 'provider_transcripts_captured', step: step as StepName,
-          runId, attempt, ...(options.member === undefined ? {} : { member: options.member }),
-          provider: provider.id, path, files: result.files, bytes: result.bytes,
-          interrupted: false, skipped: result.skipped.length, omittedLines: result.omittedLines,
-        });
-      } else {
-        await emit({
-          type: 'provider_transcripts_harvest_failed', step: step as StepName,
-          runId, attempt, ...(options.member === undefined ? {} : { member: options.member }),
-          provider: provider.id, path, error: result.error,
-        });
-      }
+      await emitTranscriptHarvest(options.events, { step, runId, attempt, ...(options.member === undefined ? {} : { member: options.member }), provider: provider.id, path: capture.path, interrupted: false }, result);
     },
   };
 }
