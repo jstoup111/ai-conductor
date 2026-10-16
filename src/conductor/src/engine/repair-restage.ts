@@ -9,6 +9,60 @@ import { createRepairObligationStore, type RepairObligation } from './repair-obl
 import { countResolvedTasks } from './task-progress.js';
 import { seedTaskStatus } from './task-seed.js';
 
+export interface AdmitRoutedObligationInput {
+  projectRoot: string;
+  planPath: string;
+  roundId: string;
+  findingId: string;
+  taskIds: readonly string[];
+  branch: string;
+  head: string;
+  tree: string;
+}
+
+export type AdmitRoutedObligationResult =
+  | { kind: 'admitted'; admissionKey: string; obligation: RepairObligation; replayed: boolean }
+  | { kind: 'failed'; detail: string };
+
+/**
+ * Project the route record's authoritative obligation into engine state.
+ *
+ * The round-owned key deliberately excludes mutable checkout and plan details,
+ * so re-entry after a restack or plan rewrite replays the same obligation.
+ */
+export async function admitRoutedObligation(
+  input: AdmitRoutedObligationInput,
+): Promise<AdmitRoutedObligationResult> {
+  const taskIds = [...new Set(input.taskIds.map(canonicalTaskId))].sort();
+  const admissionKey = createHash('sha256').update(JSON.stringify({
+    roundId: input.roundId,
+    findingId: input.findingId,
+    taskIds,
+  })).digest('hex');
+  const repairs = createRepairObligationStore(
+    input.projectRoot,
+    join(input.projectRoot, '.pipeline', 'engine-state.json'),
+  );
+  const admission = await repairs.admitOrReplay(admissionKey, {
+    id: `routed-${admissionKey.slice(0, 16)}`,
+    planPath: input.planPath,
+    taskIds,
+    source: {
+      findingId: input.findingId,
+      authority: 'routed_repair',
+      instruction: 'Repair the routed finding on its host branch.',
+    },
+    baseline: {
+      branch: input.branch,
+      head: input.head,
+      tree: input.tree,
+      resolvedTaskIds: [],
+    },
+  });
+  if (!admission.ok) return { kind: 'failed', detail: `could not persist routed admission: ${admission.message}` };
+  return { kind: 'admitted', admissionKey, obligation: admission.obligation, replayed: admission.replayed };
+}
+
 export interface AdmitAndRestageRepairInput {
   projectRoot: string;
   planPath: string;
