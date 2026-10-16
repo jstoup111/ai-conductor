@@ -151,7 +151,7 @@ describe('operator park boundary contract', () => {
       /const dispatch = await this\.stepRunner\.run\('remediate', state, \{\s*runId: attemptId,\s*retryReason: dispatchContext,\s*remediationRequest: \{ mode: 'gap-plan', projection: projectionResult\.projection \},\s*\}\);/g,
       // Compatibility and provider-execution dispatches are reached only via
       // runSelfBuildDispatch, whose admission path performs the park check.
-      /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*attempt,\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.{3}\(abortSignal === undefined \? \{\} : \{ abortSignal \}\),\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
+      /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*attempt: 1,\s*captureAttempt,\s*escalate: false,\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.{3}\(abortSignal === undefined \? \{\} : \{ abortSignal \}\),\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
       // Configured-group branches run only through runParallelGroupViaCore,
       // whose caller is one of the guarded scheduling-unit entries above.
       /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
