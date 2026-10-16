@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:8, task:rem-as-built-R4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -339,19 +339,31 @@ describe('minimal Claude self-host sandbox', () => {
     }
   });
 
-  it('redacts the injected daemon token after ambient credentials are absent', async () => {
+  it('redacts the token injected into the child after ambient credentials are restored', async () => {
     const token = 'daemon-token-123456';
-    const sandbox = await provisionSandboxBuildEnv(options({
-      step: 'build', runId: 'r-token', attempt: 1, injectedToken: token,
-    }));
-    await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
-    await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), JSON.stringify({ output: token }));
-    await sandbox.teardown();
+    const previous = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const hadPrevious = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const sandbox = await provisionSandboxBuildEnv(options({ step: 'build', runId: 'r-token', attempt: 1 }));
+    try {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+      expect(sandbox.childEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe(token);
+      if (hadPrevious) process.env.CLAUDE_CODE_OAUTH_TOKEN = previous;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
-    const captured = await readFile(join(
-      worktree, '.pipeline', 'transcripts', 'build', 'r-token-a1-claude', 'projects', 'w', 's.jsonl',
-    ), 'utf8');
-    expect(captured).not.toContain(token);
+      await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
+      await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), JSON.stringify({ output: token }));
+      await sandbox.teardown();
+
+      const captured = await readFile(join(
+        worktree, '.pipeline', 'transcripts', 'build', 'r-token-a1-claude', 'projects', 'w', 's.jsonl',
+      ), 'utf8');
+      expect(captured).not.toContain(token);
+    } finally {
+      if (hadPrevious) process.env.CLAUDE_CODE_OAUTH_TOKEN = previous;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      await sandbox.teardown();
+    }
   });
 
   it('keys a Claude capture by rubric member and reports a failed harvest without blocking teardown', async () => {
