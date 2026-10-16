@@ -1397,9 +1397,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     const settled = await store.read();
     expect(settled).toMatchObject({
       ok: true,
+      // The repeat halts before reconciliation, so the sibling is left for the
+      // next lap's judgement instead of a reservation no later lap can apply.
       state: { cases: [
         expect.objectContaining({ id: 'case-accepted', resolution: 'resolved' }),
-        expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'reserved' }) }),
       ] },
     });
     await expect(readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')).resolves.toContain('case-accepted');
@@ -1503,13 +1504,58 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
 
     expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-durable' });
+    // The halt precedes reconciliation, so nothing is reconciled or reserved.
     expect(events.map((event) => event.type)).toEqual([
-      'remediation_adjudication_started', 'remediation_case_reconciled',
+      'remediation_adjudication_started',
       'remediation_semantic_repeat_halt', 'remediation_adjudication_failed',
     ]);
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
     }));
+  });
+
+  it('halts a regression before reserving a sibling action effect it could never apply', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-regressed', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The first test needed a focused assertion.', resolution: 'resolved',
+        sources: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted', recordedAt: '2026-10-16T00:00:00.000Z' }],
+        effect: { id: 'effect-regressed', kind: 'action', status: 'applied', workOrderId: 'order-regressed' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const judge = vi.fn(async () => ({
+      mode: 'case-v1' as const, domain: 'build_review' as const,
+      sourceOutcomes: [
+        { sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted' as const, caseRef: 'case-again' },
+        { sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'acted' as const, caseRef: 'case-sibling' },
+      ],
+      cases: [{
+        caseRef: 'case-again', existingCaseId: 'case-regressed', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+        rationale: 'The first test still lacks the assertion.',
+        effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the first test' }] },
+      }, {
+        caseRef: 'case-sibling', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+        rationale: 'An independent defect needs BUILD work.',
+        effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the sibling defect' }] },
+      }],
+    }));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: mixedAggregate, generateId: sequentialIds('stranded'),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-regressed' });
+    const after = await store.read();
+    if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+    // No reservation survives the halt, so the next lap is not blocked by an
+    // effect whose tasks existed only in this discarded judgement.
+    expect(after.state.cases.filter((record) => record.effect.kind !== 'none' && record.effect.status === 'reserved')).toEqual([]);
+    expect(events.map((event) => event.type)).not.toContain('remediation_effect_reserved');
   });
 
   it.each([
