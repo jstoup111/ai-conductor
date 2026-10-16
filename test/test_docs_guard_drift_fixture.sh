@@ -38,7 +38,7 @@ if [ ! -f "$CHECKER" ]; then
 fi
 
 before_hash=$(sha256sum "$HOOK" | awk '{print $1}')
-OUT=$("$BASH_BIN" "$CHECKER" 2>&1)
+OUT=$(TMPDIR="$fixture_dir" "$BASH_BIN" "$CHECKER" 2>&1)
 CODE=$?
 after_hash=$(sha256sum "$HOOK" | awk '{print $1}')
 hook_status=$(git -C "$HARNESS_DIR" status --porcelain hooks/claude/docs-guard.sh)
@@ -68,7 +68,7 @@ interrupt_checker() {
   local signal=$1 generator=$2 output=$3 ready=$4
   HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR="$generator" \
     HARNESS_INTEGRITY_TEST_STUB_READY="$ready" \
-    "$BASH_BIN" "$CHECKER" > "$output" 2>&1 &
+  TMPDIR="$fixture_dir" "$BASH_BIN" "$CHECKER" > "$output" 2>&1 &
   local checker_pid=$!
   local attempt=0
   while [ ! -e "$ready" ] && [ "$attempt" -lt 50 ]; do
@@ -117,7 +117,7 @@ exit 0
 EOF
 chmod +x "$ignored_destination_generator"
 set +e
-ignored_destination_output=$(HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR="$ignored_destination_generator" \
+ignored_destination_output=$(TMPDIR="$fixture_dir" HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR="$ignored_destination_generator" \
   HARNESS_INTEGRITY_TEST_TRACKED_HOOK="$HOOK" "$BASH_BIN" "$CHECKER" 2>&1)
 ignored_destination_code=$?
 set -e
