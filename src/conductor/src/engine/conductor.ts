@@ -395,7 +395,7 @@ import {
   wrapForContainment,
 } from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
-import { TranscriptRetention } from './self-host/transcript-retention.js';
+import { TranscriptRetention, type TranscriptRetentionOutcome } from './self-host/transcript-retention.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
 import { classifyRebaseOperation } from './gate-code-validity.js';
@@ -820,6 +820,26 @@ export class Conductor {
   /** Close every execution this conductor observed, without exposing step selection to callers. */
   private async closeOpenExecutions(): Promise<void> {
     await this.executionLifecycle.closeOpen();
+  }
+
+  /** Settle one harvested self-host attempt without touching another retry. */
+  private async settleTranscriptAttempt(
+    step: StepName,
+    attempt: number,
+    outcome: TranscriptRetentionOutcome,
+    member?: string,
+  ): Promise<void> {
+    const runId = this.stepRunner.selfHostRunId?.();
+    if (runId === undefined) {
+      await this.transcriptRetention.settle(step, outcome);
+      return;
+    }
+    await this.transcriptRetention.settleAttempt({
+      step,
+      runId,
+      attempt,
+      ...(member === undefined ? {} : { member }),
+    }, outcome);
   }
 
   /**
@@ -2409,7 +2429,15 @@ export class Conductor {
         ? event.executionContext.subject.member
         : undefined;
       const step = (member ?? event.step) as StepName;
-      return this.transcriptRetention.settleBeforeRetry(step, event.attempt, member);
+      const runId = this.stepRunner.selfHostRunId?.();
+      return runId === undefined
+        ? this.transcriptRetention.settleBeforeRetry(step, event.attempt, member)
+        : this.transcriptRetention.settleBeforeRetry({ step, runId, nextAttempt: event.attempt, ...(member === undefined ? {} : { member }) });
+    });
+    this.events.on('step_refused', (event) => {
+      if (event.type === 'step_refused' && event.kind === 'needs-human') {
+        return this.transcriptRetention.settle(event.step, 'needs-human');
+      }
     });
     this.events.on('step_completed', (event) => {
       if (event.type !== 'step_completed' || event.step === 'build') return;
@@ -14388,8 +14416,9 @@ export class Conductor {
             }
           }
           if (step.name === 'build') {
-            await this.transcriptRetention.settle(
+            await this.settleTranscriptAttempt(
               step.name,
+              attempt,
               completedBuildMadeProgress ? 'succeeded-with-progress' : 'succeeded-without-progress',
             );
           }

@@ -1,4 +1,4 @@
-// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S6.4
+// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2
 import { describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -108,7 +108,7 @@ describe('conductor transcript retention wiring', () => {
       projectRoot: root,
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
       events,
-      stepRunner: { run: async () => ({ success: true }) },
+      stepRunner: { run: async () => ({ success: true }), selfHostRunId: () => 'review' },
     });
     const path = join('.pipeline', 'transcripts', 'build_review', 'attempt-1');
     try {
@@ -126,6 +126,34 @@ describe('conductor transcript retention wiring', () => {
           subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'build_review' },
         },
       });
+      await expect(access(join(root, path))).resolves.toBeUndefined();
+      expect(retained).toEqual([path]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a needs-human refusal through the step event spine', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-needs-human-'));
+    const events = new ConductorEventEmitter();
+    const retained: string[] = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') retained.push(event.path);
+    });
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }) },
+    });
+    const path = join('.pipeline', 'transcripts', 'build', 'needs-human');
+    try {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+      await events.emit({ type: 'provider_transcripts_captured', step: 'build', runId: 'run', attempt: 1,
+        provider: 'codex', path, files: 1, bytes: 3, interrupted: false, skipped: 0, omittedLines: 0 });
+      await events.emit({ type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator action required' });
+
       await expect(access(join(root, path))).resolves.toBeUndefined();
       expect(retained).toEqual([path]);
     } finally {
@@ -161,7 +189,7 @@ describe('conductor transcript retention wiring', () => {
         interrupted: false, skipped: 0, omittedLines: 0,
       });
       await events.emit({
-        type: 'step_completed', step: 'ship_validation', status: 'done',
+        type: 'step_completed', step: 'manual_test', status: 'done',
         executionContext: {
           executionId: 'member-success',
           subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'build_review' },
@@ -221,6 +249,7 @@ describe('conductor transcript retention wiring', () => {
       configuredProviders: ['codex'],
     };
     const runner: StepRunner = {
+      selfHostRunId: () => 'retry-flow',
       run: async (step, _state, options) => {
         dispatched.push(step);
         if (step !== 'build') return { success: true };
@@ -233,6 +262,7 @@ describe('conductor transcript retention wiring', () => {
           config: { llm_provider: 'codex' } as never,
           runId: 'retry-flow',
           attempt: options?.attempt,
+          captureAttempt: options?.captureAttempt,
           prepareCandidateSelfHost: providerExecution.prepareCandidateSelfHost,
           options: { prompt: 'Build.', cwd: root },
         });
