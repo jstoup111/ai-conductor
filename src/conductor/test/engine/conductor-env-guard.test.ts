@@ -156,7 +156,12 @@ describe('Conductor legacy provider-environment dispatch guard (Task 24)', () =>
     );
 
     expect(result).toEqual({ success: true });
-    expect(runner.run).toHaveBeenCalledWith('build', BUILD_STATE, { retryReason: undefined });
+    expect(runner.run).toHaveBeenCalledWith('build', BUILD_STATE, {
+      attempt: 1,
+      captureAttempt: 1,
+      escalate: false,
+      retryReason: undefined,
+    });
     expect(mutations).toEqual([]);
   });
 });
