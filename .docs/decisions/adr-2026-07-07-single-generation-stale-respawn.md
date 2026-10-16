@@ -71,6 +71,11 @@ Four coordinated changes, plus the config re-enable:
 > (`adr-2026-08-27-daemon-dispatcher-executor-seam` D5): claim-stop, drain, then the one-shot
 > trigger fires exactly as decided below.
 
+> **Amended 2026-10-15 by #2392:** For a stale-engine restart, the boundary hosting this trigger
+> is a natural idle (no executor running, claims never stopped). The claim-stop drain applies
+> only after `supervisor_max_stale_hours` or an executor protocol mismatch. Single-generation
+> termination is unchanged. See adr-2026-10-15-per-dispatch-engine-pinned-executor D7.
+
 2. **The idle-boundary trigger becomes one-shot per firing.** `requestRestart` reports whether
    the trigger actually fired; on a fired trigger the idle branch **breaks** the loop with
    `stopReason: 'engine_restart'` (mirroring the existing dispatch-boundary break) instead of
