@@ -62,6 +62,7 @@ import { resolveDispatchStartTimeoutSeconds } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import type { ConductorEvent } from '../types/events.js';
 import { refreshWorktreeCoAuthor } from './bot-co-author.js';
+import { resolveSkillName } from './skill-names.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -242,6 +243,8 @@ export async function prepareWorktree(
     events?: ConductorEventEmitter;
     dispatchStart?: boolean;
     dispatchStartTimeoutSeconds?: number;
+    /** Harness tree whose frontmatter names are visible to this dispatched session. */
+    skillNameRoot?: string | null;
   },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
@@ -249,7 +252,7 @@ export async function prepareWorktree(
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
   await refreshWorktreeCoAuthor(worktreePath, opts?.events);
-  await ensureSessionHooks(worktreePath, log);
+  await ensureSessionHooks(worktreePath, log, opts?.skillNameRoot);
   await excludeEngineArtifacts(worktreePath, log);
   const decision = await setupDecision(worktreePath, opts?.baseSha, opts?.force ?? false);
   // The setup decision reaches the operator as a rendered `project_setup`
@@ -399,6 +402,7 @@ async function excludeEngineArtifacts(
 async function wireSessionHookSettings(
   worktreePath: string,
   log?: (msg: string) => void,
+  skillNameRoot: string | null = null,
 ): Promise<{ file: string; error: string } | undefined> {
   try {
     const claudeDir = join(worktreePath, '.claude');
@@ -465,7 +469,7 @@ async function wireSessionHookSettings(
       }
       const overrides = settings.skillOverrides as Record<string, unknown>;
       for (const skill of OPERATOR_ONLY_SKILLS) {
-        overrides[skill] = 'off';
+        overrides[await resolveSkillName(skillNameRoot, skill)] = 'off';
       }
     }
 
@@ -599,9 +603,10 @@ async function sessionHookNeedsRepair(path: string, expectedContent: string): Pr
 export async function ensureSessionHooks(
   worktreeRoot: string,
   log?: (msg: string) => void,
+  skillNameRoot: string | null = null,
 ): Promise<SessionHookRepairOutcome> {
   const scripts = await writeSessionHooks(worktreeRoot, log);
-  const settingsFailure = await wireSessionHookSettings(worktreeRoot, log);
+  const settingsFailure = await wireSessionHookSettings(worktreeRoot, log, skillNameRoot);
   return {
     repaired: scripts.repaired,
     failed: settingsFailure ? [...scripts.failed, settingsFailure] : scripts.failed,

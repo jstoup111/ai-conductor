@@ -81,7 +81,8 @@ import {
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from './engine/provider-model-probe.js';
-import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
+import { ensureInstallFresh, relinkSkillsForSelfBuild, resolveHarnessRoot } from './engine/install-freshness.js';
+import { skillNameRootFor } from './engine/skill-names.js';
 import { Conductor } from './engine/conductor.js';
 import { createProvenanceGuardedFinishPresentationRepair } from './engine/finish-presentation-repair.js';
 import type { OperatorParkedTermination } from './engine/conductor-options.js';
@@ -1656,6 +1657,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         events: featureEvents,
         log: featureLog,
         worktreeLifecycle,
+        skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: wt.path, harnessRoot: await resolveHarnessRoot() }),
       },
     );
 
@@ -1932,6 +1934,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         mode: 'auto',
         providerExecution,
         log: featureLog,
+        skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: worktree.path, harnessRoot: await resolveHarnessRoot() }),
         },
       );
       featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
@@ -2878,6 +2881,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                               (message) => log(message, true),
                               formatDaemonFeatureTag(entry.slug),
                             ),
+                            skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: ctx.projectRoot, harnessRoot: await resolveHarnessRoot() }),
                           },
                         );
                         return stepRunner.resolveRebaseConflict(ctx);
@@ -2992,6 +2996,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                               (message) => log(message, true),
                               formatDaemonFeatureTag(ctx.entry.slug),
                             ),
+                            skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: ctx.worktreePath, harnessRoot: await resolveHarnessRoot() }),
                           },
                         );
                         return stepRunner.resolveCiFailure({

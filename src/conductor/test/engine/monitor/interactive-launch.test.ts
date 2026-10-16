@@ -57,10 +57,12 @@ describe('guided monitor interactive launch', () => {
 
     try {
       const codexLaunch = openGuidedSession({ provider: 'codex', halt });
+      await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1));
       codexChild.emit('exit', 0);
       await codexLaunch;
 
       const claudeLaunch = openGuidedSession({ provider: 'claude', halt });
+      await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(2));
       claudeChild.emit('exit', 0);
       await claudeLaunch;
 

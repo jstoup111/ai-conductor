@@ -99,6 +99,8 @@ import {
   resolveProviderExecutable,
 } from '../execution/provider-catalog.js';
 import { resolveComposeLaunchHost } from './compose-launch-host.js';
+import { resolveHarnessRoot } from './install-freshness.js';
+import { resolveSkillName } from './skill-names.js';
 import { PluginRegistry } from './plugin-registry.js';
 import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
@@ -567,6 +569,8 @@ function parseOptionalFlagPreservingEmpty(argv: string[], flag: string): string 
  * Tests inject print/printErr/gh/ensureRunningLaunch to avoid real I/O.
  */
 export interface DispatchEngineerOpts {
+  /** Skill tree used to resolve the host-visible composer name. */
+  skillNameRoot?: string | null;
   /** Override the registry path (for tests). */
   registryPath?: string;
   /** Override the engineer dir (for tests). */
@@ -1113,6 +1117,10 @@ export async function dispatchEngineer(
       const launchingDirectory = process.cwd();
       const confirmAnother = opts.confirmAnother ?? promptAnother;
       const launchEnv = opts.env ?? process.env;
+      const skillNameRoot = opts.skillNameRoot === undefined
+        ? await resolveHarnessRoot()
+        : opts.skillNameRoot;
+      const composerName = await resolveSkillName(skillNameRoot, 'composer');
 
       // Real-spawn path only: don't nest any interactive host session. When a launcher
       // is injected (tests), there is no real nesting, so skip this guard.
@@ -1126,7 +1134,7 @@ export async function dispatchEngineer(
         );
         if (nestedHost && 'interactiveLaunch' in nestedHost) {
           print(
-            `You are already inside a ${nestedHost.displayName} session — run ${nestedHost.invocationPrefix}composer directly to start ` +
+            `You are already inside a ${nestedHost.displayName} session — run ${nestedHost.invocationPrefix}${composerName} directly to start ` +
               'the idea→spec loop (no need to launch a nested session).',
           );
           return 0;
@@ -1159,7 +1167,7 @@ export async function dispatchEngineer(
       }
       const executable = host ? resolveProviderExecutable(host.id) : undefined;
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
-        const prompt = `${host!.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
+        const prompt = `${host!.invocationPrefix}${composerName}${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
           executable!,
           host!.interactiveLaunch.argv({
@@ -1231,7 +1239,7 @@ export async function dispatchEngineer(
             printErr(
               `engineer: could not launch ${host.id} executable ${executable ?? host.defaultExecutable} (${msg}). ` +
                 `Install it or set ${host.executableOverrideEnv}; if already in a session, run ` +
-                `${host.invocationPrefix}composer directly.`,
+                `${host.invocationPrefix}${composerName} directly.`,
             );
           } else {
             const displayName = host?.displayName ?? requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch').displayName;

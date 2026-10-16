@@ -27,11 +27,56 @@ function launchOptions(
   };
 }
 
+async function renamedSkillRoot(entries: Record<string, string>): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'composer-skill-names-'));
+  await Promise.all(Object.entries(entries).map(async ([directory, name]) => {
+    const skillDir = join(root, 'skills', directory);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+  }));
+  return root;
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 describe('dispatchEngineer interactive host launch', () => {
+  it('resolves composer launch prompts and diagnostics from the served skill tree', async () => {
+    const root = await renamedSkillRoot({ composer: 'ac-composer' });
+    const claudeSpawn = vi.fn(async (_executable: string, _argv: string[]) => 0);
+    const codexSpawn = vi.fn(async (_executable: string, _argv: string[]) => 0);
+    const nestedPrint = vi.fn();
+    const printErr = vi.fn();
+    const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
+    const missingSpawn = vi.fn(async () => Promise.reject(missing));
+
+    try {
+      await dispatchEngineer({ kind: 'launch', provider: 'claude' }, {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, claudeSpawn), skillNameRoot: root,
+      });
+      await dispatchEngineer({ kind: 'launch', provider: 'codex' }, {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn), skillNameRoot: root,
+      });
+      await dispatchEngineer({ kind: 'launch' }, {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn, { CODEX_THREAD_ID: 'thread' }),
+        skillNameRoot: root,
+        print: nestedPrint,
+      });
+      await dispatchEngineer({ kind: 'launch', provider: 'codex' }, {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, missingSpawn), skillNameRoot: root, printErr,
+      });
+
+      expect(claudeSpawn.mock.calls[0]?.[1]).toEqual(['--permission-mode', 'default', '/ac-composer']);
+      expect(codexSpawn.mock.calls[0]?.[1]).toEqual(['$ac-composer']);
+      expect(nestedPrint.mock.calls.flat().join('\n')).toContain('$ac-composer');
+      expect(printErr.mock.calls.flat().join('\n')).toContain('$ac-composer');
+      expect(`${nestedPrint.mock.calls.flat().join('\n')}\n${printErr.mock.calls.flat().join('\n')}`).not.toMatch(/\$(?:composer)(?:\s|$)|\/(?:composer)(?:\s|$)/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('exports the selected authoring provider while preserving inherited environment values', async () => {
     const claudeSpawn = vi.fn(async () => 0);
     const codexSpawn = vi.fn(async () => 0);

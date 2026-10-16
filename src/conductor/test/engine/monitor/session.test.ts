@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:10, task:11, task:12, task:13
+// Covers: task:2, task:3, task:5, task:10, task:11, task:12, task:13
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -42,6 +42,23 @@ async function fixtureChecksum(worktree: string): Promise<string> {
 }
 
 describe('guided halt sessions', () => {
+  it('resolves daemon-triage from the served skill tree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'monitor-skill-names-'));
+    const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
+    await mkdir(join(root, 'skills', 'daemon-triage'), { recursive: true });
+    await writeFile(join(root, 'skills', 'daemon-triage', 'SKILL.md'), '---\nname: ac-daemon-triage\n---\n');
+
+    try {
+      await openGuidedSession({
+        provider: 'codex',
+        halt: { project: '/workspace/project', slug: 'repair-index', reason: 'needs recovery' },
+      }, { launch, skillNameRoot: root });
+      expect(launch.mock.calls[0]?.[0].openingPrompt).toContain('Invoke $ac-daemon-triage for feature repair-index.');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('renders halt evidence into a fresh daemon-triage opening input', async () => {
     const launch = vi.fn<GuidedSessionLauncher>().mockResolvedValue({ kind: 'exited', exitCode: 0 });
 

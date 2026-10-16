@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:3, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -265,6 +265,27 @@ describe('runProjectPrelude (happy paths)', () => {
     expect(dispatchMemorySetup).toHaveBeenCalledTimes(1);
     expect(dispatchMemorySetup).toHaveBeenCalledWith({ kind: 'setup', dir });
     expect(warn).toHaveBeenCalledWith('[prelude] memory-store setup failed; continuing');
+  });
+
+  it('resolves bootstrap and assess from the served skill tree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'prelude-skill-names-'));
+    const provider = createMockProvider();
+    await writeFile(join(dir, 'app.rb'), 'puts 1\n');
+    for (const [directory, name] of [['bootstrap', 'ac-bootstrap'], ['assess', 'ac-assess']] as const) {
+      await mkdir(join(root, 'skills', directory), { recursive: true });
+      await writeFile(join(root, 'skills', directory, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+    }
+
+    try {
+      await runProjectPrelude(dir, provider, 'session-1', {}, {
+        harnessVersion: '1.0.0', skillNameRoot: root,
+      });
+      expect(vi.mocked(provider.invoke).mock.calls.map(([options]) => options.prompt)).toEqual([
+        '/ac-bootstrap', '/ac-assess',
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('requires initialized configuration before a managed bootstrap launch without writing defaults', async () => {

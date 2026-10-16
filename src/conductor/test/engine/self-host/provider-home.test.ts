@@ -1,4 +1,4 @@
-// Covers: task:2, task:6
+// Covers: task:2, task:6, task:7
 import { describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile, chmod } from 'node:fs/promises';
@@ -17,6 +17,37 @@ import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 const execFile = promisify(execFileCb);
 
 describe('provider-aware self-host homes', () => {
+  it('keys its copied skill catalogs by frontmatter name while pruning operator-only directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-frontmatter-names-'));
+    const worktree = join(root, 'worktree');
+    const skills = join(worktree, 'skills');
+    const names = new Map([
+      ['bootstrap', 'ac-bootstrap'],
+      ['pipeline', 'ac-pipeline'],
+      ['daemon-triage', 'ac-daemon-triage'],
+    ]);
+    for (const [directory, name] of names) {
+      await mkdir(join(skills, directory), { recursive: true });
+      await writeFile(join(skills, directory, 'SKILL.md'), `---\nname: ${name}\n---\n`, 'utf8');
+    }
+    // A non-skill worktree asset keeps its own directory name.
+    await mkdir(join(skills, 'HARNESS'), { recursive: true });
+
+    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root });
+    try {
+      const expected = ['HARNESS', 'ac-bootstrap', 'ac-pipeline'].sort();
+      expect((await readdir(join(home.homeDir, 'skills'))).sort()).toEqual(expected);
+      expect((await readdir(join(home.homeDir, '.agents', 'skills'))).sort()).toEqual(expected);
+      await expect(access(join(home.homeDir, 'skills', 'bootstrap'))).rejects.toThrow();
+      await expect(access(join(home.homeDir, 'skills', 'pipeline'))).rejects.toThrow();
+      await expect(access(join(home.homeDir, 'skills', 'daemon-triage'))).rejects.toThrow();
+      await expect(access(join(home.homeDir, 'skills', 'ac-daemon-triage'))).rejects.toThrow();
+    } finally {
+      await home.teardown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('gives Pi an isolated child environment without any other provider state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pi-provider-home-env-'));
     const worktree = join(root, 'worktree');

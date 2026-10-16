@@ -114,6 +114,7 @@ test_bin_setup_failure_propagation.sh shell-runner verifies setup failure propag
 test_codex_guidance_contract.sh shell-runner verifies Codex-facing bootstrap guidance contracts
 # triage: test_codex_skill_installation.sh fixed — isolated runner PASS after removing retired Unreleased changelog-migration assertions
 test_codex_skill_installation.sh shell-runner verifies isolated Codex catalog installation, update, check, and uninstall behavior
+test_install_skill_names.sh shell-runner verifies frontmatter-keyed installer skill links
 # triage: run_browsable_documentation_site_acceptance.sh deleted — obsolete: duplicate runner; test_docs_navigation.sh and test_docs_pages_smoke.sh retain integrity ownership
 
 # Triage: launcher, hook, and release orphan scripts verified through the isolated shell runner.

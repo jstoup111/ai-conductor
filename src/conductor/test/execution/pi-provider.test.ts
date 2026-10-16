@@ -1,4 +1,5 @@
 // Covers: task:2, task:3, task:4, task:6, task:7, task:9, task:13, task:15, task:16, task:17, task:18
+// Covers: task:4
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +16,7 @@ import {
 import { DAEMON_SESSION_MARKER } from '../../src/execution/daemon-session.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import { STEP_SKILL_INVOCATIONS, renderSkillInvocation } from '../../src/engine/skill-invocation.js';
 
 type PiSubprocessFactory = (
   file: string,
@@ -159,6 +161,54 @@ describe('resolvePiSkill', () => {
       `${projectSkillsRoot}/${skillName}/SKILL.md`,
     ]);
     expect(stat.mock.calls.flat().every((path) => path.endsWith('/SKILL.md'))).toBe(true);
+  });
+});
+
+describe('Pi frontmatter-named catalog entries', () => {
+  const harnessPath = '/home/agent/.agents/skills/HARNESS.md';
+  const spawn = vi.fn<PiSubprocessFactory>();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spawn.mockResolvedValue({
+      stdout: JSON.stringify({
+        type: 'message_end',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Pi completed.' }] },
+      }),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+  });
+
+  it('resolves only the frontmatter name used as the catalog entry key', async () => {
+    const { environment } = fakePiEnvironment({
+      files: [harnessPath, '/home/agent/.agents/skills/ac-explore/SKILL.md'],
+    });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:ac-explore\nExplore it.' }))
+      .resolves.toMatchObject({ success: true });
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:explore\nExplore it.' }))
+      .resolves.toMatchObject({
+        success: false,
+        commandUnresolved: true,
+        commandUnresolvedName: 'explore',
+      });
+
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the shipped pipeline catalog entry and rendered build prompt unchanged', async () => {
+    const { environment } = fakePiEnvironment({
+      files: [harnessPath, '/home/agent/.agents/skills/pipeline/SKILL.md'],
+    });
+    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const prompt = renderSkillInvocation(STEP_SKILL_INVOCATIONS.build!, 'pi');
+
+    expect(prompt).toBe('/skill:pipeline');
+    await expect(provider.invoke({ ...invokeOptions, prompt: `${prompt}\nBuild it.` }))
+      .resolves.toMatchObject({ success: true });
+    expect(spawn).toHaveBeenCalledOnce();
   });
 });
 

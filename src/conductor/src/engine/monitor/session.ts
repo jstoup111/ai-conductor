@@ -8,6 +8,8 @@ import { join } from 'node:path';
 import type { HaltDisposition } from '../halt-marker.js';
 import type { EffortLevel } from '../../types/config.js';
 import type { ProjectHalt } from './halt-inventory.js';
+import { resolveHarnessRoot } from '../install-freshness.js';
+import { resolveSkillName } from '../skill-names.js';
 
 /** Halt context at the external session boundary, before classification is trusted. */
 export type GuidedSessionHalt = Omit<ProjectHalt, 'haltClass'> & {
@@ -27,12 +29,14 @@ export type GuidedSessionLauncher = (
 
 export interface GuidedSessionOptions {
   readonly launch?: GuidedSessionLauncher;
+  /** Skill tree used to resolve the host-visible daemon-triage name. */
+  readonly skillNameRoot?: string | null;
 }
 
 export const MONITOR_HOSTED_MARKER = 'Session host: conduct monitor queue.';
 
-function triageInvocation(provider: string): string {
-  return `${findBuiltInProviderDescriptor(provider)?.invocationPrefix ?? '$'}daemon-triage`;
+function triageInvocation(provider: string, skillName: string): string {
+  return `${findBuiltInProviderDescriptor(provider)?.invocationPrefix ?? '$'}${skillName}`;
 }
 
 function monitorHostingBlock(provider: string): string[] {
@@ -92,12 +96,12 @@ export function recoveryProcedure(haltClass: HaltDisposition): string {
   }
 }
 
-function openingPrompt(request: GuidedSessionRequest): string {
+function openingPrompt(request: GuidedSessionRequest, triageName: string): string {
   const { halt } = request;
   const haltClass = recognizedHaltDisposition(halt.haltClass);
   return [
     'Resolve this halted daemon feature with the existing daemon-triage procedure.',
-    `Invoke ${triageInvocation(request.provider)} for feature ${halt.slug}.`,
+    `Invoke ${triageInvocation(request.provider, triageName)} for feature ${halt.slug}.`,
     `Project: ${halt.project}`,
     `Feature: ${halt.slug}`,
     `Reason: ${halt.reason}`,
@@ -117,11 +121,15 @@ export async function openGuidedSession(
   options: GuidedSessionOptions = {},
 ): Promise<InteractiveLaunchOutcome> {
   const launch = options.launch ?? launchInteractiveSession;
+  const skillNameRoot = options.skillNameRoot === undefined
+    ? await resolveHarnessRoot()
+    : options.skillNameRoot;
+  const triageName = await resolveSkillName(skillNameRoot, 'daemon-triage');
   return launch({
     provider: request.provider,
     model: request.model,
     effort: request.effort,
     cwd: haltedWorktree(request.halt),
-    openingPrompt: openingPrompt(request),
+    openingPrompt: openingPrompt(request, triageName),
   });
 }

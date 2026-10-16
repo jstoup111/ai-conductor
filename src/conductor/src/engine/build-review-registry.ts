@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import {
   BUILD_REVIEW_JUDGED_V3_SCHEMAS,
@@ -152,6 +154,15 @@ export function getBuildReviewRubricDescriptor(
   rubric: RegisteredBuildReviewRubricId,
 ): BuildReviewRubricDescriptor {
   return BUILD_REVIEW_RUBRIC_REGISTRY[rubric];
+}
+
+/** Read a shipped rubric from its installation directory, not its semantic name. */
+export async function readBuildReviewRubricSkill(
+  harnessRoot: string,
+  rubric: RegisteredBuildReviewRubricId,
+): Promise<string> {
+  const { skillName } = getBuildReviewRubricDescriptor(rubric);
+  return readFile(join(harnessRoot, 'skills', skillName, 'SKILL.md'), 'utf8');
 }
 
 /**

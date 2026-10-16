@@ -306,3 +306,60 @@ Task 9 ──▶ Task 10
 - [x] Every task has a `Done when:` block of 2-5 falsifiable checks
 - [x] Dependencies are explicit and acyclic
 - [x] Plan review sweeps cross-task fixture interference at Medium tier
+
+### Task rem-as-built-R1: step-runners.ts: thread resolvedSkillName into both optionsForCandidate re-renders (ordinary-step closure and one-shot/nativeSchema closure) via renderSkillInvocation's resolvedName argument; add step-runners-skill-name.test.ts cases where a renamed skillNameRoot plus a multi-candidate provider produces /ac-explore (and $ac-explore for codex) in the candidate-override prompt, including a one-shot gate (complexity/rebase) path
+**Gate:** as-built
+**Rationale:** Verified (99%): the approved ADR decision 2 is authoritative and the code drifts from it. In step-runners.ts the per-candidate override closures (optionsForCandidate near :1893 and :1993-1994) re-render with renderSkillInvocation(descriptor, candidateKey) and drop the resolvedSkillName computed at :1285. provider-execution.ts then applies that override over the resolved prompt. Separately, the build-review unresolved-skill remedy at :4813-4814 passes branch.skillName and not the resolvedSkillName computed at :4393. Task 2 admits the built-in step re-render fix: it owns step-runners.ts built-in step dispatch rendering via the resolvedName argument. Task 3 admits the grader diagnostic: it owns the build-review grader's resolved name. No architectural decision is needed. Completed coverage survives: the Task 2/3 shipped-tree identity assertions stay, and the new tests add renamed-fixture cases through the candidate-override path.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 2
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: step-runners.ts: pass the resolved build-review rubric skill name (resolvedSkillName) to renderBuildReviewUnresolvedSkillRemedy in place of branch.skillName; add a step-runners-skill-name.test.ts case asserting the unresolved-skill diagnostic names ac-build-review-security under a renamed fixture and is unchanged with the shipped tree
+**Gate:** as-built
+**Rationale:** Verified (99%): the approved ADR decision 2 is authoritative and the code drifts from it. In step-runners.ts the per-candidate override closures (optionsForCandidate near :1893 and :1993-1994) re-render with renderSkillInvocation(descriptor, candidateKey) and drop the resolvedSkillName computed at :1285. provider-execution.ts then applies that override over the resolved prompt. Separately, the build-review unresolved-skill remedy at :4813-4814 passes branch.skillName and not the resolvedSkillName computed at :4393. Task 2 admits the built-in step re-render fix: it owns step-runners.ts built-in step dispatch rendering via the resolvedName argument. Task 3 admits the grader diagnostic: it owns the build-review grader's resolved name. No architectural decision is needed. Completed coverage survives: the Task 2/3 shipped-tree identity assertions stay, and the new tests add renamed-fixture cases through the candidate-override path.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 2
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R3: bin/install skill_frontmatter_name: resolve the scalar value as YAML does for the plain/quoted forms (strip surrounding single/double quotes with YAML unescaping of '' and \", strip trailing ' #' comments on plain scalars, trim whitespace), matching skill-names.ts; add test/test_install_skill_names.sh scenarios for name: "ac-plan", name: 'ac-plan' and name: ac-plan # comment each linking ~/.claude/skills/ac-plan and ~/.agents/skills/ac-plan
+**Gate:** as-built
+**Rationale:** Source-verified (98%): bin/install skill_frontmatter_name captures the raw text after 'name:' with a regex. skill-names.ts reads the same field with js-yaml. A quoted value (name: "ac-plan") or a trailing comment (name: ac-plan # c) therefore yields a different installer link name than the engine invocation name, which violates ADR decision 3 (one shared name source). Task 9 owns skill_frontmatter_name and its scenarios. Task 10 reuses the function, so the fix carries over and no sibling change is needed. This is conforming implementation drift, not an architecture decision. Existing Task 9 scenarios survive: shipped-tree listing identity, no-name fallback, and unclosed-block exit 1.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 3
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R3 is committed and its targeted tests pass.
+
+### Task rem-as-built-R4: sandbox-build-env.ts: call sandboxLinkTargets from Claude sandbox provisioning after building skills/ and throw SandboxProvisionError (tearing down the partial sandbox) when any per-skill link target resolves outside <worktree>/skills; add sandbox-build-env.test.ts cases proving provisioning invokes the check (an escaping link fails provisioning, the shipped/renamed trees pass)
+**Gate:** as-built
+**Rationale:** Verified (99%): sandboxLinkTargets (sandbox-build-env.ts:414) has only a test caller, and on main it was a test-only helper too. Task 8 materially rewrote it to enumerate per-skill links. The finding requires that behavior to have a production consumer. Task 8 admits the fix inside its own files. The repair connects sandboxLinkTargets to provisioning as a post-link containment check: every per-skill link must resolve inside the worktree's skills/ directory, or provisioning fails with the existing SandboxProvisionError and removes the partial sandbox (adr-2026-06-30-sandbox-build-isolation#D6 is unchanged). The Task 8 Done-when assertions on sandboxLinkTargets stay as they are. Removing the export instead would contradict Task 8, so that is not done.
+**Parent task:** 8
+**Governing clause:** Task 8
+**Done when:**
+- Task 8 is satisfied by this task.
+- The repair for task rem-as-built-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R5: step-runners.ts: at both runProviderAwareNormal call sites (~:1697 ordinary-step and ~:1739) pass 'skill' as invocationKind before resolvedSkillName so it lands in the resolvedSkillName parameter; tighten step-runners-skill-name.test.ts so a multi-candidate provider MUST produce optionsForCandidate (no fallback to the original prompt) rendering /ac-explore for claude and $ac-explore for codex under a renamed skillNameRoot
+**Gate:** as-built
+**Rationale:** Verified (99%): step-runners.ts:1697 and :1739 call runProviderAwareNormal with resolvedSkillName in the ninth argument, invocationKind (signature :1831-1832), so ordinary skills lose candidate-specific re-rendering. ADR decision 2 and its architecture stay authoritative. This is conforming implementation and test drift, admitted by Task 2 (built-in step dispatch renders the resolved name) and the incomplete rem-as-built-R1. The fix passes 'skill' before resolvedSkillName at both calls. The masking test must require optionsForCandidate to exist and render the resolved name per candidate provider. Completed coverage from Task 2 and R1 is kept and strengthened, not relaxed.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 2
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R5 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R6: bin/install skill_frontmatter_name: recognise a quoted scalar by its leading quote, find the matching closing quote (handling \" escapes in double quotes and '' in single quotes), take the unescaped content, and allow only whitespace or a ' #' comment after it, matching skill-names.ts YAML parsing; add test/test_install_skill_names.sh scenarios for name: "ac-plan" # comment and name: 'ac-plan' # comment, each linking ~/.claude/skills/ac-plan and ~/.agents/skills/ac-plan
+**Gate:** as-built
+**Rationale:** Verified (99%): in bin/install skill_frontmatter_name, the case patterns \"*\" and \'*\' only match values that end with a quote. So name: "ac-plan" # comment and name: 'ac-plan' # comment fall to the plain branch, which strips the comment but keeps the quotes. The resulting catalog key differs from skill-names.ts YAML parsing, which ADR decision 3 requires to agree. This is conforming implementation drift, admitted by Task 9 and the incomplete rem-as-built-R3. The existing quoted-form and plain-comment scenarios from R3 are kept.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 3
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R6 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R7: bin/install skill_frontmatter_name: fix the double-quote escape check at :150. Compare the one-char substring against a single backslash ("\\" in double quotes or $'\\'), not the two-character '\\', so \" unescapes to a quote. Keep the existing '' handling and the trailing whitespace/' #' comment acceptance from R3/R6. Add test/test_install_skill_names.sh scenarios: name: "ac-\"plan" resolves to the same name skill-names.ts yields and links it under ~/.claude/skills and ~/.agents/skills, and name: "ac-\"plan" # comment does the same. Keep the existing quoted/comment scenarios passing.
+**Gate:** as-built
+**Rationale:** Verified (100%, read bin/install:149-152): the escape check compares the one-character substring ${declared_name:index:1} against '\\' written in single quotes, which is a two-backslash string, so it can never match. A valid double-quoted name with an escaped quote, such as name: "ac-\"plan", therefore closes early on the inner quote, leaves trailing text, and fails at :171-173, while skill-names.ts accepts it. ADR decision 3 is authoritative and clear, so no architectural decision is needed. This is a conforming implementation defect in the R6 repair, and Task 9 (bin/install links skills under their frontmatter names) plus the R3/R6 contract admit the fix. The existing R3/R6 quote and comment behavior and its tests must survive: only the backslash comparison literal changes, and the missing escaped-quote test is added.
+**Governing clause:** adr-2026-10-14-ac-prefixed-skill-names decision 3
+**Done when:**
+- adr-2026-10-14-ac-prefixed-skill-names decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R7 is committed and its targeted tests pass.
