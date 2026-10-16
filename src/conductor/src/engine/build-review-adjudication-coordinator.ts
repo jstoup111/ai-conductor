@@ -611,6 +611,36 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (blockedConsistency && blockedConsistency.sourceIds.length === 0) {
     return fail('blocked consistency stop has no live sources');
   }
+  // A judgement that explicitly reuses a prior case the classifier halts on
+  // must stop BEFORE reconciliation: reconciliation reserves sibling action
+  // effects, and a halt between reservation and application strands them as
+  // reserved forever (no later lap can apply them — their tasks live only in
+  // this judgement), so every following lap halts on an unfinished effect.
+  // Convergence never binds a resolved case, so explicit reuse is the only way
+  // to reach a regression; a converged repeat is still caught after reconciling.
+  // Only an `act` proposal repeats an action: any other disposition transforms
+  // the reused case (a refutation settles it) and reconciliation owns that.
+  const priorCasesBeforeReconcile = new Map(prior.state.cases.map((record) => [record.id, record]));
+  for (const proposed of admitted) {
+    if (proposed.case.disposition !== 'act') continue;
+    if (proposed.sources.every((source) => !liveSourceIds.has(source.sourceId))) continue;
+    const record = proposed.case.existingCaseId ? priorCasesBeforeReconcile.get(proposed.case.existingCaseId) : undefined;
+    if (!record) continue;
+    const reuse = classifyRemediationCaseReuse(record, attempted);
+    if (reuse === 'halt-regression' || reuse === 'halt-repeat') {
+      await input.emit?.({
+        type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId: record.id, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
+        reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
+      });
+      return failUnlessAccepted(reuse === 'halt-repeat'
+        ? `semantic remediation case repeat ${record.id}`
+        : `semantic remediation case regression ${record.id}`, {
+          settleAbsentAttempted: false,
+          caseSourceIds: [new Set(record.sources.map((source) => source.sourceId))],
+        });
+    }
+  }
   const recordedAt = new Date().toISOString();
   const generateId = input.generateId ?? randomUUID;
   const reconciled = await reconcileRemediationCases(store, {

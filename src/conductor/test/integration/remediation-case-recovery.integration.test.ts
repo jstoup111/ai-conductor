@@ -319,7 +319,7 @@ describe('remediation case recovery', () => {
     expect({ retry, charges: charge.mock.calls.length }).toEqual({ retry: { kind: 'absent' }, charges: 1 });
   });
 
-  it('keeps an action reservation orphaned by a semantic-repeat halt out of the next lap work order', async () => {
+  it('reserves nothing a semantic-repeat halt would orphan, so the next lap routes only its own work', async () => {
     const projectRoot = await root();
     const lapOne = actionAggregate('lap-one', [
       { name: 'orphaned reservation', path: 'test/orphaned.test.ts' },
@@ -354,7 +354,7 @@ describe('remediation case recovery', () => {
       ],
       cases: [
         {
-          caseRef: 'orphaned-case', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'This action should remain reserved after the abort.',
+          caseRef: 'orphaned-case', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'This action must not be reserved by a lap that halts.',
           effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the orphaned assertion' }] },
         },
         {
@@ -383,18 +383,19 @@ describe('remediation case recovery', () => {
       projectRoot, feature, aggregate: lapTwo, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy',
       judge: async () => lapTwoJudgement, chargeInput: { treeHash: 'tree-two', resolvedCount: 1, reason: 'lap two' },
       generateId: (() => { const ids = ['distinct-case-id', 'distinct-effect']; return () => ids.shift()!; })(),
-    })).resolves.toMatchObject({ ok: true, route: 'halt', detail: 'remediation effect is not finalized' });
+    })).resolves.toMatchObject({ ok: true, route: 'build' });
 
     const freshStore = new RemediationCaseStore(projectRoot, feature);
     const persisted = await freshStore.read();
     expect(persisted).toMatchObject({
       ok: true,
       state: { cases: expect.arrayContaining([
-        expect.objectContaining({ id: 'orphaned-case-id', effect: expect.objectContaining({ status: 'reserved' }) }),
         expect.objectContaining({ id: 'distinct-case-id', effect: expect.objectContaining({ status: 'applied' }) }),
       ]) },
     });
     if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+    // The repeat halted lap one before reconciliation, so no orphaned reservation exists to block lap two.
+    expect(persisted.state.cases.map((record) => record.id)).not.toContain('orphaned-case-id');
     const workOrder = JSON.parse(await readFile(join(projectRoot, '.pipeline/build-review-work-order.json'), 'utf8')) as { cases: Array<{ caseId: string }> };
     expect(workOrder.cases).toEqual([{ caseId: 'distinct-case-id', priority: 'high', tasks: [{ title: 'Repair the distinct assertion' }] }]);
 
@@ -409,7 +410,7 @@ describe('remediation case recovery', () => {
     expect(retry.context).not.toContain('orphaned-case-id');
     expect(reduceBuildReviewAdjudication({
       currentSourceIds: [buildReviewAdjudicationSourceId(distinctSource)], cases: persisted.state.cases, mechanical: 'healthy',
-    })).toEqual({ route: 'halt', remainingMechanical: false, reason: 'remediation effect is not finalized' });
+    })).toMatchObject({ route: 'build', remainingMechanical: false });
   });
 
   it('recovers from a cleared rejected-transition halt without changing its valid persisted history', async () => {
