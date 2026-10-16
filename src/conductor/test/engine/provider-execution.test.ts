@@ -619,6 +619,28 @@ describe('executeProviderCandidates', () => {
     );
   });
 
+  // Covers: task:rem-as-built-rem-ab-capture-dispatch-seq
+  it('uses a capture-only sequence for auxiliary retries without changing their escalation attempts', async () => {
+    const prepared: Array<{ runId: string | undefined; attempt: number; member: string | undefined }> = [];
+    await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'security', runId: 'R',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: true, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: async () => ({ success: false, output: 'retry', exitCode: 1 }) })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
+      prepareCandidateSelfHost: async (_candidate, _runtime, identity) => {
+        prepared.push(identity!);
+        return { executable: '/resolved/codex', env: {}, args: [], teardown: async () => {} };
+      },
+    });
+
+    expect(prepared).toEqual([
+      { runId: 'R', attempt: 1, member: 'security' },
+      { runId: 'R', attempt: 2, member: 'security' },
+    ]);
+  });
+
   it('records a custom member setup skip and launches nothing when its provider has no read-only review mode', async () => {
     const invoke = vi.fn();
     const result = await executeAuxiliaryProviderCandidates({

@@ -1,4 +1,4 @@
-// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3
+// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3, task:rem-as-built-rem-ab-capture-dispatch-seq
 import { describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -293,14 +293,23 @@ describe('conductor transcript retention wiring', () => {
     });
 
     let invocations = 0;
-    const dispatched: string[] = [];
+    const dispatched: Array<{ step: string; captureAttempt: number | undefined }> = [];
+    const transcriptWrites: Array<{ path: string; content: string }> = [];
     const runtime = {
       key: 'codex',
       provider: {
         lifecycleCapability: { synchronousSpawnPermit: true },
         resolveSelfHostExecutable: async () => 'codex',
         prepareSelfHostAuth: async () => ({ args: [] }),
-        invoke: async () => ({ success: ++invocations > 1, output: 'provider result', exitCode: invocations > 1 ? 0 : 1 }),
+        invoke: async () => {
+          invocations++;
+          return {
+            success: invocations === 3,
+            output: 'provider result',
+            exitCode: invocations === 3 ? 0 : 1,
+            ...(invocations === 2 ? { rateLimited: true, waitSeconds: 0 } : {}),
+          };
+        },
       },
       policy: providerDescriptor('codex').modelPolicy,
       builtIn: true,
@@ -315,7 +324,7 @@ describe('conductor transcript retention wiring', () => {
     const runner: StepRunner = {
       selfHostRunId: () => 'retry-flow',
       run: async (step, _state, options) => {
-        dispatched.push(step);
+        dispatched.push({ step, captureAttempt: options?.captureAttempt });
         if (step !== 'build') return { success: true };
         const result = await executeProviderCandidates({
           step,
@@ -335,7 +344,11 @@ describe('conductor transcript retention wiring', () => {
             tasks: [{ id: 'retry-task', status: 'completed' }],
           }));
         }
-        return { success: result.success, output: result.output };
+        return {
+          success: result.success,
+          output: result.output,
+          ...(result.rateLimited ? { rateLimited: true, waitSeconds: result.waitSeconds } : {}),
+        };
       },
     };
     const firstCapture = '{"attempt":1,"message":"first dispatch"}\n';
@@ -348,11 +361,12 @@ describe('conductor transcript retention wiring', () => {
         provider: 'codex', homeDir: root, childEnv: () => ({}), childArgs: () => [],
         teardown: async () => {
           const path = join('.pipeline', 'transcripts', String(options.step), `${options.runId}-a${options.attempt}-codex`);
+          const content = options.attempt === 1
+            ? firstCapture
+            : `{"attempt":${options.attempt},"message":"dispatch ${options.attempt}"}\n`;
           await mkdir(join(root, path), { recursive: true });
-          await writeFile(
-            join(root, path, 'session.jsonl'),
-            options.attempt === 1 ? firstCapture : '{"attempt":2,"message":"second dispatch"}\n',
-          );
+          await writeFile(join(root, path, 'session.jsonl'), content);
+          transcriptWrites.push({ path, content });
           await events.emit({ type: 'provider_transcripts_captured', step: 'build',
             runId: options.runId ?? 'retry-flow', attempt: options.attempt ?? 1, provider: 'codex', path,
             files: 1, bytes: 3, interrupted: false, skipped: 0, omittedLines: 0 });
@@ -381,17 +395,30 @@ describe('conductor transcript retention wiring', () => {
         projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
         featureSlug: 'retry-flow', events, stepRunner: runner, providerExecution,
         selfHostGuardrails: guardrails, daemon: true, selfHost: true, fromStep: 'build',
-        mode: 'auto', verifyArtifacts: false, maxRetries: 2,
+        mode: 'auto', verifyArtifacts: false, maxRetries: 2, sleepFn: async () => {},
         config: { llm_provider: 'codex', harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } } } as never,
       });
       await conductor.run();
 
       const first = join('.pipeline', 'transcripts', 'build', 'retry-flow-a1-codex');
       const second = join('.pipeline', 'transcripts', 'build', 'retry-flow-a2-codex');
-      expect({ invocations, dispatched }).toEqual({ invocations: 2, dispatched: ['build', 'build'] });
+      const third = join('.pipeline', 'transcripts', 'build', 'retry-flow-a3-codex');
+      expect({ invocations, dispatched }).toEqual({
+        invocations: 3,
+        dispatched: [
+          { step: 'build', captureAttempt: 1 },
+          { step: 'build', captureAttempt: 2 },
+          { step: 'build', captureAttempt: 3 },
+        ],
+      });
       expect(lifecycle).toEqual([
         { type: 'provider_transcripts_retained', path: first },
         { type: 'provider_transcripts_pruned', path: second },
+      ]);
+      expect(transcriptWrites).toEqual([
+        { path: first, content: firstCapture },
+        { path: second, content: '{"attempt":2,"message":"dispatch 2"}\n' },
+        { path: third, content: '{"attempt":3,"message":"dispatch 3"}\n' },
       ]);
       await expect(access(join(root, first))).resolves.toBeUndefined();
       await expect(readFile(join(root, first, 'session.jsonl'), 'utf8')).resolves.toBe(firstCapture);

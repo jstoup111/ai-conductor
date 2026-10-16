@@ -1467,6 +1467,8 @@ export interface ExecuteAuxiliaryProviderCandidatesInput<MemberId extends string
     'modelOverride' | 'effortOverride' | 'modelFallbackLadder' | 'auxiliaryMember'> {
   memberId: MemberId;
   policy: ResolvedBuildReviewRubricPolicy;
+  /** Allocates a capture-only dispatch sequence; it must not affect escalation. */
+  nextCaptureAttempt?: () => number;
 }
 
 export async function executeAuxiliaryProviderCandidates<MemberId extends string>(
@@ -1487,6 +1489,9 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       effortOverride: input.policy.effort,
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
+      ...(input.nextCaptureAttempt === undefined
+        ? {}
+        : { captureAttempt: input.nextCaptureAttempt() }),
     });
     // A setup-only exhaustion is terminal for this logical dispatch: retrying
     // repeats the same verified capability checks without ever invoking a
