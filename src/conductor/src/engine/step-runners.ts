@@ -3538,7 +3538,11 @@ export class DefaultStepRunner implements StepRunner {
       const hasJudgedFinding = lapResults.some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
-      if (!hasJudgedFinding && infrastructureFailure.reason !== 'projection-oversized') {
+      // A peer's judged finding must not exempt this failure from the
+      // allowance: BUILD cannot repair a reviewer's malformed output, so an
+      // uncounted failure re-dispatches build_review on the same lap forever.
+      // The judged lap still proceeds to adjudication while allowance remains.
+      if (infrastructureFailure.reason !== 'projection-oversized') {
         const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
           rubric: infrastructureFailure.rubric,
           reason: infrastructureFailure.reason,
@@ -3546,13 +3550,14 @@ export class DefaultStepRunner implements StepRunner {
           lapId,
         }, child);
         if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
-          return {
-            success: false,
-            output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
-            currentLapMechanicalFault: true,
-          };
-        }
-        if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported' || infrastructureFailure.reason === 'review-input-mutated') {
+          if (!hasJudgedFinding) {
+            return {
+              success: false,
+              output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+              currentLapMechanicalFault: true,
+            };
+          }
+        } else if (infrastructureFailure.reason === 'invalid-structured-result' || infrastructureFailure.reason === 'native-schema-unsupported' || infrastructureFailure.reason === 'review-input-mutated') {
           const reason = `build_review mechanical fault allowance exhausted for ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`;
           return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
         }
