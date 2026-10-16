@@ -140,7 +140,8 @@ skipping `land`, `handoff`, and the daemon loop.
 **Eligibility — every condition must hold, each stated with its evidence:**
 
 - The work would assess as Small, and the fix is a few localized edits: at most two production
-  files and about 15 changed production lines, provable with one or two focused tests.
+  files and about 15 changed production lines, forming one logical change, provable with one or
+  two focused tests.
 - It stays inside the existing architecture: no new module, layer, service, dependency, or
   cross-boundary call; it contradicts no APPROVED ADR or architecture diagram; it needs no new ADR.
 - It changes no contract surface: public API, schema, persisted data format, CLI flags, hook
