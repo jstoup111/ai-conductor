@@ -1,4 +1,4 @@
-// Covers: task:7, task:rem-prd-audit-R1
+// Covers: task:7, task:rem-prd-audit-R1, task:rem-as-built-R7
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import * as providerCatalog from '../../../src/execution/provider-catalog.js';
+import { startFeatureEventPersistence } from '../../../src/engine/event-persister.js';
 import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
+import { detectTranscriptsCommand, dispatchTranscripts } from '../../../src/engine/transcripts-cli.js';
 import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import {
@@ -15,6 +17,7 @@ import {
   readScratchLease,
   releaseScratchHome,
   resolveScratchHome,
+  sweepFeatureWorktreeScratch,
   sweepScratch,
   type ScratchFs,
 } from '../../../src/engine/self-host/provider-scratch.js';
@@ -22,6 +25,63 @@ import {
 const execFile = promisify(execFileCb);
 
 describe('provider scratch homes', () => {
+  it('retains interrupted sweep captures in the feature ledger and exposes them to transcripts', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'provider-scratch-sweep-retention-'));
+    const slug = 'interrupted-feature';
+    const worktreeBase = join(repo, '.worktrees');
+    const worktreeRoot = join(worktreeBase, slug);
+    const globalEvents = new ConductorEventEmitter();
+    const home = await acquireScratchHome({
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: slug,
+      runId: 'interrupted',
+      attempt: 1,
+      step: 'build',
+      provider: 'codex',
+      ownerPid: 1001,
+    });
+    const scopedEmitters: ConductorEventEmitter[] = [];
+    try {
+      await mkdir(join(home, 'self-host-codex-interrupted', 'sessions'), { recursive: true });
+      await writeFile(join(home, 'self-host-codex-interrupted', 'sessions', 'session.jsonl'), JSON.stringify({
+        type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'interrupted result' }] },
+      }));
+
+      await sweepFeatureWorktreeScratch({
+        worktreeBase,
+        events: globalEvents,
+        log: () => {},
+        startFeatureEventScope: (path, featureSlug) => {
+          const scope = startFeatureEventPersistence(path, globalEvents, featureSlug);
+          scopedEmitters.push(scope.events);
+          return scope;
+        },
+      });
+
+      const capture = '.pipeline/transcripts/build/interrupted-a1-codex';
+      const ledger = await readFile(join(worktreeRoot, '.pipeline', 'events.jsonl'), 'utf8');
+      expect(ledger).toContain('"type":"provider_transcripts_captured"');
+      expect(ledger).toContain(`"type":"provider_transcripts_retained"`);
+
+      const command = detectTranscriptsCommand(['node', 'ai-conductor', 'transcripts', slug]);
+      if (command === null) throw new Error('transcripts command was not detected');
+      const output: string[] = [];
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { output.push(line); });
+      try {
+        expect(await dispatchTranscripts(command, repo)).toBe(0);
+      } finally {
+        log.mockRestore();
+      }
+      expect(output).toEqual([expect.stringContaining(`interrupted=true path=${capture}`)]);
+
+      const scopeEvents = scopedEmitters[0] as unknown as { handlers: Map<string, Set<unknown>> };
+      expect(scopeEvents.handlers.get('provider_transcripts_captured')).toHaveLength(0);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('retains legacy entries that are not provably stale while continuing after a failed removal', async () => {
     const tempRoot = '/legacy-scratch-refusal';
     const processStartedAt = new Date('2026-08-11T12:00:00.000Z');
