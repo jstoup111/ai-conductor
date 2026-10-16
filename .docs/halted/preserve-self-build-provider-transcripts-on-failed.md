@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-16T18:34:33.151Z
+Status: halted
 Slug: preserve-self-build-provider-transcripts-on-failed
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-preserve-self-build-provider-transcripts-on-failed
-Head SHA: 57885e5ed6f9e7a31f8ec2c96ddfb66b20fc7f73
-Halted at: 2026-10-16T18:01:49.682Z
+Head SHA: 3f25706c33b2421eb85cbe965e4e88a68df7fd14
+Halted at: 2026-10-16T18:38:38.473Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
