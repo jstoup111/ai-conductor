@@ -101,7 +101,15 @@ describe('ref-backed route record store', () => {
         outbox: [],
       });
 
-      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({ kind: 'record', slug: 'demo', blob: storedBlob, record: routeRecord });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({
+        kind: 'record',
+        slug: 'demo',
+        blob: storedBlob,
+        record: {
+          ...routeRecord,
+          receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} },
+        },
+      });
       expect(await readRepairMarker(fixture.repo, 'demo')).toEqual({ kind: 'marker', slug: 'demo', blob: markerBlob, marker: { host: 1, roundId } });
       expect(await readRevalidationQueue(fixture.repo, 'demo')).toEqual({
         kind: 'queue',

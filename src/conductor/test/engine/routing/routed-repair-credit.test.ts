@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { kickbackLedgerPathFor, readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
+import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { consumeRoutedRepairCredit, grantRoutedRepairCredit } from '../../../src/engine/routing/round-receipt.js';
+import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { writeState } from '../../../src/engine/state.js';
@@ -57,6 +59,15 @@ function failingBuildReviewAggregate() {
 
 async function cumulativeCapFixture(credit: 'available' | 'consumed') {
   const root = await fixture();
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'main']);
+  const route = await createRouteRecord(root, 'demo', {
+    roundId,
+    kind: 'audit',
+    items: [],
+    allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
+  }, { git });
+  if (route.kind !== 'created') throw new Error(`failed to create routed credit fixture: ${route.kind}`);
   const statePath = join(root, '.pipeline', 'conduct-state.json');
   const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
   Object.assign(state, { feature_desc: 'demo', complexity_tier: 'M', run_started_at: 1 });

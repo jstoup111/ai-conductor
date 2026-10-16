@@ -495,7 +495,7 @@ export function evaluateProtectedArtifactSealRotation({
           rotationPaths.push(path);
           continue;
         }
-        const engineAppendExit = hasRemediationTaskHeading(head)
+        const engineAppendExit = hasRemediationTaskHeading(head) && appendedRemediationTaskIds?.length
           ? 'unvouched' as const
           : 'not-present' as const;
         return engineAppendExit === 'unvouched'
@@ -728,12 +728,9 @@ async function readFrozenAllocationRemediationTaskIds(projectRoot: string, git: 
   const identity = parseFeatureBranch(head.stdout.trim());
   if (identity.kind !== 'child' && identity.kind !== 'leaf') return [];
 
-  let settingOn = false;
+  let config: Parameters<typeof routingEligible>[1];
   try {
-    const config = loadYaml(await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8'));
-    settingOn = typeof config === 'object' && config !== null &&
-      typeof (config as { stacked_prs?: unknown }).stacked_prs === 'object' &&
-      (config as { stacked_prs: { route_whole_feature_fixes?: unknown } }).stacked_prs.route_whole_feature_fixes === true;
+    config = loadYaml(await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8')) as typeof config;
   } catch {
     return [];
   }
@@ -745,7 +742,7 @@ async function readFrozenAllocationRemediationTaskIds(projectRoot: string, git: 
     const candidate = parseFeatureBranch(branch);
     return candidate.kind === 'child' && candidate.slug === identity.slug;
   });
-  if (!hasChild || !routingEligible({ kind: 'active' }, settingOn ? { stacked_prs: { route_whole_feature_fixes: true } } : undefined)) return [];
+  if (!hasChild || !routingEligible({ kind: 'active' }, config)) return [];
   const slug = identity.slug;
 
   const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);

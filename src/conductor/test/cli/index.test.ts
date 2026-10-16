@@ -45,6 +45,7 @@ const HIDDEN_PRE_DISPATCH_COMMANDS = [
   'github-operation',
   'scope-check',
   'task-membership-check',
+  'round-stamp',
 ] as const;
 
 const VISIBLE_PRE_DISPATCH_COMMANDS = [
