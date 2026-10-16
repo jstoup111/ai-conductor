@@ -180,7 +180,8 @@ export async function admitAndRestageRepair(
   return { kind: 'restaged', obligation: admission.obligation, replayed: admission.replayed, baseline };
 }
 
-async function restageExistingRemediationTaskStatuses(
+/** Reopen an already-authored task without admitting or charging a new repair. */
+export async function restageExistingRemediationTaskStatuses(
   projectRoot: string,
   planPath: string,
   boundIds: ReadonlySet<string>,
