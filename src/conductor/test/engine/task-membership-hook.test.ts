@@ -152,6 +152,31 @@ describe('task-membership-check hook command', () => {
     await expect(run('feat/c2/demo')).resolves.toBe(0);
   });
 
+  it.each([2, '2'] as const)('accepts a canonical cached remediation child %j when its Child line is absent', async (cachedChild) => {
+    await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task rem-prd-audit-T1: repair\n');
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
+      appendedRemediationTaskChildren: { 'rem-prd-audit-T1': cachedChild },
+    }));
+
+    await expect(run('feat/c2/demo')).resolves.toBe(0);
+  });
+
+  it('refuses a malformed cached remediation child when its Child line is absent', async () => {
+    await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task rem-prd-audit-T1: repair\n');
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
+      appendedRemediationTaskChildren: { 'rem-prd-audit-T1': 'x' },
+    }));
+    const output: string[] = [];
+
+    await expect(run('feat/c2/demo', output)).resolves.toBe(1);
+    expect(output.join('\n')).toContain('unreadable membership');
+    expect(output.join('\n')).toContain('rem-prd-audit-T1');
+  });
+
   it('reads a rem task child from its committed plan block after a worktree recreation', async () => {
     await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });

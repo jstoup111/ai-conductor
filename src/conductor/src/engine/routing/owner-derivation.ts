@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { parseChildId, type ChildId } from '../child-context.js';
 import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
 import { parsePlanTaskBodies } from '../plan-task-parse.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
@@ -29,6 +30,19 @@ export function readRemTaskChildLine(planText: string, taskId: string): number |
   return child === undefined ? undefined : Number(child);
 }
 
+export type RemediationTaskChildResolution =
+  | { readonly kind: 'resolved'; readonly child: ChildId }
+  | { readonly kind: 'unreadable' };
+
+function parseCachedRemediationChild(value: unknown): ChildId | undefined {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? parseChildId(value) : undefined;
+  }
+  return typeof value === 'string' && /^(?:[1-9]\d*)$/.test(value)
+    ? parseChildId(value)
+    : undefined;
+}
+
 /**
  * Reads the active plan without relying on the volatile engine-state cache.
  * The recorded active plan is authoritative when present; a recreated
@@ -55,6 +69,21 @@ async function readCommittedPlanText(projectRoot: string): Promise<string | unde
   } catch {
     return undefined;
   }
+}
+
+/** Resolve a remediation task's committed Child assignment before its disposable cache. */
+export async function resolveRemediationTaskChild(
+  projectRoot: string,
+  taskId: string,
+  cachedChild: unknown,
+): Promise<RemediationTaskChildResolution> {
+  const planText = await readCommittedPlanText(projectRoot);
+  const committedChild = planText === undefined ? undefined : readRemTaskChildLine(planText, taskId);
+  const child = committedChild === undefined ? undefined : parseChildId(committedChild);
+  if (child !== undefined) return { kind: 'resolved', child };
+
+  const cached = parseCachedRemediationChild(cachedChild);
+  return cached === undefined ? { kind: 'unreadable' } : { kind: 'resolved', child: cached };
 }
 
 /**

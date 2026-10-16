@@ -6,6 +6,11 @@ import { PREREQUISITE_CLAIM_SCHEMA, parseBuilderClaim } from '../../../src/engin
 describe('routed build prerequisite claim schema', () => {
   it('keeps the terminal claim contract closed', () => {
     expect(PREREQUISITE_CLAIM_SCHEMA).toMatchObject({ oneOf: expect.any(Array) });
+    for (const [index, branch] of PREREQUISITE_CLAIM_SCHEMA.oneOf.entries()) {
+      expect(branch.additionalProperties).toBe(false);
+      expect(branch.properties.outcome.const).toBe(index === 0 ? 'completed' : 'blocked-by-prerequisite');
+    }
+    expect(PREREQUISITE_CLAIM_SCHEMA.oneOf[1].required).toContain('child');
     expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', symbols: ['parseB'], child: 2 }))
       .toEqual({ kind: 'claim', claim: { outcome: 'blocked-by-prerequisite', symbols: ['parseB'], child: 2 } });
   });
@@ -14,6 +19,8 @@ describe('routed build prerequisite claim schema', () => {
     expect(parseBuilderClaim(undefined)).toEqual({ kind: 'none' });
     expect(parseBuilderClaim({ outcome: 'completed' })).toEqual({ kind: 'none' });
     expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite' })).toEqual({ kind: 'malformed' });
+    expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', symbols: ['parseB'] })).toEqual({ kind: 'malformed' });
+    expect(parseBuilderClaim({ outcome: 'unknown', child: 2 })).toEqual({ kind: 'malformed' });
     expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, extra: true })).toEqual({ kind: 'malformed' });
   });
 });

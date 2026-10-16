@@ -43,7 +43,7 @@ describe('task-progress', () => {
   });
 
   describe('resolveChildTaskScope remediation membership', () => {
-    async function writeMembershipFixture(childLine?: number, cachedChild?: number): Promise<void> {
+    async function writeMembershipFixture(childLine?: number, cachedChild?: unknown): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
@@ -79,6 +79,23 @@ describe('task-progress', () => {
 
       await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toEqual({
         kind: 'available', taskIds: ['T1', 'rem-prd-audit-T1'],
+      });
+    });
+
+    it.each([2, '2'] as const)('uses canonical cached remediation child %j when the Child line is absent', async (cachedChild) => {
+      await writeMembershipFixture(undefined, cachedChild);
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['rem-prd-audit-T1'],
+      });
+    });
+
+    it('refuses a malformed cached remediation child when the Child line is absent', async () => {
+      await writeMembershipFixture(undefined, 'x');
+
+      await expect(resolveChildTaskScope(dir, parseChildId(2)!)).resolves.toMatchObject({
+        kind: 'refused',
+        reason: expect.stringContaining('remediation task rem-prd-audit-T1 has no recorded child'),
       });
     });
 
