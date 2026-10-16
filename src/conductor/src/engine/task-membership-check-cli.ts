@@ -12,8 +12,12 @@ import {
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
 import { parseChildId } from './child-context.js';
+import { loadConfig } from './config.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
 import { readCommittedRemediationTaskChildren } from './routing/owner-derivation.js';
+import { readRepairMarker, readRouteRecord } from './routing/route-record-store.js';
+import { routedTaskIdsForHost } from './routing/round-router.js';
+import { routingSettingOn } from './routing/route-types.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 
 export interface TaskMembershipCheckCommand {
@@ -56,6 +60,29 @@ async function currentBranch(projectRoot: string): Promise<string | undefined> {
 function unreadable(taskId: string, child: number, detail: string, print: (message: string) => void): number {
   print(`task-membership-check: unreadable membership for Task ${taskId} on checked-out child ${child}: ${detail}`);
   return 1;
+}
+
+type RoutedProjection =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'ids'; readonly ids: readonly string[] }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** Read routing refs only for a routing-enabled child checkout. */
+async function routedProjectionForCheckedOutChild(
+  projectRoot: string,
+  identity: Extract<ReturnType<typeof parseFeatureBranch>, { kind: 'child' }>,
+): Promise<RoutedProjection> {
+  const config = await loadConfig(projectRoot);
+  if (!config.ok || !routingSettingOn(config.config)) return { kind: 'none' };
+
+  const marker = await readRepairMarker(projectRoot, identity.slug);
+  if (marker.kind === 'absent') return { kind: 'none' };
+  if (marker.kind !== 'marker') return { kind: 'unreadable', detail: 'routed repair marker is unreadable' };
+  if (marker.marker.host !== identity.child) return { kind: 'none' };
+
+  const route = await readRouteRecord(projectRoot, identity.slug, marker.marker.roundId);
+  if (route.kind !== 'record') return { kind: 'unreadable', detail: 'routed task allocation is unavailable' };
+  return { kind: 'ids', ids: routedTaskIdsForHost(route.record, identity.child) };
 }
 
 /**
@@ -119,6 +146,17 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
     owners.set(canonical, child);
   }
 
+  const routed = await routedProjectionForCheckedOutChild(deps.projectRoot, identity);
+  if (routed.kind === 'unreadable') {
+    return unreadable(taskIds[0]!, identity.child, routed.detail, print);
+  }
+  const allowed = new Set(
+    [...owners.entries()].filter(([, child]) => child === identity.child).map(([id]) => id),
+  );
+  if (routed.kind === 'ids') {
+    for (const id of routed.ids) allowed.add(canonicalTaskId(id));
+  }
+
   const remediationChildren = typeof children === 'object' && children !== null && !Array.isArray(children)
     ? children as Record<string, unknown>
     : {};
@@ -144,6 +182,7 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
       owners.set(canonical, owner);
     }
 
+    if (allowed.has(canonical)) continue;
     const owner = owners.get(canonical);
     if (owner === undefined) {
       return unreadable(taskId, identity.child, 'Task has no recorded owning child', print);

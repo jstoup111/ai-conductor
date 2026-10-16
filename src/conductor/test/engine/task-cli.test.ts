@@ -13,6 +13,10 @@ import { execa } from 'execa';
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import { resolveTaskIds } from '../../src/engine/task-progress.js';
 import { writeCoverageBindingEnvelope } from '../../src/engine/coverage-binding-envelope.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { admitRound } from '../../src/engine/routing/round-admission.js';
+import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 describe('detectTaskCommand', () => {
   describe('start command', () => {
@@ -428,6 +432,68 @@ describe('task command child slice membership', () => {
         fsPromises.rm(baseline, { recursive: true, force: true }),
         fsPromises.rm(child, { recursive: true, force: true }),
       ]);
+    }
+  });
+
+  // Covers: task:39
+  it('starts and completes an owner-one task on routed host two in flat task status', async () => {
+    const root = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-routed-host-'));
+    const git = (args: string[]) => execa('git', args, { cwd: root });
+    const c1 = parseChildId(1)!;
+    const c2 = parseChildId(2)!;
+    const roundId = parseRoundId('r1')!;
+    try {
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'task-cli@example.test']);
+      await git(['config', 'user.name', 'Task CLI']);
+      await fsPromises.mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await fsPromises.writeFile(join(root, '.ai-conductor', 'config.yml'),
+        'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: true\n');
+      await fsPromises.writeFile(join(root, '.gitignore'), '.pipeline/\n');
+      await git(['add', '.ai-conductor/config.yml', '.gitignore']);
+      await git(['commit', '-qm', 'base']);
+      await git(['checkout', '-qb', 'feat/c1/demo']);
+      await fsPromises.writeFile(join(root, 'c1.txt'), 'c1\n');
+      await git(['add', 'c1.txt']);
+      await git(['commit', '-qm', 'child one']);
+      await git(['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
+      await git(['checkout', '-qb', 'feat/c2/demo']);
+      await fsPromises.writeFile(join(root, 'c2.txt'), 'c2\n');
+      await git(['add', 'c2.txt']);
+      await git(['commit', '-qm', 'child two']);
+      await git(['branch', 'feat/daemon-demo']);
+      await fsPromises.mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+      await fsPromises.writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: 'T1', status: 'pending' }, { id: 'T2', status: 'pending' }, { id: 'T3', status: 'pending' }],
+      }));
+      await fsPromises.mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await fsPromises.writeFile(join(root, '.docs', 'plans', 'demo.md'), [
+        '### Task T1: routed work', '', '**Done when:**', '- Current evidence is recorded.', '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/demo.md',
+      }));
+      await writeCoverageBindingEnvelope(root, {
+        version: 1, slug: 'demo', runId: 'routed-cli', status: 'done', entries: [],
+        sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] },
+      }, coverageBindingFilesystem);
+      const created = await createRouteRecord(root, 'demo', {
+        roundId, kind: 'audit',
+        items: [{ findingId: 'finding', kind: 'audit', owner: c1, host: c2, reason: 'routed', fallback: [], taskIds: ['T1'] }],
+        allocation: { [c2]: { remTaskIds: ['rem-r1-1'], blockBodies: ['### Task rem-r1-1\n'] } },
+      });
+      if (created.kind !== 'created') throw new Error(`could not create route record: ${created.kind}`);
+      const admitted = await admitRound(root, 'demo', created.record, c2);
+      if (admitted.kind !== 'admitted') throw new Error(`could not admit route record: ${admitted.detail}`);
+
+      await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'start', 'T1'])!, root)).resolves.toBe(0);
+      await expect(dispatchTaskCommand(detectTaskCommand([
+        'node', 'conduct', 'task', 'done', 'T1', '--done-when', '1=verified',
+      ])!, root)).resolves.toBe(0);
+      await expect(fsPromises.readFile(join(root, '.pipeline', 'task-status.json'), 'utf8').then(JSON.parse))
+        .resolves.toMatchObject({ tasks: expect.arrayContaining([expect.objectContaining({ id: 'T1', status: 'completed' })]) });
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true });
     }
   });
 });

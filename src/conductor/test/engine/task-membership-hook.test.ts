@@ -75,6 +75,41 @@ describe('task-membership-check hook command', () => {
     expect(output.join('\n')).toContain('child 1');
   });
 
+  // Covers: task:39
+  it('projects an owner-one routed task onto its marker host only', async () => {
+    const git = async (...args: string[]) => execFileAsync('git', ['-C', root, ...args]);
+    await git('init', '-q', '-b', 'main');
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(root, '.ai-conductor', 'config.yml'),
+      'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+    await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1, slug: 'demo', runId: 'run', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { T1: 1, T3: 1 }, titles: ['foundation'] },
+    }));
+    const record = {
+      roundId: 'r1', kind: 'audit', phase: 'open',
+      items: [{ findingId: 'finding', kind: 'audit', owner: 1, host: 2, reason: 'routed', fallback: [], taskIds: ['T1'] }],
+      allocation: { 2: { remTaskIds: ['rem-r1-1'], blockBodies: ['### Task rem-r1-1\n'] } },
+      hosts: { 2: 'repairing' }, currentHostIndex: 0, receipt: {}, outbox: [],
+    };
+    const writeRef = async (name: string, value: unknown) => {
+      const source = join(root, `${name.replace('/', '-')}.json`);
+      await writeFile(source, JSON.stringify(value));
+      const blob = (await git('hash-object', '-w', source)).stdout.trim();
+      await git('update-ref', `refs/conductor/demo/${name}`, blob);
+    };
+    await writeRef('routes/r1', record);
+    await writeRef('repairing', { host: 2, roundId: 'r1' });
+
+    await writeFile(messagePath, 'feat: routed task\n\nTask: T1\n');
+    await expect(run('feat/c2/demo')).resolves.toBe(0);
+
+    await writeFile(messagePath, 'feat: unrelated task\n\nTask: T3\n');
+    const output: string[] = [];
+    await expect(run('feat/c2/demo', output)).resolves.toBe(1);
+    expect(output.join('\n')).toContain('T3');
+  });
+
   it('validates every task trailer in message order and accepts exactly the extracted child-local set', async () => {
     const accepted = ['T1', 'T1'];
     await writeFile(messagePath, `feat: local trailers\n\n${accepted.map((id) => `Task: ${id}`).join('\n')}\n`);

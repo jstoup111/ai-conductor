@@ -70,6 +70,21 @@ export function hostOrder(hosts: Iterable<number> | Readonly<Record<number, unkn
   return [...new Set(raw)].sort((a, b) => a - b) as ChildId[];
 }
 
+/**
+ * The task ids a routed host may execute.  A round's immutable allocation
+ * owns its new remediation tasks; existing authored tasks remain in the
+ * route record's item bindings.  Keep this projection here so the hook and
+ * task CLI cannot diverge over the same durable record.
+ */
+export function routedTaskIdsForHost(record: Pick<RoutedRound, 'items' | 'allocation'> | import('./route-types.js').RouteRecord, host: ChildId): readonly string[] {
+  const ids = new Set<string>(record.allocation[host]?.remTaskIds ?? []);
+  for (const item of record.items) {
+    if (item.host !== host) continue;
+    for (const taskId of item.taskIds ?? []) ids.add(taskId);
+  }
+  return [...ids];
+}
+
 function isResidue(item: AdmittedRoutingItem): boolean {
   switch (item.provenance.kind) {
     case 'refusal-rework':
