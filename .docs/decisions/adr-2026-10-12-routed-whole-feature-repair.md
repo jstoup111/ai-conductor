@@ -334,6 +334,9 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
         before the route record is created, in today's order (counter bump, `kickback` event, cap
         check), with today's halt reason, and recorded in the receipt of the record created after a
         passing check;
+
+        > **Amended 2026-10-15 by #3211:** Only `manual_test` is charged in the receipt. A routed post-region custom-step kickback keeps today's durable, tree-keyed ledger bump under the re-opened gate (`adr-2026-07-26-cross-dispatch-kickback-livelock-bound` decision 1), run before the route record is created, with today's `kickback ping-pong` halt reason. The receipt records that charge under the custom step's id as an echo only, and never charges it again.
+
       - per-host acknowledgements and a settlement id.
     - **Cap check.** Under the existing budget mutation lock, settlement first reconciles receipts,
       then validates every effective lap and growth cap. On exhaustion the receipt stays unsettled,
