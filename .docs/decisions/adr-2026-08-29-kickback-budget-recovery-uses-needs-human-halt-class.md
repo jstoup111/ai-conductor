@@ -53,6 +53,8 @@ parsed to authorize mutation.
 
 > **Amended 2026-10-07 by #2942:** In a stacked feature the typed cap evidence is recorded in the halted child's ledger (`adr-2026-10-07-per-child-build-region` decision 10).
 
+> **Amended 2026-10-15 by #3211:** For the whole-feature gates `prd_audit`, `architecture_review_as_built` and `manual_test` in a stacked feature, the typed cap evidence and its generation are recorded in the flat feature ledger, where routed round settlement charges them (`adr-2026-10-12-routed-whole-feature-repair` decision 10).
+
 > **Amended 2026-10-10 by #2943:** The `restack` pseudo-gate (stacked restack cascade cap) uses this mechanism unchanged: class `needs-human`, typed evidence with allowance `restacks` naming the originating child, written to the active child's ledger; its count and raised limit live in `refs/conductor/<slug>/cascades` (decision 10) (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
 ### D3 — Explicit authorization is consumed before generic needs-human retention
@@ -68,6 +70,8 @@ operator park continues to win before authorization consumption; the operator mu
 unpark before the daemon can act.
 
 > **Amended 2026-10-07 by #2942:** The resume authorization is read and consumed from the halted child's ledger (`adr-2026-10-07-per-child-build-region` decision 10).
+
+> **Amended 2026-10-15 by #3211:** For those whole-feature gates, the resume authorization is read and consumed from the flat feature ledger (`adr-2026-10-12-routed-whole-feature-repair` decision 10).
 
 ### D4 — All other recovery decisions carry forward unchanged
 

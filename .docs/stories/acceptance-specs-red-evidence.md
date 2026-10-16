@@ -22,7 +22,8 @@ intervention or a HALT.
 
 #### Happy Path
 - Given committed acceptance spec files and a valid run contract exist in the worktree, and the
-  RED marker is absent, when the `acceptance_specs` completion gate is evaluated, then the engine
+  RED marker is absent, outside a routed repair pass on a stacked host, when the `acceptance_specs`
+  completion gate is evaluated, then the engine
   executes the contract's `command` from the contract's `cwd`, writes the RED marker to the
   worktree root, re-validates it, and the step passes — without re-dispatching the skill.
 - Given the engine-run specs fail (failed>=1, skipped==0, errors==0, executed>=1), when the

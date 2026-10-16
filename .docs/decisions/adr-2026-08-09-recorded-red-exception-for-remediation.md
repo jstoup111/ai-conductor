@@ -72,6 +72,8 @@ the event rather than being folded into a boolean pass.
 *declare*, not a way to *pass quietly*. The failure text for an unrecorded green run
 (`0 failed — RED not established`) is deliberately untouched.
 
+> **Amended 2026-10-15 by #3211:** A routed verify-green pass on a stacked host is neither an unrecorded green run nor a waiver: RED was proven before the child closed. Its `acceptance_red` event carries `state: satisfied` and `mode: verify-green`, so it is never presented as a fresh RED proof (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
 > **Amended 2026-08-09 by #1246:** a recorded exception must survive re-execution, which this ADR
 > originally left unstated. Conflict-check found that `selfHealAcceptanceRed`
 > (`acceptance-red-runner.ts:249-258`) composes the marker from the exec result plus the run

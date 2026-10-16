@@ -64,6 +64,8 @@ Adopt the **Hybrid (C)** design:
    It writes `.pipeline/acceptance-specs-red.json` to the **authoritative worktree-root
    path**, then re-runs the existing `validateAcceptanceRedEvidence`.
 
+> **Amended 2026-10-15 by #3211:** In a routed repair pass on a stacked host the step-path self-heal is not invoked. Acceptance runs in verify-green mode against the host's existing specs, because RED was proven before the child closed; its digest is read from `refs/conductor/<slug>/red/c<k>` when present (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
 3. **Completion predicate stays a pure read.** `artifacts.ts` `acceptance_specs` keeps
    reading only the authoritative root marker — no subprocess in a predicate that may be
    evaluated repeatedly. The execution lives in the `Conductor.run` step/retry seam,
@@ -77,6 +79,8 @@ Adopt the **Hybrid (C)** design:
    that genuinely PASS, are skipped/deselected, or error at collection still FAIL the gate
    — now with real evidence ("executed 0 / failed 0"), never a fabricated marker and never
    a bare "missing → HALT".
+
+> **Amended 2026-10-15 by #3211:** In verify-green mode, specs that pass satisfy the gate. Skipped or deselected specs, collection errors, zero executed specs, and a present marker whose digest differs from `red/c<k>` still fail it (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
 
 ## Consequences
 

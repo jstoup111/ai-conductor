@@ -69,6 +69,8 @@ residual risk is stated rather than discovered.
 step path in `conductor.ts`, `acceptance-red-runner.ts` as the self-heal progresses, and the gate
 verdict itself.
 
+> **Amended 2026-10-15 by #3211:** The `acceptance_red` variant gains an optional `mode` field. A routed repair pass on a stacked host emits `state: satisfied` with `mode: verify-green`; the field is absent outside a routed pass (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
 This rides `ConductorEventEmitter → EventPersister → .pipeline/events.jsonl` unchanged. The daemon
 CLI, the UI renderer, the OTel visualizer and the event sinks all gain the signal with **no new
 reader path**. Per `.agents/skills/event-spine/SKILL.md`, this is an occurrence in time and the bus

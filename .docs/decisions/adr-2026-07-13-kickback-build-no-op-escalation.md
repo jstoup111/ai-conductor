@@ -42,6 +42,8 @@ decision; audit-logged via the existing `kickback` event plus a new distinguishi
 
 > **Amended 2026-09-06 by #1831:** D1 retains its no-dispatchable-work halt but distinguishes truly empty output from emitted work that is refused or already resolved. Its diagnostic names the applicable ownership, authority, persistence/restaging, or evidence cause and retains finding/task context. Historical completion alone does not make an admitted current repair non-dispatchable.
 
+> **Amended 2026-10-15 by #3211:** For a routed round in a stacked feature, the guard runs at the host's region entry, which emits no `kickback` event. It halts only when every routed task for the host is already evidence-complete, and the `derived-already-complete` outcome is carried on the halt record (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
+
 > **Amended 2026-10-12 by #2944:** In a stacked feature, the route-into-no-op guard evaluates the
 > host child's checked-out tree at region entry, not the leaf's
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 9 and 11).
