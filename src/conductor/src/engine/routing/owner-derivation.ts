@@ -1,3 +1,5 @@
+import { readFile, readdir } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
 import { parsePlanTaskBodies } from '../plan-task-parse.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
@@ -25,6 +27,60 @@ export function readRemTaskChildLine(planText: string, taskId: string): number |
   const body = parsePlanTaskBodies(planText).get(taskId);
   const child = body?.match(/^\s*\*\*Child:\*\*\s*(\d+)\s*$/m)?.[1];
   return child === undefined ? undefined : Number(child);
+}
+
+/**
+ * Reads the active plan without relying on the volatile engine-state cache.
+ * The recorded active plan is authoritative when present; a recreated
+ * worktree may instead have one unambiguous plan on disk.
+ */
+async function readCommittedPlanText(projectRoot: string): Promise<string | undefined> {
+  try {
+    const state = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8')) as Record<string, unknown>;
+    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
+      const planPath = isAbsolute(state.activePlanPath)
+        ? state.activePlanPath
+        : join(projectRoot, state.activePlanPath);
+      return await readFile(planPath, 'utf8');
+    }
+  } catch {
+    // Recreated worktrees legitimately have no engine state.
+  }
+
+  try {
+    const plansDir = join(projectRoot, '.docs', 'plans');
+    const candidates = (await readdir(plansDir)).filter((name) => name.endsWith('.md'));
+    if (candidates.length !== 1) return undefined;
+    return await readFile(join(plansDir, candidates[0]!), 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Returns every durable remediation-task membership declared by committed
+ * `Child:` lines. The engine-state mapping remains only a compatibility cache.
+ */
+export async function readCommittedRemediationTaskChildren(
+  projectRoot: string,
+): Promise<Record<string, number>> {
+  const planText = await readCommittedPlanText(projectRoot);
+  if (planText === undefined) return {};
+
+  return Object.fromEntries(
+    [...parsePlanTaskBodies(planText).keys()].flatMap((taskId): Array<[string, number]> => {
+      if (!isEngineAppendedRemediationTaskId(taskId)) return [];
+      const child = readRemTaskChildLine(planText, taskId);
+      return child === undefined ? [] : [[taskId, child]];
+    }),
+  );
+}
+
+/** Lists every rem task declared in the committed plan, including malformed or absent Child lines. */
+export async function readCommittedRemediationTaskIds(projectRoot: string): Promise<string[]> {
+  const planText = await readCommittedPlanText(projectRoot);
+  if (planText === undefined) return [];
+  return [...parsePlanTaskBodies(planText).keys()].filter(isEngineAppendedRemediationTaskId);
 }
 
 /**
