@@ -88,6 +88,7 @@ import {
 } from './coverage-binding-envelope.js';
 import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
+import { assertNever } from './routing/route-types.js';
 import { PREREQUISITE_CLAIM_SCHEMA } from './routing/prerequisite-claim.js';
 import { parseFeatureRef } from './feature-branch-identity.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
@@ -132,6 +133,7 @@ export function resolveBuildReviewExecutionChild(
     case 'refused':
       return undefined;
   }
+  return assertNever(execution);
 }
 
 function recordedPositions(value: string): number[] | undefined {
