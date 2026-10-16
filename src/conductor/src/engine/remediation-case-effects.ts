@@ -18,6 +18,7 @@ import {
   type RemediationCaseFeatureIdentity,
   type RemediationCaseRecord,
   type RemediationCaseStoreState,
+  type RemediationCaseTransitionViolation,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 
@@ -147,6 +148,69 @@ export function hasReservedOrFailedRemediationEffect(record: RemediationCaseReco
 export function isBuildReviewSettlementObligationCase(record: RemediationCaseRecord): boolean {
   return isOpenRemediationCase(record)
     && (isBuildReviewDecisionStop(record) || isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
+}
+
+export const STRANDED_ACTION_RESERVATION_DIAGNOSTIC = 'stranded reservation: tasks never published';
+
+export type SettleStrandedActionReservationsResult =
+  | { readonly ok: true; readonly settled: readonly { readonly caseId: string; readonly effectId: string }[] }
+  | { readonly ok: false; readonly reason: string; readonly violation?: RemediationCaseTransitionViolation };
+
+/**
+ * Settle action reservations a previous lap made but never published.
+ *
+ * Reconciliation reserves an action effect before the effect boundary
+ * publishes its tasks, and the tasks exist only in that lap's judgement. A lap
+ * that stopped in between left a reservation no later lap can apply, and the
+ * reducer halts on it forever. Run at lap start, before this lap reconciles,
+ * every reserved effect is an earlier lap's; one is stranded only when the
+ * published order does not carry its case and none of its sources is live
+ * this lap. A live source is still current work: the judge can resume or
+ * converge on the case and the effect boundary applies it, so it is left alone.
+ *
+ * The stranded case is retired exactly as an operator-retired reservation is:
+ * resolved, with its never-completed effect recorded as failed rather than
+ * falsely applied. Resolved rows block neither the reducer nor settlement.
+ */
+export async function settleStrandedBuildReviewActionReservations(input: {
+  readonly store: RemediationCaseStore;
+  /** This lap's reported, unsuppressed rubric-namespaced source ids. */
+  readonly liveSourceIds: ReadonlySet<string>;
+  /**
+   * Case ids the published work order carries, read under the store lease
+   * that serializes every order writer. `undefined` (an unreadable order)
+   * proves nothing, so nothing is settled.
+   */
+  readonly readPublishedCaseIds: (actionEffectIds: readonly string[]) => Promise<ReadonlySet<string> | undefined>;
+}): Promise<SettleStrandedActionReservationsResult> {
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
+    const candidates = state.cases.filter((record): record is ActionCase =>
+      isActionCase(record) && record.effect.status === 'reserved'
+      && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId)));
+    if (candidates.length === 0) return { value: [] };
+    const published = await input.readPublishedCaseIds(
+      state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : []));
+    if (published === undefined) return { value: [] };
+    const settled = candidates
+      .filter((record) => !published.has(record.id))
+      .map((record) => ({ caseId: record.id, effectId: record.effect.id }));
+    if (settled.length === 0) return { value: [] };
+    const stranded = new Set(settled.map(({ caseId }) => caseId));
+    return {
+      value: settled,
+      nextState: replaceCases(state, (record) => stranded.has(record.id) && record.effect.kind === 'action'
+        ? {
+          ...record,
+          resolution: 'resolved',
+          effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic: STRANDED_ACTION_RESERVATION_DIAGNOSTIC },
+        }
+        : record),
+    };
+  });
+  if (mutation.ok) return { ok: true, settled: mutation.value };
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: mutation.reason };
 }
 
 function replaceCases(

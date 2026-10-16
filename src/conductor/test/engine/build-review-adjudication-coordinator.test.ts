@@ -906,8 +906,11 @@ describe('coordinateBuildReviewAdjudication', () => {
   ] as const)('routes leftover work rather than passing when authority arrives %s', async (_when, reads) => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
-    // An earlier lap reserved this effect and never finished it. Every exit
-    // below used to answer `pass` from `cases: []` — deciding without looking.
+    // An earlier lap reserved this effect and published its order, then was
+    // interrupted before recording it applied. Every exit below used to answer
+    // `pass` from `cases: []` — deciding without looking. (A reservation whose
+    // order was never published is settled at lap start instead; see the
+    // stranded-reservation tests.)
     await seedCases(store, {
       version: 'v1', feature,
       cases: [{
@@ -916,6 +919,10 @@ describe('coordinateBuildReviewAdjudication', () => {
         sources: [{ sourceId: 'testQuality:sha256-earlier', outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
         effect: { id: 'effect-stranded', kind: 'action', status: 'reserved' },
       }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-stranded',
+      cases: [{ caseId: 'case-stranded', priority: 'high', tasks: [{ title: 'The interrupted repair' }] }],
     });
     const unresolved = Array.from({ length: reads }, () => new Set<string>());
     const judge = vi.fn(async () => actionJudgement());
@@ -2342,6 +2349,122 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events).toContainEqual(expect.objectContaining({
       type: 'remediation_case_reconciled', caseId: 'case-gone', resolution: 'resolved',
     }));
+  });
+
+  describe('stranded action reservations', () => {
+    // An earlier lap reserved this action, then halted before its effect
+    // boundary published the tasks (the pre-#3257 sibling-reservation defect).
+    // Its tasks lived only in that discarded judgement, so no later lap can
+    // apply it.
+    const strandedCase = (sourceIdValue: string) => ({
+      id: 'case-stranded', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+      rationale: 'An action whose judgement was discarded.', resolution: 'open' as const,
+      sources: [{ sourceId: sourceIdValue, outcome: 'acted' as const, recordedAt: '2026-10-16T05:10:00.000Z' }],
+      effect: { id: 'effect-stranded', kind: 'action' as const, status: 'reserved' as const },
+    });
+    const absentSourceId = 'implementationQuality:sha256-stranded';
+
+    it('settles a reservation whose tasks were never published so the lap routes instead of halting forever', async () => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      await seedCases(store, { version: 'v1', feature, cases: [strandedCase(absentSourceId)] });
+      const events: RemediationCaseLifecycleEvent[] = [];
+
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => actionJudgement()), generateId: sequentialIds('lap-two'),
+        emit: async (event) => { events.push(event); },
+      });
+
+      expect(result).toMatchObject({ ok: true, route: 'build' });
+      const after = await store.read();
+      if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+      expect(after.state.cases.find((record) => record.id === 'case-stranded')).toMatchObject({
+        resolution: 'resolved',
+        effect: { id: 'effect-stranded', kind: 'action', status: 'failed', diagnostic: 'stranded reservation: tasks never published' },
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: 'case-stranded', effectId: 'effect-stranded', effectKind: 'action',
+        reason: 'stranded reservation: tasks never published',
+      }));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'remediation_case_reconciled', caseId: 'case-stranded', resolution: 'resolved',
+      }));
+      const order = JSON.parse(await readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')) as { cases: { caseId: string }[] };
+      expect(order.cases.map((row) => row.caseId)).not.toContain('case-stranded');
+    });
+
+    it('lets a lap with no live findings pass once the stranded reservation is settled', async () => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      await seedCases(store, { version: 'v1', feature, cases: [strandedCase(absentSourceId)] });
+      const judge = vi.fn(async () => actionJudgement());
+
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, judge), operatorResolvedFindingIds: new Set([findingId]),
+      });
+
+      // The settled failure is resolved history: neither the reducer's
+      // unfinished-effect test nor the settlement obligation blocks PASS.
+      expect(result).toMatchObject({ ok: true, route: 'pass' });
+      expect(judge).not.toHaveBeenCalled();
+    });
+
+    it('leaves a reservation the current lap resumes untouched and applies it', async () => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      // Its source is live this lap, so the reservation is still current work:
+      // the judge resumes it and the effect boundary applies it.
+      await seedCases(store, { version: 'v1', feature, cases: [strandedCase(sourceId)] });
+      const events: RemediationCaseLifecycleEvent[] = [];
+      const judge = async (): Promise<RemediationCaseJudgement> => ({
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-1' }],
+        cases: [{
+          caseRef: 'case-1', existingCaseId: 'case-stranded', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The finding still needs its repair.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the resumed finding' }] },
+        }],
+      });
+
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, judge), generateId: sequentialIds('lap-two'),
+        emit: async (event) => { events.push(event); },
+      });
+
+      expect(result).toMatchObject({ ok: true, route: 'build' });
+      const after = await store.read();
+      if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+      expect(after.state.cases.find((record) => record.id === 'case-stranded')).toMatchObject({
+        resolution: 'open', effect: { id: 'effect-stranded', status: 'applied' },
+      });
+      expect(events.map((event) => event.type)).not.toContain('remediation_effect_failed');
+    });
+
+    it.each([
+      ['a mechanically incomplete lap, whose absence proves nothing', 'retry' as const, false],
+      ['a reservation whose tasks the published order already carries', 'healthy' as const, true],
+    ])('leaves the reservation untouched for %s', async (_label, mechanical, published) => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      await seedCases(store, { version: 'v1', feature, cases: [strandedCase(absentSourceId)] });
+      if (published) {
+        await publishBuildReviewWorkOrder(root, {
+          version: 'v1', domain: 'build_review', feature, effectId: 'effect-stranded',
+          cases: [{ caseId: 'case-stranded', priority: 'high', tasks: [{ title: 'Published repair' }] }],
+        });
+      }
+      const events: RemediationCaseLifecycleEvent[] = [];
+
+      await coordinateBuildReviewAdjudication({
+        ...input(root, async () => actionJudgement()), mechanical, generateId: sequentialIds('lap-two'),
+        emit: async (event) => { events.push(event); },
+      });
+
+      const after = await store.read();
+      if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+      expect(after.state.cases.find((record) => record.id === 'case-stranded')?.effect).toMatchObject({ status: expect.not.stringMatching(/^failed$/) });
+      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', caseId: 'case-stranded' }));
+    });
   });
 
   it('carries an unattempted absent action case into the republished order instead of halting', async () => {
