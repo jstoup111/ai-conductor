@@ -284,15 +284,15 @@ export class TranscriptRetention {
         const absolutePath = join(this.worktreePath, path);
         const metadata = await stat(absolutePath).catch(() => undefined);
         if (metadata === undefined) continue;
-        const timestamp = ledger.get(path);
+        const capture = ledger.get(path);
         // The cap applies only to captures already retained by a terminal
         // verdict. Pending attempts remain recoverable until their own verdict.
-        if (timestamp === undefined) continue;
+        if (capture?.state !== 'retained') continue;
         captures.push({
           path,
           size: await directorySize(absolutePath),
-          capturedAt: timestamp?.capturedAt ?? metadata.mtimeMs,
-          order: timestamp?.order ?? Number.MAX_SAFE_INTEGER,
+          capturedAt: capture.capturedAt ?? metadata.mtimeMs,
+          order: capture.order,
         });
       }
     }
@@ -309,7 +309,7 @@ export class TranscriptRetention {
     } catch {
       return new Map();
     }
-    return new Map([...foldTranscriptLedger(content)].filter(([, capture]) => capture.state === 'retained'));
+    return foldTranscriptLedger(content);
   }
 
   private async prune(path: string): Promise<void> {
