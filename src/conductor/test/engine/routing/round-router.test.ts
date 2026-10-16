@@ -66,7 +66,7 @@ describe('routeAdmittedRound', () => {
     ]);
   });
 
-  // Covers: Task 202
+  // Covers: task:202
   it('records canonical existing-task bindings without suppressing restage outside a mixed round', async () => {
     const routed = await routeAdmittedRound({
       ...input([{
@@ -82,7 +82,7 @@ describe('routeAdmittedRound', () => {
     expect(routed.items[0]).not.toHaveProperty('restage');
   });
 
-  // Covers: Task 202
+  // Covers: task:202
   it('records canonical existing-task bindings and suppresses restage in a mixed round', async () => {
     const routed = await routeAdmittedRound({
       ...input([{
@@ -130,7 +130,7 @@ describe('routeAdmittedRound', () => {
     expect(judge).toHaveBeenCalledTimes(2);
   });
 
-  // Covers: Task 202
+  // Covers: task:202
   it('makes a mixed FAIL obligation durable at the lowest task-owned host without allocating an existing-task block', async () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
@@ -154,7 +154,7 @@ describe('routeAdmittedRound', () => {
     expect(routed.allocation[c3]).toMatchObject({ remTaskIds: [], blockBodies: [] });
   });
 
-  // Covers: Task 202
+  // Covers: task:202
   it('hosts mixed FAIL rows with task-bound work rather than a lower residue host', async () => {
     const judge = vi.fn(async () => ({
       success: true,
