@@ -1,4 +1,4 @@
-// Covers: task:23, task:rem-prd-audit-rem-prd-audit-S7.3-r1, task:rem-as-built-rem-asbuilt-b00b54a4-3-r1
+// Covers: task:23, task:54, task:rem-prd-audit-rem-prd-audit-S7.3-r1, task:rem-as-built-rem-asbuilt-b00b54a4-3-r1
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,7 @@ import {
 } from '../../src/engine/task-membership-check-cli.js';
 import { extractBodyTaskIds } from '../../src/engine/autoheal.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { recordAppendedRemediationTaskIds } from '../../src/engine/artifacts.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -114,6 +115,52 @@ describe('task-membership-check hook command', () => {
     expect(output.join('\n')).toContain('child 2');
     expect(output.join('\n')).toContain('child 1');
     await expect(run('feat/c2/demo')).resolves.toBe(0);
+  });
+
+  it('reads a rem task child from its committed plan block after a worktree recreation', async () => {
+    await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await writeFile(
+      join(root, '.docs', 'plans', 'demo.md'),
+      '### Task rem-prd-audit-T1: repair\n\n**Child:** 1\n',
+    );
+
+    await expect(run('feat/c1/demo')).resolves.toBe(0);
+  });
+
+  it('prefers a rem task committed Child line and rebuilds its stale cache', async () => {
+    await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await writeFile(
+      join(root, '.docs', 'plans', 'demo.md'),
+      '### Task rem-prd-audit-T1: repair\n\n**Child:** 1\n',
+    );
+    await writeFile(
+      join(root, '.pipeline', 'engine-state.json'),
+      JSON.stringify({
+        appendedRemediationTaskIds: ['rem-prd-audit-T1'],
+        appendedRemediationTaskChildren: { 'rem-prd-audit-T1': 2 },
+      }),
+    );
+
+    await expect(run('feat/c1/demo')).resolves.toBe(0);
+    await recordAppendedRemediationTaskIds(root, ['rem-prd-audit-T1']);
+    const state = JSON.parse(await (await import('node:fs/promises')).readFile(
+      join(root, '.pipeline', 'engine-state.json'),
+      'utf8',
+    ));
+    expect(state.appendedRemediationTaskChildren).toMatchObject({ 'rem-prd-audit-T1': 1 });
+  });
+
+  it('refuses a rem task when neither the committed Child line nor cache is available', async () => {
+    await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task rem-prd-audit-T1: repair\n');
+    const output: string[] = [];
+
+    await expect(run('feat/c1/demo', output)).resolves.toBe(1);
+    expect(output.join('\n')).toContain('unreadable membership');
+    expect(output.join('\n')).toContain('rem-prd-audit-T1');
   });
 
   it('fails closed when the child membership envelope cannot be read', async () => {

@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:5, task:6, task:rem-prd-audit-2
+// Covers: task:2, task:3, task:4, task:5, task:6, task:54, task:rem-prd-audit-2
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import {
   countResolvedTasks,
   resolveTaskIds,
   resolveTaskIdsWithDiagnostics,
+  resolveChildTaskScope,
   openRepairForTask,
   completeTaskDoneWhen,
   haltMarkerExists,
@@ -28,6 +29,7 @@ import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { createRepairObligationStore, taskObligationStanding } from '../../src/engine/repair-obligations.js';
 import { makeGitRunner, performRebase } from '../../src/engine/rebase.js';
 import { translateAfterRebase } from '../../src/engine/rebase-translate.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -38,6 +40,59 @@ describe('task-progress', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  describe('resolveChildTaskScope remediation membership', () => {
+    async function writeMembershipFixture(childLine?: number, cachedChild?: number): Promise<void> {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+        version: 1,
+        slug: 'demo',
+        runId: 'run',
+        status: 'done',
+        entries: [],
+        sliceMembership: { taskSlices: { T1: 1 }, titles: ['one'] },
+      }));
+      await writeFile(
+        join(dir, '.docs', 'plans', 'demo.md'),
+        `### Task rem-prd-audit-T1: repair\n${childLine === undefined ? '' : `\n**Child:** ${childLine}\n`}`,
+      );
+      if (cachedChild !== undefined) {
+        await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+          appendedRemediationTaskIds: ['rem-prd-audit-T1'],
+          appendedRemediationTaskChildren: { 'rem-prd-audit-T1': cachedChild },
+        }));
+      }
+    }
+
+    it('uses the committed Child line when engine state is absent after worktree recreation', async () => {
+      await writeMembershipFixture(1);
+
+      await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['T1', 'rem-prd-audit-T1'],
+      });
+    });
+
+    it('uses the committed Child line before a disagreeing remediation cache', async () => {
+      await writeMembershipFixture(1, 2);
+
+      await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toEqual({
+        kind: 'available', taskIds: ['T1', 'rem-prd-audit-T1'],
+      });
+    });
+
+    it('refuses rem task scope when both committed Child line and cache are absent', async () => {
+      await writeMembershipFixture();
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        appendedRemediationTaskIds: ['rem-prd-audit-T1'],
+      }));
+
+      await expect(resolveChildTaskScope(dir, parseChildId(1)!)).resolves.toMatchObject({
+        kind: 'refused',
+        reason: expect.stringContaining('remediation task rem-prd-audit-T1 has no recorded child'),
+      });
+    });
   });
 
   describe('countResolvedTasks', () => {

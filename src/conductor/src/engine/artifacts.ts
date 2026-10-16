@@ -60,6 +60,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
+import { readCommittedRemediationTaskChildren } from './routing/owner-derivation.js';
 import {
   parsePlanTaskStoryIds,
 } from './plan-task-parse.js';
@@ -788,6 +789,10 @@ export async function recordAppendedRemediationTaskIds(
   child?: ChildId,
 ): Promise<void> {
   if (ids.length === 0) return;
+  // The committed plan is the durable authority.  `engine-state.json` is
+  // disposable across worktree recreation, so refresh its cache from every
+  // rem task block whenever an append is recorded.
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot);
   const pipelineDir = join(projectRoot, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
   const engineStatePath = join(pipelineDir, 'engine-state.json');
@@ -796,12 +801,6 @@ export async function recordAppendedRemediationTaskIds(
       ? state.appendedRemediationTaskIds.filter((value): value is string => typeof value === 'string')
       : [];
     const appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
-    if (child === undefined) {
-      return {
-        ...state,
-        appendedRemediationTaskIds,
-      };
-    }
     const priorChildren = typeof state.appendedRemediationTaskChildren === 'object'
       && state.appendedRemediationTaskChildren !== null
       && !Array.isArray(state.appendedRemediationTaskChildren)
@@ -812,7 +811,8 @@ export async function recordAppendedRemediationTaskIds(
       appendedRemediationTaskIds,
       appendedRemediationTaskChildren: {
         ...priorChildren,
-        ...Object.fromEntries(ids.map((id) => [id, child])),
+        ...(child === undefined ? {} : Object.fromEntries(ids.map((id) => [id, child]))),
+        ...committedChildren,
       },
     };
   });

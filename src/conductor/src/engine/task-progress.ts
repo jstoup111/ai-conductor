@@ -16,6 +16,10 @@ import {
 } from './coverage-binding-envelope.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import {
+  readCommittedRemediationTaskChildren,
+  readCommittedRemediationTaskIds,
+} from './routing/owner-derivation.js';
+import {
   createRepairObligationStore,
   repairPlanIdentity,
   taskObligationStanding,
@@ -123,37 +127,44 @@ export async function resolveChildTaskScope(
   }
 
   const state = await readEngineState(join(projectRoot, '.pipeline', 'engine-state.json'));
-  if (!state.ok) {
-    return {
-      kind: 'refused',
-      reason: `child ${child} task membership is unavailable: engine state is unreadable (${state.message})`,
-    };
-  }
-  const rawRecorded = state.value.appendedRemediationTaskIds;
-  if (rawRecorded !== undefined && (!Array.isArray(rawRecorded) || !rawRecorded.every((id) => typeof id === 'string' && id.length > 0))) {
-    return {
-      kind: 'refused',
-      reason: `child ${child} task membership is unavailable: appended remediation task ids are invalid`,
-    };
-  }
-  const recorded = (rawRecorded ?? []) as string[];
-  const rawChildren = state.value.appendedRemediationTaskChildren;
+  // This state is a reconstruction cache, not rem-task authority. A committed
+  // Child line remains readable after a worktree recreation or cache damage.
+  const rawRecorded = state.ok ? state.value.appendedRemediationTaskIds : undefined;
+  const recorded = Array.isArray(rawRecorded)
+    ? rawRecorded.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : [];
+  const rawChildren = state.ok ? state.value.appendedRemediationTaskChildren : undefined;
   const children =
     rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
       ? rawChildren as Record<string, unknown>
       : undefined;
-  for (const id of recorded) {
-    const owner = typeof children?.[id] === 'number' ? parseChildId(children[id] as number) : undefined;
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot);
+  const committedIds = await readCommittedRemediationTaskIds(projectRoot);
+  const remediationIds = [...new Set([...recorded, ...committedIds])];
+  const remediationOwners = new Map<string, ChildId>();
+  for (const id of remediationIds) {
+    const hasCommittedChild = Object.hasOwn(committedChildren, id);
+    const committed = committedChildren[id];
+    const committedOwner = committed === undefined ? undefined : parseChildId(committed);
+    const cachedOwner = typeof children?.[id] === 'number' ? parseChildId(children[id] as number) : undefined;
+    if (hasCommittedChild && committedOwner === undefined) {
+      return {
+        kind: 'refused',
+        reason: `child ${child} task membership is unavailable: remediation task ${id} has an invalid committed child`,
+      };
+    }
+    const owner = committedOwner ?? cachedOwner;
     if (owner === undefined) {
       return {
         kind: 'refused',
         reason: `child ${child} task membership is unavailable: remediation task ${id} has no recorded child`,
       };
     }
+    remediationOwners.set(id, owner);
   }
 
   const owned = projectChildOwnership(envelope, child).taskIds;
-  const remediation = recorded.filter((id) => children?.[id] === child);
+  const remediation = [...remediationOwners].flatMap(([id, owner]) => owner === child ? [id] : []);
   return { kind: 'available', taskIds: [...new Set([...owned, ...remediation])] };
 }
 
