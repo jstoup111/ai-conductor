@@ -12,10 +12,11 @@ function textFrom(
 ): string | undefined {
   if (!Array.isArray(content)) return undefined;
 
-  return content.reduce<string>((text, item) => {
-    if (!isRecord(item) || item.type !== itemType || typeof item.text !== 'string') return text;
-    return text + item.text;
+  const text = content.reduce<string>((result, item) => {
+    if (!isRecord(item) || item.type !== itemType || typeof item.text !== 'string') return result;
+    return result + item.text;
   }, '');
+  return text || undefined;
 }
 
 function extractLast(

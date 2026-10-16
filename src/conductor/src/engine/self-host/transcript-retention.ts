@@ -236,29 +236,19 @@ export class TranscriptRetention {
    * sequence is deliberately independent from the retry-budget attempt: that
    * counter can reset for a non-consuming retry.
    *
-   * The optional member remains a compatibility/correlation input, not a
-   * capture filter. A configured dispatch can own an unlabelled capture or
-   * auxiliary rubric captures under the same step; filtering to its exact
-   * member would leave those failed captures pending for a later success to
-   * prune.
+   * A configured dispatch can own an unlabelled capture or auxiliary rubric
+   * captures under the same step; filtering to its exact member would leave
+   * those failed captures pending for a later success to prune.
    */
-  async settleBeforeRetry(
-    identity: Pick<TranscriptCaptureIdentity, 'step' | 'runId'> & { readonly nextAttempt: number; readonly member?: string },
-  ): Promise<void>;
-  async settleBeforeRetry(step: StepName, nextAttempt: number, member?: string): Promise<void>;
-  async settleBeforeRetry(
-    identityOrStep: (Pick<TranscriptCaptureIdentity, 'step' | 'runId'> & { readonly nextAttempt: number; readonly member?: string }) | StepName,
-    nextAttempt?: number,
-    member?: string,
-  ): Promise<void> {
-    const identity: { readonly step: StepName; readonly nextAttempt: number; readonly runId?: string; readonly member?: string } = typeof identityOrStep === 'string'
-      ? { step: identityOrStep, nextAttempt: nextAttempt!, ...(member === undefined ? {} : { member }) }
-      : identityOrStep;
+  async settleBeforeRetry(scope: {
+    readonly step: StepName;
+    readonly runId?: string;
+  }): Promise<void> {
     const identities = [...this.pending.entries()].flatMap(([key, captures]) => {
       const capture = captures[0];
       return capture !== undefined
-        && capture.step === identity.step
-        && (identity.runId === undefined || capture.runId === identity.runId)
+        && capture.step === scope.step
+        && (scope.runId === undefined || capture.runId === scope.runId)
         ? [{ key, capture }]
         : [];
     });
