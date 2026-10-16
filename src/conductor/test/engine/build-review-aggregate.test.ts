@@ -411,6 +411,26 @@ describe('build-review raw aggregate', () => {
     });
   });
 
+  it('joins an infrastructure failure that carries its structured-output rejection beside a judged peer', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest,
+      results: { ...results(judged()), implementationQuality: {
+        kind: 'infrastructure-failure', rubric: 'implementationQuality', reason: 'invalid-structured-result',
+        detail: 'invalid-structured-result: findings[0].anchor.locus.contentHash',
+        rejection: { kind: 'explained', problems: [{
+          field: 'findings[0].anchor.locus.contentHash',
+          required: 'must equal a contentHash listed by the projected changed content regions',
+          detail: 'findings[0].anchor.locus must reference a projected changed content region',
+        }] },
+      } },
+    });
+
+    expect(aggregate).toMatchObject({
+      verdict: 'FAIL', coverage: { implementationQuality: 'infrastructure-failure' }, rubric: { implementationQuality: true },
+    });
+    expect(parseBuildReviewAggregate(JSON.parse(JSON.stringify(aggregate)))).toEqual(aggregate);
+  });
+
   it('cross-checks legacy top-level fields against the raw results instead of trusting them', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged([finding])) });
 
