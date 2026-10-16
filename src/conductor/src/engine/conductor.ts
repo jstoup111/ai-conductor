@@ -195,6 +195,7 @@ import { createRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { admitRound } from './routing/round-admission.js';
 import { routedRoundOpen } from './routing/round-admission.js';
+import { enterHostRegion } from './routing/host-region-entry.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -678,6 +679,7 @@ export class Conductor {
   private stateStore: ConductStateStore<ConductState>;
   private readonly resolveActiveChild: typeof resolveActiveChild;
   private readonly enterChildRegion: typeof enterChildRegion;
+  private readonly enterHostRegion: typeof enterHostRegion;
   private readonly advanceChildRegion: typeof advanceChildRegion;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
@@ -2354,6 +2356,7 @@ export class Conductor {
     this.events = opts.events;
     this.resolveActiveChild = opts.childRegionLifecycle?.resolveActiveChild ?? resolveActiveChild;
     this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
+    this.enterHostRegion = opts.childRegionLifecycle?.enterHostRegion ?? enterHostRegion;
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
@@ -7140,6 +7143,19 @@ export class Conductor {
             const execution = resolveExecutionChild(cursor, slug);
             if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
               const target: ActiveChildLifecycleTarget = execution.target;
+              if (execution.source === 'routed-host') {
+                const hostEntry = await this.enterHostRegion({
+                  worktree: this.projectRoot,
+                  slug,
+                  roundId: execution.roundId!,
+                  host: target.child,
+                  emitter: this.events,
+                });
+                if (hostEntry.kind === 'refused') {
+                  await this.haltChildRegionRefusal(`routed host ${target.child} entry refused: ${hostEntry.detail}`);
+                  return;
+                }
+              }
               const entered = await this.enterChildRegion(
                 this.projectRoot,
                 slug,

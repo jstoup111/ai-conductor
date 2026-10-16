@@ -88,9 +88,11 @@ describe('stacked BUILD region loop', () => {
       .resolves.toContain('child stack repair is pending for closed child 1');
   });
 
+  // Covers: task:48
   it('allows a routed repair overlay to enter its host region from --from build', async () => {
     const run = vi.fn(async () => { throw new Error('stop after routed BUILD dispatch'); });
     const enterChildRegion = vi.fn(async () => ({ kind: 'completed' as const }));
+    const enterHostRegion = vi.fn(async () => ({ kind: 'resume' as const, pinnedBase: '0'.repeat(40) as never }));
     const cursor = {
       kind: 'repair-pending' as const,
       child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
@@ -105,7 +107,7 @@ describe('stacked BUILD region loop', () => {
       config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
       events: new ConductorEventEmitter(),
       stepRunner: { run },
-      childRegionLifecycle: { resolveActiveChild: async () => cursor, enterChildRegion },
+      childRegionLifecycle: { resolveActiveChild: async () => cursor, enterHostRegion, enterChildRegion },
     });
 
     await conductor.run();
@@ -117,6 +119,7 @@ describe('stacked BUILD region loop', () => {
       expect.any(ConductorEventEmitter),
       undefined,
     );
+    expect(enterHostRegion).toHaveBeenCalledWith(expect.objectContaining({ slug: 'demo', roundId: parseRoundId('r1')!, host: parseChildId(1)! }));
     expect(run).not.toHaveBeenCalled();
   });
 
