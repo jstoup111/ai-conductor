@@ -2343,6 +2343,65 @@ describe('coordinateBuildReviewAdjudication', () => {
       type: 'remediation_case_reconciled', caseId: 'case-gone', resolution: 'resolved',
     }));
   });
+
+  it('carries an unattempted absent action case into the republished order instead of halting', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    // An earlier lap applied this action, then the feature halted before BUILD
+    // ran the order: no attempt evidence, and the current lap no longer reports
+    // its source. Its tasks exist only in the published order.
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-pending', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'An earlier finding BUILD has not yet repaired.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256-pending', outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-pending', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-pending',
+      cases: [{ caseId: 'case-pending', priority: 'high', tasks: [{ title: 'Repair the earlier finding' }] }],
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), generateId: sequentialIds('lap-two'),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const order = JSON.parse(await readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')) as {
+      cases: { caseId: string; tasks: { title: string }[] }[];
+    };
+    expect(order.cases.map((row) => [row.caseId, row.tasks.map((task) => task.title)])).toEqual(expect.arrayContaining([
+      ['case-pending', ['Repair the earlier finding']],
+      [expect.not.stringMatching(/^case-pending$/), ['Add the missing assertion']],
+    ]));
+    expect(order.cases).toHaveLength(2);
+  });
+
+  it('still halts when an absent applied action case has no tasks in this lap or the published order', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-orphan', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'An earlier finding whose order was lost.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256-orphan', outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-orphan', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-orphan',
+      cases: [{ caseId: 'case-other', priority: 'high', tasks: [{ title: 'Unrelated work' }] }],
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), generateId: sequentialIds('lap-two'),
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: 'action case case-orphan has no work-order tasks' });
+  });
   it.each([
     ['at entry', 0],
     ['before dispatch', 1],
