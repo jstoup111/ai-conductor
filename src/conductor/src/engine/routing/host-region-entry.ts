@@ -1,5 +1,6 @@
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { resolveFeaturePlanPath } from '../artifacts.js';
+import { checkStepCompletion, type CompletionContext } from '../artifacts.js';
 import { writeFrozenBlocks } from '../remediation-append.js';
 import { admitRoutedObligation, restageExistingRemediationTaskStatuses } from '../repair-restage.js';
 import { seedTaskStatus } from '../task-seed.js';
@@ -20,6 +21,8 @@ import type { ConductState } from '../../types/state.js';
 export type EnterHostRegionResult =
   | { readonly kind: 'entered'; readonly pinnedBase: CommitSha }
   | { readonly kind: 'resume'; readonly pinnedBase: CommitSha }
+  /** The audit route has no runnable host-local BUILD work. */
+  | { readonly kind: 'halted'; readonly detail: string; readonly outcome: 'derived-already-complete' }
   | { readonly kind: 'refused'; readonly detail: string };
 
 export interface EnterHostRegionInput {
@@ -30,6 +33,10 @@ export interface EnterHostRegionInput {
   readonly emitter: ConductorEventEmitter;
   /** The conductor-resolved plan path; direct callers may use feature resolution. */
   readonly planPath?: string;
+  /** Freshness/configuration context for the host-local BUILD completion check. */
+  readonly completionContext?: CompletionContext;
+  /** Injectable completion boundary for the host-entry no-op decision. */
+  readonly checkCompletion?: typeof checkStepCompletion;
   readonly git?: GitRunner;
 }
 
@@ -291,6 +298,31 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     });
   } catch (error) {
     return { kind: 'refused', detail: `cannot seed routed task status: ${error instanceof Error ? error.message : String(error)}` };
+  }
+
+  // An audit route can arrive after every task it projected to this host has
+  // already acquired current evidence.  Check at the host boundary, after
+  // frozen blocks and existing-task restages are visible, so a pending frozen
+  // task still dispatches and an N=1 route keeps its established planner-side
+  // guard.  Do not transition to repairing: no provider may run for a
+  // derived no-op round.
+  if (stored.record.kind === 'audit') {
+    const completion = await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
+      ...input.completionContext,
+      projectRoot: input.worktree,
+      planPath,
+      featureDesc: input.slug,
+      activeChild: input.host,
+    });
+    if (completion.done) {
+      return {
+        kind: 'halted',
+        outcome: 'derived-already-complete',
+        detail:
+          `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
+          'every routed task is already evidence-complete',
+      };
+    }
   }
   stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (stored.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
