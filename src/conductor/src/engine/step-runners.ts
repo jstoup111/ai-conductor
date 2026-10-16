@@ -88,6 +88,7 @@ import {
 } from './coverage-binding-envelope.js';
 import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
+import { PREREQUISITE_CLAIM_SCHEMA } from './routing/prerequisite-claim.js';
 import { parseFeatureRef } from './feature-branch-identity.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { RESIDUE_ROUTING_CALL_MEMBER } from './routing/residue-routing-call.js';
@@ -1881,6 +1882,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(this.providerExecutionContext?.managedSessionContext
         ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
         : {}),
+      ...(step === 'build' && opts?.routedPrerequisiteClaim ? { nativeSchema: PREREQUISITE_CLAIM_SCHEMA } : {}),
     });
     const safety = this.candidateSafetyFor(step);
     try {
