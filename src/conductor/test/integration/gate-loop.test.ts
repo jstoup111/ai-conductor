@@ -2021,7 +2021,7 @@ describe('integration/gate-loop', () => {
       mockExeca.mockImplementation(async (_command: string, args: readonly string[] = [], options?: import('execa').Options) => {
         if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '.docs/plans/p.md\0', stderr: '' } as never;
         if (args[0] === 'show') return { exitCode: 0, stdout: planText, stderr: '' } as never;
-        if (args[0] === 'cat-file' && args.includes('--batch')) {
+        if (args[0] === 'cat-file' && args.some((arg) => arg === '--batch' || arg === '--batch-check')) {
           const requestedPaths = String(options?.input ?? '')
             .trim()
             .split('\n')
