@@ -806,14 +806,17 @@ export async function recordAppendedRemediationTaskIds(
       && !Array.isArray(state.appendedRemediationTaskChildren)
       ? state.appendedRemediationTaskChildren
       : {};
+    const appendedRemediationTaskChildren = {
+      ...priorChildren,
+      ...(child === undefined ? {} : Object.fromEntries(ids.map((id) => [id, child]))),
+      ...committedChildren,
+    };
     return {
       ...state,
       appendedRemediationTaskIds,
-      appendedRemediationTaskChildren: {
-        ...priorChildren,
-        ...(child === undefined ? {} : Object.fromEntries(ids.map((id) => [id, child]))),
-        ...committedChildren,
-      },
+      ...(Object.keys(appendedRemediationTaskChildren).length > 0
+        ? { appendedRemediationTaskChildren }
+        : {}),
     };
   });
   if (!result.ok) {

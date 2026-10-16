@@ -80,7 +80,7 @@ describe('routed round conductor resume', () => {
       roundId,
       kind: 'audit',
       items: [{ findingId: 'finding', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
-      allocation: { [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
+      allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
     });
     if (created.kind !== 'created') throw new Error(created.kind);
     await expect(admitRound(subject.repo, 'demo', created.record, child)).resolves.toMatchObject({ kind: 'admitted' });
@@ -104,10 +104,13 @@ describe('routed round conductor resume', () => {
           throw new Error('stop after resumed build dispatch');
         },
       },
+      childRegionLifecycle: {
+        enterHostRegion: async () => ({ kind: 'entered', pinnedBase: 'a'.repeat(40) }) as never,
+        enterChildRegion: async () => ({ kind: 'completed' }),
+      },
     });
 
     await conductor.run();
-
     expect(dispatched).toEqual(['build']);
     await expect(readState(pipelinePathFor(subject.repo, 'conduct-state.json', parseChildId(2)!)))
       .resolves.toMatchObject({ ok: true, value: { build: 'pending' } });

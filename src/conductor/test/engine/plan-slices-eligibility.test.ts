@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
 
-vi.mock('node:fs/promises', () => ({
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
   readFile: vi.fn(),
   readdir: vi.fn(),
 }));

@@ -146,16 +146,20 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
     owners.set(canonical, child);
   }
 
-  const routed = await routedProjectionForCheckedOutChild(deps.projectRoot, identity);
-  if (routed.kind === 'unreadable') {
-    return unreadable(taskIds[0]!, identity.child, routed.detail, print);
-  }
   const allowed = new Set(
     [...owners.entries()].filter(([, child]) => child === identity.child).map(([id]) => id),
   );
-  if (routed.kind === 'ids') {
-    for (const id of routed.ids) allowed.add(canonicalTaskId(id));
-  }
+  let routed: RoutedProjection | undefined;
+  const addRoutedMembershipIfNeeded = async (): Promise<number | undefined> => {
+    if (routed === undefined) routed = await routedProjectionForCheckedOutChild(deps.projectRoot, identity);
+    if (routed.kind === 'unreadable') {
+      return unreadable(taskIds[0]!, identity.child, routed.detail, print);
+    }
+    if (routed.kind === 'ids') {
+      for (const id of routed.ids) allowed.add(canonicalTaskId(id));
+    }
+    return undefined;
+  };
 
   const remediationChildren = typeof children === 'object' && children !== null && !Array.isArray(children)
     ? children as Record<string, unknown>
@@ -182,6 +186,12 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
       owners.set(canonical, owner);
     }
 
+    // An envelope or committed Child line is independently sufficient for a
+    // normal task. Do not turn an unrelated, unavailable route allocation
+    // into a refusal of that already-provable local commit.
+    if (allowed.has(canonical)) continue;
+    const routedRefusal = await addRoutedMembershipIfNeeded();
+    if (routedRefusal !== undefined) return routedRefusal;
     if (allowed.has(canonical)) continue;
     const owner = owners.get(canonical);
     if (owner === undefined) {

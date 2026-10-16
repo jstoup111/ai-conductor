@@ -337,9 +337,9 @@ describe('routed host region entry (real local Git)', () => {
   // Covers: task:56
   it('halts an audit host only when its host-local BUILD projection is already complete', async () => {
     const subject = await fixture();
-    const checkCompletion = async (_dir: string, step: string, context: { activeChild?: number }) => {
+    const checkCompletion = async (_dir: string, step: string, context?: { activeChild?: number }) => {
       expect(step).toBe('build');
-      expect(context.activeChild).toBe(child);
+      expect(context?.activeChild).toBe(child);
       return { done: true };
     };
 

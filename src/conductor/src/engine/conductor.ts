@@ -12958,7 +12958,10 @@ export class Conductor {
             ) {
               const evidence = failedStepResult?.output ?? '';
               const kickback = await consumeKickbackBudget('build_review', evidence);
-              if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !await consumeCurrentRoutedRepairCredit()) {
+              const routedRepairCreditApplied = cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted
+                ? await consumeCurrentRoutedRepairCredit()
+                : false;
+              if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !routedRepairCreditApplied) {
                 const reason = this.withActiveChild(
                   `build_review cumulative kickback cap exceeded:\n` +
                   renderKickbackBudgetView(
@@ -12986,7 +12989,7 @@ export class Conductor {
                 process.off('SIGTERM', sigterm);
                 return;
               }
-              if (!kickback.exhausted) {
+              if (!kickback.exhausted || routedRepairCreditApplied) {
                 await emitTracked({
                   type: 'kickback',
                   from: 'build_review',
@@ -13479,7 +13482,10 @@ export class Conductor {
                 buildReviewBeforeConsumption = kickback.before;
                 buildReviewKickbackCharged = true;
                 const count = kickback.entry.count;
-                if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !await consumeCurrentRoutedRepairCredit()) {
+                const routedRepairCreditApplied = cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted
+                  ? await consumeCurrentRoutedRepairCredit()
+                  : false;
+                if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !routedRepairCreditApplied) {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
                   const reason = this.withActiveChild(
                     `build_review cumulative kickback cap exceeded:\n` +
@@ -13508,7 +13514,7 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                if (!kickback.exhausted) {
+                if (!kickback.exhausted || routedRepairCreditApplied) {
 
                   const pointerLines = await this.buildReviewPointerLines(verdictRaw);
                   const pointerContext = pointerLines.length > 0 ? `\n${pointerLines.join('\n')}` : '';
