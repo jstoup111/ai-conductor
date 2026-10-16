@@ -2425,6 +2425,7 @@ export class Conductor {
       if (event.type !== 'step_retry') return;
       // Configured groups report their parent as the lifecycle step. Their
       // transcript owner is the member, carried in the execution context.
+      // Without that context, retain all earlier members for the event step.
       const member = event.executionContext?.subject.kind === 'configured-member'
         ? event.executionContext.subject.member
         : undefined;
