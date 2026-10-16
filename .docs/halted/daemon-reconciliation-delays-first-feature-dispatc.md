@@ -1,22 +1,28 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-16T00:08:10.014Z
+Status: halted
 Slug: daemon-reconciliation-delays-first-feature-dispatc
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-daemon-reconciliation-delays-first-feature-dispatc
-Head SHA: 019db63900b53547d793685495182580e0b5eb9b
-Halted at: 2026-10-15T12:44:28.742Z
+Head SHA: 01c206710a7b5fed49e00053f2d148f750130357
+Halted at: 2026-10-16T00:11:32.768Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: case transition rejected: source-linked-by-multiple-cases (cases 50b4c500-dd0a-47d2-8b4f-d8e33c0a21de, 3e2f0c5e-89c5-4492-af41-746fb4268b46; sources testQuality:sha256:ec890dbcdaac0e0a44bed84b9c75cb0d84bcae351e51a2ed6c8056968ef46a32)
-persisted case history is valid and unchanged
-Inspect with ai-conductor build-review findings --feature daemon-reconciliation-delays-first-feature-dispatc, then clear with ai-conductor halt clear --feature daemon-reconciliation-delays-first-feature-dispatc --rationale "<why>" once the proposed transition is admissible (an engine admits it or a judgement no longer proposes it).
+conductor error: Error: build-review aggregate requires four current, valid rubric results
+    at joinBuildReviewRubricOutcomes (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/chunk-5UN5C5US.js:17326:25)
+    at DefaultStepRunner.runRubricBuildReviewInner (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/chunk-74BGFO4J.js:39045:23)
+    at async DefaultStepRunner.runRubricBuildReview (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/chunk-74BGFO4J.js:38598:14)
+    at async DefaultStepRunner.runBuildReview (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/chunk-74BGFO4J.js:40746:7)
+    at async Conductor.runAdmittedSelfBuildDispatch (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/chunk-74BGFO4J.js:24236:14)
+    at async LiveBoundaryCoordinator.runDispatch (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/daemon-cli-DSJPTSBT.js:1470:14)
+    at async Conductor.run (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/chunk-74BGFO4J.js:27208:46)
+    at async Object.runConductorInWorktree (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/daemon-cli-DSJPTSBT.js:5732:36)
+    at async file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/daemon-cli-DSJPTSBT.js:2992:36
+    at async runFeature (file:///home/james-stoup/code/ai-conductor/src/conductor/dist-versions/20261016T000827Z-d9c292938b6e/daemon-cli-DSJPTSBT.js:2008:18)
 ```
