@@ -698,6 +698,8 @@ export class Conductor {
   private readonly transcriptRetention: TranscriptRetention;
   /** Legacy runner dispatches have no provider-execution attempt identity. */
   private readonly legacyTranscriptAttempts = new Map<StepName, number>();
+  /** Capture identity advances for every admitted self-host dispatch, independently of retries. */
+  private readonly transcriptCaptureDispatches = new Map<string, number>();
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
@@ -706,6 +708,18 @@ export class Conductor {
   /** Session-local loop counters must not carry a prior child's failures forward. */
   private childScopedStepKey(step: StepName, child: ChildId | undefined): StepName {
     return `${step}#${child === undefined ? 'feature' : child}` as StepName;
+  }
+
+  /**
+   * Capture directories are evidence, not escalation state.  In particular,
+   * non-consuming retries decrement the retry-budget attempt before their next
+   * dispatch, so that value is not a safe capture identity.
+   */
+  private nextTranscriptCaptureAttempt(step: StepName, runId: string): number {
+    const key = `${runId}\u0000${step}`;
+    const next = (this.transcriptCaptureDispatches.get(key) ?? 0) + 1;
+    this.transcriptCaptureDispatches.set(key, next);
+    return next;
   }
 
   /** Child-local suite selection has the same authoritative base as review. */
@@ -5683,6 +5697,7 @@ export class Conductor {
   private async runSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    /** Compatibility-only retry budget; capture identity must not consume it. */
     attempt: number,
     retryHint: string | undefined,
     verdictRunId?: string,
@@ -5711,6 +5726,7 @@ export class Conductor {
   private async runAdmittedSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    /** Compatibility-only retry budget; capture identity must not consume it. */
     attempt: number,
     retryHint: string | undefined,
     /**
@@ -5727,6 +5743,7 @@ export class Conductor {
     /** Cancels the provider invocation when this daemon attempt ends. */
     abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
+    void attempt;
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const executionContextOption = executionContext ? { executionContext } : {};
     const selfHostConfig = resolveSelfHostConfig(this.config);
@@ -5819,6 +5836,11 @@ export class Conductor {
       }
     }
 
+    const captureAttempt = this.nextTranscriptCaptureAttempt(
+      name,
+      this.stepRunner.selfHostRunId?.() ?? this.featureSlug ?? state.feature_desc ?? 'unknown-run',
+    );
+
     // Compatibility seam for injected/legacy runners which do not route via
     // ProviderExecutionContext. Real entrypoints always take the candidate
     // path below; this retains the existing isolated behavior for that narrow
@@ -5831,7 +5853,7 @@ export class Conductor {
         await this.discardOwnedStepRegionCapture(state, name);
         return this.stepRunner.run(name, state, {
           attempt: 1,
-          captureAttempt: attempt,
+          captureAttempt,
           escalate: false,
           retryReason: retryHint,
           ...identityOption,
@@ -5870,7 +5892,7 @@ export class Conductor {
         await this.discardOwnedStepRegionCapture(state, name);
         return await this.stepRunner.run(name, state, {
           attempt: 1,
-          captureAttempt: attempt,
+          captureAttempt,
           escalate: false,
           retryReason: retryHint,
           ...identityOption,
@@ -6072,7 +6094,7 @@ export class Conductor {
     try {
       return await this.stepRunner.run(name, state, {
         attempt: 1,
-        captureAttempt: attempt,
+        captureAttempt,
         escalate: false,
         retryReason: retryHint,
         ...identityOption,

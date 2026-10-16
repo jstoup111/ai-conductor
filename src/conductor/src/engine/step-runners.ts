@@ -1094,6 +1094,8 @@ export class DefaultStepRunner implements StepRunner {
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
+  /** Capture identity is local evidence sequencing, never retry escalation state. */
+  private readonly auxiliaryTranscriptCaptureAttempts = new Map<StepName, number>();
   /** Bounded per-run evidence cache; failed preflights never enter it. */
   private readonly tautologyPreflightCache = new Map<string, import('./build-review-test-quality-preflight.js').TautologyCompletedPreflight>();
   private readonly worktreeLifecycle: WorktreeLifecycleQueue | undefined;
@@ -1103,6 +1105,12 @@ export class DefaultStepRunner implements StepRunner {
   /** Route a shared-`.git` worktree mutation through the dispatcher queue when one is injected. */
   private mutateWorktree<T>(work: () => Promise<T>): Promise<T> {
     return this.worktreeLifecycle ? this.worktreeLifecycle.run(work) : work();
+  }
+
+  private nextAuxiliaryTranscriptCaptureAttempt(step: StepName): number {
+    const next = (this.auxiliaryTranscriptCaptureAttempts.get(step) ?? 0) + 1;
+    this.auxiliaryTranscriptCaptureAttempts.set(step, next);
+    return next;
   }
 
   constructor(
@@ -2711,6 +2719,7 @@ export class DefaultStepRunner implements StepRunner {
           step: 'rebase', memberId: REBASE_REGRADE_SKILL, policy,
           runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`${REBASE_REGRADE_SKILL}:judge`),
           config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+          nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('rebase'),
           providerAvailability: this.providerExecutionContext?.providerAvailability,
           withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
           onAttempt: this.providerAttempt, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn,
@@ -2771,6 +2780,7 @@ export class DefaultStepRunner implements StepRunner {
           step: 'remediate', memberId: RESIDUE_ROUTING_CALL_MEMBER, policy,
           runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`${RESIDUE_ROUTING_CALL_MEMBER}:judge`),
           config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+          nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('remediate'),
           providerAvailability: this.providerExecutionContext?.providerAvailability,
           withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
           onAttempt: this.providerAttempt, warn: this.providerWarn,
@@ -3796,6 +3806,7 @@ export class DefaultStepRunner implements StepRunner {
       step: 'build_review', memberId: entry.id, policy: entry.policy,
       runtimes: this.providerRuntimes, sessions: this.sessionStore.beginBranch(`build-review:${entry.id}`),
       config: this.config, runId: this.runId, tier,
+      nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build_review'),
       nativeSchemaScratch: {
         worktreeRoot: this.projectDir,
         repository: this.projectDir,
@@ -4629,6 +4640,7 @@ export class DefaultStepRunner implements StepRunner {
             sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
             config: this.config,
             runId: this.runId,
+            nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build_review'),
             nativeSchemaScratch: {
               worktreeRoot: this.projectDir,
               repository: this.projectDir,
