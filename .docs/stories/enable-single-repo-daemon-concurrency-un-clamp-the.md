@@ -41,12 +41,12 @@ opt in are untouched.
 - Given the existing daemon test corpus, when it runs against the refactored daemon at concurrency 1, then it passes without semantic edits other than those for maintenance placement and pooled repairs (mechanical renames allowed).
 
 #### Negative Paths
-- Given effective concurrency 1 and one feature in flight, when a stale engine is detected or a restart is queued, then it fires only after that feature finishes — exactly the pre-change idle-boundary timing.
+- Given effective concurrency 1 and one feature in flight, when a restart is queued or a stale-engine restart is due under adr-2026-10-15-per-dispatch-engine-pinned-executor D7, then it fires only after that feature finishes and never interrupts it.
 - Given effective concurrency 1 and one feature in flight, when an origin refresh runs, then it fetches and fast-forwards the root without moving that feature's pinned base, as at higher widths.
 
 ### Done When
 - [ ] The full existing daemon test suite passes at the default without semantic changes other than maintenance placement and pooled repairs.
-- [ ] A serial-equivalence test pins the N=1 scheduling order of dispatch, refresh, sweep, and stale-engine checks.
+- [ ] A serial-equivalence test pins the N=1 scheduling order of dispatch, refresh, and sweep; stale-engine rebuild placement follows adr-2026-10-15-per-dispatch-engine-pinned-executor D8.
 
 ## Story 3: Dispatch crosses the seam as a serializable work order with a document manifest
 
@@ -135,7 +135,7 @@ busy so that a busy pool still picks up newly merged specs.
 - [ ] A test proves a mid-run fetch/fast-forward does not re-trigger setup or alter state for pinned in-flight features.
 - [ ] The multi-branch leak refusal path emits a distinct, greppable log line listing dirty entries.
 
-## Story 7: Engine staleness and queued restarts drain, then act
+## Story 7: Queued restarts and capped stale-engine restarts drain, then act
 
 As an operator, I want stale-engine recovery and queued restarts to still happen at N>1 without
 ever interrupting a running build.
@@ -143,12 +143,12 @@ ever interrupting a running build.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a stale engine detected with two executors running, when the dispatcher enters drain (claims stop), then both builds finish normally, and the rebuild + restart fires exactly once at the drained boundary.
+- Given a stale supervisor with two executors running that has passed `supervisor_max_stale_hours` or recorded an executor protocol mismatch, when the dispatcher enters drain (claims stop), then both builds finish normally, and the restart fires exactly once at the drained boundary.
 - Given a durable RESTART-PENDING marker and a busy pool, when executors finish, then the queued restart fires at the drained boundary with the existing marker-consume → lock-release → exit ordering.
 - Given a restart is queued while draining, when the operator checks daemon status, then the pending restart and the full set of features it is waiting on (the drain set) are visible.
 
 #### Negative Paths
-- Given work in flight, when staleness is probed, then no rebuild, relink, or restart touches the root checkout before the pool is drained (work-in-flight suppression).
+- Given work in flight, when staleness is probed, then no relink or restart touches the root checkout before the pool is drained, and an engine rebuild touches it only as the coordinated root mutation of the cadence maintenance job (adr-2026-10-15-per-dispatch-engine-pinned-executor D8).
 - Given a stale-engine trigger that fails to fire, when the drained boundary is reached again later, then the retry follows the existing log-and-stay-alive path with the one-shot-per-firing bound intact (no restart loop).
 - Given a drain in progress, when a new high-priority feature merges, then it is not claimed until after the restart completes, and the post-restart daemon picks it up (drain is strict, not best-effort).
 - Given a rate-limit episode is active at the drained boundary, when a queued or stale-engine restart would fire, then it is deferred until the episode ends (the episode gate composes with drain — a restart mid-episode would respawn a daemon with no episode memory).

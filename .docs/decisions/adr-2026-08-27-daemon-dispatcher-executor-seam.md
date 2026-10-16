@@ -186,6 +186,11 @@ declares its sinks).
 any transport, #564's run-state relocation, per-feature attachable tmux sessions, and any
 weakening of the ADR-010 single-daemon-process lock.
 
+> **Amended 2026-10-15 by #2392:** Multi-process executors and their IPC transport are now in
+> scope: one local child process per dispatch, under the single supervisor and its ADR-010 lock.
+> Remote executors and durable claims remain out of scope. See
+> adr-2026-10-15-per-dispatch-engine-pinned-executor D1 and D4.
+
 ## Consequences
 
 ### Positive

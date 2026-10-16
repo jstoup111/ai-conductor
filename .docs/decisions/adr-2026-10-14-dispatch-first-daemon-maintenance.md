@@ -83,6 +83,15 @@ Option A, at every daemon width.
    dispatch loop never awaits it. The job never runs a stale-engine rebuild, a restart, or a
    queued restart; those stay drain-then-act, and the drained boundary also waits for the job to
    settle. Like the origin refresh, the job is excluded from the drain.
+
+   > **Amended 2026-10-15 by #2392:** In a self-host daemon with the stale-engine gates armed,
+   > the job now also runs the fetch, fast-forward and engine rebuild on the
+   > `engine_refresh_min_interval_seconds` interval while features are in flight. Child
+   > executors are pinned per dispatch, so a rebuild never changes a running build's engine.
+   > Restarts and queued restarts still never run in the job. Once a supervisor restart is pending
+   > at a natural idle or a drained boundary, the job is not started again, and the restart waits
+   > for any running instance to settle. See adr-2026-10-15-per-dispatch-engine-pinned-executor
+   > D7 and D8.
 4. **Mutating maintenance skips in-flight slugs.** `reconcileHaltPrs` gains the
    `isFeatureInFlight` guard that the parked and mergeable sweeps already have, so a live worker's
    own halt-state clear always wins. The skip goes through the existing delta-only log cache: it
