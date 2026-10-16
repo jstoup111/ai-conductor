@@ -207,8 +207,8 @@ Before running DECIDE, the composer reads the code the idea touches. When the id
 edits inside an existing feature, it proposes a hotfix instead of a spec and waits for your
 approval. Every condition must hold:
 
-- The work is Small: roughly three or fewer production files and about 50 changed lines, not
-  counting tests or `.docs/`.
+- The work is tiny: at most two production files and about 15 changed production lines, provable
+  with one or two focused tests.
 - It stays inside the existing architecture and every APPROVED ADR, and needs no new ADR.
 - It changes no API, schema, data format, CLI, hook, or settings contract.
 - It refines behavior an existing accepted story already intends.

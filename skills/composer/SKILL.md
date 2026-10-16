@@ -139,8 +139,8 @@ skipping `land`, `handoff`, and the daemon loop.
 
 **Eligibility — every condition must hold, each stated with its evidence:**
 
-- The work would assess as Small, and the fix is a few localized edits: roughly three or fewer
-  production files and about 50 changed lines, excluding tests and `.docs/`.
+- The work would assess as Small, and the fix is a few localized edits: at most two production
+  files and about 15 changed production lines, provable with one or two focused tests.
 - It stays inside the existing architecture: no new module, layer, service, dependency, or
   cross-boundary call; it contradicts no APPROVED ADR or architecture diagram; it needs no new ADR.
 - It changes no contract surface: public API, schema, persisted data format, CLI flags, hook
@@ -154,8 +154,8 @@ impact — stop, tell the operator, and either run the full DECIDE in the same w
 
 **Procedure, entirely inside `worktreePath`:**
 
-1. Write a failing test for the behavior first, then the minimal fix (`/tdd`), following the target
-   repo's conventions.
+1. Write one or two focused failing tests for the behavior first, then the minimal fix (`/tdd`),
+   following the target repo's conventions. Needing more tests than that means it is not a hotfix.
 2. Update the stories. Amend in place the accepted `.docs/stories/` file that owns the behavior so
    its acceptance criteria specify the fixed behavior, keeping `Status: Accepted`. If no story owns
    it, add `.docs/stories/<slug>.md` with one accepted story. Author no plan, complexity, or track
