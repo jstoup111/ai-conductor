@@ -1,4 +1,4 @@
-// Covers: task:7, task:rem-prd-audit-R1, task:rem-as-built-R7
+// Covers: task:7, task:rem-prd-audit-R1, task:rem-as-built-R7, task:rem-as-built-rem-vg-ab2
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -77,6 +77,62 @@ describe('provider scratch homes', () => {
 
       const scopeEvents = scopedEmitters[0] as unknown as { handlers: Map<string, Set<unknown>> };
       expect(scopeEvents.handlers.get('provider_transcripts_captured')).toHaveLength(0);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('retains only its recovered interrupted capture beside a live pending capture', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'provider-scratch-live-pending-sweep-'));
+    const slug = 'live-pending-feature';
+    const worktreeBase = join(repo, '.worktrees');
+    const worktreeRoot = join(worktreeBase, slug);
+    const globalEvents = new ConductorEventEmitter();
+    const liveCapture = '.pipeline/transcripts/build/live-a1-codex';
+    const recoveredCapture = '.pipeline/transcripts/build/interrupted-a1-codex';
+    const home = await acquireScratchHome({
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: slug,
+      runId: 'interrupted',
+      attempt: 1,
+      step: 'build',
+      provider: 'codex',
+      ownerPid: 1001,
+    });
+    try {
+      await mkdir(join(worktreeRoot, liveCapture), { recursive: true });
+      await writeFile(join(worktreeRoot, liveCapture, 'session.jsonl'), 'live pending transcript\n');
+      await mkdir(join(home, 'self-host-codex-interrupted', 'sessions'), { recursive: true });
+      await writeFile(join(home, 'self-host-codex-interrupted', 'sessions', 'session.jsonl'), 'interrupted transcript\n');
+      await mkdir(join(worktreeRoot, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreeRoot, '.pipeline', 'events.jsonl'), `${JSON.stringify({
+        type: 'provider_transcripts_captured',
+        step: 'build',
+        runId: 'live',
+        attempt: 1,
+        provider: 'codex',
+        path: liveCapture,
+        files: 1,
+        bytes: 24,
+        interrupted: false,
+        skipped: 0,
+        omittedLines: 0,
+      })}\n`);
+
+      await sweepFeatureWorktreeScratch({
+        worktreeBase,
+        events: globalEvents,
+        log: () => {},
+        startFeatureEventScope: (path, featureSlug) => startFeatureEventPersistence(path, globalEvents, featureSlug),
+      });
+
+      const events = (await readFile(join(worktreeRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(events.filter((event) => event.path === liveCapture).map((event) => event.type))
+        .toStrictEqual(['provider_transcripts_captured']);
+      expect(events.filter((event) => event.path === recoveredCapture).map((event) => event.type))
+        .toStrictEqual(['provider_transcripts_captured', 'provider_transcripts_retained']);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
