@@ -81,11 +81,12 @@ export function deriveBindSet(liveCheckout: string, worktreeRoot: string): reado
 export function wrapForContainment<TEnv>(
   command: { readonly executable: string; readonly args: readonly string[]; readonly env: TEnv },
   bindSet: readonly string[],
-): { readonly executable: string; readonly args: readonly string[]; readonly env: TEnv } {
+): { readonly executable: string; readonly args: readonly string[]; readonly env: TEnv; readonly launcherArgCount: number } {
   return {
     executable: 'bwrap',
     args: [...bindSet, '--', command.executable, ...command.args],
     env: command.env,
+    launcherArgCount: bindSet.length + 2,
   };
 }
 

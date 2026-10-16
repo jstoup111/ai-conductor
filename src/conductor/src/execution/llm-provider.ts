@@ -167,6 +167,12 @@ export interface SelfHostInvocation {
   env: NodeJS.ProcessEnv;
   args: readonly string[];
   /**
+   * Leading `args` that belong to a containment launcher wrapping the
+   * provider (e.g. bwrap binds, `--`, the provider binary), not to the
+   * provider itself. Absent when the invocation is not wrapped.
+   */
+  launcherArgCount?: number;
+  /**
    * The provider home this preparation replaced in `env`. Installed-policy
    * discovery reads the operator's global/plugin catalogs from this explicit
    * mapping only; it is never written to and never inferred after preparation.

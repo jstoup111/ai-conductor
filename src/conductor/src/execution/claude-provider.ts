@@ -587,8 +587,12 @@ export class ClaudeProvider implements LLMProvider {
   readOnlyReviewObservedCommandReach(
     options: Pick<InvokeOptions, 'selfHost' | 'systemPrompt' | 'model' | 'nativeSchema' | 'sessionName' | 'interactive'>,
   ): 'none' | 'possible' {
+    const selfHost = options.selfHost?.launcherArgCount
+      ? { ...options.selfHost, args: options.selfHost.args.slice(options.selfHost.launcherArgCount) }
+      : options.selfHost;
     return claudeLaunchObservedCommandReach(this.buildArgs({
       ...options,
+      ...(selfHost ? { selfHost } : {}),
       prompt: '',
       sessionId: '00000000-0000-4000-8000-000000000000',
       resume: false,

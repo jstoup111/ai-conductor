@@ -32,6 +32,18 @@ describe('claude read-only review observed-command reach', () => {
     })).toBe('possible');
   });
 
+  it('judges only the provider args of a contained self-host invocation, not its launcher prefix', () => {
+    const provider = new ClaudeProvider();
+    const launcher = ['--dev-bind', '/', '/', '--unshare-pid', '--proc', '/proc', '--ro-bind', '/live', '/live', '--', '/isolated/claude'];
+    expect(provider.readOnlyReviewObservedCommandReach({
+      selfHost: { executable: 'bwrap', env: {}, args: launcher, launcherArgCount: launcher.length, teardown: async () => {} },
+      systemPrompt: 'review', model: 'opus',
+    })).toBe('none');
+    expect(provider.readOnlyReviewObservedCommandReach({
+      selfHost: { executable: 'bwrap', env: {}, args: [...launcher, '--settings', '{}'], launcherArgCount: launcher.length, teardown: async () => {} },
+    })).toBe('possible');
+  });
+
   it.each([
     ['an allowed gh prefix', replaceValue('--allowedTools', 'Bash(git show:*),Bash(gh:*)')],
     ['an allowed conduct prefix', replaceValue('--allowedTools', 'Bash(conduct:*)')],

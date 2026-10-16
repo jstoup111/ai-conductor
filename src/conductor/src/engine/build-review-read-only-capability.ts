@@ -39,6 +39,8 @@ export interface ProbeManagedObservationDestinationOptions {
   readonly protectedPaths: readonly string[];
   /** The prepared candidate executable, when self-host selection changed it. */
   readonly executable?: string;
+  /** Prepared args preceding the provider subcommand; a contained candidate's launcher lives here. */
+  readonly executableArgs?: readonly string[];
   readonly runProcess: ReadOnlyReviewCapabilityProcess;
 }
 
@@ -251,7 +253,7 @@ export async function probeManagedObservationDestination(
     // failures; only existing protected surfaces can demonstrate refusal.
     const protectedPaths = options.protectedPaths.filter(existsSync);
     result = await options.runProcess(options.executable ?? resolveProviderExecutable(CODEX_PROVIDER), [
-      'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(options.producerRoot), '--',
+      ...(options.executableArgs ?? []), 'sandbox', ...buildCodexReadOnlyProducerRootPolicyArgs(options.producerRoot), '--',
       '/bin/bash', '-c', OBSERVATION_DESTINATION_PROBE, 'managed-observation-policy',
       options.producerRoot, ...protectedPaths,
     ]);

@@ -296,6 +296,22 @@ describe('probeManagedObservationDestination', () => {
     ]);
   });
 
+  it('launches the probe through the prepared invocation prefix, as the contained provider is launched', async () => {
+    const runProcess = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: 'producer-write-allowed\nprotected-writes-refused\n',
+      stderr: '',
+    }));
+    const launcher = ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live', '--', '/isolated/codex'];
+
+    await expect(probeManagedObservationDestination({
+      provider: 'codex', producerRoot, protectedPaths, executable: 'bwrap', executableArgs: launcher, runProcess,
+    })).resolves.toEqual({ producerWrite: 'allowed', protectedWrites: 'refused' });
+    const [executable, args] = runProcess.mock.calls[0]! as unknown as [string, readonly string[]];
+    expect(executable).toBe('bwrap');
+    expect(args.slice(0, launcher.length + 1)).toEqual([...launcher, 'sandbox']);
+  });
+
   it.each([
     ['allows a protected path', 'producer-write-allowed\nprotected-write-succeeded\n'],
     ['cannot establish the producer exception', 'producer-write-refused\nprotected-writes-refused\n'],
