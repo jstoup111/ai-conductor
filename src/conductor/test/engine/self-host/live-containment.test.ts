@@ -306,6 +306,7 @@ describe('wrapForContainment', () => {
       executable: 'bwrap',
       args: [...bindSet, '--', 'claude', '--x'],
       env: { A: '1' },
+      launcherArgCount: bindSet.length + 2,
     });
   });
 });

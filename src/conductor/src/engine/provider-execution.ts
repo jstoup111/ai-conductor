@@ -1112,7 +1112,7 @@ export async function executeProviderCandidates({
                 provider: providerKey,
                 context: ownedCandidateOptions.managedSessionContext,
                 readOnlyReview: true,
-                ...(selfHost?.executable ? { executable: selfHost.executable } : {}),
+                ...(selfHost?.executable ? { executable: selfHost.executable, executableArgs: selfHost.args } : {}),
               });
             } else if (ownedCandidateOptions.readOnlyReview && ownedCandidateOptions.managedSessionContext) {
               throw new ProviderSetupUnavailableError({
