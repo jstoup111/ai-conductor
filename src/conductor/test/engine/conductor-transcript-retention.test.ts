@@ -1,4 +1,4 @@
-// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2
+// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3
 import { describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -97,12 +97,15 @@ describe('conductor transcript retention wiring', () => {
     }
   });
 
-  it('settles the failed configured-member attempt when its retry is emitted', async () => {
+  it('retains a failed build_review member attempt and prunes only its successful retry', async () => {
     const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-member-retry-'));
     const events = new ConductorEventEmitter();
-    const retained: string[] = [];
+    const lifecycle: Array<{ type: string; path: string }> = [];
     events.on('provider_transcripts_retained', (event) => {
-      if (event.type === 'provider_transcripts_retained') retained.push(event.path);
+      if (event.type === 'provider_transcripts_retained') lifecycle.push(event);
+    });
+    events.on('provider_transcripts_pruned', (event) => {
+      if (event.type === 'provider_transcripts_pruned') lifecycle.push(event);
     });
     new Conductor({
       projectRoot: root,
@@ -110,13 +113,14 @@ describe('conductor transcript retention wiring', () => {
       events,
       stepRunner: { run: async () => ({ success: true }), selfHostRunId: () => 'review' },
     });
-    const path = join('.pipeline', 'transcripts', 'build_review', 'attempt-1');
+    const first = join('.pipeline', 'transcripts', 'build_review', 'attempt-1');
+    const second = join('.pipeline', 'transcripts', 'build_review', 'attempt-2');
     try {
-      await mkdir(join(root, path), { recursive: true });
-      await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+      await mkdir(join(root, first), { recursive: true });
+      await writeFile(join(root, first, 'session.jsonl'), '{}\n');
       await events.emit({
         type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 1,
-        member: 'build_review', provider: 'codex', path, files: 1, bytes: 3,
+        member: 'build_review', provider: 'codex', path: first, files: 1, bytes: 3,
         interrupted: false, skipped: 0, omittedLines: 0,
       });
       await events.emit({
@@ -126,8 +130,27 @@ describe('conductor transcript retention wiring', () => {
           subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'build_review' },
         },
       });
-      await expect(access(join(root, path))).resolves.toBeUndefined();
-      expect(retained).toEqual([path]);
+      await mkdir(join(root, second), { recursive: true });
+      await writeFile(join(root, second, 'session.jsonl'), '{}\n');
+      await events.emit({
+        type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 2,
+        member: 'build_review', provider: 'codex', path: second, files: 1, bytes: 3,
+        interrupted: false, skipped: 0, omittedLines: 0,
+      });
+      await events.emit({
+        type: 'step_completed', step: 'manual_test', status: 'done',
+        executionContext: {
+          executionId: 'member-retry',
+          subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'build_review' },
+        },
+      });
+
+      expect(lifecycle).toEqual([
+        { type: 'provider_transcripts_retained', path: first },
+        { type: 'provider_transcripts_pruned', path: second },
+      ]);
+      await expect(access(join(root, first))).resolves.toBeUndefined();
+      await expect(access(join(root, second))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
