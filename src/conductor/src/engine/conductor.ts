@@ -2444,8 +2444,8 @@ export class Conductor {
       const step = (member ?? event.step) as StepName;
       const runId = this.stepRunner.selfHostRunId?.();
       return runId === undefined
-        ? this.transcriptRetention.settleBeforeRetry(step, event.attempt, member)
-        : this.transcriptRetention.settleBeforeRetry({ step, runId, nextAttempt: event.attempt, ...(member === undefined ? {} : { member }) });
+        ? this.transcriptRetention.settleBeforeRetry(step, event.attempt)
+        : this.transcriptRetention.settleBeforeRetry({ step, runId, nextAttempt: event.attempt });
     });
     this.events.on('step_refused', (event) => {
       if (event.type === 'step_refused' && event.kind === 'needs-human') {

@@ -164,10 +164,17 @@ export class TranscriptRetention {
   }
 
   /**
-   * A retry event names the attempt about to run. Settle every older pending
-   * attempt for the step; when a configured member is named, narrow only to
-   * that member. This keeps auxiliary members of an unscoped group retry from
-   * being pruned by a later successful step completion.
+   * A retry is emitted after its failed provider dispatch has torn down and
+   * before the replacement dispatch starts. Therefore every pending capture
+   * in the matching scope belongs to an earlier dispatch sequence. Capture
+   * sequence is deliberately independent from the retry-budget attempt: that
+   * counter can reset for a non-consuming retry.
+   *
+   * The optional member remains a compatibility/correlation input, not a
+   * capture filter. A configured dispatch can own an unlabelled capture or
+   * auxiliary rubric captures under the same step; filtering to its exact
+   * member would leave those failed captures pending for a later success to
+   * prune.
    */
   async settleBeforeRetry(
     identity: Pick<CapturedTranscript, 'step' | 'runId' | 'member'> & { readonly nextAttempt: number },
@@ -185,9 +192,7 @@ export class TranscriptRetention {
       const capture = captures[0];
       return capture !== undefined
         && capture.step === identity.step
-        && capture.attempt < identity.nextAttempt
         && (identity.runId === undefined || capture.runId === identity.runId)
-        && (identity.member === undefined || capture.member === identity.member)
         ? [{ key, capture }]
         : [];
     });

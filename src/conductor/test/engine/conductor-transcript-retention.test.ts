@@ -1,4 +1,4 @@
-// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3, task:rem-as-built-rem-ab-capture-dispatch-seq
+// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3, task:rem-as-built-rem-ab-capture-dispatch-seq, task:rem-as-built-rem-ab-settle-by-dispatch
 import { describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,6 +10,8 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
+import { writeState } from '../../src/engine/state.js';
+import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import type { StepRunner } from '../../src/engine/step-runner-types.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -192,6 +194,120 @@ describe('conductor transcript retention wiring', () => {
 
       expect(lifecycle).toEqual(captures.map(({ path }) => ({ type: 'provider_transcripts_retained', path })));
       for (const { path } of captures) await expect(access(join(root, path))).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains earlier same-attempt captures through the configured-member retry dispatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-configured-retry-'));
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<{ type: string; path: string }> = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') lifecycle.push(event);
+    });
+    events.on('provider_transcripts_pruned', (event) => {
+      if (event.type === 'provider_transcripts_pruned') lifecycle.push(event);
+    });
+    const state = { complexity_tier: 'M' } as never;
+    await writeState(join(root, '.pipeline', 'conduct-state.json'), state);
+    let dispatch = 0;
+    const runner: StepRunner = {
+      selfHostRunId: () => 'configured-retry',
+      run: async (_step, _state, options) => {
+        dispatch += 1;
+        const path = join('.pipeline', 'transcripts', 'build_review', `dispatch-${dispatch}`);
+        await mkdir(join(root, path), { recursive: true });
+        await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+        await events.emit({
+          type: 'provider_transcripts_captured', step: 'build_review', runId: 'configured-retry',
+          // The group retry budget restarts at one; capture identity is the
+          // directory/dispatch sequence, not this lifecycle attempt.
+          attempt: 1, member: dispatch === 1 ? 'rubric-security' : 'build_review',
+          provider: 'codex', path, files: 1, bytes: 3,
+          interrupted: false, skipped: 0, omittedLines: 0,
+        });
+        return { success: dispatch === 2 };
+      },
+    };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: runner,
+      config: { steps: { explore: { max_retries: 2 } } } as never,
+    });
+    try {
+      await (conductor as unknown as {
+        runParallelGroupViaCore: (group: 'explore', branches: readonly { name: string }[], current: typeof state) => Promise<unknown>;
+      }).runParallelGroupViaCore('explore', [{ name: 'build_review' }], state);
+
+      expect(lifecycle).toEqual([
+        { type: 'provider_transcripts_retained', path: join('.pipeline', 'transcripts', 'build_review', 'dispatch-1') },
+        { type: 'provider_transcripts_pruned', path: join('.pipeline', 'transcripts', 'build_review', 'dispatch-2') },
+      ]);
+      await expect(access(join(root, '.pipeline', 'transcripts', 'build_review', 'dispatch-1'))).resolves.toBeUndefined();
+      await expect(access(join(root, '.pipeline', 'transcripts', 'build_review', 'dispatch-2'))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains earlier same-attempt captures through the built-in validation-member retry dispatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-validation-retry-'));
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<{ type: string; path: string }> = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') lifecycle.push(event);
+    });
+    events.on('provider_transcripts_pruned', (event) => {
+      if (event.type === 'provider_transcripts_pruned') lifecycle.push(event);
+    });
+    const retriedMember = VALIDATION_GROUP.members[0];
+    const state = {
+      ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
+      [retriedMember]: 'pending',
+      complexity_tier: 'M',
+      track: 'technical',
+      feature_desc: 'transcript-validation-retry',
+    } as never;
+    await writeState(join(root, '.pipeline', 'conduct-state.json'), state);
+    let retries = 0;
+    const runner: StepRunner = {
+      selfHostRunId: () => 'validation-retry',
+      run: async (step) => {
+        if (step !== retriedMember) return { success: true };
+        retries += 1;
+        const path = join('.pipeline', 'transcripts', retriedMember, `dispatch-${retries}`);
+        await mkdir(join(root, path), { recursive: true });
+        await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+        await events.emit({
+          type: 'provider_transcripts_captured', step: retriedMember, runId: 'validation-retry',
+          attempt: 1, provider: 'codex', path, files: 1, bytes: 3,
+          interrupted: false, skipped: 0, omittedLines: 0,
+        });
+        return { success: retries === 2 };
+      },
+    };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: runner,
+      fromStep: retriedMember,
+      mode: 'auto',
+      maxRetries: 2,
+      verifyArtifacts: false,
+    });
+    try {
+      await conductor.run();
+
+      expect(lifecycle).toEqual([
+        { type: 'provider_transcripts_retained', path: join('.pipeline', 'transcripts', retriedMember, 'dispatch-1') },
+        { type: 'provider_transcripts_pruned', path: join('.pipeline', 'transcripts', retriedMember, 'dispatch-2') },
+      ]);
+      await expect(access(join(root, '.pipeline', 'transcripts', retriedMember, 'dispatch-1'))).resolves.toBeUndefined();
+      await expect(access(join(root, '.pipeline', 'transcripts', retriedMember, 'dispatch-2'))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
