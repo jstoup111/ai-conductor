@@ -16,7 +16,7 @@ import {
 } from './coverage-binding-envelope.js';
 import type { ChildId } from './child-context.js';
 import {
-  readCommittedRemediationTaskIds,
+  readCommittedRemediationTaskChildren,
   resolveRemediationTaskChild,
 } from './routing/owner-derivation.js';
 import {
@@ -138,12 +138,12 @@ export async function resolveChildTaskScope(
     rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
       ? rawChildren as Record<string, unknown>
       : undefined;
-  const committedIds = await readCommittedRemediationTaskIds(projectRoot);
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot);
   // A `rem-` prefix alone does not prove engine ownership: older plans may
   // carry an ordinary remediation task with that spelling. A durable Child
   // line proves a recreated worktree's engine task; otherwise only the
   // engine-state ledger makes the missing attribution a refusal.
-  const remediationIds = [...new Set([...recorded, ...committedIds])];
+  const remediationIds = [...new Set([...recorded, ...Object.keys(committedChildren)])];
   const remediationOwners = new Map<string, ChildId>();
   for (const id of remediationIds) {
     const resolved = await resolveRemediationTaskChild(projectRoot, id, children?.[id]);
