@@ -15,6 +15,30 @@ import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('conductor transcript retention wiring', () => {
+  it('removes the retention capture listener when its run ends', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-listener-cleanup-'));
+    const events = new ConductorEventEmitter();
+    const handlers = events as unknown as {
+      handlers: Map<string, Set<unknown>>;
+    };
+    try {
+      const conductor = new Conductor({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        events,
+        stepRunner: { run: async () => ({ success: true }) },
+      });
+
+      expect(handlers.handlers.get('provider_transcripts_captured')).toHaveLength(1);
+
+      await conductor.run();
+
+      expect(handlers.handlers.get('provider_transcripts_captured')).toHaveLength(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('constructs retention without overriding its production caps', async () => {
     const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-caps-'));
     try {
