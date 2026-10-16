@@ -1843,7 +1843,7 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      expect.objectContaining({ attempt: 1 }),
+      undefined,
     );
     expect(claude.invoke).not.toHaveBeenCalled();
     expect(teardown).toHaveBeenCalledOnce();
