@@ -165,8 +165,9 @@ export class TranscriptRetention {
 
   /**
    * A retry event names the attempt about to run. Settle every older pending
-   * attempt for that exact step/member independently, so a later successful
-   * retry cannot prune a failed attempt's capture.
+   * attempt for the step; when a configured member is named, narrow only to
+   * that member. This keeps auxiliary members of an unscoped group retry from
+   * being pruned by a later successful step completion.
    */
   async settleBeforeRetry(
     identity: Pick<CapturedTranscript, 'step' | 'runId' | 'member'> & { readonly nextAttempt: number },

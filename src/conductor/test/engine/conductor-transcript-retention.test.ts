@@ -1,4 +1,4 @@
-// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3
+// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3
 import { describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -151,6 +151,47 @@ describe('conductor transcript retention wiring', () => {
       ]);
       await expect(access(join(root, first))).resolves.toBeUndefined();
       await expect(access(join(root, second))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains every auxiliary build_review capture before an unscoped retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-unscoped-review-retry-'));
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<{ type: string; path: string }> = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') lifecycle.push(event);
+    });
+    events.on('provider_transcripts_pruned', (event) => {
+      if (event.type === 'provider_transcripts_pruned') lifecycle.push(event);
+    });
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }), selfHostRunId: () => 'review' },
+    });
+    const captures = [
+      { member: 'rubric-security', path: join('.pipeline', 'transcripts', 'build_review', 'security-attempt-1') },
+      { member: 'rubric-quality', path: join('.pipeline', 'transcripts', 'build_review', 'quality-attempt-1') },
+    ];
+    try {
+      for (const capture of captures) {
+        await mkdir(join(root, capture.path), { recursive: true });
+        await writeFile(join(root, capture.path, 'session.jsonl'), '{}\n');
+        await events.emit({
+          type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 1,
+          member: capture.member, provider: 'codex', path: capture.path, files: 1, bytes: 3,
+          interrupted: false, skipped: 0, omittedLines: 0,
+        });
+      }
+
+      await events.emit({ type: 'step_retry', step: 'build_review', attempt: 2, maxAttempts: 3, reason: 'retry' });
+      await events.emit({ type: 'step_completed', step: 'build_review', status: 'done' });
+
+      expect(lifecycle).toEqual(captures.map(({ path }) => ({ type: 'provider_transcripts_retained', path })));
+      for (const { path } of captures) await expect(access(join(root, path))).resolves.toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
