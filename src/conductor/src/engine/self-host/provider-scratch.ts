@@ -16,6 +16,7 @@ import {
   type TranscriptHarvestResult,
 } from './transcript-harvest.js';
 import { collectKnownSecrets } from './transcript-sanitize.js';
+import { sanitizeProviderMember } from './provider-member.js';
 import { TranscriptRetention } from './transcript-retention.js';
 
 const OWNER_LEASE_FILE = 'owner.json';
@@ -686,6 +687,6 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
 
   const leaf = member === undefined
     ? `${attempt}-${provider}`
-    : `${attempt}-${provider}-${member.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+    : `${attempt}-${provider}-${sanitizeProviderMember(member)}`;
   return join(normalize(worktreeRoot), '.daemon', 'scratch', runId, leaf);
 }

@@ -1,10 +1,28 @@
 // Covers: task:4, task:5, task:6
 import { access, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { harvestThenRemove, harvestTranscripts } from '../../../src/engine/self-host/transcript-harvest.js';
+import { harvestThenRemove, harvestTranscripts, transcriptCapture } from '../../../src/engine/self-host/transcript-harvest.js';
+
+describe('transcriptCapture', () => {
+  it.each(['../../escape', 'a/b', 'a/../../escape'])('keeps a member capture beneath its step directory', (member) => {
+    const root = '/worktree';
+    const capture = transcriptCapture({
+      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, member, provider: 'codex',
+    });
+    const stepDirectory = resolve(root, '.pipeline', 'transcripts', 'build_review');
+
+    expect(relative(stepDirectory, resolve(capture.destination))).not.toMatch(/^\.\.(?:[/\\]|$)/);
+  });
+
+  it('keeps ordinary member capture names stable', () => {
+    expect(transcriptCapture({
+      worktreeRoot: '/worktree', step: 'build_review', runId: 'run', attempt: 1, member: 'rubric-a', provider: 'codex',
+    }).path).toBe(join('.pipeline', 'transcripts', 'build_review', 'run-a1-rubric-a-codex'));
+  });
+});
 
 describe('harvestTranscripts', () => {
   it('copies only allowlisted transcripts at their home-relative paths', async () => {

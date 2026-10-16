@@ -51,15 +51,13 @@ async function persisted(root: string) {
 }
 
 describe('TranscriptRetention', () => {
-  it('uses the production cap defaults of 20 captures and 1 GiB', () => {
-    expect(TRANSCRIPT_RETENTION_MAX_CAPTURES).toBe(20);
-    expect(TRANSCRIPT_RETENTION_MAX_BYTES).toBe(1_073_741_824);
-  });
-
-  it('evicts exactly the oldest capture when retaining a 21st capture exceeds the count cap', async () => {
+  it('uses its production defaults to evict exactly the oldest of 21 captures by count', async () => {
     const { root, events, persister } = await fixture();
     const retention = new TranscriptRetention(root, events);
     try {
+      const effectiveCaps = retention as unknown as { maxCaptures: number; maxBytes: number };
+      expect(effectiveCaps.maxCaptures).toBe(TRANSCRIPT_RETENTION_MAX_CAPTURES);
+      expect(effectiveCaps.maxBytes).toBe(TRANSCRIPT_RETENTION_MAX_BYTES);
       await retention.ready();
       for (let index = 0; index < 21; index += 1) {
         const path = `.pipeline/transcripts/build/capture-${index}`;
