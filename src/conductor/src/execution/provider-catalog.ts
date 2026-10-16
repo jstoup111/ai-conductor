@@ -81,6 +81,11 @@ export interface SelfHostShape {
   readonly selectedAuthPath: string;
   readonly transcripts: {
     readonly globs: readonly string[];
+    /** Layout used by `ai-conductor transcripts --show` to locate a session file. */
+    readonly sessionFile: {
+      readonly root: string;
+      readonly excludedPathSegments?: readonly string[];
+    };
     readonly extractFinalAssistantMessage: FinalAssistantMessageExtractor;
   };
   readonly claudeBuildPreflights: boolean;
@@ -186,6 +191,7 @@ export const BUILT_IN_PROVIDERS = [
       selectedAuthPath: '.credentials.json',
       transcripts: {
         globs: ['projects/**/*.jsonl'],
+        sessionFile: { root: 'projects', excludedPathSegments: ['subagents'] },
         extractFinalAssistantMessage: extractClaudeFinalAssistantMessage,
       },
       claudeBuildPreflights: true,
@@ -244,6 +250,7 @@ export const BUILT_IN_PROVIDERS = [
       selectedAuthPath: 'auth.json',
       transcripts: {
         globs: ['sessions/**/*.jsonl'],
+        sessionFile: { root: 'sessions' },
         extractFinalAssistantMessage: extractCodexFinalAssistantMessage,
       },
       claudeBuildPreflights: false,
@@ -292,6 +299,7 @@ export const BUILT_IN_PROVIDERS = [
       selectedAuthPath: 'auth.json',
       transcripts: {
         globs: ['sessions/**/*.jsonl'],
+        sessionFile: { root: 'sessions' },
         extractFinalAssistantMessage: extractPiFinalAssistantMessage,
       },
       claudeBuildPreflights: false,

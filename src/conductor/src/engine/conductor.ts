@@ -2412,9 +2412,20 @@ export class Conductor {
       return this.transcriptRetention.settleBeforeRetry(step, event.attempt, member);
     });
     this.events.on('step_completed', (event) => {
-      if (event.type === 'step_completed' && event.step !== 'build') {
-        return this.transcriptRetention.settle(event.step, 'succeeded-with-progress');
-      }
+      if (event.type !== 'step_completed' || event.step === 'build') return;
+      // A configured branch reports its parent group as the lifecycle step,
+      // while its provider capture is owned by the member step. Settle both
+      // identities: the parent remains the group lifecycle owner and the
+      // member closes exactly the captures it dispatched.
+      const member = event.executionContext?.subject.kind === 'configured-member'
+        ? event.executionContext.subject.member as StepName
+        : undefined;
+      return Promise.all([
+        this.transcriptRetention.settle(event.step, 'succeeded-with-progress'),
+        ...(member === undefined || member === event.step
+          ? []
+          : [this.transcriptRetention.settle(member, 'succeeded-with-progress')]),
+      ]).then(() => undefined);
     });
     this.log = opts.log;
     this.fullSuiteVerifier =

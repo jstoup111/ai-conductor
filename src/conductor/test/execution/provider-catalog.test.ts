@@ -306,6 +306,7 @@ describe('built-in provider catalog', () => {
           selectedAuthPath: '.credentials.json',
           transcripts: expect.objectContaining({
             globs: ['projects/**/*.jsonl'],
+            sessionFile: { root: 'projects', excludedPathSegments: ['subagents'] },
             extractFinalAssistantMessage: expect.any(Function),
           }),
           claudeBuildPreflights: true,
@@ -317,6 +318,7 @@ describe('built-in provider catalog', () => {
           selectedAuthPath: 'auth.json',
           transcripts: expect.objectContaining({
             globs: ['sessions/**/*.jsonl'],
+            sessionFile: { root: 'sessions' },
             extractFinalAssistantMessage: expect.any(Function),
           }),
           claudeBuildPreflights: false,
@@ -328,6 +330,7 @@ describe('built-in provider catalog', () => {
           selectedAuthPath: 'auth.json',
           transcripts: expect.objectContaining({
             globs: ['sessions/**/*.jsonl'],
+            sessionFile: { root: 'sessions' },
             extractFinalAssistantMessage: expect.any(Function),
           }),
           claudeBuildPreflights: false,

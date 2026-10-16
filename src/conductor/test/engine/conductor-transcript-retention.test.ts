@@ -89,6 +89,62 @@ describe('conductor transcript retention wiring', () => {
     }
   });
 
+  it('prunes a successful configured-member capture once and does not retain it on reconciliation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-member-success-'));
+    const events = new ConductorEventEmitter();
+    const pruned: string[] = [];
+    const ledger: unknown[] = [];
+    events.on('provider_transcripts_captured', (event) => { ledger.push(event); });
+    events.on('provider_transcripts_pruned', (event) => {
+      if (event.type === 'provider_transcripts_pruned') {
+        pruned.push(event.path);
+        ledger.push(event);
+      }
+    });
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }) },
+    });
+    const path = join('.pipeline', 'transcripts', 'build_review', 'successful-member');
+    try {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+      await events.emit({
+        type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 1,
+        member: 'build_review', provider: 'codex', path, files: 1, bytes: 3,
+        interrupted: false, skipped: 0, omittedLines: 0,
+      });
+      await events.emit({
+        type: 'step_completed', step: 'ship_validation', status: 'done',
+        executionContext: {
+          executionId: 'member-success',
+          subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'build_review' },
+        },
+      });
+      await expect(access(join(root, path))).rejects.toThrow();
+      expect(pruned).toEqual([path]);
+
+      // A later startup consults the spine, not the mere existence of a
+      // capture directory; a pruned capture must never be recovered/retained.
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline', 'events.jsonl'), `${ledger.map((event) => JSON.stringify(event)).join('\n')}\n`);
+      new Conductor({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        events,
+        stepRunner: { run: async () => ({ success: true }) },
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(pruned).toEqual([path]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('retains a failed self-host provider attempt and prunes only its successful retry', async () => {
     const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-provider-retry-'));
     const events = new ConductorEventEmitter();
