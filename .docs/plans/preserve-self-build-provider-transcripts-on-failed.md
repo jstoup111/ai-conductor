@@ -676,3 +676,29 @@ Authoritative edges are the per-task `**Dependencies:**` lines.
 **Done when:**
 - adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
 - The repair for task rem-as-built-rem-vg-ab2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-refusal-13244787-dbb9-4326-b078-158f08a509eb: conductor.ts runAdmittedSelfBuildDispatch (all three stepRunner.run branches) + step-runners.ts:1853/1959: stop threading the lifecycle/retry `attempt` into self-host provider dispatch as the escalation attempt. Self-host runs resolve model/effort exactly as before this branch (attempt 1, no escalation), and capture identity is passed on a separate non-escalating field. Add a conductor-token-injection.test.ts case asserting that the executor-resolved model and effort for a self-host retry at attempt 2 and 3 equal attempt 1's.
+**Gate:** prd-audit
+**Rationale:** Verified (100%). step-runners.ts:1853 forwards `attempt: opts?.attempt ?? 1` with `escalate: opts?.escalate ?? true`. Because the S2.10/ab1 repair threads the retry-budget `attempt` into the runAdmittedSelfBuildDispatch stepRunner.run calls without `escalate`, self-host dispatches now climb effort and model on retry. Before this branch they always resolved at attempt 1. This task only removes behavior: self-host dispatches stop sending the lifecycle attempt as the escalation input (or pass `escalate: false`) and resolve exactly as before. Capture identity moves to a separate, non-escalating dispatch sequence in the companion as-built task. The task adds no new capability. Task 9's attempt-distinct capture behavior survives through that companion task.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 13244787-dbb9-4326-b078-158f08a509eb r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 13244787-dbb9-4326-b078-158f08a509eb r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-13244787-dbb9-4326-b078-158f08a509eb is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-ab-capture-dispatch-seq: provider-execution.ts:916/1091/1486 + step-runners.ts + transcript-harvest.ts:50: derive the capture path's attempt component from a per-(runId, step) monotonic dispatch sequence that never resets or decrements with the retry budget and never feeds escalation. Include the auxiliary member and its auxiliary attempt in the path, so successive dispatches and auxiliary retries never share a capture directory. Add a test that three same-session dispatches of one step, including a retry-budget reset, write three distinct directories and leave earlier files byte-identical.
+**Gate:** as-built
+**Rationale:** Verified (99%). The capture attempt comes from the retry-budget counter, which resets at conductor.ts:9900, and auxiliary attempts restart at provider-execution.ts:1476. Paired with the stable runId, successive dispatches collide on the transcript-harvest path. settleBeforeRetry (transcript-retention.ts:171-180) uses `capture.attempt < nextAttempt` with exact member equality, so equal-numbered and auxiliary-member captures stay pending and are later pruned. ADR decision 4 and tasks 9/11/12 already require attempt-distinct captures and failed-attempt settlement, so this is conforming implementation drift. It needs no architecture decision. The fix takes capture identity off the escalation attempt, consistent with refusal NC-1.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 4
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-ab-capture-dispatch-seq is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-ab-settle-by-dispatch: transcript-retention.ts settleBeforeRetry + conductor.ts step_retry subscriber (:2404-2412): settle every pending capture of the retried step/configured member that belongs to an earlier dispatch sequence, not by `attempt < nextAttempt`. Match captures whose member is absent or is an auxiliary rubric id under that step. Add conductor tests driving the configured-member retry sites (conductor.ts:8098, :15340) and a same-attempt-number redispatch, asserting the failed captures get provider_transcripts_retained and survive the later success settle at :2426-2431.
+**Gate:** as-built
+**Rationale:** Verified (99%). The capture attempt comes from the retry-budget counter, which resets at conductor.ts:9900, and auxiliary attempts restart at provider-execution.ts:1476. Paired with the stable runId, successive dispatches collide on the transcript-harvest path. settleBeforeRetry (transcript-retention.ts:171-180) uses `capture.attempt < nextAttempt` with exact member equality, so equal-numbered and auxiliary-member captures stay pending and are later pruned. ADR decision 4 and tasks 9/11/12 already require attempt-distinct captures and failed-attempt settlement, so this is conforming implementation drift. It needs no architecture decision. The fix takes capture identity off the escalation attempt, consistent with refusal NC-1.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 4
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-ab-settle-by-dispatch is committed and its targeted tests pass.
