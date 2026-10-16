@@ -1876,6 +1876,7 @@ export class DefaultStepRunner implements StepRunner {
             config: this.config,
             tier: state.complexity_tier,
             attempt: opts?.attempt ?? 1,
+            captureAttempt: opts?.captureAttempt,
             runId: this.runId,
             nativeSchemaScratch: {
               worktreeRoot: this.projectDir,
@@ -1986,6 +1987,7 @@ export class DefaultStepRunner implements StepRunner {
           config: this.config,
           tier: request.tier,
           attempt: request.dispatch?.attempt ?? 1,
+          captureAttempt: request.dispatch?.captureAttempt,
           runId: this.runId,
           nativeSchemaScratch: {
             worktreeRoot: this.projectDir,

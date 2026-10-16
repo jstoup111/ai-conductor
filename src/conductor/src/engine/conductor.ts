@@ -5700,7 +5700,9 @@ export class Conductor {
       if (usesProviderHome) {
         await this.discardOwnedStepRegionCapture(state, name);
         return this.stepRunner.run(name, state, {
-          attempt,
+          attempt: 1,
+          captureAttempt: attempt,
+          escalate: false,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -5737,7 +5739,9 @@ export class Conductor {
       try {
         await this.discardOwnedStepRegionCapture(state, name);
         return await this.stepRunner.run(name, state, {
-          attempt,
+          attempt: 1,
+          captureAttempt: attempt,
+          escalate: false,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -5937,7 +5941,9 @@ export class Conductor {
     }
     try {
       return await this.stepRunner.run(name, state, {
-        attempt,
+        attempt: 1,
+        captureAttempt: attempt,
+        escalate: false,
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,

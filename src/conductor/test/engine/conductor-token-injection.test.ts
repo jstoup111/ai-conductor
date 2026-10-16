@@ -133,16 +133,17 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     expect(observedTokens[0]).toBe('tok-injected-v1');
   });
 
+  // Covers: task:rem-prd-audit-refusal-13244787-dbb9-4326-b078-158f08a509eb
   it.each([true, false])('reports only dispatched retry overrides (selfHost=%s)', async (selfHost) => {
-    const dispatches: Array<{ attempt?: number; model?: string; effort?: string }> = [];
+    const dispatches: Array<{ attempt?: number; captureAttempt?: number; escalate?: boolean; model?: string; effort?: string }> = [];
     let buildCalls = 0;
     const runner: StepRunner = {
       selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step === 'build') {
           buildCalls++;
-          dispatches.push({ attempt: options?.attempt, model: options?.modelOverride, effort: options?.effortOverride });
-          if (buildCalls === 1) return { success: false, output: 'first attempt failed' };
+          dispatches.push({ attempt: options?.attempt, captureAttempt: options?.captureAttempt, escalate: options?.escalate, model: options?.modelOverride, effort: options?.effortOverride });
+          if (buildCalls < 3) return { success: false, output: 'retry requested' };
         }
         return { success: true };
       }),
@@ -176,22 +177,26 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
 
     await conductor.run();
 
-    expect(retryEvents).toHaveLength(1);
-    expect(dispatches).toHaveLength(2);
+    expect(retryEvents).toHaveLength(2);
+    expect(dispatches).toHaveLength(3);
     if (selfHost) {
       expect(dispatches).toEqual([
-        // Self-host attempt identity names the provider transcript capture.
-        // It is independent of generic retry escalation, which remains absent.
-        { attempt: 1, model: undefined, effort: undefined },
-        { attempt: 2, model: undefined, effort: undefined },
+        // The executor always resolves the self-host base model and effort.
+        // Capture identity separately tracks each lifecycle retry.
+        { attempt: 1, captureAttempt: 1, escalate: false, model: undefined, effort: undefined },
+        { attempt: 1, captureAttempt: 2, escalate: false, model: undefined, effort: undefined },
+        { attempt: 1, captureAttempt: 3, escalate: false, model: undefined, effort: undefined },
       ]);
-      expect(retryEvents[0]).not.toHaveProperty('escalatedModel');
-      expect(retryEvents[0]).not.toHaveProperty('escalatedEffort');
+      for (const retryEvent of retryEvents) {
+        expect(retryEvent).not.toHaveProperty('escalatedModel');
+        expect(retryEvent).not.toHaveProperty('escalatedEffort');
+      }
     } else {
-      expect(dispatches[1]).toEqual({
-        attempt: 2, model: retryEvents[0].escalatedModel, effort: retryEvents[0].escalatedEffort,
+      expect(dispatches[2]).toEqual({
+        attempt: 3, captureAttempt: undefined, escalate: true,
+        model: retryEvents[1].escalatedModel, effort: retryEvents[1].escalatedEffort,
       });
-      expect(dispatches[1].effort ?? dispatches[1].model).toBeDefined();
+      expect(dispatches[2].effort ?? dispatches[2].model).toBeDefined();
     }
   });
 
