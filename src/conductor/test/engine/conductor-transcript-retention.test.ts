@@ -529,16 +529,19 @@ describe('conductor transcript retention wiring', () => {
       });
       expect(lifecycle).toEqual([
         { type: 'provider_transcripts_retained', path: first },
-        { type: 'provider_transcripts_pruned', path: second },
+        { type: 'provider_transcripts_retained', path: second },
+        { type: 'provider_transcripts_pruned', path: third },
       ]);
       expect(transcriptWrites).toEqual([
         { path: first, content: firstCapture },
         { path: second, content: '{"attempt":2,"message":"dispatch 2"}\n' },
         { path: third, content: '{"attempt":3,"message":"dispatch 3"}\n' },
       ]);
-      await expect(access(join(root, first))).resolves.toBeUndefined();
-      await expect(readFile(join(root, first, 'session.jsonl'), 'utf8')).resolves.toBe(firstCapture);
-      await expect(access(join(root, second))).rejects.toThrow();
+      await expect(access(join(root, second))).resolves.toBeUndefined();
+      await expect(readFile(join(root, second, 'session.jsonl'), 'utf8')).resolves.toBe(
+        '{"attempt":2,"message":"dispatch 2"}\n',
+      );
+      await expect(access(join(root, third))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

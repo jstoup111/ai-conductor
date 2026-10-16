@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { TranscriptRetention } from '../../../src/engine/self-host/transcript-retention.js';
+import {
+  asTranscriptCaptureDispatchIdentity,
+  TranscriptRetention,
+} from '../../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const roots: string[] = [];
@@ -169,9 +172,9 @@ describe('TranscriptRetention', () => {
     try {
       await retention.ready();
       await capture(events, root, first, 'build');
-      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: 1 }, 'failed');
+      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: asTranscriptCaptureDispatchIdentity(1) }, 'failed');
       await capture(events, root, second, 'build', false, 3, { attempt: 2 });
-      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: 2 }, 'succeeded-with-progress');
+      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: asTranscriptCaptureDispatchIdentity(2) }, 'succeeded-with-progress');
 
       // A distinct attempt identity is required to prune the second capture.
       await expect(access(join(root, first))).resolves.toBeUndefined();
@@ -202,7 +205,7 @@ describe('TranscriptRetention', () => {
       await capture(events, root, retry, 'build_review', false, 3, {
         runId: 'review', attempt: 1, member: 'build_review',
       });
-      await retention.settleAttempt({ step: 'build_review', runId: 'review', attempt: 1, member: 'build_review' }, 'succeeded-with-progress');
+      await retention.settleAttempt({ step: 'build_review', runId: 'review', attempt: asTranscriptCaptureDispatchIdentity(1), member: 'build_review' }, 'succeeded-with-progress');
 
       await expect(access(join(root, failed))).resolves.toBeUndefined();
       await expect(access(join(root, auxiliary))).resolves.toBeUndefined();
@@ -277,7 +280,7 @@ describe('TranscriptRetention', () => {
       await retention.settle('build', 'failed');
       await capture(events, root, pending, 'build');
       await capture(events, root, '.pipeline/transcripts/build/new-retained', 'build', false, 3, { attempt: 2 });
-      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: 2 }, 'failed');
+      await retention.settleAttempt({ step: 'build', runId: 'run', attempt: asTranscriptCaptureDispatchIdentity(2) }, 'failed');
       await expect(access(join(root, pending))).resolves.toBeUndefined();
       expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_evicted'))
         .toEqual([expect.objectContaining({ path: oldestRetained })]);

@@ -18,6 +18,22 @@ export type TranscriptRetentionOutcome =
   | 'halted'
   | 'needs-human';
 
+/**
+ * Identity of a provider-capture dispatch. This is intentionally distinct
+ * from the retry/escalation counter: a non-consuming retry can reuse the
+ * latter but must never settle the former's transcript directory.
+ */
+declare const transcriptCaptureDispatchIdentity: unique symbol;
+export type TranscriptCaptureDispatchIdentity = number & {
+  readonly [transcriptCaptureDispatchIdentity]: 'TranscriptCaptureDispatchIdentity';
+};
+
+export function asTranscriptCaptureDispatchIdentity(
+  dispatch: number,
+): TranscriptCaptureDispatchIdentity {
+  return dispatch as TranscriptCaptureDispatchIdentity;
+}
+
 export const TRANSCRIPT_RETENTION_MAX_CAPTURES = 20;
 export const TRANSCRIPT_RETENTION_MAX_BYTES = 1_073_741_824;
 
@@ -155,9 +171,11 @@ export class TranscriptRetention {
     await this.settleKeys(keys, outcome);
   }
 
-  /** Settle exactly one provider attempt without affecting a later retry. */
+  /** Settle exactly one provider capture dispatch without affecting a later retry. */
   async settleAttempt(
-    identity: Pick<CapturedTranscript, 'step' | 'runId' | 'attempt' | 'member'>,
+    identity: Omit<Pick<CapturedTranscript, 'step' | 'runId' | 'attempt' | 'member'>, 'attempt'> & {
+      readonly attempt: TranscriptCaptureDispatchIdentity;
+    },
     outcome: TranscriptRetentionOutcome,
   ): Promise<void> {
     await this.settleKeys([captureKey(identity)], outcome);
@@ -197,7 +215,10 @@ export class TranscriptRetention {
         : [];
     });
     for (const { capture } of identities) {
-      await this.settleAttempt(capture, 'failed');
+      await this.settleAttempt({
+        ...capture,
+        attempt: asTranscriptCaptureDispatchIdentity(capture.attempt),
+      }, 'failed');
     }
   }
 

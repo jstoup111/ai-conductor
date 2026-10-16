@@ -404,7 +404,12 @@ import {
   wrapForContainment,
 } from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
-import { TranscriptRetention, type TranscriptRetentionOutcome } from './self-host/transcript-retention.js';
+import {
+  asTranscriptCaptureDispatchIdentity,
+  TranscriptRetention,
+  type TranscriptCaptureDispatchIdentity,
+  type TranscriptRetentionOutcome,
+} from './self-host/transcript-retention.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
 import { classifyRebaseOperation } from './gate-code-validity.js';
@@ -697,7 +702,7 @@ export class Conductor {
   /** Best-effort evidence retention; it must never alter a step verdict. */
   private readonly transcriptRetention: TranscriptRetention;
   /** Capture identity advances for every admitted self-host dispatch, independently of retries. */
-  private readonly transcriptCaptureDispatches = new Map<string, number>();
+  private readonly transcriptCaptureDispatches = new Map<string, TranscriptCaptureDispatchIdentity>();
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
@@ -713,11 +718,20 @@ export class Conductor {
    * non-consuming retries decrement the retry-budget attempt before their next
    * dispatch, so that value is not a safe capture identity.
    */
-  private nextTranscriptCaptureAttempt(step: StepName, runId: string): number {
+  private nextTranscriptCaptureAttempt(step: StepName, runId: string): TranscriptCaptureDispatchIdentity {
     const key = `${runId}\u0000${step}`;
-    const next = (this.transcriptCaptureDispatches.get(key) ?? 0) + 1;
+    const next = asTranscriptCaptureDispatchIdentity(
+      (this.transcriptCaptureDispatches.get(key) ?? 0) + 1,
+    );
     this.transcriptCaptureDispatches.set(key, next);
     return next;
+  }
+
+  private currentTranscriptCaptureAttempt(
+    step: StepName,
+  ): TranscriptCaptureDispatchIdentity | undefined {
+    const runId = this.stepRunner.selfHostRunId?.();
+    return runId === undefined ? undefined : this.transcriptCaptureDispatches.get(`${runId}\u0000${step}`);
   }
 
   /** Child-local suite selection has the same authoritative base as review. */
@@ -886,19 +900,19 @@ export class Conductor {
   /** Settle one harvested self-host attempt without touching another retry. */
   private async settleTranscriptAttempt(
     step: StepName,
-    attempt: number,
+    captureAttempt: TranscriptCaptureDispatchIdentity | undefined,
     outcome: TranscriptRetentionOutcome,
     member?: string,
   ): Promise<void> {
     const runId = this.stepRunner.selfHostRunId?.();
-    if (runId === undefined) {
+    if (runId === undefined || captureAttempt === undefined) {
       await this.transcriptRetention.settle(step, outcome);
       return;
     }
     await this.transcriptRetention.settleAttempt({
       step,
       runId,
-      attempt,
+      attempt: captureAttempt,
       ...(member === undefined ? {} : { member }),
     }, outcome);
   }
@@ -2506,14 +2520,30 @@ export class Conductor {
     // lifecycle events.  Keeping settlement on the existing event spine makes
     // every ordinary terminal route (including configured steps) share it.
     this.events.on('step_failed', (event) => {
-      if (event.type === 'step_failed') return this.transcriptRetention.settle(event.step, 'failed');
+      if (event.type === 'step_failed') {
+        return this.settleTranscriptAttempt(
+          event.step,
+          this.currentTranscriptCaptureAttempt(event.step),
+          'failed',
+        );
+      }
     });
     this.events.on('build_stall', (event) => {
-      if (event.type === 'build_stall') return this.transcriptRetention.settle(event.step, 'stalled');
+      if (event.type === 'build_stall') {
+        return this.settleTranscriptAttempt(
+          event.step,
+          this.currentTranscriptCaptureAttempt(event.step),
+          'stalled',
+        );
+      }
     });
     this.events.on('loop_halt', (event) => {
       if (event.type === 'loop_halt' && event.step !== undefined) {
-        return this.transcriptRetention.settle(event.step, 'halted');
+        return this.settleTranscriptAttempt(
+          event.step,
+          this.currentTranscriptCaptureAttempt(event.step),
+          'halted',
+        );
       }
     });
     this.events.on('step_retry', (event) => {
@@ -2532,7 +2562,11 @@ export class Conductor {
     });
     this.events.on('step_refused', (event) => {
       if (event.type === 'step_refused' && event.kind === 'needs-human') {
-        return this.transcriptRetention.settle(event.step, 'needs-human');
+        return this.settleTranscriptAttempt(
+          event.step,
+          this.currentTranscriptCaptureAttempt(event.step),
+          'needs-human',
+        );
       }
     });
     this.events.on('step_completed', (event) => {
@@ -2545,10 +2579,18 @@ export class Conductor {
         ? event.executionContext.subject.member as StepName
         : undefined;
       return Promise.all([
-        this.transcriptRetention.settle(event.step, 'succeeded-with-progress'),
+        this.settleTranscriptAttempt(
+          event.step,
+          this.currentTranscriptCaptureAttempt(event.step),
+          'succeeded-with-progress',
+        ),
         ...(member === undefined || member === event.step
           ? []
-          : [this.transcriptRetention.settle(member, 'succeeded-with-progress')]),
+          : [this.settleTranscriptAttempt(
+            member,
+            this.currentTranscriptCaptureAttempt(member),
+            'succeeded-with-progress',
+          )]),
       ]).then(() => undefined);
     });
     this.log = opts.log;
@@ -5834,10 +5876,17 @@ export class Conductor {
       }
     }
 
+    const previousCaptureAttempt = this.currentTranscriptCaptureAttempt(name);
     const captureAttempt = this.nextTranscriptCaptureAttempt(
       name,
       this.stepRunner.selfHostRunId?.() ?? this.featureSlug ?? state.feature_desc ?? 'unknown-run',
     );
+    // A newly admitted dispatch is conclusive evidence that the preceding
+    // capture did not produce this result. This also covers non-consuming
+    // provider retries, which do not emit a retry-budget transition.
+    if (previousCaptureAttempt !== undefined) {
+      await this.settleTranscriptAttempt(name, previousCaptureAttempt, 'failed');
+    }
 
     // Compatibility seam for injected/legacy runners which do not route via
     // ProviderExecutionContext. Real entrypoints always take the candidate
@@ -14780,7 +14829,7 @@ export class Conductor {
           if (step.name === 'build') {
             await this.settleTranscriptAttempt(
               step.name,
-              attempt,
+              this.currentTranscriptCaptureAttempt(step.name),
               completedBuildMadeProgress ? 'succeeded-with-progress' : 'succeeded-without-progress',
             );
           }
