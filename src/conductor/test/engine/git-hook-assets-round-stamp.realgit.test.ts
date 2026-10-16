@@ -29,15 +29,16 @@ async function git(root: string, args: string[], input?: string): Promise<string
   return (await execFile('git', args, { cwd: root, ...(input === undefined ? {} : { input }) })).stdout.trim();
 }
 
-async function writeHookLauncher(root: string): Promise<string> {
+async function writeHookLauncher(root: string, failRoundStamp = false): Promise<string> {
   const launcher = join(root, 'round-stamp-launcher');
-  await writeFile(launcher, `#!/bin/sh\nexec node --import tsx ${JSON.stringify(sourceIndex)} "$@"\n`, 'utf8');
+  const fail = failRoundStamp ? 'if [ "$1" = round-stamp ]; then exit 1; fi\n' : '';
+  await writeFile(launcher, `#!/bin/sh\n${fail}exec node --import tsx ${JSON.stringify(sourceIndex)} "$@"\n`, 'utf8');
   await chmod(launcher, 0o755);
   return launcher;
 }
 
-async function installHooks(root: string): Promise<void> {
-  const launcher = await writeHookLauncher(root);
+async function installHooks(root: string, failRoundStamp = false): Promise<void> {
+  const launcher = await writeHookLauncher(root, failRoundStamp);
   const previous = process.env.AI_CONDUCTOR_ENGINE_BIN;
   process.env.AI_CONDUCTOR_ENGINE_BIN = launcher;
   vi.resetModules();
@@ -64,7 +65,7 @@ async function commit(root: string, file: string, message: string): Promise<stri
   return git(root, ['log', '-1', '--format=%B']);
 }
 
-async function routedFixture(): Promise<string> {
+async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'round-stamp-hook-'));
   roots.push(root);
   await git(root, ['init', '-q', '-b', 'main']);
@@ -95,11 +96,17 @@ async function routedFixture(): Promise<string> {
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'current-task'), 'T1\n');
   await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: 'T1', status: 'in_progress' }] }));
-  await installHooks(root);
+  await installHooks(root, options.failRoundStamp);
   return root;
 }
 
 describe('prepare-commit-msg round stamp (real local Git)', () => {
+  it('keeps unrelated task commits permitted when round stamping is unavailable', async () => {
+    const root = await routedFixture({ failRoundStamp: true });
+
+    await expect(commit(root, 'member.txt', 'feat: permitted child task')).resolves.toContain('Task: T1');
+  });
+
   it('adds one Task and Round trailer only for the marker host branch', async () => {
     const root = await routedFixture();
     await writeRepairMarker(root, 1, 'r1');
