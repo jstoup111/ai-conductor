@@ -234,18 +234,24 @@ describe('TranscriptRetention', () => {
     }
   });
 
-  it('never evicts an unsettled capture while enforcing the retained cap', async () => {
+  it.each([
+    ['count', { maxCaptures: 1 }],
+    ['byte', { maxBytes: 3 }],
+  ] as const)('never evicts an unsettled capture while enforcing the %s cap', async (_cap, limits) => {
     const { root, events, persister } = await fixture();
-    const retention = new TranscriptRetention(root, events, { maxCaptures: 1 });
+    const retention = new TranscriptRetention(root, events, limits);
     const pending = '.pipeline/transcripts/build/pending';
+    const oldestRetained = '.pipeline/transcripts/build/retained';
     try {
       await retention.ready();
-      await capture(events, root, '.pipeline/transcripts/build/retained', 'build');
+      await capture(events, root, oldestRetained, 'build');
       await retention.settle('build', 'failed');
       await capture(events, root, pending, 'build');
       await capture(events, root, '.pipeline/transcripts/build/new-retained', 'build', false, 3, { attempt: 2 });
       await retention.settleAttempt({ step: 'build', runId: 'run', attempt: 2 }, 'failed');
       await expect(access(join(root, pending))).resolves.toBeUndefined();
+      expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_evicted'))
+        .toEqual([expect.objectContaining({ path: oldestRetained })]);
     } finally {
       retention.stop();
       persister.stop();
