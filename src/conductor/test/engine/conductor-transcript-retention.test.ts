@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { executeProviderCandidates, type ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
@@ -14,7 +15,11 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import type { StepRunner } from '../../src/engine/step-runner-types.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
+import { transcriptCaptureIdentity } from '../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+// @ts-expect-error A rubric is a member identity, never a lifecycle StepName.
+transcriptCaptureIdentity({ step: 'rubric-security', runId: 'review', attempt: 1 });
 
 describe('conductor transcript retention wiring', () => {
   it('removes the retention capture listener when its run ends', async () => {
@@ -195,6 +200,83 @@ describe('conductor transcript retention wiring', () => {
       expect(lifecycle).toEqual(captures.map(({ path }) => ({ type: 'provider_transcripts_retained', path })));
       for (const { path } of captures) await expect(access(join(root, path))).resolves.toBeUndefined();
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes every successful build_review rubric capture at its own identity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-rubric-success-'));
+    const events = new ConductorEventEmitter();
+    const pruned: string[] = [];
+    events.on('provider_transcripts_pruned', (event) => {
+      if (event.type === 'provider_transcripts_pruned') pruned.push(event.path);
+    });
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }), selfHostRunId: () => 'review' },
+    });
+    const captures = ['rubric-security', 'rubric-quality'].map((member) => ({
+      member,
+      path: join('.pipeline', 'transcripts', 'build_review', member),
+    }));
+    try {
+      for (const capture of captures) {
+        await mkdir(join(root, capture.path), { recursive: true });
+        await writeFile(join(root, capture.path, 'session.jsonl'), '{}\n');
+        await events.emit({
+          type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 1,
+          member: capture.member, provider: 'codex', path: capture.path, files: 1, bytes: 3,
+          interrupted: false, skipped: 0, omittedLines: 0,
+        });
+      }
+
+      await events.emit({ type: 'step_completed', step: 'build_review', status: 'done' });
+
+      expect(pruned.sort()).toEqual(captures.map(({ path }) => path).sort());
+      for (const { path } of captures) await expect(access(join(root, path))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains an interrupted dispatch capture in the same run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-interrupted-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const retained: string[] = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') retained.push(event.path);
+    });
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }), selfHostRunId: () => 'interrupted' },
+    });
+    const path = join('.pipeline', 'transcripts', 'build', 'interrupted');
+    try {
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+      await events.emit({
+        type: 'provider_transcripts_captured', step: 'build', runId: 'interrupted', attempt: 1,
+        provider: 'codex', path, files: 1, bytes: 3, interrupted: false, skipped: 0, omittedLines: 0,
+      });
+      await events.emit({ type: 'step_interrupted', step: 'build', reason: 'controlled shutdown' });
+
+      expect(retained).toEqual([path]);
+      await expect(access(join(root, path))).resolves.toBeUndefined();
+      const ledger = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as { type: string; path?: string });
+      expect(ledger).toEqual(expect.arrayContaining([expect.objectContaining({
+        type: 'provider_transcripts_retained',
+        path,
+        ts: expect.any(String),
+      })]));
+    } finally {
+      persister.stop();
       await rm(root, { recursive: true, force: true });
     }
   });

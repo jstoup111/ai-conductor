@@ -48,6 +48,10 @@ import {
   type ProviderSetupExhaustion,
 } from './provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
+import {
+  transcriptCaptureIdentity,
+  type TranscriptCaptureIdentity,
+} from './self-host/transcript-retention.js';
 import type { SelfHostProviderId } from './self-host/provider-home.js';
 import {
   CODEX_DISPLAY_NAME,
@@ -258,7 +262,7 @@ export function createCandidateSafetyBoundary(options: {
 export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
-  identity?: { readonly runId: string | undefined; readonly attempt: number; readonly member?: string },
+  identity?: TranscriptCaptureIdentity,
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
@@ -901,6 +905,16 @@ export async function executeProviderCandidates({
     effort: EffortLevel | undefined;
   } | undefined;
   let lastUnavailableResult: InvokeResult | undefined;
+  // Auxiliary rubric captures and their terminal settlement share this
+  // closed identity. A rubric can only inhabit `member`, never `step`.
+  const selfHostCaptureIdentity = runId === undefined
+    ? undefined
+    : transcriptCaptureIdentity({
+      step,
+      runId,
+      attempt: captureAttempt ?? attempt,
+      ...(auxiliaryMember === undefined ? {} : { member: auxiliaryMember }),
+    });
 
   // A fallback may become the actual candidate only after another provider has
   // failed.  Capture every candidate-local policy baseline before that can
@@ -916,7 +930,7 @@ export async function executeProviderCandidates({
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
       let prepared: SelfHostInvocation | undefined;
       try {
-        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: captureAttempt ?? attempt, member: auxiliaryMember });
+        prepared = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
         await prepareCandidateBaseline({ candidate, prepared });
       } catch (error) {
         // Normal setup-unavailable candidates will be represented by the real
@@ -1091,7 +1105,7 @@ export async function executeProviderCandidates({
           ? undefined
           : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
-          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: captureAttempt ?? attempt, member: auxiliaryMember });
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
           // write no observation record, so it is provisioned no destination

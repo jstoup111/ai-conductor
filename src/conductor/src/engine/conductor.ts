@@ -412,6 +412,7 @@ import {
 } from './self-host/transcript-retention.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
+import { isStepName } from './execution-identity.js';
 import { classifyRebaseOperation } from './gate-code-validity.js';
 import {
   computeAndWriteVerdict,
@@ -650,6 +651,25 @@ import {
   type AsBuiltGoverningClauseResolution,
 } from './as-built-routing.js';
 export type { AsBuiltGoverningClauseResolution } from './as-built-routing.js';
+
+type TranscriptTerminalEvent = Extract<ConductorEvent,
+  { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' }>;
+
+function transcriptTerminalOutcome(event: TranscriptTerminalEvent): TranscriptRetentionOutcome {
+  switch (event.type) {
+    case 'step_completed': return 'succeeded-with-progress';
+    case 'step_failed': return 'failed';
+    // An interrupted dispatch has no success verdict. Keep its evidence just
+    // like every other non-success terminal outcome.
+    case 'step_interrupted': return 'failed';
+    case 'step_refused': return 'needs-human';
+  }
+  return assertNeverTranscriptTerminal(event);
+}
+
+function assertNeverTranscriptTerminal(value: never): never {
+  throw new Error(`Unhandled transcript terminal event: ${JSON.stringify(value)}`);
+}
 
 /**
  * How many times a user may pick `retry` from the recovery menu for a single
@@ -915,6 +935,23 @@ export class Conductor {
       attempt: captureAttempt,
       ...(member === undefined ? {} : { member }),
     }, outcome);
+  }
+
+  /**
+   * A terminal lifecycle event closes every captured auxiliary member using
+   * the exact identities recorded at capture time.  The ordinary dispatch
+   * identity is still settled explicitly first, so an event with no retained
+   * capture index preserves the legacy path.
+   */
+  private async settleTranscriptTerminal(
+    event: TranscriptTerminalEvent,
+    captureAttempt = this.currentTranscriptCaptureAttempt(event.step),
+    member?: string,
+  ): Promise<void> {
+    const outcome = transcriptTerminalOutcome(event);
+    await this.settleTranscriptAttempt(event.step, captureAttempt, outcome, member);
+    const runId = this.stepRunner.selfHostRunId?.();
+    if (runId !== undefined) await this.transcriptRetention.settleStepRun(event.step, runId, outcome);
   }
 
   /**
@@ -2521,11 +2558,7 @@ export class Conductor {
     // every ordinary terminal route (including configured steps) share it.
     this.events.on('step_failed', (event) => {
       if (event.type === 'step_failed') {
-        return this.settleTranscriptAttempt(
-          event.step,
-          this.currentTranscriptCaptureAttempt(event.step),
-          'failed',
-        );
+        return this.settleTranscriptTerminal(event);
       }
     });
     this.events.on('build_stall', (event) => {
@@ -2562,12 +2595,11 @@ export class Conductor {
     });
     this.events.on('step_refused', (event) => {
       if (event.type === 'step_refused' && event.kind === 'needs-human') {
-        return this.settleTranscriptAttempt(
-          event.step,
-          this.currentTranscriptCaptureAttempt(event.step),
-          'needs-human',
-        );
+        return this.settleTranscriptTerminal(event);
       }
+    });
+    this.events.on('step_interrupted', (event) => {
+      if (event.type === 'step_interrupted') return this.settleTranscriptTerminal(event);
     });
     this.events.on('step_completed', (event) => {
       if (event.type !== 'step_completed' || event.step === 'build') return;
@@ -2576,21 +2608,13 @@ export class Conductor {
       // identities: the parent remains the group lifecycle owner and the
       // member closes exactly the captures it dispatched.
       const member = event.executionContext?.subject.kind === 'configured-member'
-        ? event.executionContext.subject.member as StepName
+        ? event.executionContext.subject.member
         : undefined;
       return Promise.all([
-        this.settleTranscriptAttempt(
-          event.step,
-          this.currentTranscriptCaptureAttempt(event.step),
-          'succeeded-with-progress',
-        ),
-        ...(member === undefined || member === event.step
+        this.settleTranscriptTerminal(event),
+        ...(member === undefined || member === event.step || !isStepName(member)
           ? []
-          : [this.settleTranscriptAttempt(
-            member,
-            this.currentTranscriptCaptureAttempt(member),
-            'succeeded-with-progress',
-          )]),
+          : [this.settleTranscriptTerminal({ ...event, step: member })]),
       ]).then(() => undefined);
     });
     this.log = opts.log;
@@ -6106,7 +6130,7 @@ export class Conductor {
               runId: identity.runId,
               attempt: identity.attempt,
               step: name,
-              member: identity.member,
+              ...(identity.member.kind === 'present' ? { member: identity.member.value } : {}),
               events: this.events,
             });
             ownershipTransferred = true;
@@ -6120,7 +6144,7 @@ export class Conductor {
             runId: identity.runId,
             attempt: identity.attempt,
             step: name,
-            member: identity.member,
+            ...(identity.member.kind === 'present' ? { member: identity.member.value } : {}),
             events: this.events,
             injectedToken: daemonToken,
           });
