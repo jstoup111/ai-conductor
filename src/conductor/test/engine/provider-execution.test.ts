@@ -615,13 +615,16 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      { runId: 'R', attempt: 1, member: 'security' },
+      {
+        step: 'build_review', runId: 'R', attempt: 1,
+        member: { kind: 'present', value: 'security' },
+      },
     );
   });
 
   // Covers: task:rem-as-built-rem-ab-capture-dispatch-seq
   it('uses a capture-only sequence for auxiliary retries without changing their escalation attempts', async () => {
-    const prepared: Array<{ runId: string | undefined; attempt: number; member: string | undefined }> = [];
+    const prepared: Array<{ step: string; runId: string; attempt: number; member: { kind: 'present'; value: string } }> = [];
     await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: 'security', runId: 'R',
       policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: true, min_confidence: 0 },
@@ -630,14 +633,20 @@ describe('executeProviderCandidates', () => {
       options: { prompt: 'review', cwd: '/workspace' },
       nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
       prepareCandidateSelfHost: async (_candidate, _runtime, identity) => {
-        prepared.push(identity!);
+        if (identity?.member.kind !== 'present') throw new Error('expected auxiliary capture identity');
+        prepared.push({
+          step: identity.step,
+          runId: identity.runId,
+          attempt: identity.attempt,
+          member: identity.member,
+        });
         return { executable: '/resolved/codex', env: {}, args: [], teardown: async () => {} };
       },
     });
 
     expect(prepared).toEqual([
-      { runId: 'R', attempt: 1, member: 'security' },
-      { runId: 'R', attempt: 2, member: 'security' },
+      { step: 'build_review', runId: 'R', attempt: 1, member: { kind: 'present', value: 'security' } },
+      { step: 'build_review', runId: 'R', attempt: 2, member: { kind: 'present', value: 'security' } },
     ]);
   });
 
