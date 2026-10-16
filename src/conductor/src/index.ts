@@ -209,6 +209,10 @@ import {
   runTaskMembershipCheck,
 } from './engine/task-membership-check-cli.js';
 import {
+  detectRoundStampCommand,
+  runRoundStamp,
+} from './engine/round-stamp-cli.js';
+import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
 } from './engine/test-suite-cli.js';
@@ -1148,6 +1152,15 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(await runTaskMembershipCheck({
       projectRoot,
       commitMessagePath: taskMembershipCheckCmd.commitMessagePath,
+    }));
+  }
+
+  const roundStampCmd = detectRoundStampCommand(process.argv);
+  if (roundStampCmd) {
+    const projectRoot = process.env.CONDUCT_ROUND_STAMP_PROJECT_ROOT ?? process.cwd();
+    process.exit(await runRoundStamp({
+      projectRoot,
+      commitMessagePath: roundStampCmd.commitMessagePath,
     }));
   }
 
