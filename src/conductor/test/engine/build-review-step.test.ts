@@ -267,7 +267,8 @@ describe('build_review oversized projection step', () => {
     expect(aggregate.results.security.findings).toEqual([
       expect.objectContaining({ summary: 'Credential committed to source.' }),
     ]);
-    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(0);
+    // Publishing the sibling does not exempt the rejected branch from the allowance.
+    expect((await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0).toBe(1);
   });
 
   it('routes an oversized refusal before a second build-review dispatch', async () => {
