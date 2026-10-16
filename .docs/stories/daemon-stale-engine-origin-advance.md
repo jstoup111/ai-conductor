@@ -57,9 +57,9 @@ exercised without me running pull + rebuild + restart.
   loop — unchanged by this feature.
 
 ### Done When
-- [ ] `rebuildAndMaybeRestartForStaleEngine` invokes a new injected `refreshEngineSource`
-      dep before `rebuildEngine`, only when `staleGatesArmed`, from the cadence maintenance
-      job of adr-2026-10-15-per-dispatch-engine-pinned-executor D8; unit tests cover order,
+- [ ] The cadence maintenance job of adr-2026-10-15-per-dispatch-engine-pinned-executor D8
+      invokes the injected `refreshEngineSource` dep before `rebuildEngine`, only when
+      `staleGatesArmed`, and never requests a restart itself; unit tests cover order,
       gating, and non-fatal failure.
 - [ ] `refreshEngineSource` is wired self-host-only in `src/daemon-cli.ts` (alongside
       `rebuildEngine`) and delegates to the existing `fastForwardRoot` (not a fork).
