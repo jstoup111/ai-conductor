@@ -17,6 +17,8 @@ export interface RepairAdmission {
     instruction: string;
   };
   baseline: {
+    /** Present only when a routed repair is bound to its host branch. */
+    branch?: string;
     head: string;
     tree: string;
     resolvedTaskIds: readonly string[];
@@ -36,6 +38,7 @@ export interface RepairObligation {
   taskIds: string[];
   source: RepairAdmission['source'];
   baseline: {
+    branch?: string;
     head: string;
     tree: string;
     resolvedTaskIds: string[];
@@ -145,6 +148,15 @@ function validEvidence(value: unknown): value is RepairClosureEvidence {
   return isRecord(value) && typeof value.kind === 'string' && typeof value.value === 'string';
 }
 
+/** Mirrors the reject conditions of `git check-ref-format --branch` without a subprocess. */
+function validBranchName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value !== '@' && !value.startsWith('-')
+    && !value.startsWith('/') && !value.endsWith('/') && !value.endsWith('.')
+    && !value.includes('..') && !value.includes('@{') && !value.includes('//')
+    && !/[\x00-\x20\x7f ~^:?*[\\]/.test(value)
+    && value.split('/').every((component) => component.length > 0 && !component.startsWith('.'));
+}
+
 function validObligation(value: unknown): value is RepairObligation {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.planIdentity !== 'string' ||
     !isStringArray(value.taskIds) || !isRecord(value.source) || !isRecord(value.baseline) ||
@@ -152,6 +164,7 @@ function validObligation(value: unknown): value is RepairObligation {
   if (typeof value.source.findingId !== 'string' || typeof value.source.authority !== 'string' ||
     typeof value.source.instruction !== 'string' || typeof value.baseline.head !== 'string' ||
     typeof value.baseline.tree !== 'string' || !isStringArray(value.baseline.resolvedTaskIds) ||
+    (value.baseline.branch !== undefined && !validBranchName(value.baseline.branch)) ||
     (value.baseline.resolvedCount !== undefined &&
       (typeof value.baseline.resolvedCount !== 'number' ||
         !Number.isSafeInteger(value.baseline.resolvedCount) || value.baseline.resolvedCount < 0)) ||
@@ -199,7 +212,10 @@ export function createRepairObligationStore(
       let result: RepairAdmissionResult | undefined;
       const planIdentity = repairPlanIdentity(projectRoot, admission.planPath);
       const taskIds = uniqueCanonicalTaskIds(admission.taskIds);
-      if (!admission.id || taskIds.length === 0 || (admissionKey !== undefined && !admissionKey.trim())) return failure('Repair admission requires an id, task, and non-empty key') as RepairAdmissionResult;
+      if (!admission.id || taskIds.length === 0 || (admissionKey !== undefined && !admissionKey.trim()) ||
+        (admission.baseline.branch !== undefined && !validBranchName(admission.baseline.branch))) {
+        return failure('Repair admission requires an id, task, valid optional branch, and non-empty key') as RepairAdmissionResult;
+      }
 
       const updated = await store.update((current) => {
         const parsed = parseSection(current);
