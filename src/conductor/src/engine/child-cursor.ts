@@ -11,7 +11,7 @@ import {
 import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveThroughMap } from './rebase-translate.js';
-import { readRepairMarker, readRevalidationQueue } from './routing/route-record-store.js';
+import { readRepairMarker, readRevalidationQueue, readRouteRecord } from './routing/route-record-store.js';
 import type { RoundId } from './routing/route-types.js';
 import { routingSettingOn } from './routing/route-types.js';
 
@@ -60,6 +60,7 @@ export interface ActiveChildDependencies {
 export type ChildBaseResolution =
   | { kind: 'none' }
   | { kind: 'parent'; parent: ChildId; sha: string }
+  | { kind: 'routed-repair'; child: ChildId; sha: string }
   | { kind: 'parent-missing'; parent: ChildId; branch: string }
   | { kind: 'parent-not-ancestor'; parent: ChildId; sha: string };
 
@@ -208,6 +209,22 @@ export async function resolveChildBase(
   }
   const positions = positionsFromEnvelope(envelope);
   const index = positions.indexOf(child);
+
+  // A routed host's record freezes the repair comparison before any branch
+  // mutation. Consult routing only for an eligible stacked feature, so an N=1
+  // or non-routed child retains the existing no-routing-ref path.
+  if (positions.length > 1) {
+    const config = await loadConfig(worktree);
+    if (routingSettingOn(config.ok ? config.config : undefined)) {
+      const marker = await readRepairMarker(worktree, slug, { git });
+      if (marker.kind === 'marker' && marker.marker.host === child) {
+        const route = await readRouteRecord(worktree, slug, marker.marker.roundId, { git });
+        if (route.kind === 'record' && route.record.hosts[child] === 'repairing' && route.record.entry !== undefined) {
+          return { kind: 'routed-repair', child, sha: route.record.entry.pinnedBase };
+        }
+      }
+    }
+  }
 
   // A position is first according to the sealed slice order, not its numeric
   // spelling (a valid manifest may use a gap such as positions 1 and 3).
