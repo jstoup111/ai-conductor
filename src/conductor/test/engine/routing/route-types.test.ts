@@ -28,7 +28,7 @@ const routeRecord = {
     laps: { prd_audit: 1 }, growth: 2, taskless: { manual_test: 1 }, echo: { 'lint-docs': 3 },
     settlementId: 'settlement-1', acks: { 2: true },
   },
-  entry: { pinnedBase: 'c'.repeat(40), tree: 'd'.repeat(40) },
+  entry: { host: 2, pinnedBase: 'c'.repeat(40), tree: 'd'.repeat(40) },
   fallback: [{ from: 1, to: 2, evidence: ['src/b.ts'], branch: 'feat/c1/demo', head: 'e'.repeat(40) }],
   reroute: { sourceBranch: 'feat/c1/demo', rejectedTip: 'f'.repeat(40), resetTip: 'a'.repeat(40), destination: 2 },
   outbox: [{
@@ -47,8 +47,14 @@ describe('routed repair durable record parsers', () => {
     }
   });
 
-  it('round-trips the typed settled receipt, entry pin, obligation, fallback and reroute state', () => {
-    expect(parseRouteRecord(JSON.stringify(routeRecord))).toEqual(routeRecord);
+  it('round-trips the typed settled receipt, host entry pin, obligation, fallback and reroute state byte-identically', () => {
+    const parsed = parseRouteRecord(JSON.stringify(routeRecord));
+    expect(parsed).toEqual(routeRecord);
+    expect(JSON.stringify(parsed)).toBe(JSON.stringify(routeRecord));
+  });
+
+  it('rejects an entry whose host is absent, so one host cannot consume another host\'s pin', () => {
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, entry: { ...routeRecord.entry, host: 4 } }))).toBeUndefined();
   });
 
   it('rejects reroutes without a matching latest fallback movement', () => {

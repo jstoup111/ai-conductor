@@ -219,7 +219,7 @@ export async function resolveChildBase(
       const marker = await readRepairMarker(worktree, slug, { git });
       if (marker.kind === 'marker' && marker.marker.host === child) {
         const route = await readRouteRecord(worktree, slug, marker.marker.roundId, { git });
-        if (route.kind === 'record' && route.record.hosts[child] === 'repairing' && route.record.entry !== undefined) {
+        if (route.kind === 'record' && route.record.hosts[child] === 'repairing' && route.record.entry?.host === child) {
           return { kind: 'routed-repair', child, sha: route.record.entry.pinnedBase };
         }
       }
