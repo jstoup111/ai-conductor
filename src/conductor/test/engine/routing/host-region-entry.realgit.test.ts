@@ -1,5 +1,5 @@
 // Covers: task:48
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,6 +16,7 @@ import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import type { RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { seedTaskStatus } from '../../../src/engine/task-seed.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const child = parseChildId(1)!;
@@ -234,5 +235,134 @@ describe('routed host region entry (real local Git)', () => {
     })).resolves.toMatchObject({ kind: 'refused', detail: expect.stringContaining('restack journal') });
     await expect(readFile(join(subject.repo, planPath), 'utf8')).resolves.toBe(beforePlan);
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({ blob: stored.blob });
+  });
+
+  // Covers: task:50
+  it('halts an admitted host on a conflicting frozen block without allocating a second id', async () => {
+    const subject = await fixture();
+    await subject.git(['switch', 'feat/c1/demo']);
+    await writeFile(join(subject.repo, planPath), [
+      '### Task T1: Existing work',
+      '### Task rem-prd-audit-T1: Conflicting local rewrite',
+      '**Child:** 1',
+      '**Round:** r1',
+      '',
+    ].join('\n'));
+    await subject.git(['add', planPath]);
+    await subject.git(['commit', '-qm', 'add conflicting frozen block']);
+    const childHead = (await subject.git(['rev-parse', 'HEAD'])).stdout;
+    await subject.git(['switch', leafBranchFor('demo')]);
+
+    await expect(entered(subject)).resolves.toMatchObject({
+      kind: 'refused', detail: expect.stringContaining('rem-prd-audit-T1'),
+    });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'admitted' } },
+    });
+    await expect(subject.git(['rev-parse', 'feat/c1/demo'])).resolves.toMatchObject({ stdout: childHead });
+    await expect(readFile(join(subject.repo, planPath), 'utf8')).resolves.not.toContain('rem-prd-audit-T1-2');
+  });
+
+  // Covers: task:50
+  it('halts an admitted host and leaves no later region transition when its append commit is rejected', async () => {
+    const subject = await fixture();
+    const hook = join(subject.repo, '.git', 'hooks', 'pre-commit');
+    await writeFile(hook, '#!/bin/sh\nexit 1\n');
+    await chmod(hook, 0o755);
+
+    await expect(entered(subject)).resolves.toMatchObject({
+      kind: 'refused', detail: expect.stringContaining('pre-commit hook failed'),
+    });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'admitted' } },
+    });
+    await expect(readFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'utf8'))
+      .resolves.not.toContain('### Task rem-prd-audit-T1:');
+  });
+
+  // Covers: task:50
+  it('writes a single-host round on the leaf and pins the pre-append leaf tip', async () => {
+    const subject = await fixture();
+    const leafTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await subject.git(['update-ref', '-d', closureRefFor('demo', child)]);
+
+    await expect(entered(subject)).resolves.toMatchObject({ kind: 'entered', pinnedBase: leafTip });
+    await expect(subject.git(['symbolic-ref', '--short', 'HEAD']))
+      .resolves.toMatchObject({ stdout: leafBranchFor('demo') });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { entry: { pinnedBase: leafTip }, hosts: { 1: 'repairing' } },
+    });
+    await expect(readFile(join(subject.repo, planPath), 'utf8')).resolves.toContain('### Task rem-prd-audit-T1:');
+  });
+
+  // Covers: task:47
+  it('converges after every durable region-entry boundary without duplicating frozen tasks', async () => {
+    const resumeAfter = async (boundary: 'pin' | 'append' | 'seed' | 'repairing') => {
+      const subject = await fixture();
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('missing record');
+      const allocation = stored.record.allocation[child]!;
+
+      if (boundary === 'pin') {
+        const crashing: GitRunner = async (args, options) => {
+          const result = await subject.git(args, options);
+          if (args[0] === 'update-ref' && args[1] === '--stdin') throw new Error('crash after entry pin');
+          return result;
+        };
+        await expect(entered(subject, crashing)).resolves.toMatchObject({ kind: 'refused' });
+      } else {
+        await expect(writeFrozenBlocks({
+          worktree: subject.repo, planPath, roundId, host: child, allocation, slug: 'demo', git: subject.git,
+        })).resolves.toMatchObject({ kind: 'written' });
+        if (boundary === 'seed' || boundary === 'repairing') {
+          await seedTaskStatus(subject.repo, planPath, undefined, { childBase: { slug: 'demo', child } });
+        }
+        if (boundary === 'repairing') await expect(entered(subject)).resolves.toMatchObject({ kind: 'entered' });
+      }
+
+      await expect(entered(subject)).resolves.toMatchObject({ kind: boundary === 'repairing' ? 'resume' : 'entered' });
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record', record: { hosts: { 1: 'repairing' } },
+      });
+      await expect(readFile(join(subject.repo, planPath), 'utf8').then((plan) =>
+        plan.match(/^### Task rem-prd-audit-T1:/gm),
+      )).resolves.toHaveLength(1);
+      await expect(subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/']))
+        .resolves.toMatchObject({ stdout: 'refs/conductor/demo/routes/r1' });
+    };
+
+    for (const boundary of ['pin', 'append', 'seed', 'repairing'] as const) await resumeAfter(boundary);
+  });
+
+  // Covers: task:56
+  it('halts an audit host only when its host-local BUILD projection is already complete', async () => {
+    const subject = await fixture();
+    const checkCompletion = async (_dir: string, step: string, context: { activeChild?: number }) => {
+      expect(step).toBe('build');
+      expect(context.activeChild).toBe(child);
+      return { done: true };
+    };
+
+    await expect(enterHostRegion({
+      worktree: subject.repo, slug: 'demo', roundId, host: child,
+      emitter: new ConductorEventEmitter(), git: subject.git, planPath, checkCompletion,
+    })).resolves.toMatchObject({ kind: 'halted', outcome: 'derived-already-complete' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'admitted' } },
+    });
+  });
+
+  // Covers: task:56
+  it('does not halt an audit host when its frozen task remains dispatchable', async () => {
+    const subject = await fixture();
+    const checkCompletion = async () => ({ done: false, reason: 'rem-prd-audit-T1 is pending' });
+
+    await expect(enterHostRegion({
+      worktree: subject.repo, slug: 'demo', roundId, host: child,
+      emitter: new ConductorEventEmitter(), git: subject.git, planPath, checkCompletion,
+    })).resolves.toMatchObject({ kind: 'entered' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'repairing' } },
+    });
   });
 });

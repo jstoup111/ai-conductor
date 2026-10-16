@@ -189,7 +189,7 @@ import {
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild } from './routing/execution-child.js';
 import { routingEligible } from './routing/route-types.js';
-import { consumeRoutedRepairCredit } from './routing/round-receipt.js';
+import { consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord } from './routing/route-record-store.js';
@@ -6314,6 +6314,17 @@ export class Conductor {
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
       if (resumeSlug) {
+        // Receipt recovery is meaningful only for a routed stack.  Keep the
+        // N=1 path byte-for-byte free of route-ref probes.
+        if (this.config.stacked_prs?.route_whole_feature_fixes === true && await hasDurableChildState(this.projectRoot, resumeSlug)) {
+          try {
+            await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug);
+            await reconcileReceiptLedger(this.projectRoot, resumeSlug);
+          } catch {
+            await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
+            return;
+          }
+        }
         const preflight = await runStackPreflight({
           worktree: this.projectRoot,
           slug: resumeSlug,
@@ -7165,7 +7176,15 @@ export class Conductor {
                   roundId: execution.roundId!,
                   host: target.child,
                   emitter: this.events,
+                  completionContext: await this.completionCtx(state),
                 });
+                if (hostEntry.kind === 'halted') {
+                  await this.haltChildRegionRefusal(
+                    `routed host ${target.child} entry halted: ${hostEntry.detail}\n` +
+                    `Outcome: ${hostEntry.outcome}`,
+                  );
+                  return;
+                }
                 if (hostEntry.kind === 'refused') {
                   await this.haltChildRegionRefusal(`routed host ${target.child} entry refused: ${hostEntry.detail}`);
                   return;
@@ -9689,6 +9708,8 @@ export class Conductor {
           if (step.name !== 'build') return false;
           let settlement:
             | Awaited<ReturnType<typeof settlePendingRepair>>
+            | { kind: 'settled' | 'acknowledged' | 'none' }
+            | { kind: 'exhausted'; gate: string; allowance: 'laps' | 'growth' }
             | undefined;
           let settlementFailure: string | undefined;
           let settlementLedger: Awaited<ReturnType<typeof readKickbackLedger>> | undefined;
@@ -9705,11 +9726,26 @@ export class Conductor {
             growthCap = budgets[0]?.growthCap;
             settlementGrowth = budgets[0]?.growth;
             settlementAuthoredSource = budgets[0]?.authoredSource;
-            settlement = await settlePendingRepair(
-              this.projectRoot,
-              budgets,
-              { events: { emit: (event) => this.events.emit(event) } },
-            );
+            const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+            const cursor = slug ? await this.resolveActiveChild(this.projectRoot, slug) : undefined;
+            const execution = cursor && slug ? resolveExecutionChild(cursor, slug) : undefined;
+            if (slug && execution?.source === 'routed-host' && execution.roundId !== undefined) {
+              const routed = await settleRoundAtDispatch({
+                projectRoot: this.projectRoot,
+                slug,
+                roundId: execution.roundId,
+                dispatchingChild: execution.target.child,
+                budgets,
+              });
+              if (routed.kind === 'halted' || routed.kind === 'refused') settlementFailure = routed.reason;
+              else settlement = routed;
+            } else {
+              settlement = await settlePendingRepair(
+                this.projectRoot,
+                budgets,
+                { events: { emit: (event) => this.events.emit(event) } },
+              );
+            }
           } catch (error) {
             // A malformed pending record is intentionally indistinguishable
             // from exhausted remediation allowance at this boundary. It must

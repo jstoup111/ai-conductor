@@ -10,6 +10,21 @@ import type { RemediationGap } from '../src/engine/artifacts.js';
 import { validatePlanDoneWhen } from '../src/engine/plan-done-when.js';
 
 describe('prd_audit remediation append', () => {
+  // Covers: task:50
+  it('keeps the N=1 title-drift ordinal behavior outside routed frozen blocks', () => {
+    const original = appendRemediationTasks('### Task T1: Existing work\n', [{
+      id: 'S1', disposition: 'build', category: null, rationale: 'Original repair.',
+      tasks: [{ id: 'T1', title: 'Original repair' }],
+    }], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
+    const drifted = appendRemediationTasks(original.planText, [{
+      id: 'S1', disposition: 'build', category: null, rationale: 'Renamed repair.',
+      tasks: [{ id: 'T1', title: 'Renamed repair' }],
+    }], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
+
+    expect(drifted.ids).toEqual(['rem-prd-audit-T1-2']);
+    expect(drifted.planText).toContain('### Task rem-prd-audit-T1-2: Renamed repair');
+  });
+
   it('renders one valid, idempotent Done-when block from every criterion-bound gap shape', () => {
     const existingPlan = [
       '### Task 4: Existing work',
