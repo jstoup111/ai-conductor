@@ -17,7 +17,7 @@ import { parsePlanTaskBodies } from './plan-task-parse.js';
 import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop } from './remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, STRANDED_ACTION_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
@@ -213,6 +213,35 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (!persisted.ok) return failStore('suppression store', persisted);
   const suppressionHistory = await suppressionStore.read();
   if (!suppressionHistory.ok) return failStore('suppression store', suppressionHistory);
+  // A reservation an earlier lap never published can never be applied, and
+  // the reducer halts on it every lap. Settle it before any exit routes from
+  // the store. Only a mechanically complete lap's absence is evidence the
+  // case's finding is gone; an operator-accepted source stays "live" here so
+  // `finalize` retires it under operator attribution instead.
+  if (input.mechanical === 'healthy') {
+    const strandedSettlement = await settleStrandedBuildReviewActionReservations({
+      store,
+      liveSourceIds: new Set(sources
+        .filter((source) => !input.suppressedFindingIds?.has(source.findingId))
+        .map(buildReviewAdjudicationSourceId)),
+      readPublishedCaseIds: async (actionEffectIds) => {
+        const order = await readBuildReviewWorkOrder(input.projectRoot, input.feature, actionEffectIds);
+        if (order.ok) return new Set(order.workOrder.cases.map((row) => row.caseId));
+        return classifyBuildReviewDurableRead(order) === 'absent' ? new Set() : undefined;
+      },
+    });
+    if (!strandedSettlement.ok) return failStore('case store', strandedSettlement);
+    for (const { caseId, effectId } of strandedSettlement.settled) {
+      await input.emit?.({
+        type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId, resolution: 'resolved',
+      });
+      await input.emit?.({
+        type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId, effectId, effectKind: 'action', reason: STRANDED_ACTION_RESERVATION_DIAGNOSTIC,
+      });
+    }
+  }
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
