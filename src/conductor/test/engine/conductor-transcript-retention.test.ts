@@ -1,6 +1,6 @@
-// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3
+// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3
 import { describe, expect, it } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -297,6 +297,7 @@ describe('conductor transcript retention wiring', () => {
         return { success: result.success, output: result.output };
       },
     };
+    const firstCapture = '{"attempt":1,"message":"first dispatch"}\n';
     const guardrails: SelfHostGuardrails = {
       resolveHarnessRoot: async () => root,
       resolveInstalledHarnessRoot: async () => ({ status: 'ok', root }),
@@ -307,7 +308,10 @@ describe('conductor transcript retention wiring', () => {
         teardown: async () => {
           const path = join('.pipeline', 'transcripts', String(options.step), `${options.runId}-a${options.attempt}-codex`);
           await mkdir(join(root, path), { recursive: true });
-          await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+          await writeFile(
+            join(root, path, 'session.jsonl'),
+            options.attempt === 1 ? firstCapture : '{"attempt":2,"message":"second dispatch"}\n',
+          );
           await events.emit({ type: 'provider_transcripts_captured', step: 'build',
             runId: options.runId ?? 'retry-flow', attempt: options.attempt ?? 1, provider: 'codex', path,
             files: 1, bytes: 3, interrupted: false, skipped: 0, omittedLines: 0 });
@@ -349,6 +353,7 @@ describe('conductor transcript retention wiring', () => {
         { type: 'provider_transcripts_pruned', path: second },
       ]);
       await expect(access(join(root, first))).resolves.toBeUndefined();
+      await expect(readFile(join(root, first, 'session.jsonl'), 'utf8')).resolves.toBe(firstCapture);
       await expect(access(join(root, second))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
