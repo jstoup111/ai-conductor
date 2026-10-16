@@ -417,8 +417,30 @@ function candidateScopeCandidate(value: unknown): BuildReviewCandidateScopeCandi
     ? { candidateId: source.candidateId, sourceRegion, obligationReferences: obligations }
     : undefined;
 }
+function stableScopeResolutionJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableScopeResolutionJson).join(',')}]`;
+  const source = object(value);
+  if (!source) return JSON.stringify(value) ?? 'undefined';
+  return `{${Object.keys(source).sort().map((key) => `${JSON.stringify(key)}:${stableScopeResolutionJson(source[key])}`).join(',')}}`;
+}
+/**
+ * Drops repeats of an identical resolution entry. A reviewer that restates the
+ * same resolution for a candidate has still given one answer; only a repeat that
+ * disagrees is ambiguous and stays a contract violation.
+ */
+function withoutIdenticalScopeResolutionRepeats(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const seen = new Set<string>();
+  return value.filter((entry) => {
+    const key = stableScopeResolutionJson(entry);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 /** Validates exactly one source-grounded reviewer disposition for every frozen scope candidate. */
 export function parseBuildReviewCandidateScopeResolutions(value: unknown, context: BuildReviewCandidateScopeResolutionContext): readonly BuildReviewCandidateScopeResolution[] | undefined {
+  value = withoutIdenticalScopeResolutionRepeats(value);
   if (!Array.isArray(value)) return undefined;
   const candidates = context.candidates.map(candidateScopeCandidate);
   if (candidates.some((candidate) => !candidate)) return undefined;
@@ -860,12 +882,12 @@ function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCa
   if (!Array.isArray(value)) return ['"scopeResolutions" must be an array of frozen-candidate resolutions (invalid value)'];
   const problems: string[] = [];
   const supplied = new Set<string>();
-  for (const entry of value) {
+  for (const entry of withoutIdenticalScopeResolutionRepeats(value) as unknown[]) {
     const source = object(entry);
     if (!source || !text(source.candidateId)) { problems.push('"scopeResolutions" contains an invalid resolution without a candidateId'); continue; }
     const candidate = known.find((item) => item.candidateId === source.candidateId);
     if (!candidate) { problems.push(`"scopeResolutions" names unknown candidateId "${source.candidateId}"`); continue; }
-    if (supplied.has(candidate.candidateId)) { problems.push(`"scopeResolutions" duplicates candidateId "${candidate.candidateId}"`); continue; }
+    if (supplied.has(candidate.candidateId)) { problems.push(`"scopeResolutions" has conflicting resolutions for candidateId "${candidate.candidateId}"`); continue; }
     supplied.add(candidate.candidateId);
     if (source.status === 'resolved') {
       const sourceRegion = candidateScopeSourceRegion(source.sourceRegion); const obligations = obligationReferences(source.obligationReferences);
