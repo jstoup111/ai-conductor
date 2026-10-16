@@ -1,8 +1,10 @@
 import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider.js";
 import { v4 as uuidv4 } from "uuid";
 import { combineTokenUsage } from "../execution/token-usage.js";
-import { CLAUDE_MODEL_POLICY } from "./provider-model-policy.js";
-import type { ProviderModelPolicy } from "./provider-model-policy-defaults.js";
+import {
+  CLAUDE_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from "./provider-model-policy-defaults.js";
 
 /** @deprecated Use CLAUDE_MODEL_POLICY.modelFallbackLadder instead. */
 export const DEFAULT_MODEL_FALLBACK_LADDER: readonly string[] = CLAUDE_MODEL_POLICY.modelFallbackLadder;
