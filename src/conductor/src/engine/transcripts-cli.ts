@@ -84,12 +84,13 @@ async function findFiles(root: string, prefix: string, files: string[] = []): Pr
 async function sessionFile(worktree: string, capture: Capture): Promise<string | undefined> {
   const captureRoot = join(worktree, capture.path);
   const provider = findBuiltInProviderDescriptor(capture.provider);
-  const sandboxProvider = provider?.selfHostShape?.isolation === 'claude-config-sandbox';
-  const source = sandboxProvider ? 'projects' : 'sessions';
-  const candidates = await findFiles(join(captureRoot, source), source);
-  const topLevel = sandboxProvider
-    ? candidates.filter((path) => !relative(captureRoot, path).split(sep).includes('subagents'))
-    : candidates;
+  const selection = provider?.selfHostShape?.transcripts.sessionFile;
+  if (!selection) return undefined;
+  const candidates = await findFiles(join(captureRoot, selection.root), selection.root);
+  const excluded = selection.excludedPathSegments ?? [];
+  const topLevel = candidates.filter((path) =>
+    !relative(captureRoot, path).split(sep).some((segment) => excluded.includes(segment)),
+  );
   if (topLevel.length === 0) return undefined;
   const dated = await Promise.all(topLevel.map(async (path) => ({ path, mtime: (await stat(path)).mtimeMs })));
   return dated.sort((a, b) => b.mtime - a.mtime)[0]?.path;
