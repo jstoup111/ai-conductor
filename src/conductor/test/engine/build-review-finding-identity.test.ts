@@ -444,6 +444,8 @@ func formatAverage(avg float64) string {
       ['findings[0].sourceRegions', customPayload({ findings: [{ ...base, sourceRegions: [] }] })],
       ['findings[0].sourceRegions', customPayload({ findings: [{ ...base, sourceRegions: Array.from({ length: MAX_CUSTOM_SOURCE_REGIONS + 1 }, () => region) }] })],
       ['findings[0].concernId', customPayload({ findings: [{ ...base, concernId: 'Not A Concern Id!' }] })],
+      ['unexpected', customPayload({ findings: [base], unexpected: true })],
+      ['findings[0].unexpected', customPayload({ findings: [{ ...base, unexpected: true }] })],
     ];
 
     for (const [field, payload] of cases) {
