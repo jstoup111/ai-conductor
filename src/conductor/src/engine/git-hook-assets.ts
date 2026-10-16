@@ -524,7 +524,7 @@ export const PREPARE_COMMIT_MSG_HOOK = [
   '  git interpret-trailers --in-place --if-exists replace --trailer "Task: $TASK_ID" "$COMMIT_MSG_FILE" || true',
   'fi',
   '',
-  'CONDUCT_ROUND_STAMP_PROJECT_ROOT="$WORKTREE_ROOT" ' + shellQuote(resolveCanonicalLauncher()) + ' round-stamp "$COMMIT_MSG_FILE"',
+  'CONDUCT_ROUND_STAMP_PROJECT_ROOT="$WORKTREE_ROOT" ' + shellQuote(resolveCanonicalLauncher()) + ' round-stamp "$COMMIT_MSG_FILE" || true',
   '',
   '# Chain to the repository\'s own prepare-commit-msg hook if it exists',
   'COMMON_DIR="$(git rev-parse --git-common-dir)"',
