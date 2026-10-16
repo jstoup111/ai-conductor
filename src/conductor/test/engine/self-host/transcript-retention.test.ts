@@ -5,11 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import {
-  TRANSCRIPT_RETENTION_MAX_BYTES,
-  TRANSCRIPT_RETENTION_MAX_CAPTURES,
-  TranscriptRetention,
-} from '../../../src/engine/self-host/transcript-retention.js';
+import { TranscriptRetention } from '../../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const roots: string[] = [];
@@ -56,8 +52,8 @@ describe('TranscriptRetention', () => {
     const retention = new TranscriptRetention(root, events);
     try {
       const effectiveCaps = retention as unknown as { maxCaptures: number; maxBytes: number };
-      expect(effectiveCaps.maxCaptures).toBe(TRANSCRIPT_RETENTION_MAX_CAPTURES);
-      expect(effectiveCaps.maxBytes).toBe(TRANSCRIPT_RETENTION_MAX_BYTES);
+      expect(effectiveCaps.maxCaptures).toBe(20);
+      expect(effectiveCaps.maxBytes).toBe(1_073_741_824);
       await retention.ready();
       for (let index = 0; index < 21; index += 1) {
         const path = `.pipeline/transcripts/build/capture-${index}`;

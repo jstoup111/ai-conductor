@@ -1,6 +1,6 @@
 // Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S6.4
 import { describe, expect, it } from 'vitest';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -16,9 +16,23 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('conductor transcript retention wiring', () => {
   it('constructs retention without overriding its production caps', async () => {
-    const source = await readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8');
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-caps-'));
+    try {
+      const conductor = new Conductor({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        events: new ConductorEventEmitter(),
+        stepRunner: { run: async () => ({ success: true }) },
+      });
+      const retention = (conductor as unknown as {
+        transcriptRetention: { maxCaptures: number; maxBytes: number };
+      }).transcriptRetention;
 
-    expect(source).toContain('new TranscriptRetention(this.projectRoot, this.events)');
+      expect(retention.maxCaptures).toBe(20);
+      expect(retention.maxBytes).toBe(1_073_741_824);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('settles failed, stalled, halted, and non-build successful captures on the event spine', async () => {
