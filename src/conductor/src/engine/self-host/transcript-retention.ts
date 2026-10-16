@@ -4,6 +4,9 @@ import { join } from 'node:path';
 
 import type { StepName } from '../../types/steps.js';
 import type { TranscriptOwnerStep } from '../../types/events.js';
+import { isBuiltInProviderId } from '../../execution/provider-catalog.js';
+import type { SelfHostProviderId } from './provider-home.js';
+import { isStepName } from '../execution-identity.js';
 import { ConductorEventEmitter, type EventHandler } from '../../ui/events.js';
 
 /** Every terminal step disposition that decides an attempt's captured transcripts. */
@@ -43,6 +46,7 @@ type TranscriptEventRecord = {
   readonly runId?: unknown;
   readonly attempt?: unknown;
   readonly member?: unknown;
+  readonly provider?: unknown;
   readonly ts?: unknown;
 };
 
@@ -52,7 +56,7 @@ export interface TranscriptLedgerCapture {
   readonly runId: string;
   readonly attempt: number;
   readonly member?: string;
-  readonly provider: string;
+  readonly provider: SelfHostProviderId | 'unknown';
   readonly path: string;
   readonly interrupted: boolean;
   /** Parsed persisted ISO timestamp, absent only for malformed legacy rows. */
@@ -76,7 +80,9 @@ export function foldTranscriptLedger(content: string): Map<string, TranscriptLed
         step: event.step, runId: typeof event.runId === 'string' ? event.runId : 'unknown',
         attempt: typeof event.attempt === 'number' ? event.attempt : 0,
         ...(typeof event.member === 'string' ? { member: event.member } : {}),
-        provider: typeof (event as { provider?: unknown }).provider === 'string' ? (event as { provider: string }).provider : 'unknown',
+        provider: typeof event.provider === 'string' && isBuiltInProviderId(event.provider)
+          ? event.provider
+          : 'unknown',
         path: event.path, interrupted: event.interrupted === true,
         ...(Number.isNaN(capturedAt) ? {} : { capturedAt }), order: order++, state: 'pending',
       });
@@ -341,7 +347,7 @@ async function directorySize(path: string): Promise<number> {
 }
 
 function isTranscriptOwnerStep(value: unknown): value is TranscriptOwnerStep {
-  return typeof value === 'string';
+  return value === 'unknown-step' || isStepName(value);
 }
 
 function captureKey(identity: Pick<CapturedTranscript, 'step' | 'runId' | 'attempt' | 'member'>): string {
