@@ -39,6 +39,7 @@ export type RoutingTransactionOp =
   | { readonly kind: 'update-record'; readonly previous: StoredRouteRecord; readonly record: RouteRecord }
   | { readonly kind: 'delete-record'; readonly previous: StoredRouteRecord }
   | { readonly kind: 'create-marker'; readonly marker: RepairMarker }
+  | { readonly kind: 'replace-marker'; readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' }; readonly marker: RepairMarker }
   | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha };
@@ -152,6 +153,14 @@ export async function writeRoutingTransaction(
           const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
           if (!blob) return { kind: 'unavailable' };
           lines.push(`update ${repairMarkerRefFor(slug)} ${blob} ${ZERO_SHA}`);
+          break;
+        }
+        case 'replace-marker': {
+          if (op.previous.slug !== slug) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(op.marker) });
+          const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
+          if (!blob) return { kind: 'unavailable' };
+          lines.push(`update ${repairMarkerRefFor(slug)} ${blob} ${op.previous.blob}`);
           break;
         }
         case 'update-branch':

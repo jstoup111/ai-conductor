@@ -187,16 +187,17 @@ import {
   type ChildId,
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
-import { isUnroutedRepairPending, resolveExecutionChild } from './routing/execution-child.js';
-import { routingEligible } from './routing/route-types.js';
-import { consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch } from './routing/round-receipt.js';
+import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
+import { completeRerouteSync, parseBuilderClaim, rerouteRound, verifyPrerequisiteClaim } from './routing/prerequisite-claim.js';
+import { routingEligible, type RoundId } from './routing/route-types.js';
+import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
-import { createRouteRecord } from './routing/route-record-store.js';
+import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { admitRound } from './routing/round-admission.js';
 import { routedRoundOpen } from './routing/round-admission.js';
-import { enterHostRegion } from './routing/host-region-entry.js';
+import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -6994,6 +6995,36 @@ export class Conductor {
             `commits, and manual-test re-runs after this build.`,
         );
 
+        // A taskless manual-test failure still belongs to the routed round
+        // protocol on stacked features.  It carries no rem block, but the
+        // retry hint and its one admission charge are durable on the record.
+        const manualSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+        if (manualSlug) {
+          const cursor = await this.resolveActiveChild(this.projectRoot, manualSlug);
+          if (routingEligible(cursor, this.config) && await hasDurableChildState(this.projectRoot, manualSlug)) {
+            const execution = resolveExecutionChild(cursor, manualSlug);
+            if (execution.source === 'cursor' || execution.source === 'routed-host') {
+              const roundId = await nextRoundId(this.projectRoot, manualSlug);
+              if (typeof roundId === 'string') {
+                const host = execution.target.child;
+                const created = await createRouteRecord(this.projectRoot, manualSlug, {
+                  roundId, kind: 'audit',
+                  items: [{ findingId: 'manual-test-fail', kind: 'audit', owner: host, host, reason: 'manual-test', fallback: [] }],
+                  allocation: { [host]: { remTaskIds: [], blockBodies: [], retryHint: evidence } },
+                });
+                if (created.kind === 'created') {
+                  const charged = await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug: manualSlug, roundId, gate: 'manual_test' });
+                  if (charged.kind === 'charged') {
+                    await admitRound(this.projectRoot, manualSlug, created.record, host, {
+                      persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // Task 7: Merged-PR guard on manual_test kickback (TS-1).
         // Before committing the rewind, check if the recorded PR has been
         // merged out-of-band. If so, stop the run as a synthetic verified
@@ -7181,7 +7212,7 @@ export class Conductor {
                 if (hostEntry.kind === 'halted') {
                   await this.haltChildRegionRefusal(
                     `routed host ${target.child} entry halted: ${hostEntry.detail}\n` +
-                    `Outcome: ${hostEntry.outcome}`,
+                    (hostEntry.outcome === undefined ? '' : `Outcome: ${hostEntry.outcome}`),
                   );
                   return;
                 }
@@ -10117,12 +10148,42 @@ export class Conductor {
           );
           this.currentAttemptStartedAt = undefined;
           this.currentRunId = undefined;
+          const verifySlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+          const verifyCursor = verifySlug === undefined
+            ? undefined
+            : await this.resolveActiveChild(this.projectRoot, verifySlug);
+          const verifyExecution = verifyCursor === undefined || verifySlug === undefined
+            ? undefined
+            : resolveExecutionChild(verifyCursor, verifySlug);
+          if (verifySlug !== undefined && verifyExecution?.source === 'routed-host') {
+            const verified = await verifyGreenAcceptance({
+              worktree: this.projectRoot,
+              slug: verifySlug,
+              roundId: verifyExecution.roundId!,
+              host: verifyExecution.target.child,
+              exec: this.acceptanceRedExec,
+            });
+            if (verified.kind === 'verified') {
+              await emitAcceptanceRed({
+                type: 'acceptance_red', state: 'satisfied', step: step.name,
+                mode: 'verify-green', viaException: false,
+              });
+              succeeded = true;
+              successOutput = undefined;
+              acceptanceRedPreHealed = true;
+            } else {
+              acceptanceRedHealFailureReason = verified.reason;
+              // A routed pass never falls through to the RED self-heal.  Its
+              // observed green contract is the only authority for this pass.
+              acceptanceRedPreHealed = true;
+            }
+          }
           const hasRepairableRedEvidenceRefusal =
             !preCheck.done &&
             (preCheck.acceptanceRedRefusalClass === 'missing' ||
               preCheck.acceptanceRedRefusalClass === 'unparseable' ||
               preCheck.acceptanceRedRefusalClass === 'shape');
-          if (hasRepairableRedEvidenceRefusal) {
+          if (!acceptanceRedPreHealed && hasRepairableRedEvidenceRefusal) {
             const specFiles = await findArtifactFilesForStep(
               this.projectRoot,
               'acceptance_specs',
@@ -10410,6 +10471,8 @@ export class Conductor {
             step.name !== 'test_suite' && step.name !== 'rebase' &&
             !(step.name === 'finish' && this.finishPublication);
           let result: StepRunResult;
+          let routedClaimSlug: string | undefined;
+          let routedPrerequisiteClaim: { readonly target: ActiveChildLifecycleTarget; readonly roundId: RoundId } | undefined;
           if (protectedArtifactIssue) {
             buildAttemptSettled = true;
             buildWatcher?.stop();
@@ -10541,6 +10604,21 @@ export class Conductor {
             // dispatches settle inside runAdmittedSelfBuildDispatch, after its
             // safety and auth preflights have accepted the attempt.
             if (missingWorktree === undefined && !usesSelfBuildDispatch && await settleBuildPendingRepair()) return;
+            // Only the durable routed-host projection may ask a provider for
+            // a prerequisite claim. An ordinary child BUILD has the same
+            // activeRegionChild shape, so resolve the cursor rather than
+            // inferring routing from that transient field.
+            routedClaimSlug = step.name === 'build'
+              ? state.feature_desc ?? this.featureSlug ?? this.featureDesc
+              : undefined;
+            let routedClaimExecution: ExecutionChildResolution | undefined;
+            if (routedClaimSlug) {
+              const cursor = await this.resolveActiveChild(this.projectRoot, routedClaimSlug);
+              routedClaimExecution = resolveExecutionChild(cursor, routedClaimSlug);
+            }
+            routedPrerequisiteClaim = routedClaimExecution?.source === 'routed-host' && routedClaimExecution.roundId !== undefined
+              ? { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId }
+              : undefined;
             result =
               missingWorktree ??
               (step.name === 'complexity'
@@ -10588,6 +10666,7 @@ export class Conductor {
                             try {
                               await this.discardOwnedStepRegionCapture(state, step.name);
                               return await this.stepRunner.run(step.name, state, {
+                                ...(routedPrerequisiteClaim === undefined ? {} : { routedPrerequisiteClaim: true as const }),
                                 ...(step.name === 'prd_audit' && this.prdWideningReviewContext
                                   ? { prdWideningReviewContext: this.prdWideningReviewContext }
                                   : {}),
@@ -10643,6 +10722,53 @@ export class Conductor {
           // Settlement owns its HALT marker and loop-halt event. Preserve the
           // pre-existing terminal routing without retry or failure accounting.
           if (result.pendingRepairSettlementHalt) return;
+
+          // A routed BUILD owns the terminal claim boundary.  No parser or
+          // provider output gets to move a ref: parsing, immutable-tree
+          // verification, the fenced reroute and worktree synchronization are
+          // all engine operations. A bad claim deliberately becomes this
+          // region's ordinary failed attempt, not a whole-feature escalation.
+          if (step.name === 'build' && routedPrerequisiteClaim !== undefined && routedClaimSlug !== undefined) {
+            const parsed = parseBuilderClaim(result.finalStructuredResult);
+            if (parsed.kind === 'malformed') {
+              result = { ...result, success: false, output: 'routed prerequisite claim is malformed' };
+            } else if (parsed.kind === 'claim') {
+              const verified = await verifyPrerequisiteClaim({
+                claim: parsed.claim,
+                host: routedPrerequisiteClaim.target.child,
+                slug: routedClaimSlug,
+                git: makeGitRunner(this.projectRoot),
+              });
+              if (verified.kind !== 'verified') {
+                result = { ...result, success: false, output: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
+              } else {
+                const moved = await rerouteRound({
+                  worktree: this.projectRoot,
+                  slug: routedClaimSlug,
+                  roundId: routedPrerequisiteClaim.roundId!,
+                  from: routedPrerequisiteClaim.target.child,
+                  to: verified.destination,
+                  evidence: [...(parsed.claim.paths ?? []), ...(parsed.claim.symbols ?? [])],
+                  git: makeGitRunner(this.projectRoot),
+                });
+                if (moved.kind === 'rerouted') {
+                  const synced = await completeRerouteSync({
+                    worktree: this.projectRoot, slug: routedClaimSlug,
+                    roundId: routedPrerequisiteClaim.roundId!, git: makeGitRunner(this.projectRoot),
+                  });
+                  if (synced.kind === 'completed') {
+                    // Re-enter through the region cursor, which activates the
+                    // admitted destination and never settles this reroute.
+                    i = indexOf('acceptance_specs') - 1;
+                    continue stepLoop;
+                  }
+                  result = { ...result, success: false, output: synced.detail };
+                } else {
+                  result = { ...result, success: false, output: moved.detail };
+                }
+              }
+            }
+          }
 
           // An end_attempt policy is an ordinary failed provider attempt: it
           // spends the existing retry budget, but records its distinct cause
@@ -14821,6 +14947,41 @@ export class Conductor {
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.emitLoopHalt(reason, prUrl);
           return 'halt';
+        }
+        // A configured post-region step keeps its established flat ledger
+        // bump, then records that bumped count on a taskless routed receipt.
+        // No plan task is appended for this shape.
+        const customSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+        if (customSlug && !ALL_STEPS.some((step) => step.name === target) && !isRegionStep(target)) {
+          const cursor = await this.resolveActiveChild(this.projectRoot, customSlug);
+          if (routingEligible(cursor, this.config) && await hasDurableChildState(this.projectRoot, customSlug)) {
+            const execution = resolveExecutionChild(cursor, customSlug);
+            if (execution.source === 'cursor' || execution.source === 'routed-host') {
+              const roundId = await nextRoundId(this.projectRoot, customSlug);
+              if (typeof roundId === 'string') {
+                const host = execution.target.child;
+                const created = await createRouteRecord(this.projectRoot, customSlug, {
+                  roundId, kind: 'audit',
+                  items: [{ findingId: `custom-${target}`, kind: 'audit', owner: host, host, reason: 'custom-step', fallback: [] }],
+                  allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+                });
+                if (created.kind === 'created') {
+                  const stored = await readRouteRecord(this.projectRoot, customSlug, roundId);
+                  if (stored.kind === 'record') {
+                    const echoed = await writeRouteRecord(this.projectRoot, stored, {
+                      ...stored.record,
+                      receipt: { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } },
+                    });
+                    if (echoed.kind === 'updated') {
+                      await admitRound(this.projectRoot, customSlug, { ...stored.record, receipt: { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } } }, host, {
+                        persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
         const hasContract = hasCompletionContract(target, this.config);
         const disposition = await this.resolveDecideEntryDisposition({

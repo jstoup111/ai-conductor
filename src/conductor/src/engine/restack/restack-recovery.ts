@@ -197,7 +197,12 @@ async function corruptJournalRefValues(slug: string, git: GitRunner): Promise<st
   return [...values].map(([name, value]) => `${name} ${value}`).join('\n');
 }
 
-async function isHaltRecordOnlyDescendant(
+/**
+ * A routed reset may discard only the engine's durable halt-record extension.
+ * Keep this check here with the restack recovery rules so both callers use the
+ * same definition of a harmless descendant.
+ */
+export async function isHaltRecordOnlyDescendant(
   git: GitRunner,
   base: CommitSha,
   tip: CommitSha,

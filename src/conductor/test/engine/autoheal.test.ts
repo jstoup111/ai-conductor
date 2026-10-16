@@ -2142,6 +2142,21 @@ describe('listCommitsWithTrailersAfterRepairBoundary rebase fallback (Task 9)', 
     });
   });
 
+  it('reads a repair boundary against its bound host branch, not HEAD', async () => {
+    const mod = await loadAutoheal();
+    const boundary = await commitFixtureFile('boundary.txt', 'repair boundary');
+    await execa('git', ['checkout', '-qb', 'feat/c1/demo'], { cwd: gitDir });
+    await commitFixtureFile('host-fix.txt', 'host repair\n\nTask: T1');
+    await execa('git', ['checkout', 'main'], { cwd: gitDir });
+
+    const range = await mod.listCommitsWithTrailersAfterRepairBoundary(gitDir, boundary, 'feat/c1/demo');
+    expect(range).toMatchObject({ kind: 'available' });
+    if (range.kind === 'available') {
+      expect(range.commits).toHaveLength(1);
+      expect(range.commits[0]?.trailers.Task).toEqual(['T1']);
+    }
+  });
+
   it('refuses a residue boundary without searching for a successor', async () => {
     const mod = await loadAutoheal();
     const residueBoundary = await commitFixtureFile('residue-boundary.txt', 'residue repair boundary');
