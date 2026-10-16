@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
+import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { writeFrozenBlocks } from '../../../src/engine/remediation-append.js';
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
@@ -18,6 +20,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
+const planPath = '.docs/plans/demo.md';
 const roots: string[] = [];
 
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -30,7 +33,9 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
   await git(['config', 'user.email', 'host-region@example.invalid']);
   await git(['config', 'user.name', 'Host region']);
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
-  await git(['add', '.gitignore']);
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(repo, planPath), '### Task T1: Existing work\n');
+  await git(['add', '.gitignore', planPath]);
   await git(['commit', '-qm', 'ignore pipeline']);
   await git(['checkout', '-qb', 'feat/c1/demo']);
   await writeFile(join(repo, 'child.txt'), 'closed child\n');
@@ -50,7 +55,14 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
   const created = await createRouteRecord(repo, 'demo', {
     roundId, kind,
     items: [{ findingId: 'finding', kind, owner: child, host: child, reason: 'task-slice', fallback: [] }],
-    allocation: { [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
+    allocation: { [child]: {
+      remTaskIds: ['rem-prd-audit-T1'],
+      blockBodies: [
+        '### Task rem-prd-audit-T1: Repair routed task\n' +
+        '**Child:** 1\n' +
+        '**Round:** r1\n',
+      ],
+    } },
   });
   if (created.kind !== 'created') throw new Error(`create route record: ${created.kind}`);
   const admitted = await admitRound(repo, 'demo', created.record, child, { git });
@@ -61,7 +73,7 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
 function entered(subject: Awaited<ReturnType<typeof fixture>>, git: GitRunner = subject.git) {
   return enterHostRegion({
     worktree: subject.repo, slug: 'demo', roundId, host: child,
-    emitter: new ConductorEventEmitter(), git,
+    emitter: new ConductorEventEmitter(), git, planPath,
   });
 }
 
@@ -80,7 +92,7 @@ describe('routed host region entry (real local Git)', () => {
     await expect(readFile(join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8').then(JSON.parse))
       .resolves.toMatchObject({ acceptance_specs: 'pending', build: 'pending', test_suite: 'pending', build_review: 'pending' });
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
-      kind: 'record', record: { hosts: { 1: 'admitted' }, entry: { pinnedBase: subject.closure } },
+      kind: 'record', record: { hosts: { 1: 'repairing' }, entry: { pinnedBase: subject.closure } },
     });
     const pin = calls.findIndex((call) => call.args[0] === 'update-ref' && call.args[1] === '--stdin');
     const switchCall = calls.findIndex((call) => call.args[0] === 'switch');
@@ -153,5 +165,74 @@ describe('routed host region entry (real local Git)', () => {
     const untouched = await readRouteRecord(subject.repo, 'demo', roundId);
     expect(untouched).toMatchObject({ kind: 'record' });
     if (untouched.kind === 'record') expect(untouched.record).not.toHaveProperty('entry');
+  });
+
+  // Covers: task:49
+  it('writes the frozen body verbatim, seeds it, and moves the host to repairing after its append commit', async () => {
+    const subject = await fixture();
+
+    await expect(entered(subject)).resolves.toMatchObject({ kind: 'entered' });
+
+    const plan = await readFile(join(subject.repo, planPath), 'utf8');
+    const body = '### Task rem-prd-audit-T1: Repair routed task\n**Child:** 1\n**Round:** r1\n';
+    expect(plan).toContain(body);
+    await expect(subject.git(['show', '-s', '--format=%(trailers:key=Round,valueonly)', 'HEAD']))
+      .resolves.toMatchObject({ stdout: 'r1\n' });
+    await expect(readFile(join(subject.repo, '.pipeline', 'task-status.json'), 'utf8').then(JSON.parse))
+      .resolves.toMatchObject({ tasks: expect.arrayContaining([expect.objectContaining({ id: 'rem-prd-audit-T1', status: 'pending' })]) });
+    const record = await readRouteRecord(subject.repo, 'demo', roundId);
+    expect(record).toMatchObject({ kind: 'record', record: { hosts: { 1: 'repairing' } } });
+    if (record.kind !== 'record') throw new Error('missing route record');
+    expect(record.record.outbox).toContainEqual(expect.objectContaining({
+      event: expect.objectContaining({ type: 'routed_repair_phase', phase: 'repairing', credit: true }),
+    }));
+    await expect(readKickbackLedger(subject.repo, child)).resolves.toMatchObject({
+      routedRepairCredit: { roundId: 'r1' },
+    });
+  });
+
+  // Covers: task:49
+  it('replays identical frozen blocks without appending or committing, and refuses an unallocated body', async () => {
+    const subject = await fixture();
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing record');
+    const allocation = stored.record.allocation[child]!;
+    const first = await writeFrozenBlocks({ worktree: subject.repo, planPath, roundId, host: child, allocation, slug: 'demo', git: subject.git });
+    expect(first).toMatchObject({ kind: 'written' });
+    const head = (await subject.git(['rev-parse', 'HEAD'])).stdout;
+    const before = await readFile(join(subject.repo, planPath), 'utf8');
+
+    await expect(writeFrozenBlocks({ worktree: subject.repo, planPath, roundId, host: child, allocation, slug: 'demo', git: subject.git }))
+      .resolves.toMatchObject({ kind: 'noop' });
+    await expect(readFile(join(subject.repo, planPath), 'utf8')).resolves.toBe(before);
+    await expect(subject.git(['rev-parse', 'HEAD'])).resolves.toMatchObject({ stdout: head });
+
+    await expect(writeFrozenBlocks({
+      worktree: subject.repo, planPath, roundId, host: child, slug: 'demo', git: subject.git,
+      allocation: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-other: Wrong allocation\n'] },
+    })).resolves.toMatchObject({ kind: 'refused', detail: expect.stringContaining('rem-prd-audit-other') });
+  });
+
+  // Covers: task:49
+  it('restores the plan when the guarded append is refused by a moving restack journal', async () => {
+    const subject = await fixture();
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing record');
+    const beforePlan = await readFile(join(subject.repo, planPath), 'utf8');
+    const journal: RestackJournal = {
+      opId: 'frozen-append' as RestackOpId, cause: 'feature-repair',
+      committer: { name: 'Host region', email: 'host-region@example.invalid', date: '2030-01-01T00:00:00Z' },
+      dirtyPaths: [], refs: [], ranges: [], children: [], state: 'moved',
+      owner: { host: 'test', pid: 1, processStartTime: '1' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal, { git: subject.git });
+    await subject.git(['update-ref', 'refs/conductor/demo/restack/journal', blob]);
+
+    await expect(writeFrozenBlocks({
+      worktree: subject.repo, planPath, roundId, host: child, slug: 'demo',
+      allocation: stored.record.allocation[child]!, git: subject.git,
+    })).resolves.toMatchObject({ kind: 'refused', detail: expect.stringContaining('restack journal') });
+    await expect(readFile(join(subject.repo, planPath), 'utf8')).resolves.toBe(beforePlan);
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({ blob: stored.blob });
   });
 });
