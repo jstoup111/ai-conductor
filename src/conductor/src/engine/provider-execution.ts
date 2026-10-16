@@ -270,6 +270,8 @@ export interface ExecuteProviderCandidatesInput {
   config?: HarnessConfig;
   tier?: ComplexityTier;
   attempt?: number;
+  /** Self-host transcript capture identity, independent of escalation. */
+  captureAttempt?: number;
   /** Run identity held by the enclosing step runner for self-host scratch homes. */
   runId?: string;
   /** Feature-owned worktree identity for schema-only Codex scratch. */
@@ -850,6 +852,7 @@ export async function executeProviderCandidates({
   config,
   tier,
   attempt = 1,
+  captureAttempt,
   runId,
   nativeSchemaScratch,
   executionContext,
@@ -913,7 +916,7 @@ export async function executeProviderCandidates({
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
       let prepared: SelfHostInvocation | undefined;
       try {
-        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt, member: auxiliaryMember });
+        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: captureAttempt ?? attempt, member: auxiliaryMember });
         await prepareCandidateBaseline({ candidate, prepared });
       } catch (error) {
         // Normal setup-unavailable candidates will be represented by the real
@@ -1088,7 +1091,7 @@ export async function executeProviderCandidates({
           ? undefined
           : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
-          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt, member: auxiliaryMember });
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: captureAttempt ?? attempt, member: auxiliaryMember });
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
           // write no observation record, so it is provisioned no destination
