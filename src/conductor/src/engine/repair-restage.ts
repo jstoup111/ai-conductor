@@ -8,11 +8,12 @@ import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import { createRepairObligationStore, type RepairObligation } from './repair-obligations.js';
 import { countResolvedTasks } from './task-progress.js';
 import { seedTaskStatus } from './task-seed.js';
+import { parseRoundId, type RoundId } from './routing/route-types.js';
 
 export interface AdmitRoutedObligationInput {
   projectRoot: string;
   planPath: string;
-  roundId: string;
+  roundId: RoundId;
   findingId: string;
   taskIds: readonly string[];
   branch: string;
@@ -33,9 +34,14 @@ export type AdmitRoutedObligationResult =
 export async function admitRoutedObligation(
   input: AdmitRoutedObligationInput,
 ): Promise<AdmitRoutedObligationResult> {
+  // This API is normally reached from a parsed route record. Re-parse at the
+  // persistence boundary as well so an unsafe caller cannot derive an
+  // admission key in an invalid routing namespace.
+  const roundId = parseRoundId(input.roundId);
+  if (!roundId) return { kind: 'failed', detail: 'routed admission requires a valid round id' };
   const taskIds = [...new Set(input.taskIds.map(canonicalTaskId))].sort();
   const admissionKey = createHash('sha256').update(JSON.stringify({
-    roundId: input.roundId,
+    roundId,
     findingId: input.findingId,
     taskIds,
   })).digest('hex');
