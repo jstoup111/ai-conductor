@@ -88,8 +88,8 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
       const deleted = await writeRoutingTransaction(worktree, slug, [{ kind: 'delete-record', previous: stored }], { git });
       return deleted.kind === 'updated' ? { kind: 'aborted', roundId: id } : { kind: 'unavailable', detail: `cannot abort prepared routing round: ${deleted.kind}` };
     }
-    const admitted = Object.entries(stored.record.hosts).find(([, state]) => state === 'admitted');
-    if (admitted) return { kind: 'navigate-leaf-to-build', roundId: id, host: Number(admitted[0]) as ChildId };
+    const activeHost = Object.entries(stored.record.hosts).find(([, state]) => state === 'admitted' || state === 'repairing');
+    if (activeHost) return { kind: 'navigate-leaf-to-build', roundId: id, host: Number(activeHost[0]) as ChildId };
   }
   return { kind: 'deferred' };
 }
