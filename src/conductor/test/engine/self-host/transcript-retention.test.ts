@@ -208,6 +208,28 @@ describe('TranscriptRetention', () => {
     }
   });
 
+  it('settles retry captures only from the dispatch run that is retrying', async () => {
+    const { root, events, persister } = await fixture();
+    const retention = new TranscriptRetention(root, events);
+    const currentRun = '.pipeline/transcripts/build/current-run-attempt-1';
+    const otherRun = '.pipeline/transcripts/build/other-run-attempt-1';
+    try {
+      await retention.ready();
+      await capture(events, root, currentRun, 'build', false, 3, { runId: 'current', attempt: 1 });
+      await capture(events, root, otherRun, 'build', false, 3, { runId: 'other', attempt: 1 });
+
+      await retention.settleBeforeRetry({ step: 'build', runId: 'current', nextAttempt: 2 });
+
+      await expect(access(join(root, currentRun))).resolves.toBeUndefined();
+      await expect(access(join(root, otherRun))).resolves.toBeUndefined();
+      expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_retained').map((event) => event.path))
+        .toEqual([currentRun]);
+    } finally {
+      retention.stop();
+      persister.stop();
+    }
+  });
+
   it('settles every auxiliary member capture before an unscoped group retry', async () => {
     const { root, events, persister } = await fixture();
     const retention = new TranscriptRetention(root, events);

@@ -168,13 +168,25 @@ export class TranscriptRetention {
    * attempt for that exact step/member independently, so a later successful
    * retry cannot prune a failed attempt's capture.
    */
-  async settleBeforeRetry(step: StepName, nextAttempt: number, member?: string): Promise<void> {
+  async settleBeforeRetry(
+    identity: Pick<CapturedTranscript, 'step' | 'runId' | 'member'> & { readonly nextAttempt: number },
+  ): Promise<void>;
+  async settleBeforeRetry(step: StepName, nextAttempt: number, member?: string): Promise<void>;
+  async settleBeforeRetry(
+    identityOrStep: (Pick<CapturedTranscript, 'step' | 'runId' | 'member'> & { readonly nextAttempt: number }) | StepName,
+    nextAttempt?: number,
+    member?: string,
+  ): Promise<void> {
+    const identity: { readonly step: CapturedTranscript['step']; readonly nextAttempt: number; readonly runId?: string; readonly member?: string } = typeof identityOrStep === 'string'
+      ? { step: identityOrStep, nextAttempt: nextAttempt!, ...(member === undefined ? {} : { member }) }
+      : identityOrStep;
     const identities = [...this.pending.entries()].flatMap(([key, captures]) => {
       const capture = captures[0];
       return capture !== undefined
-        && capture.step === step
-        && capture.attempt < nextAttempt
-        && (member === undefined || capture.member === member)
+        && capture.step === identity.step
+        && capture.attempt < identity.nextAttempt
+        && (identity.runId === undefined || capture.runId === identity.runId)
+        && (identity.member === undefined || capture.member === identity.member)
         ? [{ key, capture }]
         : [];
     });
