@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:200
 import { describe, expect, it } from 'vitest';
 
 import { MAX_CHILD_ID } from '../../../src/engine/child-context.js';
