@@ -780,6 +780,10 @@ export function createProgram(): Command {
     .requiredOption('--slug <slug>', 'Feature worktree slug')
     .requiredOption('--pr <url>', 'Implementation pull request URL, or local');
   program
+    .command('transcripts <slug>')
+    .description('Inspect retained self-host provider transcripts for a feature')
+    .option('--show <capture>', 'Print the final assistant message from one retained capture');
+  program
     .command('kpi')
     .description('Report delivery metrics from committed shipped records');
   const memory = program
