@@ -3,7 +3,7 @@ import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import type { StepName } from '../../types/steps.js';
 import type { SelfHostProviderId } from './provider-home.js';
-import { isBuiltInProviderId, providerDescriptor } from '../../execution/provider-catalog.js';
+import { BUILT_IN_PROVIDERS, isBuiltInProviderId, providerDescriptor } from '../../execution/provider-catalog.js';
 import { isStepName } from '../execution-identity.js';
 import { LEGACY_TRANSCRIPT_OWNER_STEP, type ConductorEvent, type TranscriptOwnerStep } from '../../types/events.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
@@ -566,8 +566,10 @@ function providerFromAttemptDirectory(attemptDirectory: string, attempt: number)
   const prefix = `${attempt}-`;
   if (!attemptDirectory.startsWith(prefix)) return undefined;
   const remainder = attemptDirectory.slice(prefix.length);
-  const providers: readonly SelfHostProviderId[] = ['claude', 'codex', 'pi'];
-  return providers.find((provider) => remainder === provider || remainder.startsWith(`${provider}-`));
+  return BUILT_IN_PROVIDERS
+    .filter((provider): provider is typeof provider & { readonly selfHostShape: NonNullable<typeof provider.selfHostShape> } => provider.selfHostShape !== undefined)
+    .map((provider) => provider.id as SelfHostProviderId)
+    .find((provider) => remainder === provider || remainder.startsWith(`${provider}-`));
 }
 
 function isSelfHostProviderId(value: unknown): value is SelfHostProviderId {
