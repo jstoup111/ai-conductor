@@ -81,6 +81,8 @@ describe('routed repair durable record parsers', () => {
 
   it('fails closed on malformed receipts, existing-task bindings without ids, and invalid obligation branches', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { laps: 'x' } }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, lapz: {} } }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, extra: true } }))).toBeUndefined();
 
     const existingWithoutTaskIds = structuredClone(routeRecord);
     const existing = existingWithoutTaskIds.items[0]! as Record<string, unknown>;

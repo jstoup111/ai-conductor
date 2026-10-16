@@ -14,9 +14,10 @@ import {
   parseCoverageBindingEnvelope,
   projectChildOwnership,
 } from './coverage-binding-envelope.js';
-import { parseChildId, type ChildId } from './child-context.js';
+import type { ChildId } from './child-context.js';
 import {
-  readCommittedRemediationTaskChildren,
+  readCommittedRemediationTaskIds,
+  resolveRemediationTaskChild,
 } from './routing/owner-derivation.js';
 import {
   createRepairObligationStore,
@@ -137,32 +138,22 @@ export async function resolveChildTaskScope(
     rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
       ? rawChildren as Record<string, unknown>
       : undefined;
-  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot);
+  const committedIds = await readCommittedRemediationTaskIds(projectRoot);
   // A `rem-` prefix alone does not prove engine ownership: older plans may
   // carry an ordinary remediation task with that spelling. A durable Child
   // line proves a recreated worktree's engine task; otherwise only the
   // engine-state ledger makes the missing attribution a refusal.
-  const remediationIds = [...new Set([...recorded, ...Object.keys(committedChildren)])];
+  const remediationIds = [...new Set([...recorded, ...committedIds])];
   const remediationOwners = new Map<string, ChildId>();
   for (const id of remediationIds) {
-    const hasCommittedChild = Object.hasOwn(committedChildren, id);
-    const committed = committedChildren[id];
-    const committedOwner = committed === undefined ? undefined : parseChildId(committed);
-    const cachedOwner = typeof children?.[id] === 'number' ? parseChildId(children[id] as number) : undefined;
-    if (hasCommittedChild && committedOwner === undefined) {
-      return {
-        kind: 'refused',
-        reason: `child ${child} task membership is unavailable: remediation task ${id} has an invalid committed child`,
-      };
-    }
-    const owner = committedOwner ?? cachedOwner;
-    if (owner === undefined) {
+    const resolved = await resolveRemediationTaskChild(projectRoot, id, children?.[id]);
+    if (resolved.kind === 'unreadable') {
       return {
         kind: 'refused',
         reason: `child ${child} task membership is unavailable: remediation task ${id} has no recorded child`,
       };
     }
-    remediationOwners.set(id, owner);
+    remediationOwners.set(id, resolved.child);
   }
 
   const owned = projectChildOwnership(envelope, child).taskIds;

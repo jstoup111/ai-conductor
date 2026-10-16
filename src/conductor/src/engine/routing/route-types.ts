@@ -370,6 +370,7 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
       case 'echo': parsed.echo = echo; break;
       case 'settlementId': if (settlementId !== undefined) parsed.settlementId = settlementId; break;
       case 'acks': parsed.acks = acks; break;
+      default: return undefined;
     }
   }
   return parsed as RoundReceipt;

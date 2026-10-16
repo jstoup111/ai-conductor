@@ -14,7 +14,7 @@ import {
 import { parseChildId } from './child-context.js';
 import { loadConfig } from './config.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
-import { readCommittedRemediationTaskChildren } from './routing/owner-derivation.js';
+import { resolveRemediationTaskChild } from './routing/owner-derivation.js';
 import { readRepairMarker, readRouteRecord } from './routing/route-record-store.js';
 import { routedTaskIdsForHost } from './routing/round-router.js';
 import { routingSettingOn } from './routing/route-types.js';
@@ -164,26 +164,18 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
   const remediationChildren = typeof children === 'object' && children !== null && !Array.isArray(children)
     ? children as Record<string, unknown>
     : {};
-  const committedRemediationChildren = await readCommittedRemediationTaskChildren(deps.projectRoot);
-
   for (const taskId of taskIds) {
     const canonical = canonicalTaskId(taskId);
     if (isEngineAppendedRemediationTaskId(taskId)) {
-      // A Child line travels with the committed plan while the state cache is
-      // intentionally disposable.  Only a truly source-less rem task refuses.
-      const hasCommittedChild = Object.hasOwn(committedRemediationChildren, taskId);
-      const committedChild = parseChildId(committedRemediationChildren[taskId]);
-      const cachedChild = typeof remediationChildren[taskId] === 'string' || typeof remediationChildren[taskId] === 'number'
-        ? parseChildId(remediationChildren[taskId])
-        : undefined;
-      if (hasCommittedChild && committedChild === undefined) {
-        return unreadable(taskId, identity.child, 'committed remediation Child line is malformed', print);
-      }
-      const owner = committedChild ?? cachedChild;
-      if (owner === undefined) {
+      const resolved = await resolveRemediationTaskChild(
+        deps.projectRoot,
+        taskId,
+        remediationChildren[taskId],
+      );
+      if (resolved.kind === 'unreadable') {
         return unreadable(taskId, identity.child, 'remediation task membership is missing or malformed', print);
       }
-      owners.set(canonical, owner);
+      owners.set(canonical, resolved.child);
     }
 
     // An envelope or committed Child line is independently sufficient for a
