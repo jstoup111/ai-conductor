@@ -201,7 +201,7 @@ describe('TranscriptRetention', () => {
       });
       // A free retry may restart the retry budget at one. Both captures are
       // still earlier dispatches and must be retained before the replacement.
-      await retention.settleBeforeRetry({ step: 'build_review', runId: 'review', nextAttempt: 1, member: 'build_review' });
+      await retention.settleBeforeRetry({ step: 'build_review', runId: 'review' });
       await capture(events, root, retry, 'build_review', false, 3, {
         runId: 'review', attempt: 1, member: 'build_review',
       });
@@ -228,7 +228,7 @@ describe('TranscriptRetention', () => {
       await capture(events, root, currentRun, 'build', false, 3, { runId: 'current', attempt: 1 });
       await capture(events, root, otherRun, 'build', false, 3, { runId: 'other', attempt: 1 });
 
-      await retention.settleBeforeRetry({ step: 'build', runId: 'current', nextAttempt: 2 });
+      await retention.settleBeforeRetry({ step: 'build', runId: 'current' });
 
       await expect(access(join(root, currentRun))).resolves.toBeUndefined();
       await expect(access(join(root, otherRun))).resolves.toBeUndefined();
@@ -254,7 +254,7 @@ describe('TranscriptRetention', () => {
         runId: 'review', attempt: 1, member: 'audit',
       });
 
-      await retention.settleBeforeRetry('build_review', 2);
+      await retention.settleBeforeRetry({ step: 'build_review' });
 
       await expect(access(join(root, rubric))).resolves.toBeUndefined();
       await expect(access(join(root, audit))).resolves.toBeUndefined();

@@ -39,4 +39,29 @@ describe('provider final assistant transcript extractors', () => {
       '{malformed',
     ])).toBeUndefined();
   });
+
+  it.each([
+    ['claude',
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'last text' }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'read' }] } },
+    ],
+    ['codex',
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'last text' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'function_call', name: 'read' }] } },
+    ],
+    ['pi',
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'last text' }] } },
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'tool', name: 'read' }] } },
+    ],
+  ] as const)('keeps the last %s assistant text when a tool-only record follows it', (provider, textual, toolOnly) => {
+    expect(extract(provider, [JSON.stringify(textual), JSON.stringify(toolOnly)])).toBe('last text');
+  });
+
+  it.each([
+    ['claude', { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'read' }] } }],
+    ['codex', { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'function_call', name: 'read' }] } }],
+    ['pi', { type: 'message', message: { role: 'assistant', content: [{ type: 'tool', name: 'read' }] } }],
+  ] as const)('returns undefined for only tool-only %s assistant records', (provider, toolOnly) => {
+    expect(extract(provider, [JSON.stringify(toolOnly)])).toBeUndefined();
+  });
 });
