@@ -168,6 +168,8 @@ export interface KickbackLedger {
   settlementReceipts?: Record<string, { gates: string[] }>;
   /** Applied-rebase operation ids whose build-review convergence laps were refunded. */
   convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
+  /** One routed repair round may exceed the build-review cumulative bound once. */
+  routedRepairCredit?: { roundId: string; consumed?: true };
 }
 
 type PersistedKickbackGateEntry = Omit<
@@ -188,6 +190,7 @@ interface PersistedKickbackLedger {
   pendingRepair?: PendingRepair;
   settlementReceipts?: Record<string, { gates: string[] }>;
   convergenceCreditReceipts?: Record<string, { gate: 'build_review' }>;
+  routedRepairCredit?: { roundId: string; consumed?: true };
 }
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
@@ -453,6 +456,13 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
+function isRoutedRepairCredit(value: unknown): value is { roundId: string; consumed?: true } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const credit = value as Record<string, unknown>;
+  return /^r[1-9][0-9]*$/.test(typeof credit.roundId === 'string' ? credit.roundId : '') &&
+    (credit.consumed === undefined || credit.consumed === true);
+}
+
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -659,6 +669,9 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
       typeof receipt === 'object' && receipt !== null && !Array.isArray(receipt) &&
       (receipt as { gate?: unknown }).gate === 'build_review')
   )) return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  if (ledger.routedRepairCredit !== undefined && !isRoutedRepairCredit(ledger.routedRepairCredit)) {
+    return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  }
   const parsed: PersistedKickbackLedger = {
     version: 1,
     gates,
@@ -676,6 +689,7 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
       ? { settlementReceipts: ledger.settlementReceipts }
       : {}),
     ...(receipts === undefined ? {} : { convergenceCreditReceipts: receipts as Record<string, { gate: 'build_review' }> }),
+    ...(ledger.routedRepairCredit === undefined ? {} : { routedRepairCredit: ledger.routedRepairCredit }),
   };
   const normalized = normalizeKickbackLedger(parsed);
   return unreadableGates.length > 0 ? unreadableLedger(normalized.gates, unreadableGates) : normalized;

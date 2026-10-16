@@ -189,6 +189,7 @@ import {
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild } from './routing/execution-child.js';
 import { routingEligible } from './routing/route-types.js';
+import { consumeRoutedRepairCredit } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord } from './routing/route-record-store.js';
@@ -6819,6 +6820,20 @@ export class Conductor {
       }, this.activeRegionChild);
     };
 
+    /** A routed host receives exactly one cumulative build-review overage per round. */
+    const consumeCurrentRoutedRepairCredit = async (): Promise<boolean> => {
+      const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      if (!slug || this.activeRegionChild === undefined) return false;
+      const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+      const routed = 'routedRepair' in cursor ? cursor.routedRepair : undefined;
+      if (!routed || routed.child !== this.activeRegionChild) return false;
+      return consumeRoutedRepairCredit({
+        projectRoot: this.projectRoot,
+        child: routed.child,
+        roundId: routed.roundId,
+      });
+    };
+
     /**
      * Records the pre-kickback baseline for `sourceGate` right before a
      * navigateBack(..., 'build', ...) is committed, so the next time
@@ -12781,19 +12796,20 @@ export class Conductor {
             ) {
               const evidence = failedStepResult?.output ?? '';
               const kickback = await consumeKickbackBudget('build_review', evidence);
-              if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
-                const reason =
+              if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !await consumeCurrentRoutedRepairCredit()) {
+                const reason = this.withActiveChild(
                   `build_review cumulative kickback cap exceeded:\n` +
                   renderKickbackBudgetView(
                     kickback.entry,
                     'build_review',
                     MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
-                  );
+                  ),
+                );
                 const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
                   consumed: kickback.entry.cumulative,
                   limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
                   latestReason: kickback.entry.lastReason,
-                });
+                }, this.activeRegionChild);
                 const markerResult = await this.writeHaltMarker(
                   `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
                   'needs-human',
@@ -13301,7 +13317,7 @@ export class Conductor {
                 buildReviewBeforeConsumption = kickback.before;
                 buildReviewKickbackCharged = true;
                 const count = kickback.entry.count;
-                if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
+                if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !await consumeCurrentRoutedRepairCredit()) {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
                   const reason = this.withActiveChild(
                     `build_review cumulative kickback cap exceeded:\n` +
