@@ -6998,32 +6998,7 @@ export class Conductor {
         // A taskless manual-test failure still belongs to the routed round
         // protocol on stacked features.  It carries no rem block, but the
         // retry hint and its one admission charge are durable on the record.
-        const manualSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
-        if (manualSlug) {
-          const cursor = await this.resolveActiveChild(this.projectRoot, manualSlug);
-          if (routingEligible(cursor, this.config) && await hasDurableChildState(this.projectRoot, manualSlug)) {
-            const execution = resolveExecutionChild(cursor, manualSlug);
-            if (execution.source === 'cursor' || execution.source === 'routed-host') {
-              const roundId = await nextRoundId(this.projectRoot, manualSlug);
-              if (typeof roundId === 'string') {
-                const host = execution.target.child;
-                const created = await createRouteRecord(this.projectRoot, manualSlug, {
-                  roundId, kind: 'audit',
-                  items: [{ findingId: 'manual-test-fail', kind: 'audit', owner: host, host, reason: 'manual-test', fallback: [] }],
-                  allocation: { [host]: { remTaskIds: [], blockBodies: [], retryHint: evidence } },
-                });
-                if (created.kind === 'created') {
-                  const charged = await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug: manualSlug, roundId, gate: 'manual_test' });
-                  if (charged.kind === 'charged') {
-                    await admitRound(this.projectRoot, manualSlug, created.record, host, {
-                      persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
+        await this.admitRoutedManualTestKickback(state, evidence);
 
         // Task 7: Merged-PR guard on manual_test kickback (TS-1).
         // Before committing the rewind, check if the recorded PR has been
@@ -14895,6 +14870,38 @@ export class Conductor {
       throw new Error('Full-suite verifier does not expose the required preservation recording seam');
     }
     await this.fullSuiteVerifier.recordPreservation(inspection);
+  }
+
+  /** Records the taskless routed receipt for a manual-test kickback. */
+  private async admitRoutedManualTestKickback(state: ConductState, evidence: string): Promise<void> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug) return;
+
+    const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+    if (!routingEligible(cursor, this.config)) return;
+    if (!await hasDurableChildState(this.projectRoot, slug)) return;
+
+    const execution = resolveExecutionChild(cursor, slug);
+    if (execution.source !== 'cursor' && execution.source !== 'routed-host') return;
+
+    const roundId = await nextRoundId(this.projectRoot, slug);
+    if (typeof roundId !== 'string') return;
+
+    const host = execution.target.child;
+    const created = await createRouteRecord(this.projectRoot, slug, {
+      roundId,
+      kind: 'audit',
+      items: [{ findingId: 'manual-test-fail', kind: 'audit', owner: host, host, reason: 'manual-test', fallback: [] }],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [], retryHint: evidence } },
+    });
+    if (created.kind !== 'created') return;
+
+    const charged = await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test' });
+    if (charged.kind !== 'charged') return;
+
+    await admitRound(this.projectRoot, slug, created.record, host, {
+      persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
+    });
   }
 
   /** Records the taskless routed receipt for a post-region custom-step kickback. */

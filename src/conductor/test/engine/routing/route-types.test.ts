@@ -22,7 +22,7 @@ const routeRecord = {
   allocation: {
     2: { remTaskIds: ['rem-4'], blockBodies: ['### Task 4\n'] },
   },
-  hosts: { 1: 'restacked', 2: 'repairing', 3: 'pending' },
+  hosts: { 1: 'reroute-moved', 2: 'pending', 3: 'pending' },
   currentHostIndex: 1,
   receipt: {
     laps: { prd_audit: 1 }, growth: 2, taskless: { manual_test: 1 }, echo: { 'lint-docs': 3 },
@@ -49,6 +49,21 @@ describe('routed repair durable record parsers', () => {
 
   it('round-trips the typed settled receipt, entry pin, obligation, fallback and reroute state', () => {
     expect(parseRouteRecord(JSON.stringify(routeRecord))).toEqual(routeRecord);
+  });
+
+  it('rejects reroutes without a matching latest fallback movement', () => {
+    const missingFallback = structuredClone(routeRecord);
+    missingFallback.fallback = [];
+    expect(parseRouteRecord(JSON.stringify(missingFallback))).toBeUndefined();
+
+    const mismatchedDestination = structuredClone(routeRecord);
+    mismatchedDestination.reroute.destination = 3;
+    expect(parseRouteRecord(JSON.stringify(mismatchedDestination))).toBeUndefined();
+
+    const mismatchedSource = structuredClone(routeRecord);
+    mismatchedSource.hosts[1] = 'repairing';
+    mismatchedSource.hosts[3] = 'reroute-moved';
+    expect(parseRouteRecord(JSON.stringify(mismatchedSource))).toBeUndefined();
   });
 
   it('normalizes the legacy empty receipt as an unsettled receipt with zero charges', () => {
