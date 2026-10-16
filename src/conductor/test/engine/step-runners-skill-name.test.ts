@@ -10,7 +10,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
-import type { InvokeResult } from '../../src/execution/llm-provider.js';
+import type { InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 
 const roots: string[] = [];
@@ -92,7 +92,7 @@ describe('DefaultStepRunner skill-name root', () => {
 
   it('renders a built-in invocation from the served skill frontmatter', async () => {
     const root = await skillRoot('---\nname: ac-explore\n---\n');
-    const invoke = vi.fn(async () => ({ success: true, output: '', exitCode: 0 }));
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }));
     const runner = new DefaultStepRunner({ invoke }, 'skill-name', root, {
       providerKey: 'codex',
       skillNameRoot: root,
@@ -100,16 +100,16 @@ describe('DefaultStepRunner skill-name root', () => {
 
     await runner.run('explore', {});
 
-    expect(invoke.mock.calls[0]?.[0].prompt).toBe('$ac-explore');
+    expect(invoke.mock.calls[0]?.[0]?.prompt).toBe('$ac-explore');
   });
 
   it('falls back to the directory name when the root is null', async () => {
-    const invoke = vi.fn(async () => ({ success: true, output: '', exitCode: 0 }));
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }));
     const runner = new DefaultStepRunner({ invoke }, 'skill-name', '/project', { providerKey: 'codex' });
 
     await runner.run('explore', {});
 
-    expect(invoke.mock.calls[0]?.[0].prompt).toBe('$explore');
+    expect(invoke.mock.calls[0]?.[0]?.prompt).toBe('$explore');
   });
 
   it('reports a missing served skill without invoking the provider', async () => {
@@ -189,7 +189,7 @@ describe('DefaultStepRunner auxiliary and legacy skill names', () => {
     ['codex', '$'],
   ] as const)('uses frontmatter names for auxiliary and legacy %s dispatches', async (providerKey, prefix) => {
     const root = await renamedSkillRoot();
-    const invoke = vi.fn(async () => ({
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: true,
       output: 'MODELS: 0\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S',
       exitCode: 0,
@@ -236,7 +236,7 @@ describe('DefaultStepRunner auxiliary and legacy skill names', () => {
     ['claude', '/'],
     ['codex', '$'],
   ] as const)('keeps shipped auxiliary and legacy %s prompts unchanged', async (providerKey, prefix) => {
-    const invoke = vi.fn(async () => ({
+    const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: true,
       output: 'MODELS: 0\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S',
       exitCode: 0,

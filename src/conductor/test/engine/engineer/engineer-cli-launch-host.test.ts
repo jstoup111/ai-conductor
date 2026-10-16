@@ -44,8 +44,8 @@ afterEach(() => {
 describe('dispatchEngineer interactive host launch', () => {
   it('resolves composer launch prompts and diagnostics from the served skill tree', async () => {
     const root = await renamedSkillRoot({ composer: 'ac-composer' });
-    const claudeSpawn = vi.fn(async () => 0);
-    const codexSpawn = vi.fn(async () => 0);
+    const claudeSpawn = vi.fn(async (_executable: string, _argv: string[]) => 0);
+    const codexSpawn = vi.fn(async (_executable: string, _argv: string[]) => 0);
     const nestedPrint = vi.fn();
     const printErr = vi.fn();
     const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });

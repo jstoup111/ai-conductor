@@ -181,7 +181,7 @@ describe('live daemon E2E command resolution (#1311)', () => {
         home: { homeDir: string },
         dispatch: () => Promise<T>,
         providerKey: string,
-        preflight?: (homeDir: string, providerKey?: string) => Promise<void>,
+        preflight?: (homeDir: string, sourceRoot: string, providerKey?: string) => Promise<void>,
       ) => Promise<T>;
     };
 
@@ -217,7 +217,7 @@ describe('live daemon E2E command resolution (#1311)', () => {
       { homeDir: '/provisioned-home' },
       dispatch,
       'claude',
-      async (homeDir, _sourceRoot, providerKey) => { order.push(`preflight:${homeDir}:${providerKey}`); },
+      async (homeDir: string, _sourceRoot: string, providerKey?: string) => { order.push(`preflight:${homeDir}:${providerKey}`); },
     )).resolves.toBe('dispatched');
     expect(order).toEqual(['preflight:/provisioned-home:claude', 'dispatch']);
 

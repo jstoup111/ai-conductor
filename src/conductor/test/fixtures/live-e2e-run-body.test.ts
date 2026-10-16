@@ -813,6 +813,7 @@ describe('live E2E preflight dispatch boundary', () => {
         dispatch: () => Promise<void>,
         providerKey: string,
         preflight: (homeDir: string, sourceRoot: string, providerKey?: string) => Promise<void>,
+        sourceRoot?: string,
       ) => Promise<void>;
     };
     const preflight = vi.fn(async () => { throw new Error('selected provider command unavailable'); });
@@ -833,6 +834,7 @@ describe('live E2E preflight dispatch boundary', () => {
         dispatch: () => Promise<T>,
         providerKey: string,
         preflight: (homeDir: string, sourceRoot: string, providerKey?: string) => Promise<void>,
+        sourceRoot?: string,
       ) => Promise<T>;
     };
     const preflight = vi.fn(async () => {});
