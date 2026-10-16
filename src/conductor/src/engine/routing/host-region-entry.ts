@@ -221,7 +221,7 @@ async function bindHostObligations(
     const admitted = await admitRoutedObligation({
       projectRoot: input.worktree,
       planPath,
-      roundId: input.roundId,
+      roundId: record.roundId,
       findingId: item.findingId,
       taskIds: item.taskIds,
       branch,
@@ -269,7 +269,7 @@ async function reconcileHostObligations(
     const admitted = await admitRoutedObligation({
       projectRoot: input.worktree,
       planPath,
-      roundId: input.roundId,
+      roundId: record.roundId,
       findingId: item.findingId,
       taskIds: item.taskIds,
       ...item.obligation,

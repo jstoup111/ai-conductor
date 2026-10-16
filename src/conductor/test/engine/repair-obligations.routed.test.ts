@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import { admitAndRestageRepair, admitRoutedObligation } from '../../src/engine/repair-restage.js';
+import { parseRoundId, type RoundId } from '../../src/engine/routing/route-types.js';
 
 const temporaryDirectories: string[] = [];
+const routedRoundId = parseRoundId('r1');
+if (!routedRoundId) throw new Error('r1 must be a valid route round');
 
 async function createProject(): Promise<{ projectRoot: string; planPath: string }> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'repair-obligations-routed-'));
@@ -27,13 +30,30 @@ afterEach(async () => {
 });
 
 describe('routed repair obligations', () => {
+  it('refuses an invalid round id before deriving an admission key', async () => {
+    const { projectRoot, planPath } = await createProject();
+
+    expect(parseRoundId('r0')).toBeUndefined();
+    await expect(admitRoutedObligation({
+      projectRoot,
+      planPath,
+      roundId: 'r0' as RoundId,
+      findingId: 'finding-1',
+      taskIds: ['T1'],
+      branch: 'feat/c1/demo',
+      head: 'host-head',
+      tree: 'host-tree',
+    })).resolves.toEqual({ kind: 'failed', detail: 'routed admission requires a valid round id' });
+    await expect(readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('uses the same round-keyed admission when HEAD or plan path changes', async () => {
     const { projectRoot, planPath } = await createProject();
 
     const first = await admitRoutedObligation({
       projectRoot,
       planPath,
-      roundId: 'r1',
+      roundId: routedRoundId,
       findingId: 'finding-1',
       taskIds: ['T1'],
       branch: 'feat/c1/demo',
@@ -43,7 +63,7 @@ describe('routed repair obligations', () => {
     const changed = await admitRoutedObligation({
       projectRoot,
       planPath: join(projectRoot, '.docs/plans/rewritten.md'),
-      roundId: 'r1',
+      roundId: routedRoundId,
       findingId: 'finding-1',
       taskIds: ['T1'],
       branch: 'feat/c1/demo',
@@ -62,7 +82,7 @@ describe('routed repair obligations', () => {
     const input = {
       projectRoot,
       planPath,
-      roundId: 'r1',
+      roundId: routedRoundId,
       findingId: 'finding-1',
       taskIds: ['T1'],
       branch: 'feat/c1/demo',

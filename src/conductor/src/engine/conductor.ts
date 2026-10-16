@@ -14897,6 +14897,46 @@ export class Conductor {
     await this.fullSuiteVerifier.recordPreservation(inspection);
   }
 
+  /** Records the taskless routed receipt for a post-region custom-step kickback. */
+  private async admitRoutedCustomStepKickback(
+    state: ConductState,
+    target: StepName,
+    count: number,
+  ): Promise<void> {
+    const customSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!customSlug || ALL_STEPS.some((step) => step.name === target) || isRegionStep(target)) return;
+
+    const cursor = await this.resolveActiveChild(this.projectRoot, customSlug);
+    if (!routingEligible(cursor, this.config)) return;
+    if (!await hasDurableChildState(this.projectRoot, customSlug)) return;
+
+    const execution = resolveExecutionChild(cursor, customSlug);
+    if (execution.source !== 'cursor' && execution.source !== 'routed-host') return;
+
+    const roundId = await nextRoundId(this.projectRoot, customSlug);
+    if (typeof roundId !== 'string') return;
+
+    const host = execution.target.child;
+    const created = await createRouteRecord(this.projectRoot, customSlug, {
+      roundId,
+      kind: 'audit',
+      items: [{ findingId: `custom-${target}`, kind: 'audit', owner: host, host, reason: 'custom-step', fallback: [] }],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (created.kind !== 'created') return;
+
+    const stored = await readRouteRecord(this.projectRoot, customSlug, roundId);
+    if (stored.kind !== 'record') return;
+
+    const receipt = { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } };
+    const echoed = await writeRouteRecord(this.projectRoot, stored, { ...stored.record, receipt });
+    if (echoed.kind !== 'updated') return;
+
+    await admitRound(this.projectRoot, customSlug, { ...stored.record, receipt }, host, {
+      persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
+    });
+  }
+
   /**
    * Shared kickback-verdict scan. Walks every persisted verdict looking for a
    * gate that the given step re-opened (verdict is {satisfied:false,
@@ -14957,38 +14997,7 @@ export class Conductor {
         // A configured post-region step keeps its established flat ledger
         // bump, then records that bumped count on a taskless routed receipt.
         // No plan task is appended for this shape.
-        const customSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
-        if (customSlug && !ALL_STEPS.some((step) => step.name === target) && !isRegionStep(target)) {
-          const cursor = await this.resolveActiveChild(this.projectRoot, customSlug);
-          if (routingEligible(cursor, this.config) && await hasDurableChildState(this.projectRoot, customSlug)) {
-            const execution = resolveExecutionChild(cursor, customSlug);
-            if (execution.source === 'cursor' || execution.source === 'routed-host') {
-              const roundId = await nextRoundId(this.projectRoot, customSlug);
-              if (typeof roundId === 'string') {
-                const host = execution.target.child;
-                const created = await createRouteRecord(this.projectRoot, customSlug, {
-                  roundId, kind: 'audit',
-                  items: [{ findingId: `custom-${target}`, kind: 'audit', owner: host, host, reason: 'custom-step', fallback: [] }],
-                  allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
-                });
-                if (created.kind === 'created') {
-                  const stored = await readRouteRecord(this.projectRoot, customSlug, roundId);
-                  if (stored.kind === 'record') {
-                    const echoed = await writeRouteRecord(this.projectRoot, stored, {
-                      ...stored.record,
-                      receipt: { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } },
-                    });
-                    if (echoed.kind === 'updated') {
-                      await admitRound(this.projectRoot, customSlug, { ...stored.record, receipt: { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } } }, host, {
-                        persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
-                      });
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+        await this.admitRoutedCustomStepKickback(state, target, count);
         const hasContract = hasCompletionContract(target, this.config);
         const disposition = await this.resolveDecideEntryDisposition({
           target,
