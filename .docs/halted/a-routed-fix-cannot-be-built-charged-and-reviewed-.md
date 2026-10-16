@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-16T17:55:13.806Z
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
 Halting step: unknown
