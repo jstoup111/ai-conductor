@@ -45,11 +45,38 @@ export interface TranscriptRetentionDependencies {
   readonly reconcile?: boolean;
 }
 
-type CapturedTranscript = {
-  readonly step: TranscriptOwnerStep;
+/**
+ * The owner portion of a capture identity is closed deliberately.  A rubric
+ * name is an auxiliary member, never a lifecycle step, so callers cannot
+ * accidentally key a rubric capture as though it were a StepName.
+ */
+export type TranscriptCaptureMember =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'present'; readonly value: string };
+
+export interface TranscriptCaptureIdentity {
+  readonly step: StepName;
+  readonly member: TranscriptCaptureMember;
+  readonly runId: string;
+  readonly attempt: number;
+}
+
+/** Build the sole step/member identity used for capture recording and settlement. */
+export function transcriptCaptureIdentity(input: {
+  readonly step: StepName;
   readonly runId: string;
   readonly attempt: number;
   readonly member?: string;
+}): TranscriptCaptureIdentity {
+  return {
+    step: input.step,
+    member: input.member === undefined ? { kind: 'absent' } : { kind: 'present', value: input.member },
+    runId: input.runId,
+    attempt: input.attempt,
+  };
+}
+
+type CapturedTranscript = TranscriptCaptureIdentity & {
   readonly path: string;
   readonly interrupted: boolean;
 };
@@ -144,11 +171,18 @@ export class TranscriptRetention {
     this.maxBytes = dependencies.maxBytes ?? TRANSCRIPT_RETENTION_MAX_BYTES;
     this.capturedHandler = (event) => {
       if (event.type !== 'provider_transcripts_captured') return;
+      // Legacy unknown-step captures have no lifecycle terminal that can
+      // settle them. Retain them immediately rather than inventing an
+      // incomplete identity outside the StepName domain.
+      if (!isStepName(event.step)) return this.retain(event.path);
+      const step = event.step;
       return this.capture({
-        step: event.step,
-        runId: event.runId,
-        attempt: event.attempt,
-        ...(event.member === undefined ? {} : { member: event.member }),
+        ...transcriptCaptureIdentity({
+          step,
+          runId: event.runId,
+          attempt: event.attempt,
+          ...(event.member === undefined ? {} : { member: event.member }),
+        }),
         path: event.path,
         interrupted: event.interrupted,
       });
@@ -173,12 +207,26 @@ export class TranscriptRetention {
 
   /** Settle exactly one provider capture dispatch without affecting a later retry. */
   async settleAttempt(
-    identity: Omit<Pick<CapturedTranscript, 'step' | 'runId' | 'attempt' | 'member'>, 'attempt'> & {
+    identity: Omit<TranscriptCaptureIdentity, 'attempt' | 'member'> & {
       readonly attempt: TranscriptCaptureDispatchIdentity;
+      readonly member?: string;
     },
     outcome: TranscriptRetentionOutcome,
   ): Promise<void> {
-    await this.settleKeys([captureKey(identity)], outcome);
+    await this.settleKeys([captureKey(transcriptCaptureIdentity(identity))], outcome);
+  }
+
+  /** Settle all captured members of one terminal lifecycle step by their own identities. */
+  async settleStepRun(step: StepName, runId: string, outcome: TranscriptRetentionOutcome): Promise<void> {
+    const identities = [...this.pending.values()].flatMap((captures) => captures)
+      .filter((capture) => capture.step === step && capture.runId === runId)
+      .map(({ step: captureStep, runId: captureRunId, attempt, member }) => ({
+        step: captureStep,
+        runId: captureRunId,
+        attempt: asTranscriptCaptureDispatchIdentity(attempt),
+        ...(member.kind === 'present' ? { member: member.value } : {}),
+      }));
+    for (const identity of identities) await this.settleAttempt(identity, outcome);
   }
 
   /**
@@ -195,15 +243,15 @@ export class TranscriptRetention {
    * prune.
    */
   async settleBeforeRetry(
-    identity: Pick<CapturedTranscript, 'step' | 'runId' | 'member'> & { readonly nextAttempt: number },
+    identity: Pick<TranscriptCaptureIdentity, 'step' | 'runId'> & { readonly nextAttempt: number; readonly member?: string },
   ): Promise<void>;
   async settleBeforeRetry(step: StepName, nextAttempt: number, member?: string): Promise<void>;
   async settleBeforeRetry(
-    identityOrStep: (Pick<CapturedTranscript, 'step' | 'runId' | 'member'> & { readonly nextAttempt: number }) | StepName,
+    identityOrStep: (Pick<TranscriptCaptureIdentity, 'step' | 'runId'> & { readonly nextAttempt: number; readonly member?: string }) | StepName,
     nextAttempt?: number,
     member?: string,
   ): Promise<void> {
-    const identity: { readonly step: CapturedTranscript['step']; readonly nextAttempt: number; readonly runId?: string; readonly member?: string } = typeof identityOrStep === 'string'
+    const identity: { readonly step: StepName; readonly nextAttempt: number; readonly runId?: string; readonly member?: string } = typeof identityOrStep === 'string'
       ? { step: identityOrStep, nextAttempt: nextAttempt!, ...(member === undefined ? {} : { member }) }
       : identityOrStep;
     const identities = [...this.pending.entries()].flatMap(([key, captures]) => {
@@ -216,8 +264,10 @@ export class TranscriptRetention {
     });
     for (const { capture } of identities) {
       await this.settleAttempt({
-        ...capture,
+        step: capture.step,
+        runId: capture.runId,
         attempt: asTranscriptCaptureDispatchIdentity(capture.attempt),
+        ...(capture.member.kind === 'present' ? { member: capture.member.value } : {}),
       }, 'failed');
     }
   }
@@ -389,8 +439,13 @@ function isTranscriptOwnerStep(value: unknown): value is TranscriptOwnerStep {
   return value === 'unknown-step' || isStepName(value);
 }
 
-function captureKey(identity: Pick<CapturedTranscript, 'step' | 'runId' | 'attempt' | 'member'>): string {
-  return [identity.step, identity.runId, identity.attempt, identity.member ?? ''].join('\u0000');
+function captureKey(identity: TranscriptCaptureIdentity): string {
+  return [
+    identity.step,
+    identity.runId,
+    identity.attempt,
+    identity.member.kind === 'present' ? identity.member.value : '',
+  ].join('\u0000');
 }
 
 function assertNever(value: never): never {
