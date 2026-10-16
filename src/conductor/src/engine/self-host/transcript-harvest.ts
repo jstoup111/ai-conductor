@@ -2,6 +2,7 @@ import * as fsp from 'node:fs/promises';
 import { matchesGlob, join, relative, sep } from 'node:path';
 
 import { sanitizeTranscriptLine } from './transcript-sanitize.js';
+import { sanitizeProviderMember } from './provider-member.js';
 import type { ConductorEvent, TranscriptOwnerStep } from '../../types/events.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 
@@ -46,7 +47,7 @@ export function transcriptCapture(identity: TranscriptCaptureIdentity & { readon
   readonly path: string;
   readonly destination: string;
 } {
-  const name = [`${identity.runId}-a${identity.attempt}`, identity.member, identity.provider]
+  const name = [`${identity.runId}-a${identity.attempt}`, identity.member === undefined ? undefined : sanitizeProviderMember(identity.member), identity.provider]
     .filter((part): part is string => part !== undefined).join('-');
   const path = join('.pipeline', 'transcripts', identity.step, name);
   return { path, destination: join(identity.worktreeRoot, path) };
