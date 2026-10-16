@@ -22,7 +22,7 @@ import {
   parseBuildReviewRubricResult,
   parseBuildReviewSkip,
   renderBuildReviewUnresolvedSkillRemedy,
-  type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
+  type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection, CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import {
@@ -465,7 +465,7 @@ describe('build-review domain', () => {
     expect(unexplained.problems).not.toContainEqual(expect.objectContaining({ field: expect.any(String) }));
   });
 
-  it('names missing, duplicate, unknown, foreign, and invalid candidate scope resolution authority', () => {
+  it('names missing, conflicting, unknown, foreign, and invalid candidate scope resolution authority', () => {
     const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
     const sourceRegion = { path: 'test/widget.test.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'bound assertion' };
     const scopeContext = { candidates: [{ candidateId: 'bound-target', sourceRegion, obligationReferences: ['S5.4'] }] };
@@ -480,7 +480,7 @@ describe('build-review domain', () => {
     };
 
     expect(describe(undefined)).toContain('missing');
-    expect(describe([resolved, resolved])).toContain('duplicate');
+    expect(describe([resolved, { ...resolved, associationReason: 'A different answer.' }])).toContain('conflicting');
     expect(describe([{ ...resolved, candidateId: 'unknown-target' }])).toContain('unknown');
     expect(describe([{ ...resolved, sourceRegion: { ...sourceRegion, startLine: 13, endLine: 13 } }])).toContain('foreign');
     expect(describe([{ candidateId: 'bound-target', status: 'resolved' }])).toContain('invalid');
@@ -699,7 +699,7 @@ describe('build-review domain', () => {
     };
     const invalid = [
       [],
-      [resolved, resolved],
+      [resolved, { ...resolved, associationReason: 'A different answer for the same candidate.' }],
       [{ ...resolved, candidateId: 'unknown-candidate' }],
       [{ ...resolved, obligationReferences: ['S9.9'] }],
       [{ ...resolved, sourceRegion: { ...sourceRegion, path: 'test/missing.test.ts' } }],
@@ -707,6 +707,30 @@ describe('build-review domain', () => {
     ];
 
     expect(invalid.map((resolutions) => parseBuildReviewCandidateScopeResolutions(resolutions, { candidates: [candidate] }))).toEqual(Array(invalid.length).fill(undefined));
+  });
+
+  it('collapses an identical repeated scope resolution and rejects a conflicting one', () => {
+    const sourceRegion = { path: 'test/widget.test.ts', startLine: 12, endLine: 18, contentHash: HASH, display: 'widget assertion' };
+    const candidate = { candidateId: 'candidate-widget', sourceRegion, obligationReferences: ['S5.4'] };
+    const resolved = {
+      candidateId: candidate.candidateId, status: 'resolved', sourceRegion,
+      obligationReferences: ['S5.4'], associationReason: 'The assertion is the projected candidate.',
+    };
+    const reordered = {
+      associationReason: resolved.associationReason, obligationReferences: ['S5.4'],
+      sourceRegion: { display: 'widget assertion', contentHash: HASH, endLine: 18, startLine: 12, path: 'test/widget.test.ts' },
+      status: 'resolved', candidateId: candidate.candidateId,
+    };
+    const conflicting = { candidateId: candidate.candidateId, status: 'out-of-scope', exclusionReason: 'No changed behavior.' };
+    const diagnose = (scopeResolutions: unknown) => diagnoseBuildReviewJudgedResultRejection(
+      { kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'digest', contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION, findings: [], verdict: 'PASS', scopeResolutions },
+      'testQuality', { lapId: 'lap-1', snapshotDigest: 'digest' }, undefined, { candidates: [candidate] },
+    ).problems.map((problem) => problem.detail).filter((detail) => detail.includes('scopeResolutions'));
+
+    expect(parseBuildReviewCandidateScopeResolutions([resolved, reordered], { candidates: [candidate] })).toEqual([resolved]);
+    expect(diagnose([resolved, reordered])).toEqual([]);
+    expect(parseBuildReviewCandidateScopeResolutions([resolved, conflicting], { candidates: [candidate] })).toBeUndefined();
+    expect(diagnose([resolved, conflicting])).toEqual([`"scopeResolutions" has conflicting resolutions for candidateId "${candidate.candidateId}"`]);
   });
 
   describe('finding reference context', () => {
