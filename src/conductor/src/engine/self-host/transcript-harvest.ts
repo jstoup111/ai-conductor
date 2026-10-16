@@ -146,6 +146,12 @@ export async function harvestTranscripts(options: HarvestTranscriptsOptions): Pr
       const sanitized = sanitizeFile(content, options.knownSecrets, options.sanitizeLine ?? sanitizeTranscriptLine);
       const target = join(options.destination, relativePath);
       await fs.mkdir(join(target, '..'), { recursive: true });
+      try {
+        await fs.lstat(target);
+        throw new Error(`transcript destination already exists: ${relativePath}`);
+      } catch (error) {
+        if (!isNotFound(error)) throw error;
+      }
       await fs.writeFile(target, sanitized.content);
       files += 1;
       bytes += Buffer.byteLength(sanitized.content);
