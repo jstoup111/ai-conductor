@@ -21,7 +21,7 @@ import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReser
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
-import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
+import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
 import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
@@ -517,6 +517,19 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   }
   const attemptedCaseIds = attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [];
   const attempted = new Set(attemptedCaseIds);
+  // An open, applied action case from an earlier lap that BUILD never attempted
+  // (the feature halted first) keeps its tasks only in the published order. A
+  // lap that does not re-admit its source has no tasks for it, so both order
+  // writers below would drop it and every re-kick would halt on "no work-order
+  // tasks". Snapshot those unattempted rows before anything republishes; an
+  // attempted absent case is instead resolved by reconciliation.
+  const publishedOrder = await readBuildReviewWorkOrder(input.projectRoot, input.feature,
+    prior.state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : []));
+  const carriedTasksByCaseId = new Map<string, readonly BuildReviewWorkOrderTask[]>(publishedOrder.ok
+    ? publishedOrder.workOrder.cases
+      .filter((row) => !attempted.has(row.caseId) && row.tasks.length > 0)
+      .map((row) => [row.caseId, row.tasks])
+    : []);
   const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate, input.feature)))();
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
   const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
@@ -796,12 +809,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     if (!caseId || proposed.case.effect.kind !== 'action') return fail('action case identity was not reconciled');
     tasksByCaseId.set(caseId, proposed.case.effect.tasks);
   }
+  // This lap's tasks win; carried rows only fill cases the lap did not admit.
+  const workOrderTasksByCaseId = new Map([...carriedTasksByCaseId, ...tasksByCaseId]);
   if (tasksByCaseId.size > 0) {
     const pendingActionEffects = reconciled.state.cases.filter((record) =>
       record.effect.kind === 'action' && record.effect.status === 'reserved' && tasksByCaseId.has(record.id),
     );
     const action = await applyBuildReviewActionEffects({
-      projectRoot: input.projectRoot, feature: input.feature, store, tasksByCaseId, chargeInput: input.chargeInput,
+      projectRoot: input.projectRoot, feature: input.feature, store, tasksByCaseId: workOrderTasksByCaseId, chargeInput: input.chargeInput,
       ...(input.child === undefined ? {} : { child: input.child }),
       ...(input.chargeEffect === undefined ? {} : { chargeEffect: input.chargeEffect }),
     });
@@ -918,8 +933,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       }
     }
     if (deferredFailureRetiredByAcceptance) {
-      return finalize({ tasksByCaseId, republishWorkOrder: true, resolvedAtEntry: resolved });
+      return finalize({ tasksByCaseId: workOrderTasksByCaseId, republishWorkOrder: true, resolvedAtEntry: resolved });
     }
   }
-  return finalize({ tasksByCaseId, republishWorkOrder: true });
+  return finalize({ tasksByCaseId: workOrderTasksByCaseId, republishWorkOrder: true });
 }
