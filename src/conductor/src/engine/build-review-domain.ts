@@ -485,6 +485,18 @@ function withOccurrenceOrdinals(references: readonly BuildReviewContentRegionRef
 }
 function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewContentRegionReference): boolean { return left.path === right.path && left.contentHash === right.contentHash && left.occurrence === right.occurrence; }
 /**
+ * Resolve a content anchor against the projected regions. The projection lists
+ * hunks without their ordinals, so a provider can only guess `occurrence`.
+ * When path and hash name exactly one region the ordinal carries no identity,
+ * so the anchor resolves to that region; a repeated hash still needs an exact
+ * ordinal.
+ */
+function resolveContentRegion(regions: readonly BuildReviewContentRegionReference[], locus: BuildReviewContentRegionReference): BuildReviewContentRegionReference | undefined {
+  if (regions.some((candidate) => sameRegion(candidate, locus))) return locus;
+  const sameContent = regions.filter((candidate) => candidate.path === locus.path && candidate.contentHash === locus.contentHash);
+  return sameContent.length === 1 ? contentRegionReference(locus.path, locus.contentHash, locus.display, sameContent[0]!.occurrence) : undefined;
+}
+/**
  * adr-2026-08-18 fixes finding identity as `sha256(whitespace-normalized
  * titleText)`, and the skill contract states the same shape to providers.
  * A reflowed or re-indented declared title is the same declared test, so both
@@ -628,10 +640,9 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
   const contentRubric = source?.rubric === 'security' || source?.rubric === 'implementationQuality'
     ? source.rubric
     : undefined;
-  const contentLocus = contentRubric ? securityRegion(source!.locus) : undefined;
-  return contentLocus && (!references || references.changedContentRegions.some((candidate) => sameRegion(candidate, contentLocus)))
-    ? { rubric: contentRubric!, locus: contentLocus }
-    : undefined;
+  const parsedLocus = contentRubric ? securityRegion(source!.locus) : undefined;
+  const contentLocus = parsedLocus && references ? resolveContentRegion(references.changedContentRegions, parsedLocus) : parsedLocus;
+  return contentLocus ? { rubric: contentRubric!, locus: contentLocus } : undefined;
 }
 function finding(value: unknown, rubric: BuildReviewRubricId, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const confidence = source?.confidence; const concernKind = parseBuildReviewFindingConcernKind(source?.concernKind, rubric); if (!source || !anchor || anchor.rubric !== rubric || !concernKind || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100))) return undefined; return { concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(confidence === undefined ? {} : { confidence: confidence as number }) }; }
 const TEST_QUALITY_EVIDENCE_FIELDS = ['scopeResolutions', 'relocationAudit', 'counterfactualSensitivity'] as const;
@@ -906,7 +917,7 @@ export function diagnoseBuildReviewJudgedResultRejection(value: unknown, rubric:
       if (anchor.rubric !== rubric) problems.push(rejectionProblem(`findings[${index}].anchor.rubric`, `must be "${rubric}"`));
       const locus = rubric === 'security' || rubric === 'implementationQuality' ? securityRegion(anchor.locus) : region(anchor.locus);
       if (!locus) problems.push(rejectionProblem(`findings[${index}].anchor.locus`, 'must be a content-region reference {"path", "contentHash", "display", "occurrence"?}'));
-      else if ((rubric === 'security' || rubric === 'implementationQuality') && references && !references.changedContentRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected changed content regions', `findings[${index}].anchor.locus must reference a projected changed content region (path, contentHash, and occurrence must match one)`));
+      else if ((rubric === 'security' || rubric === 'implementationQuality') && references && !resolveContentRegion(references.changedContentRegions, locus)) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected changed content regions', `findings[${index}].anchor.locus must reference a projected changed content region (path, contentHash, and occurrence must match one)`));
       else if (rubric === 'testQuality' && references?.changedTestRegions && !references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(rejectionProblem(`findings[${index}].anchor.locus.contentHash`, 'must equal a contentHash listed by the projected in-scope content regions', `findings[${index}].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)`));
     });
     const duplicates = new Map<string, number>();

@@ -131,6 +131,24 @@ describe('build-review domain', () => {
     expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, contentHash: `sha256:${'b'.repeat(64)}` } }, references)).toBeUndefined();
   });
 
+  it('resolves a content anchor whose path and hash name exactly one region, whatever ordinal it guessed', () => {
+    const anchor = { rubric: 'implementationQuality', locus: { path: 'src/retention.ts', contentHash: HASH, display: 'capture key omits candidate' } };
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'implementationQuality', changedFiles: [{ path: 'src/retention.ts', changeKind: 'added', hunks: [
+        { oldStart: 0, oldCount: 0, newStart: 1, newCount: 40, contentHash: HASH },
+      ] }],
+    } as unknown as BuildReviewRubricProjection);
+    const guessed = { ...anchor, locus: { ...anchor.locus, occurrence: 1 } };
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const result = {
+      kind: 'judged', rubric: 'implementationQuality', ...expected, contractVersion: 'v3', verdict: 'FAIL',
+      findings: [{ concernKind: 'duplication', summary: 'Duplicated capture.', evidenceLocations: ['src/retention.ts:3'], anchor: guessed }],
+    };
+
+    expect(parseBuildReviewFindingAnchor(guessed, references)).toEqual(anchor);
+    expect(describeBuildReviewJudgedResultRejection(result, 'implementationQuality', expected, references)).not.toContain('projected changed content region');
+  });
+
   it('rejects coordinate fields from a security content-region anchor', () => {
     const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command', line: 42 } };
 
