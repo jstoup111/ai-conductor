@@ -79,6 +79,20 @@ describe('routed repair durable record parsers', () => {
     });
   });
 
+  it('rejects acknowledgements on unsettled receipts while preserving valid taskless and echo receipts', () => {
+    const { settlementId: _settlementId, ...acknowledgedUnsettledReceipt } = routeRecord.receipt;
+    const acknowledgedUnsettled = { ...routeRecord, receipt: acknowledgedUnsettledReceipt };
+    expect(parseRouteRecord(JSON.stringify(acknowledgedUnsettled))).toBeUndefined();
+
+    const tasklessAndEchoUnsettled = {
+      ...routeRecord,
+      receipt: { laps: {}, growth: 0, taskless: { manual_test: 1 }, echo: { 'lint-docs': 3 }, acks: {} },
+    };
+    const parsed = parseRouteRecord(JSON.stringify(tasklessAndEchoUnsettled));
+    expect(parsed?.receipt).toEqual(tasklessAndEchoUnsettled.receipt);
+    expect(JSON.stringify(parsed)).toBe(JSON.stringify(tasklessAndEchoUnsettled));
+  });
+
   it('fails closed on malformed receipts, existing-task bindings without ids, and invalid obligation branches', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { laps: 'x' } }))).toBeUndefined();
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, lapz: {} } }))).toBeUndefined();

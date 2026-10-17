@@ -14872,8 +14872,16 @@ export class Conductor {
     await this.fullSuiteVerifier.recordPreservation(inspection);
   }
 
-  /** Records the taskless routed receipt for a manual-test kickback. */
-  private async admitRoutedManualTestKickback(state: ConductState, evidence: string): Promise<void> {
+  /** Creates and admits one taskless round after its receipt-specific charge is durable. */
+  private async admitRoutedTasklessKickback(
+    state: ConductState,
+    input: {
+      readonly findingId: (host: ChildId) => string;
+      readonly reason: string;
+      readonly retryHint?: string;
+      readonly mutateReceipt: (input: { readonly slug: string; readonly roundId: RoundId }) => Promise<boolean>;
+    },
+  ): Promise<void> {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (!slug) return;
 
@@ -14891,16 +14899,29 @@ export class Conductor {
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
       kind: 'audit',
-      items: [{ findingId: 'manual-test-fail', kind: 'audit', owner: host, host, reason: 'manual-test', fallback: [] }],
-      allocation: { [host]: { remTaskIds: [], blockBodies: [], retryHint: evidence } },
+      items: [{ findingId: input.findingId(host), kind: 'audit', owner: host, host, reason: input.reason, fallback: [] }],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [], ...(input.retryHint === undefined ? {} : { retryHint: input.retryHint }) } },
     });
     if (created.kind !== 'created') return;
 
-    const charged = await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test' });
-    if (charged.kind !== 'charged') return;
+    if (!await input.mutateReceipt({ slug, roundId })) return;
 
-    await admitRound(this.projectRoot, slug, created.record, host, {
+    const stored = await readRouteRecord(this.projectRoot, slug, roundId);
+    if (stored.kind !== 'record') return;
+
+    await admitRound(this.projectRoot, slug, stored.record, host, {
       persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
+    });
+  }
+
+  /** Records the taskless routed receipt for a manual-test kickback. */
+  private async admitRoutedManualTestKickback(state: ConductState, evidence: string): Promise<void> {
+    await this.admitRoutedTasklessKickback(state, {
+      findingId: () => 'manual-test-fail',
+      reason: 'manual-test',
+      retryHint: evidence,
+      mutateReceipt: async ({ slug, roundId }) =>
+        (await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test' })).kind === 'charged',
     });
   }
 
@@ -14910,37 +14931,17 @@ export class Conductor {
     target: StepName,
     count: number,
   ): Promise<void> {
-    const customSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
-    if (!customSlug || ALL_STEPS.some((step) => step.name === target) || isRegionStep(target)) return;
+    if (ALL_STEPS.some((step) => step.name === target) || isRegionStep(target)) return;
 
-    const cursor = await this.resolveActiveChild(this.projectRoot, customSlug);
-    if (!routingEligible(cursor, this.config)) return;
-    if (!await hasDurableChildState(this.projectRoot, customSlug)) return;
-
-    const execution = resolveExecutionChild(cursor, customSlug);
-    if (execution.source !== 'cursor' && execution.source !== 'routed-host') return;
-
-    const roundId = await nextRoundId(this.projectRoot, customSlug);
-    if (typeof roundId !== 'string') return;
-
-    const host = execution.target.child;
-    const created = await createRouteRecord(this.projectRoot, customSlug, {
-      roundId,
-      kind: 'audit',
-      items: [{ findingId: `custom-${target}`, kind: 'audit', owner: host, host, reason: 'custom-step', fallback: [] }],
-      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
-    });
-    if (created.kind !== 'created') return;
-
-    const stored = await readRouteRecord(this.projectRoot, customSlug, roundId);
-    if (stored.kind !== 'record') return;
-
-    const receipt = { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } };
-    const echoed = await writeRouteRecord(this.projectRoot, stored, { ...stored.record, receipt });
-    if (echoed.kind !== 'updated') return;
-
-    await admitRound(this.projectRoot, customSlug, { ...stored.record, receipt }, host, {
-      persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
+    await this.admitRoutedTasklessKickback(state, {
+      findingId: () => `custom-${target}`,
+      reason: 'custom-step',
+      mutateReceipt: async ({ slug, roundId }) => {
+        const stored = await readRouteRecord(this.projectRoot, slug, roundId);
+        if (stored.kind !== 'record') return false;
+        const receipt = { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } };
+        return (await writeRouteRecord(this.projectRoot, stored, { ...stored.record, receipt })).kind === 'updated';
+      },
     });
   }
 

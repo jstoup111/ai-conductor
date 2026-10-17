@@ -359,6 +359,7 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
   }
   const settlementId = value.settlementId === undefined ? undefined : nonEmptyString(value.settlementId);
   if (value.settlementId !== undefined && settlementId === undefined) return undefined;
+  if (settlementId === undefined && Object.keys(acks).length > 0) return undefined;
   // Preserve the durable record's serialized field order: route blobs are
   // compared as bytes by recovery callers as well as parsed structurally.
   const parsed: Record<string, unknown> = {};
