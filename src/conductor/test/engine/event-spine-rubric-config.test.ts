@@ -24,10 +24,22 @@ function cleanResult(rubric: 'testQuality' | 'security'): BuildReviewJudgedResul
 
 describe('repository-local event-spine build-review rubric', () => {
   it('declares the project event-spine custom rubric and attributes its judged finding', async () => {
-    const loaded = await loadConfig(repoRoot);
+    const repository = await loadConfig(repoRoot);
 
-    expect(loaded.ok).toBe(true);
-    if (!loaded.ok) return;
+    expect(repository.ok).toBe(true);
+    if (!repository.ok) return;
+    // The live repository may switch the rubric off; this test checks the
+    // declaration and its attribution when it is enabled.
+    const customRubrics = repository.config.build_review?.custom_rubrics;
+    const declared = customRubrics?.eventSpine;
+    if (!declared) throw new Error('repository must declare the eventSpine rubric');
+    const loaded = {
+      ...repository,
+      config: {
+        ...repository.config,
+        build_review: { ...repository.config.build_review, custom_rubrics: { ...customRubrics, eventSpine: { ...declared, enabled: true } } },
+      },
+    };
     const resolved = resolveBuildReviewConfig(loaded.config);
     const eventSpine = resolved.catalog.filter((entry) => entry.id === 'eventSpine');
 
