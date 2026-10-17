@@ -8,7 +8,16 @@ import {
   parseRevalidationQueueRecord,
   parseRouteRecord,
   parseRoundId,
+  type UnsettledRoundReceipt,
 } from '../../../src/engine/routing/route-types.js';
+
+const compileTimeUnsettledReceipt: UnsettledRoundReceipt = {
+  acks: {
+    // @ts-expect-error Unsettled receipts cannot acknowledge a host.
+    1: true,
+  },
+};
+void compileTimeUnsettledReceipt;
 
 const routeRecord = {
   roundId: 'r1',
@@ -72,11 +81,12 @@ describe('routed repair durable record parsers', () => {
     expect(parseRouteRecord(JSON.stringify(mismatchedSource))).toBeUndefined();
   });
 
-  it('normalizes the legacy empty receipt as an unsettled receipt with zero charges', () => {
+  it('round-trips the legacy empty receipt as an unsettled receipt', () => {
     const unsettled = { ...routeRecord, receipt: {} };
-    expect(parseRouteRecord(JSON.stringify(unsettled))?.receipt).toEqual({
-      laps: {}, growth: 0, taskless: {}, echo: {}, acks: {},
-    });
+    const serialized = JSON.stringify(unsettled);
+    const parsed = parseRouteRecord(serialized);
+    expect(parsed?.receipt).toEqual({});
+    expect(JSON.stringify(parsed)).toBe(serialized);
   });
 
   it('rejects acknowledgements on unsettled receipts while preserving valid taskless and echo receipts', () => {

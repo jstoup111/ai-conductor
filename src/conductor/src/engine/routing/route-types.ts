@@ -204,15 +204,29 @@ export type ReceiptLapCharges = ReceiptCharges<WholeFeatureBudgetGate>;
 export type ReceiptTasklessCharges = ReceiptCharges<TasklessReceiptGate>;
 export type ReceiptEchoCharges = ReceiptCharges<CustomStepReceiptGate>;
 
-/** The durable settlement state for a routing round. */
-export interface RoundReceipt {
+/** Fields shared by settled and unsettled routing-round receipts. */
+interface RoundReceiptCharges {
   readonly laps?: ReceiptLapCharges;
   readonly growth?: number;
   readonly taskless?: ReceiptTasklessCharges;
   readonly echo?: ReceiptEchoCharges;
-  readonly settlementId?: string;
-  readonly acks?: Readonly<Record<ChildId, true>>;
 }
+
+/** A receipt before settlement cannot carry an acknowledgement. */
+export type UnsettledRoundReceipt = RoundReceiptCharges & {
+  readonly settlementId?: never;
+  /** Omitted preserves the legacy `{}` durable representation. */
+  readonly acks?: Readonly<Record<string, never>>;
+};
+
+/** A receipt after settlement has both its idempotency key and host acknowledgements. */
+export type SettledRoundReceipt = RoundReceiptCharges & {
+  readonly settlementId: string;
+  readonly acks: Readonly<Record<ChildId, true>>;
+};
+
+/** The durable settlement state for a routing round. */
+export type RoundReceipt = UnsettledRoundReceipt | SettledRoundReceipt;
 
 /** One verified upward reroute retained as durable audit context. */
 export interface RouteFallback {
@@ -360,7 +374,7 @@ function parseReceiptCharges<Key extends string>(
 function parseReceipt(value: unknown): RoundReceipt | undefined {
   if (!isRecord(value)) return undefined;
   if (Object.keys(value).length === 0) {
-    return { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} };
+    return {};
   }
   const laps = parseReceiptCharges(value.laps, WHOLE_FEATURE_BUDGET_GATES);
   const growth = nonNegativeInteger(value.growth);
@@ -390,7 +404,9 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
       default: return undefined;
     }
   }
-  return parsed as RoundReceipt;
+  return settlementId === undefined
+    ? parsed as unknown as UnsettledRoundReceipt
+    : parsed as unknown as SettledRoundReceipt;
 }
 
 /** Mirrors the reject conditions of `git check-ref-format --branch` without a subprocess. */
