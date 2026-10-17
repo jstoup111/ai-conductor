@@ -1020,8 +1020,9 @@ export async function readGrowthAccounting(
     // therefore always equal the sealed baseline plus those settled appends;
     // treating a pending repair as if it erased earlier settled growth makes a
     // valid ledger unreadable as soon as a second repair is admitted.
-    const matchesPlan = !derived.resolved ||
-      stored.authored + stored.added === derived.growth.authored;
+    const matchesPlan = !derived.resolved || (pendingGrowth
+      ? stored.authored === derived.growth.authored
+      : stored.authored + stored.added === derived.growth.authored);
     if (growthTotalsAgree(stored) && matchesPlan) {
       return { growth: withRemaining(stored, cap), authoredSource };
     }
@@ -1029,7 +1030,7 @@ export async function readGrowthAccounting(
     // The sealed authored denominator is immutable. Re-deriving it from a
     // leaf plan can silently refund routed growth, so disagreement fails
     // closed instead of rewriting the denominator.
-    if (growthTotalsAgree(stored) && derived.resolved) {
+    if (growthTotalsAgree(stored) && derived.resolved && !matchesPlan) {
       throw new Error(`stored authored denominator ${stored.authored} disagrees with sealed plan denominator ${derived.growth.authored}`);
     }
 

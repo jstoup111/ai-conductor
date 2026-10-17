@@ -9756,6 +9756,12 @@ export class Conductor {
           let settlementAuthoredSource: 'plan' | 'ledger' | 'unresolved' | undefined;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
+            if (
+              isUnreadableKickbackLedger(settlementLedger) ||
+              isUnreadableKickbackGrowth(settlementLedger)
+            ) {
+              throw new Error('kickback ledger is unreadable');
+            }
             // Budget derivation is a charging precondition, not a required
             // BUILD preflight.  A normal BUILD with no admitted repair must
             // not synthesize a zero growth baseline or refuse dispatch merely
@@ -10529,7 +10535,7 @@ export class Conductor {
             // restart. Recording the count on this exit is the honest reading
             // of the predicate's own contract: this dispatch ended without
             // making forward progress, so it must not earn a re-kick.
-            if (step.name === 'build' && this.taskEvidence) {
+            if (step.name === 'build') {
               // Re-read fresh from disk rather than writing the possibly-
               // stale in-memory snapshot — same reason as the other T7 stamps.
               const freshEvidence = await createTaskEvidence(this.projectRoot);
@@ -10616,7 +10622,7 @@ export class Conductor {
             // settlement remains at this final generic boundary. Self-host
             // dispatches settle inside runAdmittedSelfBuildDispatch, after its
             // safety and auth preflights have accepted the attempt.
-            if (missingWorktree === undefined && !usesSelfBuildDispatch && await settleBuildPendingRepair()) return;
+            if (!usesSelfBuildDispatch && await settleBuildPendingRepair()) return;
             // Only the durable routed-host projection may ask a provider for
             // a prerequisite claim. An ordinary child BUILD has the same
             // activeRegionChild shape, so resolve the cursor rather than
@@ -10735,6 +10741,12 @@ export class Conductor {
           // Settlement owns its HALT marker and loop-halt event. Preserve the
           // pre-existing terminal routing without retry or failure accounting.
           if (result.pendingRepairSettlementHalt) return;
+
+          if (step.name === 'build') {
+            const freshEvidence = await createTaskEvidence(this.projectRoot);
+            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
+            await freshEvidence.write();
+          }
 
           // A routed BUILD owns the terminal claim boundary.  No parser or
           // provider output gets to move a ref: parsing, immutable-tree
@@ -12221,7 +12233,7 @@ export class Conductor {
                   // not just success. Re-read fresh from disk (see the
                   // success-exit comment above) so this doesn't clobber
                   // stamps written directly to the sidecar elsewhere.
-                  if (this.taskEvidence) {
+                  if (step.name === 'build') {
                     const freshEvidence = await createTaskEvidence(this.projectRoot);
                     freshEvidence.lastResolvedCount = resolvedTasksAfter;
                     await freshEvidence.write();
@@ -12304,7 +12316,7 @@ export class Conductor {
                     // from disk (see the success-exit comment above) so this
                     // doesn't clobber stamps written directly to the
                     // sidecar elsewhere.
-                    if (this.taskEvidence) {
+                    if (step.name === 'build') {
                       const freshEvidence = await createTaskEvidence(this.projectRoot);
                       freshEvidence.lastResolvedCount = resolvedTasksAfter;
                       await freshEvidence.write();
@@ -12670,7 +12682,7 @@ export class Conductor {
               // fixed-budget-exhausted / non-daemon-park failure exit is
               // still a build-step dispatch end, so lastResolvedCount must
               // be recorded here even though nothing "succeeded".
-              if (step.name === 'build' && this.taskEvidence) {
+              if (step.name === 'build') {
                 // Re-read fresh from disk rather than writing the possibly-
                 // stale in-memory `this.taskEvidence` snapshot — stamps can
                 // be written directly to the sidecar by other pathways
@@ -12725,7 +12737,7 @@ export class Conductor {
                 // from whatever is already persisted, not from this `state`
                 // object.
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
-                if (this.taskEvidence) {
+                if (step.name === 'build') {
                   const freshEvidence = await createTaskEvidence(this.projectRoot);
                   freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
                   await freshEvidence.write();
@@ -12750,7 +12762,7 @@ export class Conductor {
           // T7: stamp the ending resolved count on the success/completing
           // exit — every build-step exit path (success, park, ceiling)
           // records lastResolvedCount, not just the park paths above.
-          if (step.name === 'build' && this.taskEvidence) {
+          if (step.name === 'build') {
             // Re-read fresh from disk — see comment at the fixed-budget-
             // exhausted exit above for why this must not write the stale
             // in-memory `this.taskEvidence` snapshot.
@@ -15074,6 +15086,14 @@ export class Conductor {
         }, kickbackChild);
         const count = kickback.entry.count;
         if (kickback.exhausted) {
+          await this.events.emit(this.stampGateTier({
+            type: 'kickback',
+            from: stepName,
+            to: target,
+            evidence: v.kickback?.evidence,
+            count,
+            ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
+          }));
           const pingPongReason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
             `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
