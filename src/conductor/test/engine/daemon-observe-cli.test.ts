@@ -1152,7 +1152,7 @@ describe('engine/daemon-observe-cli', () => {
         await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
         await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
         const ledgerPath = join(featureRoot, '.pipeline', 'kickback-ledger.json');
-        const growth = { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } };
+        const growth = { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } };
         await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: {}, growth }), 'utf8');
         const out: string[] = [];
 

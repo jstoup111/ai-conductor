@@ -11,6 +11,11 @@
       "resolvedBefore": 3
     }
   },
+  "growth": {
+    "authored": 3,
+    "added": 0,
+    "byGate": {}
+  },
   "pendingRepair": {
     "receiptId": "00000000-0000-4000-8000-000000000012",
     "charges": {

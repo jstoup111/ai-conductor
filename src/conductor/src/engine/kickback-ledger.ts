@@ -1015,15 +1015,13 @@ export async function readGrowthAccounting(
       return { growth: withRemaining(derived.growth, cap), authoredSource };
     }
 
-    // A pending append is already present in the plan but deliberately has
-    // not consumed `growth.added` until BUILD dispatch. Its task ids are
-    // excluded from the derived authored count above, so compare that count
-    // with the stored authored baseline rather than adding settled growth a
-    // second time. Lap-only existing-task repairs do not change plan growth
-    // and must not be excluded from the denominator at all.
-    const matchesPlan = !derived.resolved || (pendingGrowth
-      ? stored.authored === derived.growth.authored
-      : stored.authored + stored.added === derived.growth.authored);
+    // Pending task ids are excluded from the derived plan count above, while
+    // `added` contains only earlier, settled appends.  The remainder must
+    // therefore always equal the sealed baseline plus those settled appends;
+    // treating a pending repair as if it erased earlier settled growth makes a
+    // valid ledger unreadable as soon as a second repair is admitted.
+    const matchesPlan = !derived.resolved ||
+      stored.authored + stored.added === derived.growth.authored;
     if (growthTotalsAgree(stored) && matchesPlan) {
       return { growth: withRemaining(stored, cap), authoredSource };
     }
