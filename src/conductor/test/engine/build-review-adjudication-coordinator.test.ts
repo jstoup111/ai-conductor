@@ -2383,6 +2383,53 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  describe('absent failed cases', () => {
+    // A lap charged this action past the cumulative kickback budget, so its
+    // effect failed. After an operator reset, a later lap no longer reports its
+    // finding, yet the open failed case halted every lap as unfinalized.
+    const failedCase = (sourceIdValue: string) => ({
+      id: 'case-failed', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+      rationale: 'An action charged past the budget.', resolution: 'open' as const,
+      sources: [{ sourceId: sourceIdValue, outcome: 'acted' as const, recordedAt: '2026-10-17T13:51:43.000Z' }],
+      effect: { id: 'effect-failed', kind: 'action' as const, status: 'failed' as const, diagnostic: 'build-review kickback budget exhausted (cumulative)' },
+    });
+
+    it('resolves a failed case whose finding is gone so the lap routes instead of halting forever', async () => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      await seedCases(store, { version: 'v1', feature, cases: [failedCase('implementationQuality:sha256-failed-gone')] });
+      const events: RemediationCaseLifecycleEvent[] = [];
+
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => actionJudgement()), generateId: sequentialIds('lap-two'),
+        emit: async (event) => { events.push(event); },
+      });
+
+      expect(result).toMatchObject({ ok: true, route: 'build' });
+      const after = await store.read();
+      if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+      expect(after.state.cases.find((record) => record.id === 'case-failed')).toMatchObject({
+        resolution: 'resolved',
+        effect: { id: 'effect-failed', status: 'failed', diagnostic: 'build-review kickback budget exhausted (cumulative)' },
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'remediation_case_reconciled', caseId: 'case-failed', resolution: 'resolved',
+      }));
+    });
+
+    it('keeps a failed case open while this lap still reports its finding', async () => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      await seedCases(store, { version: 'v1', feature, cases: [failedCase(sourceId)] });
+
+      await coordinateBuildReviewAdjudication(input(root, async () => actionJudgement()));
+
+      const after = await store.read();
+      if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+      expect(after.state.cases.find((record) => record.id === 'case-failed')).toMatchObject({ resolution: 'open' });
+    });
+  });
+
   describe('stranded deferral reservations', () => {
     // An earlier lap reserved this deferral in a run with no filing capability,
     // so its issue was never filed and the effect stayed reserved. The reducer
