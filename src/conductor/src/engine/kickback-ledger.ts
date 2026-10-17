@@ -1004,7 +1004,16 @@ export async function readGrowthAccounting(
     const stored = ledger.growth;
     const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
 
-    if (!stored) return { growth: withRemaining(derived.growth, cap), authoredSource };
+    if (!stored) {
+      // The first plan read seals the authored denominator.  Later routed
+      // entries can write rem blocks on another child branch, so deriving
+      // again from whichever plan happens to be checked out would turn that
+      // branch movement into free (or phantom) feature growth.
+      if (options.persist && derived.resolved) {
+        await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
+      }
+      return { growth: withRemaining(derived.growth, cap), authoredSource };
+    }
 
     // A pending append is already present in the plan but deliberately has
     // not consumed `growth.added` until BUILD dispatch. Its task ids are

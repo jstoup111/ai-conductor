@@ -34,6 +34,19 @@ describe('deriveTaskBoundOwner', () => {
     }
   });
 
+  it('recovers committed rem membership from a caller-proven slug after engine-state loss', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'owner-derivation-'));
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(root, '.docs', 'plans', 'demo.md'), remPlan);
+      await writeFile(join(root, '.docs', 'plans', 'another-feature.md'), `### Task ${remTaskId}\n**Child:** 2\n`);
+      await expect(resolveRemediationTaskChild(root, remTaskId, undefined, 'demo'))
+        .resolves.toEqual({ kind: 'resolved', child: 1 });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('derives an authored task owner from the sealed task slice', () => {
     expect(deriveTaskBoundOwner({
       taskIds: ['T1'], envelope, planText: '', appendedChildren: {}, declaredPositions: [1, 2, 3],
