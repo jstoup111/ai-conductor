@@ -6989,13 +6989,6 @@ export class Conductor {
       if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
         manualTestSelfHeals++;
         const evidence = failRows.join('\n');
-        await this.events.emit(this.stampGateTier({
-          type: 'kickback',
-          from: 'manual_test',
-          to: 'build',
-          evidence,
-          count: manualTestSelfHeals,
-        }));
         // Hand BUILD the bugs it must fix. The whitewash guard on the
         // manual_test gate refuses a PASS rewrite with no new commits,
         // so a no-op BUILD cannot silently converge this loop.
@@ -7030,6 +7023,14 @@ export class Conductor {
           default:
             return assertNever(routedAdmission);
         }
+
+        await this.events.emit(this.stampGateTier({
+          type: 'kickback',
+          from: 'manual_test',
+          to: 'build',
+          evidence,
+          count: manualTestSelfHeals,
+        }));
 
         // Task 7: Merged-PR guard on manual_test kickback (TS-1).
         // Before committing the rewind, check if the recorded PR has been
@@ -9755,6 +9756,11 @@ export class Conductor {
           let settlementAuthoredSource: 'plan' | 'ledger' | 'unresolved' | undefined;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
+            // Budget derivation is a charging precondition, not a required
+            // BUILD preflight.  A normal BUILD with no admitted repair must
+            // not synthesize a zero growth baseline or refuse dispatch merely
+            // because no feature plan has been selected yet.
+            if (settlementLedger.pendingRepair === undefined) return false;
             const budgets = await pendingRepairSettlementBudgets(
               this.projectRoot,
               this.config,
@@ -12731,8 +12737,15 @@ export class Conductor {
                 break;
               }
               break;
+            } else {
+              succeeded = true;
+              successOutput = result.output;
+              stepResult = result;
+              break;
             }
           }
+
+          if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
 
           // T7: stamp the ending resolved count on the success/completing
           // exit — every build-step exit path (success, park, ceiling)
@@ -14969,9 +14982,14 @@ export class Conductor {
     }
     if (stored.kind !== 'record') return { kind: 'halted', reason: `routing round ${roundId} record reread failed: ${stored.kind}` };
 
-    const admitted = await admitRound(this.projectRoot, slug, stored.record, host, {
-      persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
-    });
+    let admitted: Awaited<ReturnType<typeof admitRound>>;
+    try {
+      admitted = await admitRound(this.projectRoot, slug, stored.record, host, {
+        persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
+      });
+    } catch (error) {
+      return { kind: 'halted', reason: `routing round ${roundId} admission failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
     return admitted.kind === 'admitted'
       ? { kind: 'admitted' }
       : { kind: 'halted', reason: `routing round ${roundId} admission failed: ${admitted.detail}` };
@@ -15055,14 +15073,6 @@ export class Conductor {
           reason: v.kickback?.evidence ?? '',
         }, kickbackChild);
         const count = kickback.entry.count;
-        await this.events.emit(this.stampGateTier({
-          type: 'kickback',
-          from: stepName,
-          to: target,
-          evidence: v.kickback?.evidence,
-          count,
-          ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
-        }));
         if (kickback.exhausted) {
           const pingPongReason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
@@ -15093,6 +15103,14 @@ export class Conductor {
           default:
             return assertNever(routedAdmission);
         }
+        await this.events.emit(this.stampGateTier({
+          type: 'kickback',
+          from: stepName,
+          to: target,
+          evidence: v.kickback?.evidence,
+          count,
+          ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
+        }));
         const hasContract = hasCompletionContract(target, this.config);
         const disposition = await this.resolveDecideEntryDisposition({
           target,
