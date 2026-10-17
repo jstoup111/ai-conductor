@@ -215,6 +215,15 @@ function reconcileState(
       && existing.disposition === 'act'
       && existing.effect.kind === 'action'
       && existing.effect.status === 'applied';
+    // A failed action effect is terminal (for example charged past the
+    // kickback budget), so no lap can apply it and the open case halted every
+    // lap. Re-raising its finding as action reserves a fresh effect, which is
+    // charged like any new action, so an exhausted budget still stops the lap.
+    const admitsActionRetry = caseRow.disposition === 'act'
+      && existing.disposition === 'act'
+      && existing.resolution === 'open'
+      && existing.effect.kind === 'action'
+      && existing.effect.status === 'failed';
     if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
     if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
     referencedExisting.add(existingCaseId);
@@ -270,6 +279,17 @@ function reconcileState(
         resolution: 'open',
         sources: appendedSources,
         effect: { id: effectId, kind: 'deferral', status: 'reserved' },
+      });
+    } else if (admitsActionRetry) {
+      const effectId = takeId(input.generateId, usedIds);
+      if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
+      replacements.set(existingCaseId, {
+        ...existing,
+        priority: caseRow.priority,
+        rationale: caseRow.rationale,
+        confidence: caseRow.confidence,
+        sources: appendedSources,
+        effect: { id: effectId, kind: 'action', status: 'reserved' },
       });
     } else if (appendedSources.length !== existing.sources.length) {
       replacements.set(existingCaseId, { ...existing, sources: appendedSources });
