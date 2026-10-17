@@ -364,24 +364,25 @@ describe('minimal Claude self-host sandbox', () => {
     }
   });
 
-  it('keys a Claude capture by rubric member and reports a failed harvest without blocking teardown', async () => {
+  it('preserves a configured group-member owner on Claude capture and reports a failed harvest without blocking teardown', async () => {
     const events = new ConductorEventEmitter();
     const captured: unknown[] = [];
     const failed: unknown[] = [];
     events.on('provider_transcripts_captured', (event) => { captured.push(event); });
     events.on('provider_transcripts_harvest_failed', (event) => { failed.push(event); });
+    const owner = { kind: 'configured-group-member', parentGroup: 'explore', member: 'rubric-a' } as const;
     const sandbox = await provisionSandboxBuildEnv(options({
-      captureIdentity: { step: 'build', runId: 'r1', attempt: 1, member: 'rubric-a' }, events,
+      captureIdentity: { owner, step: 'build', runId: 'r1', attempt: 1, member: 'rubric-a' }, events,
     }));
     await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
     await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), '{"type":"assistant"}\n');
 
     await sandbox.teardown();
     expect(captured).toEqual([expect.objectContaining({
-      path: '.pipeline/transcripts/build/r1-a1-rubric-a-claude', member: 'rubric-a',
+      owner, path: '.pipeline/transcripts/rubric-a/r1-a1-rubric-a-claude', member: 'rubric-a',
     })]);
     expect(failed).toEqual([]);
-    await expect(readFile(join(worktree, '.pipeline', 'transcripts', 'build', 'r1-a1-rubric-a-claude', 'projects', 'w', 's.jsonl'), 'utf8')).resolves.toContain('assistant');
+    await expect(readFile(join(worktree, '.pipeline', 'transcripts', 'rubric-a', 'r1-a1-rubric-a-claude', 'projects', 'w', 's.jsonl'), 'utf8')).resolves.toContain('assistant');
   });
 
   it('reports a harvest failure and still removes the Claude sandbox', async () => {

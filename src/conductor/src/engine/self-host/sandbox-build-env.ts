@@ -224,6 +224,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     result: TranscriptHarvestResult,
   ): Promise<void> {
     await emitTranscriptHarvest(capture.events, {
+      ...(capture.owner === undefined ? {} : { owner: capture.owner }),
       step: capture.step, runId: capture.runId, attempt: capture.attempt,
       ...(capture.member === undefined ? {} : { member: capture.member }),
       provider: sandboxProvider().id, path, interrupted: false,
