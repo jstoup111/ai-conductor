@@ -21,12 +21,13 @@ async function sourceFiles(directory: string): Promise<string[]> {
 function protectedRoutingRefWrites(source: string, fileName = 'fixture.ts'): string[] {
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const writes: string[] = [];
+  const updatesRef = source.includes('routeRecordRefFor(') || source.includes('repairMarkerRefFor(');
+  const isUpdateRefCall = (node: ts.CallExpression): boolean => node.arguments.some((argument) => ts.isArrayLiteralExpression(argument)
+    && argument.elements.some((element) => ts.isStringLiteral(element) && (element.text === 'update-ref' || element.text === 'symbolic-ref')));
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && node.arguments.some((argument) => ts.isArrayLiteralExpression(argument)
-      && argument.elements.some((element) => ts.isStringLiteral(element)
-        && (element.text === 'update-ref' || element.text === 'symbolic-ref')))) {
+    if (ts.isCallExpression(node) && isUpdateRefCall(node)) {
       const text = node.getText(file);
-      if (/refs\/conductor\/[^'"`]+\/(?:routes\/|repairing\b)/.exec(text)) writes.push(text);
+      if (updatesRef || /refs\/conductor\/[^'"`]+\/(?:routes\/|repairing\b)/.exec(text)) writes.push(text);
     }
     ts.forEachChild(node, visit);
   };
@@ -57,5 +58,14 @@ describe('routing ref writer fence', () => {
       : []);
 
     expect(violations.sort()).toEqual([]);
+    const storeWrites = protectedRoutingRefWrites(await readFile(routeStore, 'utf8'), routeStore);
+    expect(storeWrites).toHaveLength(1);
+    const store = await readFile(routeStore, 'utf8');
+    expect(store).toContain('case \'update-branch\'');
+    expect(store).toContain('`update ${op.ref} ${op.new} ${op.old}`');
+    expect(store).toContain('case \'create-pin\'');
+    expect(store).toContain('`update ${op.ref} ${op.new} ${ZERO_SHA}`');
+    expect(store).toContain('case \'update-marker\'');
+    expect(store).toContain('`update ${repairMarkerRefFor(slug)} ${op.new} ${op.old}`');
   });
 });

@@ -17,6 +17,7 @@ import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseChildId } from '../child-context.js';
 import { readRouteRecord, writeRouteRecord } from './route-record-store.js';
 import {
+  emptyUnsettledReceipt,
   parseRoundId,
   routingEligible,
   WHOLE_FEATURE_BUDGET_GATES,
@@ -167,21 +168,21 @@ function defaultGateEntry() {
 function receiptCharges(record: RouteRecord): { laps: ReceiptLapCharges; growth: number } {
   // A route records its originating charges at admission. An empty receipt is
   // an existing-task/no-allocation round, never an implicit prd_audit charge.
-  const laps = record.receipt.laps ?? {};
+  const laps = record.receipt.laps;
   const allocated = Object.values(record.allocation).reduce((count, allocation) => count + allocation.remTaskIds.length, 0);
   // The record parser normalizes an empty receipt to `growth: 0`; that is a
   // legacy placeholder, not an authorization to make frozen rem blocks free.
   // A genuine existing-task repair has no allocation, so it still charges 0.
-  const growth = allocated > 0 && (record.receipt.growth ?? 0) === 0
+  const growth = allocated > 0 && record.receipt.growth === 0
     ? allocated
-    : record.receipt.growth ?? 0;
+    : record.receipt.growth;
   return { laps, growth };
 }
 
 function withTasklessCharge(receipt: RoundReceipt, gate: TasklessReceiptGate): RoundReceipt {
-  const taskless = { ...(receipt.taskless ?? {}), [gate]: 1 };
+  const taskless = { ...receipt.taskless, [gate]: 1 };
   if (receipt.settlementId === undefined) {
-    const unsettled: UnsettledRoundReceipt = { ...receipt, taskless };
+    const unsettled: UnsettledRoundReceipt = { ...emptyUnsettledReceipt(), ...receipt, taskless };
     return unsettled;
   }
   const settled: SettledRoundReceipt = { ...receipt, taskless };
@@ -351,14 +352,14 @@ export async function chargeTasklessAtAdmission(input: {
   let count = 0;
   for (const item of records) {
     if (item.kind !== 'ok') return { kind: 'halted', reason: `route receipt is ${item.kind}` };
-    count += item.record.receipt.taskless?.[input.gate] ?? 0;
+    count += item.record.receipt.taskless[input.gate] ?? 0;
   }
   // Keep this numeric literal local to routing so taskless admission doesn't
   // import the legacy self-heal machinery and accidentally bump its ledger.
   if (count >= 2) return { kind: 'exhausted', count };
   const current = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
   if (current.kind !== 'record') return { kind: 'halted', reason: `route receipt ${input.roundId} is unreadable` };
-  const present = current.record.receipt.taskless?.[input.gate] ?? 0;
+  const present = current.record.receipt.taskless[input.gate] ?? 0;
   if (present > 0) return { kind: 'charged', count };
   const receipt = current.record.receipt;
   const wrote = await writeRouteRecord(input.projectRoot, current, {
