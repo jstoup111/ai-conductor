@@ -14,7 +14,11 @@ HARNESS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOOK="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
 GENERATOR="${HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR:-${HARNESS_DIR}/bin/generate-docs-guard-hook}"
 
-fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/docs-guard-drift-fixture-XXXXXX") || {
+# A full-suite child can intentionally carry only the Vitest run-root marker.
+# Keep this fixture inside that scope rather than falling back to the real
+# operator tmpdir when TMPDIR was scrubbed on the way to the child.
+fixture_tmpdir="${TMPDIR:-${AI_CONDUCTOR_TEST_TMP_ROOT:-/tmp}}"
+fixture_dir=$(mktemp -d "${fixture_tmpdir}/docs-guard-drift-fixture-XXXXXX") || {
   echo "docs-guard drift fixture: temporary-copy failure: unable to create temporary copy directory" >&2
   exit 1
 }

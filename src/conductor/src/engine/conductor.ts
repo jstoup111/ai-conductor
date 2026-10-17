@@ -395,8 +395,16 @@ import {
   wrapForContainment,
 } from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
+import {
+  asTranscriptCaptureDispatchIdentity,
+  TranscriptRetention,
+  type TranscriptCaptureDispatchIdentity,
+  type TranscriptRetentionOutcome,
+} from './self-host/transcript-retention.js';
+import { transcriptTerminalOutcome } from './self-host/transcript-terminal-outcome.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
+import { isStepName } from './execution-identity.js';
 import { classifyRebaseOperation } from './gate-code-validity.js';
 import {
   computeAndWriteVerdict,
@@ -683,6 +691,10 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  /** Best-effort evidence retention; it must never alter a step verdict. */
+  private readonly transcriptRetention: TranscriptRetention;
+  /** Capture identity advances for every admitted self-host dispatch, independently of retries. */
+  private readonly transcriptCaptureDispatches = new Map<string, TranscriptCaptureDispatchIdentity>();
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
@@ -691,6 +703,27 @@ export class Conductor {
   /** Session-local loop counters must not carry a prior child's failures forward. */
   private childScopedStepKey(step: StepName, child: ChildId | undefined): StepName {
     return `${step}#${child === undefined ? 'feature' : child}` as StepName;
+  }
+
+  /**
+   * Capture directories are evidence, not escalation state.  In particular,
+   * non-consuming retries decrement the retry-budget attempt before their next
+   * dispatch, so that value is not a safe capture identity.
+   */
+  private nextTranscriptCaptureAttempt(step: StepName, runId: string): TranscriptCaptureDispatchIdentity {
+    const key = `${runId}\u0000${step}`;
+    const next = asTranscriptCaptureDispatchIdentity(
+      (this.transcriptCaptureDispatches.get(key) ?? 0) + 1,
+    );
+    this.transcriptCaptureDispatches.set(key, next);
+    return next;
+  }
+
+  private currentTranscriptCaptureAttempt(
+    step: StepName,
+  ): TranscriptCaptureDispatchIdentity | undefined {
+    const runId = this.stepRunner.selfHostRunId?.();
+    return runId === undefined ? undefined : this.transcriptCaptureDispatches.get(`${runId}\u0000${step}`);
   }
 
   /** Child-local suite selection has the same authoritative base as review. */
@@ -815,6 +848,44 @@ export class Conductor {
   /** Close every execution this conductor observed, without exposing step selection to callers. */
   private async closeOpenExecutions(): Promise<void> {
     await this.executionLifecycle.closeOpen();
+  }
+
+  /** Settle one harvested self-host attempt without touching another retry. */
+  private async settleTranscriptAttempt(
+    step: StepName,
+    captureAttempt: TranscriptCaptureDispatchIdentity | undefined,
+    outcome: TranscriptRetentionOutcome,
+    member?: string,
+  ): Promise<void> {
+    const runId = this.stepRunner.selfHostRunId?.();
+    if (runId === undefined || captureAttempt === undefined) {
+      await this.transcriptRetention.settle(step, outcome);
+      return;
+    }
+    await this.transcriptRetention.settleAttempt({
+      step,
+      runId,
+      attempt: captureAttempt,
+      ...(member === undefined ? {} : { member }),
+    }, outcome);
+  }
+
+  /**
+   * A terminal lifecycle event closes every captured auxiliary member using
+   * the exact identities recorded at capture time.  The ordinary dispatch
+   * identity is still settled explicitly first, so an event with no retained
+   * capture index preserves the legacy path.
+   */
+  private async settleTranscriptTerminal(
+    event: Extract<ConductorEvent,
+      { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' }>,
+    captureAttempt = this.currentTranscriptCaptureAttempt(event.step),
+    member?: string,
+  ): Promise<void> {
+    const outcome = transcriptTerminalOutcome(event);
+    await this.settleTranscriptAttempt(event.step, captureAttempt, outcome, member);
+    const runId = this.stepRunner.selfHostRunId?.();
+    if (runId !== undefined) await this.transcriptRetention.settleStepRun(event.step, runId, outcome);
   }
 
   /**
@@ -1087,6 +1158,9 @@ export class Conductor {
    * check.
    */
   private currentRunId: string | undefined;
+
+  /** Step whose admitted attempt currently owns any terminal halt. */
+  private dispatchingStep: StepName | undefined;
 
   /**
    * Set when a recorded prd-audit finding could not be projected into the
@@ -2378,6 +2452,72 @@ export class Conductor {
       opts.effectiveDaemonConcurrency ?? resolveDaemonConcurrency(this.config);
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
+    this.transcriptRetention = new TranscriptRetention(this.projectRoot, this.events);
+    // Transcript capture completes in provider teardown before these terminal
+    // lifecycle events.  Keeping settlement on the existing event spine makes
+    // every ordinary terminal route (including configured steps) share it.
+    this.events.on('step_failed', (event) => {
+      if (event.type === 'step_failed') {
+        return this.settleTranscriptTerminal(event);
+      }
+    });
+    this.events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') {
+        return this.settleTranscriptAttempt(
+          event.step,
+          this.currentTranscriptCaptureAttempt(event.step),
+          'stalled',
+        );
+      }
+    });
+    this.events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt' && event.step !== undefined) {
+        return this.settleTranscriptAttempt(
+          event.step,
+          this.currentTranscriptCaptureAttempt(event.step),
+          'halted',
+        );
+      }
+    });
+    this.events.on('step_retry', (event) => {
+      if (event.type !== 'step_retry') return;
+      // Configured groups report their parent as the lifecycle step. Their
+      // transcript owner is the member, carried in the execution context.
+      // Without that context, retain all earlier members for the event step.
+      const member = event.executionContext?.subject.kind === 'configured-member'
+        ? event.executionContext.subject.member
+        : undefined;
+      const step = (member ?? event.step) as StepName;
+      const runId = this.stepRunner.selfHostRunId?.();
+      return this.transcriptRetention.settleBeforeRetry({
+        step,
+        ...(runId === undefined ? {} : { runId }),
+      });
+    });
+    this.events.on('step_refused', (event) => {
+      if (event.type === 'step_refused' && event.kind === 'needs-human') {
+        return this.settleTranscriptTerminal(event);
+      }
+    });
+    this.events.on('step_interrupted', (event) => {
+      if (event.type === 'step_interrupted') return this.settleTranscriptTerminal(event);
+    });
+    this.events.on('step_completed', (event) => {
+      if (event.type !== 'step_completed' || event.step === 'build') return;
+      // A configured branch reports its parent group as the lifecycle step,
+      // while its provider capture is owned by the member step. Settle both
+      // identities: the parent remains the group lifecycle owner and the
+      // member closes exactly the captures it dispatched.
+      const member = event.executionContext?.subject.kind === 'configured-member'
+        ? event.executionContext.subject.member
+        : undefined;
+      return Promise.all([
+        this.settleTranscriptTerminal(event),
+        ...(member === undefined || member === event.step || !isStepName(member)
+          ? []
+          : [this.settleTranscriptTerminal({ ...event, step: member })]),
+      ]).then(() => undefined);
+    });
     this.log = opts.log;
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
@@ -5314,7 +5454,7 @@ export class Conductor {
     // While the loop is active, the breadcrumb identifies the step that is
     // actually halting. Persisted state can still name the previously settled
     // step, so use it only when no active breadcrumb is available.
-    const candidate = this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
+    const candidate = this.dispatchingStep ?? this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
     const step =
       ALL_STEPS.some(({ name }) => name === candidate) ||
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
@@ -5504,6 +5644,8 @@ export class Conductor {
   private async runSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    /** Compatibility-only retry budget; capture identity must not consume it. */
+    attempt: number,
     retryHint: string | undefined,
     verdictRunId?: string,
     /** The serial lifecycle scope that owns this provider invocation. */
@@ -5514,7 +5656,7 @@ export class Conductor {
     abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
+      return this.runAdmittedSelfBuildDispatch(name, state, attempt, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -5524,13 +5666,15 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
+      return this.runAdmittedSelfBuildDispatch(name, state, attempt, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
     });
   }
 
   private async runAdmittedSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    /** Compatibility-only retry budget; capture identity must not consume it. */
+    attempt: number,
     retryHint: string | undefined,
     /**
      * This dispatch's engine-minted verdict identity, for a SHIP-tail verdict
@@ -5546,6 +5690,7 @@ export class Conductor {
     /** Cancels the provider invocation when this daemon attempt ends. */
     abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
+    void attempt;
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const executionContextOption = executionContext ? { executionContext } : {};
     const selfHostConfig = resolveSelfHostConfig(this.config);
@@ -5638,6 +5783,18 @@ export class Conductor {
       }
     }
 
+    const previousCaptureAttempt = this.currentTranscriptCaptureAttempt(name);
+    const captureAttempt = this.nextTranscriptCaptureAttempt(
+      name,
+      this.stepRunner.selfHostRunId?.() ?? this.featureSlug ?? state.feature_desc ?? 'unknown-run',
+    );
+    // A newly admitted dispatch is conclusive evidence that the preceding
+    // capture did not produce this result. This also covers non-consuming
+    // provider retries, which do not emit a retry-budget transition.
+    if (previousCaptureAttempt !== undefined) {
+      await this.settleTranscriptAttempt(name, previousCaptureAttempt, 'failed');
+    }
+
     // Compatibility seam for injected/legacy runners which do not route via
     // ProviderExecutionContext. Real entrypoints always take the candidate
     // path below; this retains the existing isolated behavior for that narrow
@@ -5649,6 +5806,9 @@ export class Conductor {
       if (usesProviderHome) {
         await this.discardOwnedStepRegionCapture(state, name);
         return this.stepRunner.run(name, state, {
+          attempt: 1,
+          captureAttempt,
+          escalate: false,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -5668,8 +5828,11 @@ export class Conductor {
         harnessRoot,
         repository: this.projectRoot,
         featureSlug,
-        runId,
-        attempt: 1,
+        // Capture identity, not retry state: captures must never collide when
+        // a legacy runner dispatches more than once in the same lifecycle.
+        captureIdentity: { step: name, runId, attempt: captureAttempt },
+        events: this.events,
+        injectedToken: daemonToken,
       });
       const priorConfig = process.env.CLAUDE_CONFIG_DIR;
       const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -5680,6 +5843,9 @@ export class Conductor {
       try {
         await this.discardOwnedStepRegionCapture(state, name);
         return await this.stepRunner.run(name, state, {
+          attempt: 1,
+          captureAttempt,
+          escalate: false,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -5842,9 +6008,13 @@ export class Conductor {
               worktreeRoot: this.projectRoot,
               repository: this.projectRoot,
               featureSlug,
-              runId: identity.runId,
-              attempt: identity.attempt,
-              member: identity.member,
+              captureIdentity: {
+                step: name,
+                runId: identity.runId,
+                attempt: identity.attempt,
+                ...(identity.member === undefined ? {} : { member: identity.member }),
+              },
+              events: this.events,
             });
             ownershipTransferred = true;
             return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, scratchRoot: this.projectRoot, teardown:async () => { try { await verify(); } finally { await home.teardown(); } } });
@@ -5854,9 +6024,14 @@ export class Conductor {
             harnessRoot: liveCheckout,
             repository: this.projectRoot,
             featureSlug,
-            runId: identity.runId,
-            attempt: identity.attempt,
-            member: identity.member,
+            captureIdentity: {
+              step: name,
+              runId: identity.runId,
+              attempt: identity.attempt,
+              ...(identity.member === undefined ? {} : { member: identity.member }),
+            },
+            events: this.events,
+            injectedToken: daemonToken,
           });
           ownershipTransferred = true;
           return prepareInvocation({
@@ -5874,6 +6049,9 @@ export class Conductor {
     }
     try {
       return await this.stepRunner.run(name, state, {
+        attempt: 1,
+        captureAttempt,
+        escalate: false,
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
@@ -6246,6 +6424,7 @@ export class Conductor {
 
   async run(): Promise<OperatorParkedTermination | undefined> {
     this.shutdownRequested = false;
+    await this.transcriptRetention.ready();
     // #788 regression guard: the phase-active marker creates `.pipeline/`
     // via `mkdirSync` as a side effect ahead of any real init (worktree-
     // prepare provisioning session-hooks/, task-status.json, etc). Recorded
@@ -10124,6 +10303,7 @@ export class Conductor {
         if (!acceptanceRedPreHealed)
         while (attempt < stepMaxRetries) {
           attempt++;
+          this.dispatchingStep = step.name;
           const isAuthorizedRecoveryTrial = authorizedRecoveryTrial;
           authorizedRecoveryTrial = false;
           const recoveryProbeFailure = authorizedRecoveryProbeFailure;
@@ -10497,6 +10677,7 @@ export class Conductor {
                           ? await this.runSelfBuildDispatch(
                               step.name,
                               state,
+                              attempt,
                               retryHint,
                               // D1 scope, self-host path: the verdict gate's
                               // lifecycle `attempt.id` and its sidecar stamp
@@ -10550,6 +10731,8 @@ export class Conductor {
                             }
                           })());
           } finally {
+            // A later loop-level halt is no longer owned by this settled attempt.
+            this.dispatchingStep = undefined;
             buildAttemptSettled = true;
             buildWatcher?.stop();
             stepInFlightTicker?.stop();
@@ -14266,6 +14449,7 @@ export class Conductor {
           lastSettledUnit = { kind: 'step', name: step.name };
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
           let completedBuildTreeAfter: string | null | undefined;
+          let completedBuildMadeProgress = false;
           if (step.name === 'build') {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
@@ -14274,6 +14458,7 @@ export class Conductor {
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             completedBuildTreeAfter = treeAfter;
+            completedBuildMadeProgress = resolvedAfter > resolvedTasksBefore;
             const gate = await pendingBuildKickbackGate();
             await writeBuildOutcomeBestEffort(this.projectRoot, {
               ...outcomeStore,
@@ -14309,6 +14494,13 @@ export class Conductor {
                 { test_suite: 'stale' },
               );
             }
+          }
+          if (step.name === 'build') {
+            await this.settleTranscriptAttempt(
+              step.name,
+              this.currentTranscriptCaptureAttempt(step.name),
+              completedBuildMadeProgress ? 'succeeded-with-progress' : 'succeeded-without-progress',
+            );
           }
           await emitTracked({
             type: 'step_completed',
@@ -14543,6 +14735,7 @@ export class Conductor {
       // and live-boundary paths. Existing terminals win; only still-open
       // admitted scopes receive the truthful interruption terminal.
       await this.closeOpenExecutions();
+      this.transcriptRetention.stop();
       this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);

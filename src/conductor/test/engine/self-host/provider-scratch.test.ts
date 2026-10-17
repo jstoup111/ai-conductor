@@ -1,10 +1,14 @@
+// Covers: task:7, task:rem-prd-audit-R1, task:rem-as-built-R7, task:rem-as-built-rem-vg-ab2
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as providerCatalog from '../../../src/execution/provider-catalog.js';
+import { startFeatureEventPersistence } from '../../../src/engine/event-persister.js';
 import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
+import { detectTranscriptsCommand, dispatchTranscripts } from '../../../src/engine/transcripts-cli.js';
 import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import {
@@ -13,6 +17,7 @@ import {
   readScratchLease,
   releaseScratchHome,
   resolveScratchHome,
+  sweepFeatureWorktreeScratch,
   sweepScratch,
   type ScratchFs,
 } from '../../../src/engine/self-host/provider-scratch.js';
@@ -20,6 +25,119 @@ import {
 const execFile = promisify(execFileCb);
 
 describe('provider scratch homes', () => {
+  it('retains interrupted sweep captures in the feature ledger and exposes them to transcripts', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'provider-scratch-sweep-retention-'));
+    const slug = 'interrupted-feature';
+    const worktreeBase = join(repo, '.worktrees');
+    const worktreeRoot = join(worktreeBase, slug);
+    const globalEvents = new ConductorEventEmitter();
+    const home = await acquireScratchHome({
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: slug,
+      runId: 'interrupted',
+      attempt: 1,
+      step: 'build',
+      provider: 'codex',
+      ownerPid: 1001,
+    });
+    const scopedEmitters: ConductorEventEmitter[] = [];
+    try {
+      await mkdir(join(home, 'self-host-codex-interrupted', 'sessions'), { recursive: true });
+      await writeFile(join(home, 'self-host-codex-interrupted', 'sessions', 'session.jsonl'), JSON.stringify({
+        type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'interrupted result' }] },
+      }));
+
+      await sweepFeatureWorktreeScratch({
+        worktreeBase,
+        events: globalEvents,
+        log: () => {},
+        startFeatureEventScope: (path, featureSlug) => {
+          const scope = startFeatureEventPersistence(path, globalEvents, featureSlug);
+          scopedEmitters.push(scope.events);
+          return scope;
+        },
+      });
+
+      const capture = '.pipeline/transcripts/build/interrupted-a1-codex';
+      const ledger = await readFile(join(worktreeRoot, '.pipeline', 'events.jsonl'), 'utf8');
+      expect(ledger).toContain('"type":"provider_transcripts_captured"');
+      expect(ledger).toContain(`"type":"provider_transcripts_retained"`);
+
+      const command = detectTranscriptsCommand(['node', 'ai-conductor', 'transcripts', slug]);
+      if (command === null) throw new Error('transcripts command was not detected');
+      const output: string[] = [];
+      const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { output.push(line); });
+      try {
+        expect(await dispatchTranscripts(command, repo)).toBe(0);
+      } finally {
+        log.mockRestore();
+      }
+      expect(output).toEqual([expect.stringContaining(`interrupted=true path=${capture}`)]);
+
+      const scopeEvents = scopedEmitters[0] as unknown as { handlers: Map<string, Set<unknown>> };
+      expect(scopeEvents.handlers.get('provider_transcripts_captured')).toHaveLength(0);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('retains only its recovered interrupted capture beside a live pending capture', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'provider-scratch-live-pending-sweep-'));
+    const slug = 'live-pending-feature';
+    const worktreeBase = join(repo, '.worktrees');
+    const worktreeRoot = join(worktreeBase, slug);
+    const globalEvents = new ConductorEventEmitter();
+    const liveCapture = '.pipeline/transcripts/build/live-a1-codex';
+    const recoveredCapture = '.pipeline/transcripts/build/interrupted-a1-codex';
+    const home = await acquireScratchHome({
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: slug,
+      runId: 'interrupted',
+      attempt: 1,
+      step: 'build',
+      provider: 'codex',
+      ownerPid: 1001,
+    });
+    try {
+      await mkdir(join(worktreeRoot, liveCapture), { recursive: true });
+      await writeFile(join(worktreeRoot, liveCapture, 'session.jsonl'), 'live pending transcript\n');
+      await mkdir(join(home, 'self-host-codex-interrupted', 'sessions'), { recursive: true });
+      await writeFile(join(home, 'self-host-codex-interrupted', 'sessions', 'session.jsonl'), 'interrupted transcript\n');
+      await mkdir(join(worktreeRoot, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreeRoot, '.pipeline', 'events.jsonl'), `${JSON.stringify({
+        type: 'provider_transcripts_captured',
+        step: 'build',
+        runId: 'live',
+        attempt: 1,
+        provider: 'codex',
+        path: liveCapture,
+        files: 1,
+        bytes: 24,
+        interrupted: false,
+        skipped: 0,
+        omittedLines: 0,
+      })}\n`);
+
+      await sweepFeatureWorktreeScratch({
+        worktreeBase,
+        events: globalEvents,
+        log: () => {},
+        startFeatureEventScope: (path, featureSlug) => startFeatureEventPersistence(path, globalEvents, featureSlug),
+      });
+
+      const events = (await readFile(join(worktreeRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(events.filter((event) => event.path === liveCapture).map((event) => event.type))
+        .toStrictEqual(['provider_transcripts_captured']);
+      expect(events.filter((event) => event.path === recoveredCapture).map((event) => event.type))
+        .toStrictEqual(['provider_transcripts_captured', 'provider_transcripts_retained']);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('retains legacy entries that are not provably stale while continuing after a failed removal', async () => {
     const tempRoot = '/legacy-scratch-refusal';
     const processStartedAt = new Date('2026-08-11T12:00:00.000Z');
@@ -274,6 +392,7 @@ describe('provider scratch homes', () => {
         featureSlug: 'provider-scratch',
         runId: 'R',
         attempt: 2,
+        provider: 'codex',
         ownerPid: 1234,
         startedAt: '2026-08-11T12:34:56.000Z',
       },
@@ -284,7 +403,88 @@ describe('provider scratch homes', () => {
     ]);
   });
 
-  it('serializes only the six scratch-home identity fields into an owner lease', async () => {
+  it('round-trips the owning step, provider, and member with the scratch lease identity', async () => {
+    const files = new Map<string, string>();
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async (path, content) => { files.set(path, content); },
+      readFile: async (path) => files.get(path) ?? null,
+      readdir: async () => [],
+      rm: async () => {},
+      rmdir: async () => {},
+    };
+
+    const home = await acquireScratchHome({
+      worktreeRoot: '/wt',
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      step: 'build',
+      provider: 'codex',
+      member: 'rubric-a',
+      ownerPid: 1234,
+      now: () => new Date('2026-08-11T12:34:56.000Z'),
+      fs,
+    });
+
+    await expect(readScratchLease(home, { fs })).resolves.toEqual({
+      kind: 'present',
+      lease: {
+        repository: 'owner/repository',
+        featureSlug: 'provider-scratch',
+        runId: 'R',
+        attempt: 2,
+        step: 'build',
+        provider: 'codex',
+        member: 'rubric-a',
+        ownerPid: 1234,
+        startedAt: '2026-08-11T12:34:56.000Z',
+      },
+    });
+  });
+
+  it('reads pre-upgrade leases without transcript ownership metadata as present', async () => {
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => JSON.stringify({
+        repository: 'owner/repository',
+        featureSlug: 'provider-scratch',
+        runId: 'R',
+        attempt: 2,
+        ownerPid: 1234,
+        startedAt: '2026-08-11T12:34:56.000Z',
+      }),
+      readdir: async () => [],
+      rm: async () => {},
+      rmdir: async () => {},
+    };
+
+    await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toMatchObject({ kind: 'present' });
+  });
+
+  it.each([
+    ['step', 'bogus'],
+    ['provider', 'bogus'],
+  ])('rejects a lease with an out-of-domain %s identity', async (field, value) => {
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => JSON.stringify({
+        repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 2,
+        step: 'build', provider: 'codex', ownerPid: 1234, startedAt: '2026-08-11T12:34:56.000Z',
+        [field]: value,
+      }),
+      readdir: async () => [],
+      rm: async () => {},
+      rmdir: async () => {},
+    };
+
+    await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toStrictEqual({ kind: 'incomplete' });
+  });
+
+  it('serializes only scratch-home identity fields into an owner lease', async () => {
     const files = new Map<string, string>();
     const fs: ScratchFs = {
       mkdir: async () => {},
@@ -316,6 +516,7 @@ describe('provider scratch homes', () => {
       'featureSlug',
       'runId',
       'attempt',
+      'provider',
       'ownerPid',
       'startedAt',
     ]);
@@ -522,6 +723,275 @@ describe('provider scratch homes', () => {
           { kind: 'retained', home: liveHome, reason: 'live-owner' },
         ],
       ]);
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:10
+  it('captures an interrupted dead-owner provider home before reclaiming it', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-interrupted-capture-'));
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('provider_transcripts_captured', (event) => { emitted.push(event); });
+    const home = await acquireScratchHome({
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 1,
+      step: 'build',
+      provider: 'codex',
+      ownerPid: 1001,
+    });
+    const providerHome = join(home, 'self-host-codex-interrupted');
+
+    try {
+      await mkdir(join(providerHome, 'sessions'), { recursive: true });
+      await writeFile(join(providerHome, 'sessions', 'x.jsonl'), '{"message":"interrupted"}\n');
+
+      await expect(sweepScratch({
+        worktreeRoot,
+        events,
+        ownerLiveness: () => 'dead',
+      })).resolves.toStrictEqual([{ kind: 'reclaimed', home }]);
+
+      await expect(readFile(join(
+        worktreeRoot, '.pipeline', 'transcripts', 'build', 'R-a1-codex', 'sessions', 'x.jsonl',
+      ), 'utf8')).resolves.toBe('{"message":"interrupted"}\n');
+      expect(emitted).toStrictEqual([{
+        type: 'provider_transcripts_captured',
+        step: 'build', runId: 'R', attempt: 1, provider: 'codex',
+        path: '.pipeline/transcripts/build/R-a1-codex',
+        files: 1, bytes: 26, interrupted: true, skipped: 0, omittedLines: 0,
+      }]);
+      await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a member-bearing legacy home whose lease predates the provider field', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-legacy-member-capture-'));
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('provider_transcripts_captured', (event) => { emitted.push(event); });
+    const home = join(worktreeRoot, '.daemon', 'scratch', 'R', '1-codex-rubric-a');
+
+    try {
+      await mkdir(join(home, 'self-host-codex-interrupted', 'sessions'), { recursive: true });
+      await Promise.all([
+        writeFile(join(home, 'owner.json'), JSON.stringify({
+          repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1,
+          step: 'build_review', member: 'rubric-a', ownerPid: 1001, startedAt: '2026-08-11T12:34:56.000Z',
+        })),
+        writeFile(join(home, 'self-host-codex-interrupted', 'sessions', 'x.jsonl'), '{"message":"interrupted"}\n'),
+      ]);
+
+      await expect(sweepScratch({ worktreeRoot, events, ownerLiveness: () => 'dead' }))
+        .resolves.toStrictEqual([{ kind: 'reclaimed', home }]);
+
+      await expect(readFile(join(
+        worktreeRoot, '.pipeline', 'transcripts', 'build_review', 'R-a1-rubric-a-codex', 'sessions', 'x.jsonl',
+      ), 'utf8')).resolves.toBe('{"message":"interrupted"}\n');
+      expect(emitted).toEqual([expect.objectContaining({
+        type: 'provider_transcripts_captured', provider: 'codex', member: 'rubric-a', interrupted: true,
+        path: '.pipeline/transcripts/build_review/R-a1-rubric-a-codex',
+      })]);
+      await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('aggregates matching provider homes into one interrupted capture before reclaiming', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-multi-home-capture-'));
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('provider_transcripts_captured', (event) => { emitted.push(event); });
+    const home = await acquireScratchHome({
+      worktreeRoot, repository: 'owner/repository', featureSlug: 'provider-scratch',
+      runId: 'R', attempt: 1, step: 'build', provider: 'codex', ownerPid: 1001,
+    });
+
+    try {
+      await Promise.all([
+        mkdir(join(home, 'self-host-codex-one', 'sessions'), { recursive: true }),
+        mkdir(join(home, 'self-host-codex-two', 'sessions'), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(home, 'self-host-codex-one', 'sessions', 'one.jsonl'), '{"message":"one"}\n'),
+        writeFile(join(home, 'self-host-codex-two', 'sessions', 'two.jsonl'), '{"message":"two"}\n'),
+      ]);
+
+      await expect(sweepScratch({ worktreeRoot, events, ownerLiveness: () => 'dead' }))
+        .resolves.toStrictEqual([{ kind: 'reclaimed', home }]);
+
+      await expect(Promise.all([
+        readFile(join(worktreeRoot, '.pipeline', 'transcripts', 'build', 'R-a1-codex', 'sessions', 'one.jsonl'), 'utf8'),
+        readFile(join(worktreeRoot, '.pipeline', 'transcripts', 'build', 'R-a1-codex', 'sessions', 'two.jsonl'), 'utf8'),
+      ])).resolves.toEqual(['{"message":"one"}\n', '{"message":"two"}\n']);
+      expect(emitted).toEqual([expect.objectContaining({ files: 2, bytes: 36, skipped: 0, omittedLines: 0, interrupted: true })]);
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports one failed event and removes a colliding multi-home capture before reclaiming', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-multi-home-collision-'));
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('provider_transcripts_harvest_failed', (event) => { emitted.push(event); });
+    const home = await acquireScratchHome({
+      worktreeRoot, repository: 'owner/repository', featureSlug: 'provider-scratch',
+      runId: 'R', attempt: 1, step: 'build', provider: 'codex', ownerPid: 1001,
+    });
+
+    try {
+      await Promise.all([
+        mkdir(join(home, 'self-host-codex-one', 'sessions'), { recursive: true }),
+        mkdir(join(home, 'self-host-codex-two', 'sessions'), { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(home, 'self-host-codex-one', 'sessions', 'same.jsonl'), '{"message":"one"}\n'),
+        writeFile(join(home, 'self-host-codex-two', 'sessions', 'same.jsonl'), '{"message":"two"}\n'),
+      ]);
+
+      await expect(sweepScratch({ worktreeRoot, events, ownerLiveness: () => 'dead' }))
+        .resolves.toStrictEqual([{ kind: 'reclaimed', home }]);
+
+      expect(emitted).toEqual([expect.objectContaining({
+        type: 'provider_transcripts_harvest_failed',
+        path: '.pipeline/transcripts/build/R-a1-codex', error: expect.stringContaining('already exists'),
+      })]);
+      await expect(readdir(join(worktreeRoot, '.pipeline', 'transcripts', 'build', 'R-a1-codex'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('captures an interrupted Claude sandbox home before reclaiming it', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-claude-capture-'));
+    const events = new ConductorEventEmitter();
+    const captures: ConductorEvent[] = [];
+    events.on('provider_transcripts_captured', (event) => { captures.push(event); });
+    const home = await acquireScratchHome({
+      worktreeRoot, repository: 'owner/repository', featureSlug: 'provider-scratch',
+      runId: 'claude-run', attempt: 1, step: 'build', provider: 'claude', ownerPid: 1001,
+    });
+    try {
+      const sandbox = join(home, 'harness-selfbuild-interrupted');
+      await mkdir(join(sandbox, 'projects', 'w'), { recursive: true });
+      await writeFile(join(sandbox, '.credentials.json'), '{"token":"claude-secret-value"}');
+      await writeFile(join(sandbox, 'projects', 'w', 'session.jsonl'), '{"message":"interrupted claude-secret-value"}\n');
+      await sweepScratch({ worktreeRoot, events, ownerLiveness: () => 'dead' });
+      await expect(readFile(join(worktreeRoot, '.pipeline', 'transcripts', 'build', 'claude-run-a1-claude', 'projects', 'w', 'session.jsonl'), 'utf8'))
+        .resolves.toBe('{"message":"interrupted [REDACTED]"}\n');
+      expect(captures).toEqual([expect.objectContaining({ provider: 'claude', interrupted: true })]);
+      await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:10
+  it('leaves missing, unreadable, and live leases untouched without transcript events', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-retained-capture-'));
+    const scratchRun = join(worktreeRoot, '.daemon', 'scratch', 'R');
+    const missingHome = join(scratchRun, '1-codex');
+    const unreadableHome = join(scratchRun, '2-codex');
+    const events = new ConductorEventEmitter();
+    const captures: ConductorEvent[] = [];
+    events.on('provider_transcripts_captured', (event) => { captures.push(event); });
+
+    try {
+      await Promise.all([
+        mkdir(join(missingHome, 'self-host-codex-missing', 'sessions'), { recursive: true }),
+        mkdir(join(unreadableHome, 'self-host-codex-unreadable', 'sessions'), { recursive: true }),
+      ]);
+      await writeFile(join(unreadableHome, 'owner.json'), '{');
+      const liveHome = await acquireScratchHome({
+        worktreeRoot,
+        repository: 'owner/repository',
+        featureSlug: 'provider-scratch',
+        runId: 'R',
+        attempt: 3,
+        step: 'build',
+        provider: 'codex',
+        ownerPid: 1003,
+      });
+      await mkdir(join(liveHome, 'self-host-codex-live', 'sessions'), { recursive: true });
+
+      await sweepScratch({ worktreeRoot, events, ownerLiveness: () => 'live' });
+
+      await expect(Promise.all([readdir(missingHome), readdir(unreadableHome), readdir(liveHome)])).resolves.toHaveLength(3);
+      await expect(readdir(join(worktreeRoot, '.pipeline', 'transcripts'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(captures).toStrictEqual([]);
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['step', 'bogus'],
+    ['provider', 'bogus'],
+  ])('does not harvest or select a provider for a dead lease with an out-of-domain %s', async (field, value) => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-invalid-lease-'));
+    const home = join(worktreeRoot, '.daemon', 'scratch', 'R', '1-codex');
+    const harvest = vi.fn(async () => ({ kind: 'captured' as const, files: 0, bytes: 0, skipped: [], omittedLines: 0 }));
+    const descriptor = vi.spyOn(providerCatalog, 'providerDescriptor');
+
+    try {
+      await mkdir(join(home, 'self-host-codex-invalid', 'sessions'), { recursive: true });
+      await writeFile(join(home, 'owner.json'), JSON.stringify({
+        repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1,
+        step: 'build', provider: 'codex', ownerPid: 1001, startedAt: '2026-08-11T12:34:56.000Z',
+        [field]: value,
+      }));
+
+      await expect(sweepScratch({ worktreeRoot, ownerLiveness: () => 'dead', harvest }))
+        .resolves.toStrictEqual([{ kind: 'retained', home, reason: 'incomplete-lease' }]);
+
+      expect(harvest).not.toHaveBeenCalled();
+      expect(descriptor).not.toHaveBeenCalled();
+    } finally {
+      descriptor.mockRestore();
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:10
+  it('reports a failed interrupted harvest while retaining the dead-owner reclaim decision', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-failed-capture-'));
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('provider_transcripts_harvest_failed', (event) => { emitted.push(event); });
+    const home = await acquireScratchHome({
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 1,
+      step: 'build',
+      provider: 'codex',
+      ownerPid: 1001,
+    });
+
+    try {
+      await mkdir(join(home, 'self-host-codex-interrupted', 'sessions'), { recursive: true });
+      await expect(sweepScratch({
+        worktreeRoot,
+        events,
+        ownerLiveness: () => 'dead',
+        harvest: async () => ({ kind: 'failed', error: 'capture unavailable' }),
+      })).resolves.toStrictEqual([{ kind: 'reclaimed', home }]);
+
+      expect(emitted).toStrictEqual([{
+        type: 'provider_transcripts_harvest_failed',
+        step: 'build', runId: 'R', attempt: 1, provider: 'codex',
+        path: '.pipeline/transcripts/build/R-a1-codex', error: 'capture unavailable',
+      }]);
+      await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(worktreeRoot, { recursive: true, force: true });
     }

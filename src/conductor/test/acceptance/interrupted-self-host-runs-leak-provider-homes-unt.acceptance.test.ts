@@ -38,6 +38,7 @@ import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/d
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 import { provisionSandboxBuildEnv } from '../../src/engine/self-host/sandbox-build-env.js';
 import { sweepFeatureWorktreeScratch } from '../../src/engine/self-host/provider-scratch.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCb);
 const roots: string[] = [];
@@ -86,18 +87,17 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
     const home = await provisionProviderHome({
       provider: { id: 'codex' },
       worktreeRoot: worktree,
-      runId: 'R',
-      attempt: 2,
+      captureIdentity: { step: 'build', runId: 'R', attempt: 2 },
       repository: 'owner/repo',
       featureSlug: 'scratch-feature',
-    } as unknown as Parameters<typeof provisionProviderHome>[0]);
+    });
 
     const path = home.homeDir;
     expect(path).toMatch(new RegExp(`^${expectedHome(worktree, 'codex')}/self-host-codex-`));
     expect(home.childEnv().CODEX_HOME).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
     const lease = JSON.parse(await readFile(join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json'), 'utf8'));
-    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
     expect(lease).toMatchObject({ repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2, ownerPid: process.pid });
     expect(await git('status', '--porcelain')).toBe('');
 
@@ -113,18 +113,17 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
       worktreeRoot: worktree,
       harnessRoot: worktree,
       globalStateFile: join(worktree, 'missing-operator-state.json'),
-      runId: 'R',
-      attempt: 2,
+      captureIdentity: { step: 'build', runId: 'R', attempt: 2 },
       repository: 'owner/repo',
       featureSlug: 'scratch-feature',
-    } as unknown as Parameters<typeof provisionSandboxBuildEnv>[0]);
+    });
 
     const path = sandbox.configDir;
     expect(path).toMatch(new RegExp(`^${expectedHome(worktree, 'claude')}/harness-selfbuild-`));
     expect(sandbox.childEnv().CLAUDE_CONFIG_DIR).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
     const lease = JSON.parse(await readFile(join(worktree, '.daemon', 'scratch', 'R', '2-claude', 'owner.json'), 'utf8'));
-    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
     expect(lease).toMatchObject({ repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2, ownerPid: process.pid });
     expect(await git('status', '--porcelain')).toBe('');
 
@@ -184,10 +183,16 @@ describe('Concrete worktree daemon sweep', () => {
     const durable = join(root, 'durable-runs', 'scratch-feature', 'conduct-state.json');
     await mkdir(join(worktree, 'skills'), { recursive: true });
     await mkdir(join(durable, '..'), { recursive: true }); await writeFile(durable, '{}\n');
-    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2 });
+    const home = await provisionProviderHome({
+      provider: { id: 'codex' }, worktreeRoot: worktree, repository: 'owner/repo', featureSlug: 'scratch-feature',
+      captureIdentity: { step: 'build', runId: 'R', attempt: 2 },
+    });
     const leasePath = join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json');
-    const lease = JSON.parse(await readFile(leasePath, 'utf8')); lease.ownerPid = 99999999; await writeFile(leasePath, `${JSON.stringify(lease)}\n`);
-    await sweepFeatureWorktreeScratch({ worktreeBase: join(root, '.worktrees'), events: { emit: async () => {} } as never, log: () => {} });
+    const lease = JSON.parse(await readFile(leasePath, 'utf8')) as { ownerPid: number; step?: string };
+    lease.ownerPid = 99999999;
+    delete lease.step; // Legacy leases exercise Task 10's typed fallback.
+    await writeFile(leasePath, `${JSON.stringify(lease)}\n`);
+    await sweepFeatureWorktreeScratch({ worktreeBase: join(root, '.worktrees'), events: new ConductorEventEmitter(), log: () => {} });
     expect(await exists(home.homeDir)).toBe(false);
     expect(await exists(durable)).toBe(true);
   });
@@ -205,8 +210,7 @@ describe('Story 6 — production worktree removal is the final scratch backstop'
       worktreeRoot: worktree,
       repository: root,
       featureSlug: 'scratch-feature',
-      runId: 'R',
-      attempt: 2,
+      captureIdentity: { step: 'build', runId: 'R', attempt: 2 },
     });
     const leasePath = join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json');
     expect(JSON.parse(await readFile(leasePath, 'utf8'))).toMatchObject({

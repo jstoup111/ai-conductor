@@ -38,6 +38,10 @@ import type { HostState, RoundId, RouteKind } from '../engine/routing/route-type
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Legacy leases written before a conductor step was recorded own this bucket. */
+export const LEGACY_TRANSCRIPT_OWNER_STEP = 'unknown-step' as const;
+export type TranscriptOwnerStep = StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
+
 /** Closed disposition of pull-request publication for a completed run. */
 export type RunPrDisposition = 'opened' | 'none' | 'unrecorded';
 
@@ -1041,6 +1045,55 @@ type ConductorEventBody =
       attempt: ScratchCleanupAttempt;
       path: string;
       reason: string;
+    }
+  | {
+      /** Allowlisted provider transcripts were captured before a scratch home was retired. */
+      type: 'provider_transcripts_captured';
+      step: TranscriptOwnerStep;
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      files: number;
+      bytes: number;
+      interrupted: boolean;
+      skipped: number;
+      omittedLines: number;
+    }
+  | {
+      /** Provider transcript capture failed, but scratch-home retirement continued. */
+      type: 'provider_transcripts_harvest_failed';
+      step: TranscriptOwnerStep;
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      error: string;
+    }
+  | {
+      /** A captured provider transcript was retained after its step verdict settled. */
+      type: 'provider_transcripts_retained';
+      path: string;
+    }
+  | {
+      /** A captured provider transcript was pruned after successful step progress. */
+      type: 'provider_transcripts_pruned';
+      path: string;
+    }
+  | {
+      /** A retained provider transcript was evicted to satisfy a retention cap. */
+      type: 'provider_transcripts_evicted';
+      path: string;
+      reason: 'count' | 'size';
+    }
+  | {
+      /** A provider transcript retention cleanup action failed. */
+      type: 'provider_transcripts_retention_failed';
+      path: string;
+      action: 'prune' | 'evict';
+      error: string;
     }
   | {
       /**

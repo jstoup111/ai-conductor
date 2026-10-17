@@ -615,8 +615,39 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      { runId: 'R', attempt: 0, member: 'security' },
+      {
+        step: 'build_review', runId: 'R', attempt: 1,
+        member: 'security',
+      },
     );
+  });
+
+  // Covers: task:rem-as-built-rem-ab-capture-dispatch-seq
+  it('uses a capture-only sequence for auxiliary retries without changing their escalation attempts', async () => {
+    const prepared: Array<{ step: string; runId: string; attempt: number; member: string }> = [];
+    await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'security', runId: 'R',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: true, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: async () => ({ success: false, output: 'retry', exitCode: 1 }) })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
+      prepareCandidateSelfHost: async (_candidate, _runtime, identity) => {
+        if (identity?.member !== 'security') throw new Error('expected auxiliary capture identity');
+        prepared.push({
+          step: identity.step,
+          runId: identity.runId,
+          attempt: identity.attempt,
+          member: identity.member,
+        });
+        return { executable: '/resolved/codex', env: {}, args: [], teardown: async () => {} };
+      },
+    });
+
+    expect(prepared).toEqual([
+      { step: 'build_review', runId: 'R', attempt: 1, member: 'security' },
+      { step: 'build_review', runId: 'R', attempt: 2, member: 'security' },
+    ]);
   });
 
   it('records a custom member setup skip and launches nothing when its provider has no read-only review mode', async () => {
@@ -1812,7 +1843,7 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      expect.objectContaining({ attempt: 0 }),
+      undefined,
     );
     expect(claude.invoke).not.toHaveBeenCalled();
     expect(teardown).toHaveBeenCalledOnce();

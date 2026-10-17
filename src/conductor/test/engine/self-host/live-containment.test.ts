@@ -110,7 +110,7 @@ async function prepareCandidate(
       prepared = await prepare(
         { step, providerKey, model: policy.modelFallbackLadder[0], effort: 'high' } as never,
         runtimes.get(providerKey) as never,
-        { runId: 'containment-red', attempt: 1 },
+        { step, runId: 'containment-red', attempt: 1 },
       );
       if (!prepared) throw new Error('self-host candidate preparation returned no command');
       return { success: true, output: 'prepared' };

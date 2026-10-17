@@ -313,6 +313,12 @@ export interface StepRunOptions {
    */
   attempt?: number;
   /**
+   * Self-host transcript capture identity for this dispatch. This is distinct
+   * from `attempt`: retries retain their own capture directories without
+   * changing the provider model/effort escalation input.
+   */
+  captureAttempt?: number;
+  /**
    * Whether the current step's retry ladder is enabled. Forwarded with
    * `attempt` so fallback providers preserve `escalate:false`.
    */

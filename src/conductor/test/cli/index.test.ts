@@ -30,6 +30,7 @@ const OPERATOR_FACING_COMMANDS = [
   'intake-loop',
   'render-diagrams',
   'build-auth-status',
+  'transcripts',
   'shipment-evidence',
 ] as const;
 
@@ -67,6 +68,7 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'intake-loop',
   'brain',
   'shipped-record',
+  'transcripts',
   'shipment-evidence',
   'task',
   'evidence',
@@ -410,6 +412,7 @@ describe('CLI', () => {
         'intake-loop': ['--continuous', '--once', '--interval-ms'],
         'render-diagrams': ['--check'],
         'build-auth-status': [],
+        transcripts: ['--show'],
         'shipment-evidence': ['--pr', '--event', 'reconcile', 'audit'],
       };
       for (const [command, options] of Object.entries(commandOptions)) {
