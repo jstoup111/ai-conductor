@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseChildId, type ChildId } from '../child-context.js';
 import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
@@ -48,10 +48,28 @@ function parseCachedRemediationChild(value: unknown): ChildId | undefined {
  * A repository may hold many plans, so recovery must never infer membership
  * from an unscoped directory listing.
  */
-async function readCommittedPlanText(projectRoot: string): Promise<string | undefined> {
+async function readCommittedPlanText(projectRoot: string, featureSlug?: string): Promise<string | undefined> {
   try {
-    const state = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8')) as Record<string, unknown>;
-    const slug = state.feature_desc;
+    // engine-state is a disposable cache.  Callers that already proved the
+    // feature identity from their durable envelope must be able to recover
+    // committed rem ownership after that cache is lost.
+    let slug: unknown = featureSlug;
+    if (slug === undefined) {
+      try {
+        const state = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8')) as Record<string, unknown>;
+        slug = state.feature_desc;
+      } catch {
+        // Handled by the unambiguous-plan fallback below.
+      }
+      if (typeof slug !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) {
+        // A legacy cache rebuild has no caller-proven slug.  It may use the
+        // plan directory only when it contains exactly one candidate; with
+        // siblings, refusing is the only safe ownership result.
+        const plans = (await readdir(join(projectRoot, '.docs', 'plans'))).filter((name) => name.endsWith('.md'));
+        if (plans.length !== 1) return undefined;
+        slug = plans[0]!.slice(0, -3);
+      }
+    }
     if (typeof slug !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) return undefined;
     return await readFile(join(projectRoot, '.docs', 'plans', `${slug}.md`), 'utf8');
   } catch {
@@ -66,8 +84,9 @@ export async function resolveRemediationTaskChild(
   projectRoot: string,
   taskId: string,
   cachedChild: unknown,
+  featureSlug?: string,
 ): Promise<RemediationTaskChildResolution> {
-  const planText = await readCommittedPlanText(projectRoot);
+  const planText = await readCommittedPlanText(projectRoot, featureSlug);
   const committedChild = planText === undefined ? undefined : readRemTaskChildLine(planText, taskId);
   const child = committedChild === undefined ? undefined : parseChildId(committedChild);
   if (child !== undefined) return { kind: 'resolved', child };
@@ -82,8 +101,9 @@ export async function resolveRemediationTaskChild(
  */
 export async function readCommittedRemediationTaskChildren(
   projectRoot: string,
+  featureSlug?: string,
 ): Promise<Record<string, number>> {
-  const planText = await readCommittedPlanText(projectRoot);
+  const planText = await readCommittedPlanText(projectRoot, featureSlug);
   if (planText === undefined) return {};
 
   return Object.fromEntries(

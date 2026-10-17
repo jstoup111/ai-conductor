@@ -171,6 +171,7 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
         deps.projectRoot,
         taskId,
         remediationChildren[taskId],
+        envelope.slug,
       );
       if (resolved.kind === 'unreadable') {
         return unreadable(taskId, identity.child, 'remediation task membership is missing or malformed', print);
