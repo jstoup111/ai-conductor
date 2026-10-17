@@ -113,7 +113,7 @@ describe('Pi self-host conductor lifecycle', () => {
         for (const mode of ['success', 'failure', 'abort'] as const) {
           const prepared = await providerExecution.prepareCandidateSelfHost!(
             { step: 'build', providerKey: 'pi', model: 'openrouter/m', effort: 'high' }, runtimes.get('pi') as never,
-            { runId: `run-${mode}`, attempt: 1 },
+            { step: 'build', runId: `run-${mode}`, attempt: 1 },
           );
           expect({ args: prepared!.args.includes('K'), env: Object.values(prepared!.env).includes('K') }).toEqual({ args: false, env: false });
           if (mode === 'success') await invoke();
@@ -125,7 +125,7 @@ describe('Pi self-host conductor lifecycle', () => {
         }
         const prepared = await providerExecution.prepareCandidateSelfHost!(
           { step: 'build', providerKey: 'pi', model: 'openrouter/m', effort: 'high' }, runtimes.get('pi') as never,
-          { runId: 'run-drift', attempt: 1 },
+          { step: 'build', runId: 'run-drift', attempt: 1 },
         );
         await writeFile(join(operatorHome, 'settings.json'), '{"after":true}');
         await prepared!.teardown();

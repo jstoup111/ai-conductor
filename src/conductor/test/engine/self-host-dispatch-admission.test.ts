@@ -43,7 +43,7 @@ describe('self-host dispatch admission', () => {
           const prepared = await providerExecution.prepareCandidateSelfHost!(
             { step: 'build', providerKey: 'claude', model: 'opus', effort: 'high' },
             { provider: {} } as never,
-            { runId: 'admission-test', attempt: 1 },
+            { step: 'build', runId: 'admission-test', attempt: 1 },
           );
           try {
             expect(lease.spawnPermit()).toEqual({ permitted: true });

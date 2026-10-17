@@ -4730,12 +4730,12 @@ describe('engine/conductor', () => {
         const codexInvocation = await prepare(
           { step: 'build', providerKey: 'codex', model: 'gpt-5.6-terra', effort: 'medium' },
           runtimes.get('codex'),
-          { runId: input.runId, attempt: 0 },
+          { step: 'build', runId: input.runId ?? 'held-conductor-run', attempt: 0 },
         );
         const claudeInvocation = await prepare(
           { step: 'build', providerKey: 'claude', model: 'sonnet', effort: 'medium' },
           runtimes.get('claude'),
-          { runId: input.runId, attempt: 1 },
+          { step: 'build', runId: input.runId ?? 'held-conductor-run', attempt: 1 },
         );
         for (const [attempt, invocation] of [codexInvocation, claudeInvocation].entries()) {
           const provider = attempt === 0 ? 'codex' : 'claude';
@@ -4793,16 +4793,14 @@ describe('engine/conductor', () => {
         worktreeRoot: dir,
         repository: dir,
         featureSlug: 'self-host-identity',
-        runId: 'held-conductor-run',
-        attempt: 0,
+        captureIdentity: { step: 'build', runId: 'held-conductor-run', attempt: 0 },
       }),
       claude: expect.objectContaining({
         worktreeRoot: dir,
         harnessRoot: dir,
         repository: dir,
         featureSlug: 'self-host-identity',
-        runId: 'held-conductor-run',
-        attempt: 1,
+        captureIdentity: { step: 'build', runId: 'held-conductor-run', attempt: 1 },
       }),
     });
     for (const [attempt, lease] of leases.entries()) {
