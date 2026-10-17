@@ -22,6 +22,22 @@ describe('transcriptCapture', () => {
       worktreeRoot: '/worktree', step: 'build_review', runId: 'run', attempt: 1, member: 'rubric-a', provider: 'codex',
     }).path).toBe(join('.pipeline', 'transcripts', 'build_review', 'run-a1-rubric-a-codex'));
   });
+
+  it('encodes distinct unsafe members into distinct single-segment capture names', () => {
+    const root = '/worktree';
+    const slash = transcriptCapture({
+      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, member: 'a/b', provider: 'codex',
+    });
+    const question = transcriptCapture({
+      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, member: 'a?b', provider: 'codex',
+    });
+    const stepDirectory = resolve(root, '.pipeline', 'transcripts', 'build_review');
+
+    expect(slash.path).not.toBe(question.path);
+    for (const capture of [slash, question]) {
+      expect(relative(stepDirectory, resolve(capture.destination))).not.toMatch(/[/\\]/);
+    }
+  });
 });
 
 describe('harvestTranscripts', () => {
