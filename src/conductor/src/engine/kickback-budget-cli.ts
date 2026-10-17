@@ -260,7 +260,10 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   const action: KickbackBudgetAdjustment['kind'] = command.action === 'raise' ? 'raise' : 'reset';
   const rationale = command.rationale.trim();
   const restackChild = gate === 'restack' ? child! : undefined;
-  let ledgerChild = child;
+  // Remediation and manual-test allowances are feature-wide.  A routed host
+  // is an execution overlay, never an accounting namespace; even an explicit
+  // `--child` must leave the authoritative adjustment in the flat ledger.
+  let ledgerChild = WHOLE_FEATURE_GATES.has(gate) ? undefined : child;
   if (restackChild !== undefined) {
     const activeCursor = await resolveActiveChildForCurrentFeature(worktree);
     if (activeCursor.kind !== 'active' && activeCursor.kind !== 'repair-pending') {

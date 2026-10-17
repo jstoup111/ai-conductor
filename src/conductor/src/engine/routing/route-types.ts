@@ -157,6 +157,25 @@ export interface RoutedItem {
   readonly rationale?: string;
   /** Existing-task work is represented, but must not be re-staged. */
   readonly restage?: boolean;
+  /** Authored task bindings for an existing-task repair. */
+  readonly taskIds?: readonly string[];
+  /** The durable routed-obligation boundary, written at host region entry. */
+  readonly obligation?: RoutedObligation;
+}
+
+/** The routed obligation is the durable authority for its engine-state projection. */
+export interface RoutedObligation {
+  readonly branch: string;
+  readonly head: CommitSha;
+  readonly tree: CommitSha;
+}
+
+/** The base and tree captured before a host region can mutate its branch. */
+export interface HostEntry {
+  /** The only host permitted to consume this entry baseline. */
+  readonly host: ChildId;
+  readonly pinnedBase: CommitSha;
+  readonly tree: CommitSha;
 }
 
 /** The immutable rem-* blocks to append when a host enters its region. */
@@ -169,12 +188,72 @@ export interface FrozenHostAllocation {
 /** Frozen rem-* task ids and their exact block bodies, grouped by host child. */
 export type FrozenAllocation = Readonly<Record<ChildId, FrozenHostAllocation>>;
 
-/**
- * The receipt schema is deliberately opaque until the budget/settlement group
- * owns it. It must nonetheless be a JSON object so malformed durable blobs
- * fail closed at the record boundary.
- */
-export type RoundReceipt = Readonly<Record<string, unknown>>;
+/** The only whole-feature remediation gates that can consume a route lap. */
+export const WHOLE_FEATURE_BUDGET_GATES = ['prd_audit', 'architecture_review_as_built'] as const;
+export type WholeFeatureBudgetGate = typeof WHOLE_FEATURE_BUDGET_GATES[number];
+
+/** A taskless retry is deliberately separate from whole-feature lap charges. */
+export type TasklessReceiptGate = 'manual_test';
+
+/** A configured custom step's durable counter echo. */
+export type CustomStepReceiptGate = string & { readonly __brand: 'CustomStepReceiptGate' };
+
+/** Per-gate charges and durable counter echoes, keyed by their closed domain. */
+export type ReceiptCharges<Key extends string> = Readonly<Partial<Record<Key, number>>>;
+export type ReceiptLapCharges = ReceiptCharges<WholeFeatureBudgetGate>;
+export type ReceiptTasklessCharges = ReceiptCharges<TasklessReceiptGate>;
+export type ReceiptEchoCharges = ReceiptCharges<CustomStepReceiptGate>;
+
+/** Fields shared by settled and unsettled routing-round receipts. */
+interface RoundReceiptCharges {
+  readonly laps: ReceiptLapCharges;
+  readonly growth: number;
+  readonly taskless: ReceiptTasklessCharges;
+  readonly echo: ReceiptEchoCharges;
+}
+
+/** A receipt before settlement cannot carry an acknowledgement. */
+export type UnsettledRoundReceipt = RoundReceiptCharges & {
+  readonly settlementId?: never;
+  readonly acks: Readonly<Record<string, never>>;
+};
+
+/** A receipt after settlement has both its idempotency key and host acknowledgements. */
+export type SettledRoundReceipt = RoundReceiptCharges & {
+  readonly settlementId: string;
+  readonly acks: Readonly<Record<ChildId, true>>;
+};
+
+/** The durable settlement state for a routing round. */
+export type RoundReceipt = UnsettledRoundReceipt | SettledRoundReceipt;
+
+/** The canonical unsettled receipt, including all durable accounting fields. */
+export function emptyUnsettledReceipt(): UnsettledRoundReceipt {
+  return { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} };
+}
+
+/** One verified upward reroute retained as durable audit context. */
+export interface RouteFallback {
+  readonly from: ChildId;
+  readonly to: ChildId;
+  readonly evidence: readonly string[];
+  readonly branch: string;
+  readonly head: CommitSha;
+}
+
+/** The sync inputs persisted while a reroute is between ref move and tree sync. */
+export interface ReroutePhase {
+  readonly sourceBranch: string;
+  readonly rejectedTip: CommitSha;
+  readonly resetTip: CommitSha;
+  readonly destination: ChildId;
+}
+
+/** The source and destination proven by a parsed in-progress reroute. */
+export interface ValidatedReroute {
+  readonly source: ChildId;
+  readonly destination: ChildId;
+}
 
 /** A complete event waits in the durable route or queue outbox until persisted. */
 export interface OutboxEntry {
@@ -192,7 +271,26 @@ export interface RouteRecord {
   readonly hosts: Readonly<Record<ChildId, HostState>>;
   readonly currentHostIndex: number;
   readonly receipt: RoundReceipt;
+  /** The current host's pre-mutation review and no-op baseline. */
+  readonly entry?: HostEntry;
+  /** Verified upward movements, in the order they happened. */
+  readonly fallback?: readonly RouteFallback[];
+  /** Present only while a rerouted worktree still needs tree synchronization. */
+  readonly reroute?: ReroutePhase;
   readonly outbox: readonly OutboxEntry[];
+}
+
+/**
+ * Returns the reroute endpoints only from a record whose parser has proven
+ * that its latest fallback movement and in-progress reroute agree.
+ */
+export function validatedReroute(record: RouteRecord): ValidatedReroute | undefined {
+  if (!record.reroute) return undefined;
+  const fallback = record.fallback?.at(-1);
+  if (!fallback || fallback.to !== record.reroute.destination) return undefined;
+  const sourceState = record.hosts[fallback.from];
+  if (sourceState !== 'reroute-moved' && sourceState !== 'rerouted') return undefined;
+  return { source: fallback.from, destination: record.reroute.destination };
 }
 
 /** The marker is written before changing the routed host's region state. */
@@ -259,6 +357,105 @@ function parseStringArray(value: unknown, predicate: (entry: string) => boolean 
     : undefined;
 }
 
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function parseReceiptCharges<Key extends string>(
+  value: unknown,
+  allowed: readonly Key[] | undefined,
+): ReceiptCharges<Key> | undefined {
+  if (!isRecord(value)) return undefined;
+  const charges: Partial<Record<Key, number>> = {};
+  for (const [gate, count] of Object.entries(value)) {
+    const parsed = nonNegativeInteger(count);
+    if (!nonEmptyString(gate) || parsed === undefined || (allowed !== undefined && !allowed.includes(gate as Key))) return undefined;
+    charges[gate as Key] = parsed;
+  }
+  return charges;
+}
+
+function parseReceipt(value: unknown): RoundReceipt | undefined {
+  if (!isRecord(value)) return undefined;
+  if (Object.keys(value).length === 0) {
+    return emptyUnsettledReceipt();
+  }
+  const laps = parseReceiptCharges(value.laps, WHOLE_FEATURE_BUDGET_GATES);
+  const growth = nonNegativeInteger(value.growth);
+  const taskless = parseReceiptCharges(value.taskless, ['manual_test'] as const);
+  const echo = parseReceiptCharges<CustomStepReceiptGate>(value.echo, undefined);
+  if (!laps || growth === undefined || !taskless || !echo || !isRecord(value.acks)) return undefined;
+  const acks: Record<ChildId, true> = {} as Record<ChildId, true>;
+  for (const [rawChild, acknowledged] of Object.entries(value.acks)) {
+    const child = parseChildId(rawChild);
+    if (!child || acknowledged !== true) return undefined;
+    acks[child] = true;
+  }
+  const settlementId = value.settlementId === undefined ? undefined : nonEmptyString(value.settlementId);
+  if (value.settlementId !== undefined && settlementId === undefined) return undefined;
+  if (settlementId === undefined && Object.keys(acks).length > 0) return undefined;
+  // Preserve the durable record's serialized field order: route blobs are
+  // compared as bytes by recovery callers as well as parsed structurally.
+  const parsed: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    switch (key) {
+      case 'laps': parsed.laps = laps; break;
+      case 'growth': parsed.growth = growth; break;
+      case 'taskless': parsed.taskless = taskless; break;
+      case 'echo': parsed.echo = echo; break;
+      case 'settlementId': if (settlementId !== undefined) parsed.settlementId = settlementId; break;
+      case 'acks': parsed.acks = acks; break;
+      default: return undefined;
+    }
+  }
+  return settlementId === undefined
+    ? parsed as unknown as UnsettledRoundReceipt
+    : parsed as unknown as SettledRoundReceipt;
+}
+
+/** Mirrors the reject conditions of `git check-ref-format --branch` without a subprocess. */
+function validBranchName(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value !== '@' && !value.startsWith('-')
+    && !value.startsWith('/') && !value.endsWith('/') && !value.endsWith('.')
+    && !value.includes('..') && !value.includes('@{') && !value.includes('//')
+    && !/[\x00-\x20\x7f ~^:?*[\\]/.test(value)
+    && value.split('/').every((component) => component.length > 0 && !component.startsWith('.'));
+}
+
+function parseHostEntry(value: unknown): HostEntry | undefined {
+  if (!isRecord(value)) return undefined;
+  const host = parseChild(value.host);
+  const pinnedBase = typeof value.pinnedBase === 'string' ? parseCommitSha(value.pinnedBase) : undefined;
+  const tree = typeof value.tree === 'string' ? parseCommitSha(value.tree) : undefined;
+  return host && pinnedBase && tree ? { host, pinnedBase, tree } : undefined;
+}
+
+function parseRoutedObligation(value: unknown): RoutedObligation | undefined {
+  if (!isRecord(value) || !validBranchName(value.branch)) return undefined;
+  const head = typeof value.head === 'string' ? parseCommitSha(value.head) : undefined;
+  const tree = typeof value.tree === 'string' ? parseCommitSha(value.tree) : undefined;
+  return head && tree ? { branch: value.branch, head, tree } : undefined;
+}
+
+function parseRouteFallback(value: unknown): RouteFallback | undefined {
+  if (!isRecord(value) || !validBranchName(value.branch)) return undefined;
+  const from = parseChild(value.from);
+  const to = parseChild(value.to);
+  const evidence = parseStringArray(value.evidence);
+  const head = typeof value.head === 'string' ? parseCommitSha(value.head) : undefined;
+  return from && to && evidence && head ? { from, to, evidence, branch: value.branch, head } : undefined;
+}
+
+function parseReroutePhase(value: unknown): ReroutePhase | undefined {
+  if (!isRecord(value) || !validBranchName(value.sourceBranch)) return undefined;
+  const rejectedTip = typeof value.rejectedTip === 'string' ? parseCommitSha(value.rejectedTip) : undefined;
+  const resetTip = typeof value.resetTip === 'string' ? parseCommitSha(value.resetTip) : undefined;
+  const destination = parseChild(value.destination);
+  return rejectedTip && resetTip && destination
+    ? { sourceBranch: value.sourceBranch, rejectedTip, resetTip, destination }
+    : undefined;
+}
+
 function parseOutboxEntry(value: unknown): OutboxEntry | undefined {
   if (!isRecord(value)) return undefined;
   const eventId = nonEmptyString(value.eventId);
@@ -286,10 +483,16 @@ function parseRoutedItem(value: unknown): RoutedItem | undefined {
   if (fallback.some((child) => child === undefined)) return undefined;
   if (value.rationale !== undefined && typeof value.rationale !== 'string') return undefined;
   if (value.restage !== undefined && typeof value.restage !== 'boolean') return undefined;
+  const taskIds = value.taskIds === undefined ? undefined : parseStringArray(value.taskIds);
+  const obligation = value.obligation === undefined ? undefined : parseRoutedObligation(value.obligation);
+  if ((value.taskIds !== undefined && (!taskIds || taskIds.length === 0)) || (value.obligation !== undefined && !obligation)
+    || (value.restage === false && taskIds === undefined) || (obligation !== undefined && taskIds === undefined)) return undefined;
   return {
     findingId, kind, owner, host, reason, fallback: fallback as ChildId[],
     ...(value.rationale === undefined ? {} : { rationale: value.rationale }),
     ...(value.restage === undefined ? {} : { restage: value.restage }),
+    ...(taskIds === undefined ? {} : { taskIds }),
+    ...(obligation === undefined ? {} : { obligation }),
   };
 }
 
@@ -338,12 +541,18 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const allocation = parseAllocation(value.allocation);
   const hosts = parseHosts(value.hosts);
   const outbox = parseOutbox(value.outbox);
+  const receipt = parseReceipt(value.receipt);
+  const entry = value.entry === undefined ? undefined : parseHostEntry(value.entry);
+  const fallback = value.fallback === undefined ? undefined : Array.isArray(value.fallback) ? value.fallback.map(parseRouteFallback) : undefined;
+  const reroute = value.reroute === undefined ? undefined : parseReroutePhase(value.reroute);
   const currentHostIndex = value.currentHostIndex;
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
-    || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !isRecord(value.receipt) || !outbox) return undefined;
+    || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
+    || (value.entry !== undefined && (!entry || hosts[entry.host] === undefined)) || (fallback?.some((item) => item === undefined) ?? false)
+    || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)) return undefined;
   const items = value.items.map(parseRoutedItem);
   if (items.some((item) => item === undefined)) return undefined;
-  return {
+  const record: RouteRecord = {
     roundId,
     kind,
     phase,
@@ -351,9 +560,14 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     allocation,
     hosts,
     currentHostIndex,
-    receipt: value.receipt,
+    receipt,
+    ...(entry === undefined ? {} : { entry }),
+    ...(fallback === undefined ? {} : { fallback: fallback as RouteFallback[] }),
+    ...(reroute === undefined ? {} : { reroute }),
     outbox,
   };
+  if (reroute && !validatedReroute(record)) return undefined;
+  return record;
 }
 
 /** Parses the marker that identifies the routed host before region mutation. */

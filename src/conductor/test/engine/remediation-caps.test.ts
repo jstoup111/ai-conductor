@@ -57,7 +57,7 @@ describe('readPlanGrowthBudget', () => {
     const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
     try {
       await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
-        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+        growth: { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
       });
 
       await expect(readPlanGrowthBudget(root, STORY_TWO_CONFIG, { persist: true })).resolves.toEqual({
@@ -76,7 +76,7 @@ describe('readPlanGrowthBudget', () => {
     try {
       await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
         effectiveGrowthCap: 20,
-        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+        growth: { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
       });
 
       await expect(readPlanGrowthBudget(root, STORY_TWO_CONFIG, { persist: true })).resolves.toMatchObject({
@@ -120,7 +120,7 @@ describe('readRemediationGateAppendBudget', () => {
     const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
     try {
       await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
-        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+        growth: { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
       });
 
       await expect(readRemediationGateAppendBudget(
@@ -141,7 +141,7 @@ describe('pendingRepairSettlementBudgets', () => {
     const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
     try {
       await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
-        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+        growth: { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
         pendingRepair: {
           receiptId: 'repair-1',
           charges: { prd_audit: { laps: 1, growth: 3 } },
@@ -168,7 +168,7 @@ describe('pendingRepairSettlementBudgets', () => {
     const root = await mkdtemp(join(tmpdir(), 'remediation-caps-'));
     try {
       await writePlanFixture(root, STORY_TWO_SLUG, [taskHeadings('', 24), taskHeadings('rem-', 9)].join('\n'), {
-        growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+        growth: { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
         pendingRepair: {
           receiptId: 'repair-1',
           charges: { prd_audit: { laps: 1, growth: 4 } },

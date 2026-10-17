@@ -2,8 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
+import { load as loadYaml } from 'js-yaml';
 import { readGitBlobs, type GitBlobBatchRunner } from './git-blob-batch.js';
 import { resolveDocsAllowlist } from './phase-marker.js';
+import { parseFeatureBranch } from './feature-branch-identity.js';
+import { readRouteRecord, type RouteRecordGitRunner } from './routing/route-record-reader.js';
+import { parseRoundId, routingEligible } from './routing/route-types.js';
 
 /**
  * The stem with a leading `YYYY-MM-DD-` date prefix removed. Duplicated here
@@ -83,6 +87,8 @@ export interface EvaluateProtectedArtifactSealRotationInRepositoryInput {
   seal: ProtectedArtifactSeal;
   headCommit: string;
   baseTipRef?: string;
+  /** Test seam for the routing-only reads added to the rotation check. */
+  git?: RouteRecordGitRunner;
 }
 
 export type ProtectedArtifactSealRotationVerdict =
@@ -351,15 +357,11 @@ function optionalBuffersEqual(left: Buffer | undefined, right: Buffer | undefine
   return left === undefined ? right === undefined : right !== undefined && left.equals(right);
 }
 
-function hasRecordedRemediationTaskHeading(
-  content: Buffer | undefined,
-  appendedRemediationTaskIds: readonly string[] | undefined,
-): boolean {
-  if (!content || !appendedRemediationTaskIds?.length) return false;
-  const recorded = new Set(appendedRemediationTaskIds);
+function hasRemediationTaskHeading(content: Buffer | undefined): boolean {
+  if (!content) return false;
   return content.toString('utf8').split('\n').some((line) => {
     const heading = /^### Task ([^:\s]+):/.exec(line);
-    return heading !== null && recorded.has(heading[1]);
+    return heading !== null && heading[1].startsWith('rem-');
   });
 }
 
@@ -493,7 +495,7 @@ export function evaluateProtectedArtifactSealRotation({
           rotationPaths.push(path);
           continue;
         }
-        const engineAppendExit = hasRecordedRemediationTaskHeading(head, appendedRemediationTaskIds)
+        const engineAppendExit = hasRemediationTaskHeading(head) && appendedRemediationTaskIds?.length
           ? 'unvouched' as const
           : 'not-present' as const;
         return engineAppendExit === 'unvouched'
@@ -708,6 +710,57 @@ export async function readRecordedAppendedRemediationTaskIds(projectRoot: string
 }
 
 /**
+ * Frozen route allocations survive worktree recreation, unlike the flat
+ * engine-state append cache.  Read them only after the ordinary cursor and
+ * setting predicate says this is a routed stacked feature, preserving the
+ * N=1 path's complete absence of routing-ref reads.
+ */
+function makeRouteRecordGitRunner(projectRoot: string): RouteRecordGitRunner {
+  return async (args) => {
+    const result = await execa('git', args, { cwd: projectRoot, reject: false });
+    return { exitCode: result.exitCode ?? 1, stdout: result.stdout };
+  };
+}
+
+async function readFrozenAllocationRemediationTaskIds(projectRoot: string, git: RouteRecordGitRunner): Promise<string[]> {
+  const head = await git(['symbolic-ref', '-q', '--short', 'HEAD']);
+  if (head.exitCode !== 0) return [];
+  const identity = parseFeatureBranch(head.stdout.trim());
+  if (identity.kind !== 'child' && identity.kind !== 'leaf') return [];
+
+  let config: Parameters<typeof routingEligible>[1];
+  try {
+    config = loadYaml(await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8')) as typeof config;
+  } catch {
+    return [];
+  }
+  // The sealed-artifact path has no conductor instance. Its lightweight
+  // eligibility seam admits only a daemon-owned stacked branch with another
+  // child branch for the same feature; N=1 never reaches routing refs.
+  const children = await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/feat']);
+  const hasChild = children.exitCode === 0 && children.stdout.split('\n').some((branch) => {
+    const candidate = parseFeatureBranch(branch);
+    return candidate.kind === 'child' && candidate.slug === identity.slug;
+  });
+  if (!hasChild || !routingEligible({ kind: 'active' }, config)) return [];
+  const slug = identity.slug;
+
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) return [];
+  const ids = new Set<string>();
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!roundId) return [];
+    const stored = await readRouteRecord(git, slug, roundId);
+    if (stored.kind !== 'record') return [];
+    for (const allocation of Object.values(stored.record.allocation)) {
+      for (const id of allocation.remTaskIds) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/**
  * Whether `commit` names an object this repository can read. Distinguishes a
  * seal whose baseline was rewritten away from a probe that failed for any
  * other reason — only the latter is `baseline-unresolvable`.
@@ -726,6 +779,7 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
   seal,
   headCommit,
   baseTipRef,
+  git: injectedGit,
 }: EvaluateProtectedArtifactSealRotationInRepositoryInput): Promise<ProtectedArtifactSealRotationVerdict> {
   const ancestry = await execa(
     'git',
@@ -806,7 +860,10 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
     baseTipArtifacts,
     ...(sealedArtifacts ? { sealedArtifacts } : {}),
     authorshipByPath,
-    appendedRemediationTaskIds: await readRecordedAppendedRemediationTaskIds(projectRoot),
+    appendedRemediationTaskIds: [
+      ...await readRecordedAppendedRemediationTaskIds(projectRoot),
+      ...await readFrozenAllocationRemediationTaskIds(projectRoot, injectedGit ?? makeRouteRecordGitRunner(projectRoot)),
+    ],
   });
   if (verdict.permitted || !('path' in verdict)) return verdict;
   return { ...verdict, ...provenanceByPath.get(verdict.path)?.provenance };

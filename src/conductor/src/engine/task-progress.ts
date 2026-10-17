@@ -14,7 +14,11 @@ import {
   parseCoverageBindingEnvelope,
   projectChildOwnership,
 } from './coverage-binding-envelope.js';
-import { parseChildId, type ChildId } from './child-context.js';
+import type { ChildId } from './child-context.js';
+import {
+  readCommittedRemediationTaskChildren,
+  resolveRemediationTaskChild,
+} from './routing/owner-derivation.js';
 import {
   createRepairObligationStore,
   repairPlanIdentity,
@@ -123,37 +127,37 @@ export async function resolveChildTaskScope(
   }
 
   const state = await readEngineState(join(projectRoot, '.pipeline', 'engine-state.json'));
-  if (!state.ok) {
-    return {
-      kind: 'refused',
-      reason: `child ${child} task membership is unavailable: engine state is unreadable (${state.message})`,
-    };
-  }
-  const rawRecorded = state.value.appendedRemediationTaskIds;
-  if (rawRecorded !== undefined && (!Array.isArray(rawRecorded) || !rawRecorded.every((id) => typeof id === 'string' && id.length > 0))) {
-    return {
-      kind: 'refused',
-      reason: `child ${child} task membership is unavailable: appended remediation task ids are invalid`,
-    };
-  }
-  const recorded = (rawRecorded ?? []) as string[];
-  const rawChildren = state.value.appendedRemediationTaskChildren;
+  // This state is a reconstruction cache, not rem-task authority. A committed
+  // Child line remains readable after a worktree recreation or cache damage.
+  const rawRecorded = state.ok ? state.value.appendedRemediationTaskIds : undefined;
+  const recorded = Array.isArray(rawRecorded)
+    ? rawRecorded.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    : [];
+  const rawChildren = state.ok ? state.value.appendedRemediationTaskChildren : undefined;
   const children =
     rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
       ? rawChildren as Record<string, unknown>
       : undefined;
-  for (const id of recorded) {
-    const owner = typeof children?.[id] === 'number' ? parseChildId(children[id] as number) : undefined;
-    if (owner === undefined) {
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot, envelope.slug);
+  // A `rem-` prefix alone does not prove engine ownership: older plans may
+  // carry an ordinary remediation task with that spelling. A durable Child
+  // line proves a recreated worktree's engine task; otherwise only the
+  // engine-state ledger makes the missing attribution a refusal.
+  const remediationIds = [...new Set([...recorded, ...Object.keys(committedChildren)])];
+  const remediationOwners = new Map<string, ChildId>();
+  for (const id of remediationIds) {
+    const resolved = await resolveRemediationTaskChild(projectRoot, id, children?.[id], envelope.slug);
+    if (resolved.kind === 'unreadable') {
       return {
         kind: 'refused',
         reason: `child ${child} task membership is unavailable: remediation task ${id} has no recorded child`,
       };
     }
+    remediationOwners.set(id, resolved.child);
   }
 
   const owned = projectChildOwnership(envelope, child).taskIds;
-  const remediation = recorded.filter((id) => children?.[id] === child);
+  const remediation = [...remediationOwners].flatMap(([id, owner]) => owner === child ? [id] : []);
   return { kind: 'available', taskIds: [...new Set([...owned, ...remediation])] };
 }
 
@@ -249,7 +253,14 @@ export async function resolveTaskIdsWithDiagnostics(
     let allOpenObligationsEvidenced = true;
     for (const obligation of obligations) {
       if (obligation.tasks[canonicalId].status === 'resolved') continue;
-      const strictRange = await listCommitsWithTrailersAfterRepairBoundary(projectRoot, obligation.baseline.head);
+      // Routed obligations are bound to their host branch.  Never let a leaf
+      // commit satisfy a host repair merely because the current checkout is
+      // on the leaf.
+      const strictRange = await listCommitsWithTrailersAfterRepairBoundary(
+        projectRoot,
+        obligation.baseline.head,
+        obligation.baseline.branch,
+      );
       if (strictRange.kind !== 'available') {
         allOpenObligationsEvidenced = false;
         unavailableReasons.set(planId, strictRange.reason);

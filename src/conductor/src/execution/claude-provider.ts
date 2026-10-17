@@ -26,7 +26,6 @@ import {
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withGitGuardPath } from './child-environment.js';
-import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
@@ -41,6 +40,13 @@ import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from
 
 function claudeDisplayName(): string {
   return providerDescriptor('claude').displayName;
+}
+
+// The catalog constructs adapters, while the guard reaches routing state. Keep
+// that guard behind the actual dispatch boundary so catalog loading stays pure.
+async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
+  const guard = await import('../engine/git-guard.js');
+  return guard.ensureGitGuardForDispatch(cwd);
 }
 
 function abortedInvocationResult(): InvokeResult {

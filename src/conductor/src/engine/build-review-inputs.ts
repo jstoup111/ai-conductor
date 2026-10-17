@@ -78,7 +78,7 @@ export interface BuildReviewInputs {
   baseRef: string;
   /** Where the base came from — a closed parent child, origin's discovered
    * default, or the local fallback (no remote / probe failure). */
-  baseKind: 'child-parent' | 'remote' | 'local';
+  baseKind: 'child-parent' | 'routed-repair' | 'remote' | 'local';
   /** The local tracking ref's sha at resolution time, or `null` on fallback. */
   trackingRefSha: string | null;
   /** The true remote head sha reported by the freshness probe, or `null` on
@@ -838,40 +838,51 @@ export async function assembleBuildReviewInputs(
   let trackingRefSha: string | null;
   let remoteHeadSha: string | null;
   let fresh: boolean;
-  if (childBase.kind === 'parent') {
-    // A closure tip is local daemon state, not a remote freshness source.
-    // It is already immutable review authority, so it has no degraded-fetch
-    // advisory and must not initiate a default-branch probe.
-    baseRef = childBase.sha;
-    baseKind = 'child-parent';
-    trackingRefSha = null;
-    remoteHeadSha = null;
-    fresh = true;
-  } else {
-    if (childBase.kind === 'parent-missing') {
+  switch (childBase.kind) {
+    case 'parent':
+      // A closure tip is local daemon state, not a remote freshness source.
+      // It is already immutable review authority, so it has no degraded-fetch
+      // advisory and must not initiate a default-branch probe.
+      baseRef = childBase.sha;
+      baseKind = 'child-parent';
+      trackingRefSha = null;
+      remoteHeadSha = null;
+      fresh = true;
+      break;
+    case 'routed-repair':
+      // The host pin is written before region entry mutates its branch. Its
+      // immutable repair range must not be replaced by a later closure ref.
+      baseRef = childBase.sha;
+      baseKind = 'routed-repair';
+      trackingRefSha = null;
+      remoteHeadSha = null;
+      fresh = true;
+      break;
+    case 'parent-missing':
       throw new MergeBaseError(
         `build_review cannot resolve parent child ${childBase.parent}: branch ${childBase.branch} is missing`,
         childBase.branch,
       );
-    }
-    if (childBase.kind === 'parent-not-ancestor') {
+    case 'parent-not-ancestor':
       throw new MergeBaseError(
         `build_review cannot resolve parent child ${childBase.parent}: tip ${childBase.sha} is not an ancestor of HEAD`,
         childBase.sha,
       );
+    case 'none': {
+      const resolution = await resolveFreshBase(git);
+      if (resolution.kind === 'local') {
+        console.warn(
+          `[build_review] base resolution degraded to local fallback (ref=${resolution.ref}); ` +
+            'grading against a possibly stale base. No origin remote, or the freshness probe/fetch failed.',
+        );
+      }
+      baseRef = resolution.ref;
+      baseKind = resolution.kind;
+      trackingRefSha = resolution.trackingRefSha;
+      remoteHeadSha = resolution.remoteHeadSha;
+      fresh = resolution.fresh;
+      break;
     }
-    const resolution = await resolveFreshBase(git);
-    if (resolution.kind === 'local') {
-      console.warn(
-        `[build_review] base resolution degraded to local fallback (ref=${resolution.ref}); ` +
-          'grading against a possibly stale base. No origin remote, or the freshness probe/fetch failed.',
-      );
-    }
-    baseRef = resolution.ref;
-    baseKind = resolution.kind;
-    trackingRefSha = resolution.trackingRefSha;
-    remoteHeadSha = resolution.remoteHeadSha;
-    fresh = resolution.fresh;
   }
 
   // Freeze both revision identities before any dependent read. The symbolic

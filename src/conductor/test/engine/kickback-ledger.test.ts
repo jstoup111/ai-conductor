@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:30, task:rem-as-built-rem-ab4-1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:30, task:66, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
@@ -706,7 +706,7 @@ describe('kickback-ledger', () => {
       });
     });
 
-    it('reads reconciled plan growth without persisting when requested', async () => {
+    it('fails closed instead of reconciling a stale authored denominator', async () => {
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
@@ -725,18 +725,13 @@ describe('kickback-ledger', () => {
       const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
       const before = await readFile(ledgerPath, 'utf8');
 
-      await expect(readGrowthAccounting(dir, 4, { persist: false })).resolves.toEqual({
-        growth: { authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 2 },
-        authoredSource: 'plan',
-      });
+      await expect(readGrowthAccounting(dir, 4, { persist: false }))
+        .rejects.toThrow('stored authored denominator 0 disagrees with sealed plan denominator 12');
       await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
 
-      await expect(readGrowth(dir, 4)).resolves.toEqual({
-        authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 2,
-      });
-      await expect(readKickbackLedger(dir)).resolves.toMatchObject({
-        growth: { authored: 10, added: 2, byGate: { prd_audit: 2 } },
-      });
+      await expect(readGrowth(dir, 4))
+        .rejects.toThrow('stored authored denominator 0 disagrees with sealed plan denominator 12');
+      await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
     });
 
     it('prefers the recorded active plan over the slug-matched feature plan', async () => {

@@ -6,6 +6,7 @@ import {
   parsePlanTasks,
   canonicalTaskId,
   listCommitsWithTrailers,
+  listCommitsWithTrailersAfterRepairBoundary,
   resolveOriginRef,
 } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
@@ -554,7 +555,26 @@ export async function seedTaskStatus(
         // trailer as resolving the task for build-step routing
         // (adr-2026-07-23, #859), while current repair obligations take
         // precedence over that historic trailer evidence.
-        const provenSha = provenCompletions.get(canonicalId);
+        let provenSha = provenCompletions.get(canonicalId);
+        // A restored row for a routed repair must read its host branch even
+        // when this worktree is currently checked out on the leaf.  Ordinary
+        // obligations retain the existing branch-scoped restoration map.
+        const obligationStanding = taskObligationStanding(repairs.value, planIdentity, taskId);
+        const branchBound = obligationStanding.kind === 'live'
+          ? obligationStanding.live.find((obligation) => obligation.baseline.branch !== undefined)
+          : undefined;
+        if (branchBound?.baseline.branch) {
+          const range = await listCommitsWithTrailersAfterRepairBoundary(
+            projectRoot,
+            branchBound.baseline.head,
+            branchBound.baseline.branch,
+          );
+          provenSha = range.kind === 'available'
+            ? range.commits.find((commit) => (commit.trailers.Task ?? []).some(
+              (trailer) => canonicalTaskId(trailer) === canonicalId,
+            ))?.sha
+            : undefined;
+        }
         const newTask: TaskStatusRecord = provenSha
           ? {
               id: taskId,

@@ -26,6 +26,7 @@ import type { performRebase } from './rebase.js';
 import type { RemediationProjectionLimits } from './remediation-projection.js';
 import type { resolveActiveChild } from './child-cursor.js';
 import type { advanceChildRegion, enterChildRegion } from './child-lifecycle.js';
+import type { enterHostRegion } from './routing/host-region-entry.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -85,6 +86,7 @@ export interface ConductorOptions {
   childRegionLifecycle?: {
     resolveActiveChild?: typeof resolveActiveChild;
     enterChildRegion?: typeof enterChildRegion;
+    enterHostRegion?: typeof enterHostRegion;
     advanceChildRegion?: typeof advanceChildRegion;
   };
   operatorParkBoundary?: () => Promise<boolean>;
