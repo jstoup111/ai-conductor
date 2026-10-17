@@ -11,6 +11,7 @@ import {
   parseRouteRecord,
   type RepairMarker,
   type RevalidationQueueRecord,
+  type UnsettledRoundReceipt,
   type RouteRecord,
   type RoundId,
 } from './route-types.js';
@@ -194,7 +195,8 @@ export async function createRouteRecord(
 ): Promise<{ readonly kind: 'created'; readonly record: RouteRecord } | Exclude<WriteRouteRecordResult, { readonly kind: 'updated' }>> {
   const hosts = Object.keys(input.allocation).reduce((result, value) => ({ ...result, [value]: 'pending' as const }), {} as Record<string, RouteRecord['hosts'][keyof RouteRecord['hosts']]>);
   if (Object.keys(hosts).length === 0) return { kind: 'unavailable' };
-  const record: RouteRecord = { ...input, phase: 'prepared', hosts, currentHostIndex: 0, receipt: input.receipt ?? {}, outbox: [] };
+  const emptyReceipt: UnsettledRoundReceipt = {};
+  const record: RouteRecord = { ...input, phase: 'prepared', hosts, currentHostIndex: 0, receipt: input.receipt ?? emptyReceipt, outbox: [] };
   const write = await writeRoutingTransaction(worktree, slug, [{ kind: 'create-record', record }], dependencies);
   return write.kind === 'updated' ? { kind: 'created', record } : write;
 }

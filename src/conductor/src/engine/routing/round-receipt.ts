@@ -16,7 +16,18 @@ import {
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseChildId } from '../child-context.js';
 import { readRouteRecord, writeRouteRecord } from './route-record-store.js';
-import { parseRoundId, routingEligible, WHOLE_FEATURE_BUDGET_GATES, type ReceiptLapCharges, type RoundId, type RouteRecord, type TasklessReceiptGate } from './route-types.js';
+import {
+  parseRoundId,
+  routingEligible,
+  WHOLE_FEATURE_BUDGET_GATES,
+  type ReceiptLapCharges,
+  type RoundId,
+  type RoundReceipt,
+  type RouteRecord,
+  type SettledRoundReceipt,
+  type TasklessReceiptGate,
+  type UnsettledRoundReceipt,
+} from './route-types.js';
 
 /** The caller-established routing context required before receipt refs are read. */
 export interface ReceiptRoutingScope {
@@ -167,10 +178,20 @@ function receiptCharges(record: RouteRecord): { laps: ReceiptLapCharges; growth:
   return { laps, growth };
 }
 
+function withTasklessCharge(receipt: RoundReceipt, gate: TasklessReceiptGate): RoundReceipt {
+  const taskless = { ...(receipt.taskless ?? {}), [gate]: 1 };
+  if (receipt.settlementId === undefined) {
+    const unsettled: UnsettledRoundReceipt = { ...receipt, taskless };
+    return unsettled;
+  }
+  const settled: SettledRoundReceipt = { ...receipt, taskless };
+  return settled;
+}
+
 /** Apply the durable accounting carried by one already-settled round receipt. */
 function applySettledReceiptToLedger(ledger: KickbackLedger, record: RouteRecord): KickbackLedger {
+  if (record.receipt.settlementId === undefined) return ledger;
   const settlementId = record.receipt.settlementId;
-  if (!settlementId) return ledger;
   const charges = receiptCharges(record);
   const gates = { ...ledger.gates };
   for (const gate of WHOLE_FEATURE_BUDGET_GATES) {
@@ -243,8 +264,7 @@ export async function reconcileReceiptLedgerUnlocked(
   let ledger = await readKickbackLedger(projectRoot);
   for (const item of records) {
     if (item.kind !== 'ok') return { kind: item.kind };
-    const settlementId = item.record.receipt.settlementId;
-    if (!settlementId || ledger.settlementReceipts?.[settlementId]) continue;
+    if (item.record.receipt.settlementId === undefined || ledger.settlementReceipts?.[item.record.receipt.settlementId]) continue;
     // Reconciliation deliberately uses the receipt's durable numbers rather
     // than current caps: the admission was already settled by the ref CAS.
     ledger = applySettledReceiptToLedger(ledger, item.record);
@@ -269,15 +289,24 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
       if (stored.kind !== 'record') return { kind: 'halted', reason: `routing round ${input.roundId} is unreadable` } as const;
       if (currentHost(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
       const receipt = stored.record.receipt;
-      if (receipt.settlementId) {
-        if (receipt.acks?.[input.dispatchingChild]) return { kind: 'acknowledged', settlementId: receipt.settlementId } as const;
-        const wrote = await writeRouteRecord(input.projectRoot, stored, { ...stored.record, receipt: { ...receipt, acks: { ...(receipt.acks ?? {}), [input.dispatchingChild]: true } } }, { git });
+      if (receipt.settlementId !== undefined) {
+        if (receipt.acks[input.dispatchingChild]) return { kind: 'acknowledged', settlementId: receipt.settlementId } as const;
+        const acknowledgedReceipt: SettledRoundReceipt = {
+          ...receipt,
+          acks: { ...receipt.acks, [input.dispatchingChild]: true },
+        };
+        const wrote = await writeRouteRecord(input.projectRoot, stored, { ...stored.record, receipt: acknowledgedReceipt }, { git });
         return wrote.kind === 'updated' ? { kind: 'acknowledged', settlementId: receipt.settlementId } as const : wrote.kind === 'restack-journal-open' ? { kind: 'halted', reason: `routing round ${input.roundId} has an open restack journal` } as const : { kind: 'retry' as const };
       }
       const settlementId = receiptSettlementId(input.roundId, receipt);
+      const settledReceipt: SettledRoundReceipt = {
+        ...receipt,
+        settlementId,
+        acks: { [input.dispatchingChild]: true },
+      };
       const settledRecord = {
         ...stored.record,
-        receipt: { ...receipt, settlementId, acks: { ...(receipt.acks ?? {}), [input.dispatchingChild]: true } },
+        receipt: settledReceipt,
       };
       const ledger = await readKickbackLedger(input.projectRoot);
       const next = nextLedgerForReceipt(ledger, settledRecord, input.budgets);
@@ -334,7 +363,7 @@ export async function chargeTasklessAtAdmission(input: {
   const receipt = current.record.receipt;
   const wrote = await writeRouteRecord(input.projectRoot, current, {
     ...current.record,
-    receipt: { ...receipt, taskless: { ...(receipt.taskless ?? {}), [input.gate]: 1 } },
+    receipt: withTasklessCharge(receipt, input.gate),
   }, { git });
   return wrote.kind === 'updated'
     ? { kind: 'charged', count: count + 1 }
