@@ -1,6 +1,6 @@
 // Covers: task:14, task:15, task:16, task:19
 import { describe, expect, it, vi } from 'vitest';
-import { runDaemon, type FeatureOutcome } from '../../src/engine/daemon.js';
+import { runDaemon, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
 import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import { RepairQueue } from '../../src/engine/repair-queue.js';
@@ -8,6 +8,12 @@ import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { PASSING_SUITE, buildPrFixture, skipReplay } from './autoresolve-pr-fixture.js';
 
 const done = (slug: string): FeatureOutcome => ({ slug, status: 'done' });
+
+const repairCapabilityContract = {
+  // @ts-expect-error a queue cannot be injected without its claim-time runner.
+  repairs: { queue: new RepairQueue() },
+} satisfies Pick<DaemonDeps, 'repairs'>;
+void repairCapabilityContract;
 
 describe('daemon pooled repairs', () => {
   it('claims repairs before features and releases their reserved pool key', async () => {
@@ -20,12 +26,12 @@ describe('daemon pooled repairs', () => {
 
     await runDaemon({
       claims,
-      repairQueue: queue,
       repairPriority: (slug) => slug === 'p0' ? 'P0' : 'P2',
-      runRepair: async (request) => {
+      repairs: { queue,
+      run: async (request) => {
         repairs.push(request.prUrl);
         expect(claims.list()).toContain(`repair:${request.prUrl}`);
-      },
+      } },
       discoverBacklog: async () => [{ slug: 'feature' }],
       runFeature: async (item) => { features.push(item.slug); return done(item.slug); },
     }, { concurrency: 1, once: true, maxItems: 1 });
@@ -40,7 +46,7 @@ describe('daemon pooled repairs', () => {
     queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/1', slug: 'one', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-01T00:00:00Z' });
     const runRepair = vi.fn(async () => {});
     await runDaemon({
-      repairQueue: queue, runRepair, isPaused: async () => true,
+      repairs: { queue, run: runRepair }, isPaused: async () => true,
       discoverBacklog: async () => [], runFeature: async (item) => done(item.slug),
     }, { concurrency: 1, once: true });
     expect(runRepair).not.toHaveBeenCalled();
@@ -85,8 +91,7 @@ describe('daemon pooled repairs', () => {
             labels: [], isDraft: false, hasHaltBodyMarker: false,
           }),
         },
-        repairQueue: queue,
-        registerRepair: (request, run) => runners.set(request.prUrl, run),
+        repairs: { queue, register: (request, run) => runners.set(request.prUrl, run) },
         autoresolve: {
           enabled: true,
           isEligible: async () => ({ eligible: true }),
@@ -100,8 +105,7 @@ describe('daemon pooled repairs', () => {
       });
 
       await runDaemon({
-        repairQueue: queue,
-        runRepair: async (request) => runners.get(request.prUrl)?.(),
+        repairs: { queue, run: async (request) => runners.get(request.prUrl)?.() },
         discoverBacklog: async () => [],
         runFeature: async (item) => done(item.slug),
       }, { concurrency: 1, once: true });

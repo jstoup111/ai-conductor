@@ -9,7 +9,7 @@ describe('timeMaintenancePhase', () => {
     const emit = vi.fn();
 
     await timeMaintenancePhase(
-      'startup-refresh',
+      { phase: 'startup-refresh' },
       async () => {
         now += 25;
       },
@@ -30,7 +30,7 @@ describe('timeMaintenancePhase', () => {
     const failure = new Error('refresh failed');
 
     await expect(timeMaintenancePhase(
-      'rekick',
+      { phase: 'rekick' },
       async () => {
         now += 40;
         throw failure;
@@ -50,7 +50,7 @@ describe('timeMaintenancePhase', () => {
     const emit = vi.fn();
 
     await timeMaintenancePhase(
-      'parked-reconcile',
+      { phase: 'parked-reconcile' },
       async () => 'skipped-unchanged' as const,
       { now: () => 1, emit },
     );

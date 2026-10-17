@@ -51,8 +51,7 @@ describe('daemon width-one parity', () => {
 
     const daemon = runDaemon({
       claims,
-      repairQueue: queue,
-      runRepair,
+      repairs: { queue, run: runRepair },
       discoverBacklog: async () => ['first', 'second', 'third'].map((slug) => ({ slug })),
       runFeature: async (item): Promise<FeatureOutcome> => {
         events.push(`feature:start:${item.slug}`);

@@ -116,6 +116,7 @@ export interface ParkedSweepEntry {
 }
 
 export interface ParkedSweepResult {
+  outcome?: 'completed' | 'skipped-unchanged';
   entries: ParkedSweepEntry[];
   counts: {
     reconciled: number;
@@ -287,7 +288,7 @@ async function listShippedStemsOnMain(
 async function listBranchesBySlug(
   runGit: GitRunner,
   projectRoot: string,
-): Promise<Map<string, string[]> | null> {
+): Promise<{ branchesBySlug: Map<string, string[]>; refsFingerprintMaterial: string } | null> {
   try {
     const { stdout } = await runGit([
       'for-each-ref',
@@ -311,10 +312,7 @@ async function listBranchesBySlug(
       if (existing) existing.push(ref);
       else bySlug.set(key, [ref]);
     }
-    Object.defineProperty(bySlug, 'parkedInputFingerprint', {
-      value: `${originMainSha}\n${stdout}`,
-    });
-    return bySlug;
+    return { branchesBySlug: bySlug, refsFingerprintMaterial: `${originMainSha}\n${stdout}` };
   } catch {
     return null;
   }
@@ -324,7 +322,7 @@ async function fingerprintParkedInputs(
   projectRoot: string,
   parkedSlugs: readonly string[],
   registeredWorktrees: readonly RegisteredWorktree[] | null,
-  branchesBySlug: Map<string, string[]> | null,
+  branches: { branchesBySlug: Map<string, string[]>; refsFingerprintMaterial: string } | null,
   shippedStems: readonly string[] | null,
   isFeatureInFlight: ((slug: string) => boolean) | undefined,
   inFlightSlugs: (() => readonly string[]) | undefined,
@@ -348,10 +346,9 @@ async function fingerprintParkedInputs(
       return [slug, (error as { code?: unknown }).code === 'ENOENT' ? false : 'unreadable'] as const;
     }
   }));
-  const refs = branchesBySlug === null
+  const refs = branches === null
     ? null
-    : (branchesBySlug as Map<string, string[]> & { parkedInputFingerprint?: string }).parkedInputFingerprint
-      ?? [...branchesBySlug.entries()].sort(([a], [b]) => a.localeCompare(b));
+    : branches.refsFingerprintMaterial;
   const input = JSON.stringify({
     worktrees: registeredWorktrees,
     refs,
@@ -631,8 +628,9 @@ async function gatherMergeEvidence(
     ? prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot))
     : [];
   if (shippedStems === null) return null;
-  const branchesBySlug =
-    prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
+  const branchesBySlug = prefetched?.branchesBySlug
+    ?? (await listBranchesBySlug(runGit, projectRoot))?.branchesBySlug
+    ?? null;
   if (branchesBySlug === null) return null;
 
   const key = undatedStem(slug);
@@ -745,6 +743,7 @@ export async function reconcileParkedFeatures(
     && now - opts.memo.completedAt < 10 * 60 * 1000
   ) {
     return {
+      outcome: 'skipped-unchanged',
       entries: previous.entries.map((entry) => ({ ...entry })),
       counts: { ...previous.counts },
       refusedByReason: { ...previous.refusedByReason },
@@ -784,7 +783,7 @@ export async function reconcileParkedFeatures(
         runGit,
         opts.projectRoot,
         slug,
-        prefetched,
+        { ...prefetched, branchesBySlug: prefetched.branchesBySlug?.branchesBySlug ?? null },
         candidate.branch,
       );
       if (evidence === null) {
@@ -946,11 +945,12 @@ export async function reconcileParkedFeatures(
     for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }
 
-  const result = { entries, counts, refusedByReason };
+  const result = { outcome: 'completed' as const, entries, counts, refusedByReason };
   if (opts.memo) {
     opts.memo.fingerprint = fingerprint;
     opts.memo.completedAt = now;
     opts.memo.result = {
+      outcome: result.outcome,
       entries: entries.map((entry) => ({ ...entry })),
       counts: { ...counts },
       refusedByReason: { ...refusedByReason },
