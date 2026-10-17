@@ -109,9 +109,13 @@ build_review:
   # Repository-local guard against bypassing this repository's event spine.
   # Routed to Codex terra 2026-10-07 (operator order) to split rubrics across
   # providers without paying for astra.
+  # Disabled 2026-10-17 (operator order): operator acceptances are keyed by exact
+  # finding identity, so this rubric re-raises an accepted finding under a new id
+  # every lap and halts features on substance the operator already decided.
+  # Re-enable once acceptance survives a re-raise (#3271).
   custom_rubrics:
     eventSpine:
-      enabled: true
+      enabled: false
       skill: event-spine
       source: project
       llm_provider: codex

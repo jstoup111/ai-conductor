@@ -29,9 +29,21 @@ afterEach(async () => {
 });
 
 async function eventSpineDeclaration() {
-  const loaded = await loadConfig(repoRoot);
-  expect(loaded.ok).toBe(true);
-  if (!loaded.ok) throw new Error('repository config must load');
+  const repository = await loadConfig(repoRoot);
+  expect(repository.ok).toBe(true);
+  if (!repository.ok) throw new Error('repository config must load');
+  // The live repository may switch the rubric off; these tests settle the
+  // policy its declaration names when it is enabled.
+  const customRubrics = repository.config.build_review?.custom_rubrics;
+  const eventSpine = customRubrics?.eventSpine;
+  if (!eventSpine) throw new Error('repository must declare the eventSpine rubric');
+  const loaded = {
+    ...repository,
+    config: {
+      ...repository.config,
+      build_review: { ...repository.config.build_review, custom_rubrics: { ...customRubrics, eventSpine: { ...eventSpine, enabled: true } } },
+    },
+  };
   const entry = resolveBuildReviewConfig(loaded.config).catalog.find((item) => item.id === 'eventSpine');
   if (!entry || entry.kind !== 'custom') throw new Error('eventSpine custom rubric must resolve');
   return { loaded, entry };
