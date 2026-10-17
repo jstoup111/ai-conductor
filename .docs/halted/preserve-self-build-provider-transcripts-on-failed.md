@@ -1,22 +1,20 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-17T14:28:25.293Z
+Status: halted
 Slug: preserve-self-build-provider-transcripts-on-failed
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-preserve-self-build-provider-transcripts-on-failed
-Head SHA: adfb3a8eee684abd564d5dfcad44d88d60ec3edf
-Halted at: 2026-10-17T14:08:25.353Z
+Head SHA: c1a015b3d7df9100d8eadb214e2800a7d5507979
+Halted at: 2026-10-17T14:32:50.425Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: remediation effect is not finalized
+build_review adjudication halted: applied action effect awaits its BUILD attempt outside the current sources
 route: halt
 0744b362-3fbf-4e6c-9e14-42a657cd74cc [reject/resolved] sources: eventSpine:sha256:39c7ece14af1450d260037cd94069681b810c3433d7b5c2a7453324a4a319663, eventSpine:sha256:6b4c2f72929e3eba2d776bbcc59a92059991e010568f98bf8e0b36d95d781e46, eventSpine:sha256:8208c81a688342bc410fb8cd2406af20271e37b450e22834e5149102afeab73d, eventSpine:sha256:985bc28a6d18f3f0db308277f526938b8999737182544a4b1125caabe4ff2370; effect: none
 244391f0-d696-47c6-93bf-a22fc77a346e [act/resolved] sources: implementationQuality:sha256:d226d3d15fa79f6e7734b2412aa70dc9b4785ac221354e362697ae806e9adf33; effect: action:applied:b0ef843b-e409-4f3f-ab55-d23fab9deb24
@@ -38,9 +36,10 @@ c6548f1f-424c-4a72-ac11-2cbc52a49d3d [act/resolved] sources: implementationQuali
 20238fb6-cea7-4e2d-befc-249bf2877b67 [act/resolved] sources: implementationQuality:sha256:a6a703dba9107ecb6f55a62827087a5dd01a78597431e3778e4f022af5d93d62; effect: action:applied:c4ef7ac1-f012-433f-b1d5-76c20c47baa1
 9967b205-8ebe-4f6e-ba97-fe41a4a45263 [act/resolved] sources: implementationQuality:sha256:47c0c787d19e43d2799d3936a2da103b9b7fa452a4b4ec4b01f7b33806243634; effect: action:applied:ac3a2d96-7bfc-4215-b8d9-578007abfa9a
 31930cb5-ea16-4a2e-91d9-eaedd2cd1de2 [act/resolved] sources: implementationQuality:sha256:833af7e8864af552dbc173537bf321a94984ca49734b838dd343a0e2e6feecb0; effect: action:applied:1274fc9e-0ae5-447f-b9e4-d078b9a9d182
-3406c26c-d1af-4ba9-8a41-0c9982cc8d8a [act/open] sources: implementationQuality:sha256:cb926da8d6f3b0784f40d34ebeeeb7bdfec472417fb8b90c81faa2c528f18624, implementationQuality:sha256:0282d93c4d5d6a646ce7c455b3a29a370e807710d6f87b4d7b3568f929ae7bee; effect: action:failed:48316c2e-2790-4ff8-96ab-4284050e6753
-c9bc0c9d-30f0-4f38-b74e-89f584374ffa [act/open] sources: implementationQuality:sha256:fb73169c5fdd8e8682b603d4c575ca5dc77715c166f7bf737f67cbba3fd7a805; effect: action:failed:0048fbbc-f175-4dd9-b3de-b4f1c8bad6f7
-3f3ea72e-abb2-4a91-aa54-d2d259f37917 [act/open] sources: implementationQuality:sha256:e4d47c895c1b5f4550a1f63e0024a073699ff30d0e7ca4cdbb72eb54c2d243c1; effect: action:failed:12992dc9-a28e-446b-9075-5a5f183537b0
+3406c26c-d1af-4ba9-8a41-0c9982cc8d8a [act/resolved] sources: implementationQuality:sha256:cb926da8d6f3b0784f40d34ebeeeb7bdfec472417fb8b90c81faa2c528f18624, implementationQuality:sha256:0282d93c4d5d6a646ce7c455b3a29a370e807710d6f87b4d7b3568f929ae7bee; effect: action:failed:48316c2e-2790-4ff8-96ab-4284050e6753
+c9bc0c9d-30f0-4f38-b74e-89f584374ffa [act/resolved] sources: implementationQuality:sha256:fb73169c5fdd8e8682b603d4c575ca5dc77715c166f7bf737f67cbba3fd7a805; effect: action:failed:0048fbbc-f175-4dd9-b3de-b4f1c8bad6f7
+3f3ea72e-abb2-4a91-aa54-d2d259f37917 [act/resolved] sources: implementationQuality:sha256:e4d47c895c1b5f4550a1f63e0024a073699ff30d0e7ca4cdbb72eb54c2d243c1; effect: action:failed:12992dc9-a28e-446b-9075-5a5f183537b0
 8a3e451d-1006-41b2-8ddd-0b2087b496ed [act/open] sources: implementationQuality:sha256:1331da0d37f0fdbd835f19772c116e51c5ab7b7a47638f1d64fa0836ff107fd6; effect: action:applied:0e2bea53-d1d6-4dfb-9d7d-47794b31a6ac
 8cf29ab6-920c-44dc-ab23-0468bcb474cd [act/open] sources: implementationQuality:sha256:27fc676dac3606011af6d8ecde34ab080f64d3a440d10ca3f075805e7f9e660b; effect: action:applied:e9c3ee94-aa35-4498-905f-7fe9518e1b33
+8cbe063b-eed6-4fa2-9236-63d5b7b3025d [reject/open] sources: implementationQuality:sha256:92eed843eb0dc80d232cd4e1c2228cc1480cb51b93bd24cfde00e05f09703cb7; effect: none
 ```
