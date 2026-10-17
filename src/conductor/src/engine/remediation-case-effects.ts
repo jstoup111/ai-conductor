@@ -8,6 +8,8 @@ import {
 import { orderBuildReviewActionCases } from './build-review-adjudication.js';
 import {
   chargeBuildReviewEffectInLedger,
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  recordKickbackCapEvidence,
   type BumpKickbackGateInput,
 } from './kickback-ledger.js';
 import type { ChildId } from './child-context.js';
@@ -332,8 +334,23 @@ export async function applyBuildReviewActionEffects(input: {
       // work is blocked or how close the counters are. Name both.
       const blocked = pending.map((record) => `${record.id} (effect ${record.effect.id})`).join(', ');
       const scope = charged.cumulativeExhausted ? 'cumulative' : 'per-gate';
-      const diagnostic = `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
+      let diagnostic = `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
         `count ${charged.entry.count}, cumulative ${charged.entry.cumulative}`;
+      // `kickback-budget raise --gate build_review` moves the cumulative limit,
+      // and admits a halt only when the ledger's cap evidence names the
+      // generation the HALT body repeats. This diagnostic becomes that body.
+      // A failed evidence write still halts; it only leaves the halt without
+      // the raise recovery, which is the pre-existing behaviour.
+      if (charged.cumulativeExhausted) {
+        try {
+          const capEntry = await recordKickbackCapEvidence(input.projectRoot, 'build_review', {
+            consumed: charged.entry.cumulative,
+            limit: charged.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+            latestReason: charged.entry.lastReason ?? '',
+          }, input.child);
+          diagnostic += `\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`;
+        } catch { /* halt without recovery evidence */ }
+      }
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
     const next = replaceCases(state, (record) => isSettling(record)
