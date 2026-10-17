@@ -68,6 +68,7 @@ interrupt_checker() {
   local signal=$1 generator=$2 output=$3 ready=$4
   HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR="$generator" \
     HARNESS_INTEGRITY_TEST_STUB_READY="$ready" \
+    TMPDIR="$fixture_dir" \
     "$BASH_BIN" "$CHECKER" > "$output" 2>&1 &
   local checker_pid=$!
   local attempt=0
