@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-17T13:04:40.342Z
 Slug: preserve-self-build-provider-transcripts-on-failed
 Class: needs-human
 Halting step: unknown
