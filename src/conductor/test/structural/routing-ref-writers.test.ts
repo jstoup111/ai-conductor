@@ -1,4 +1,3 @@
-// Covers: task:201
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +47,7 @@ describe('routing ref writer fence', () => {
     expect(protectedRoutingRefWrites(teardown, 'restack-refs-cleanup.ts')).toEqual([]);
   });
 
+  // Covers: task:201
   it('keeps all route-record and repairing writes in the fenced route store', async () => {
     const files = await sourceFiles(engineRoot);
     const violations = (await Promise.all(files.map(async (file) => ({
