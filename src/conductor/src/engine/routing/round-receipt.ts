@@ -114,6 +114,31 @@ function receiptCharges(record: RouteRecord): { laps: Record<string, number>; gr
   return { laps, growth };
 }
 
+/** Apply the durable accounting carried by one already-settled round receipt. */
+function applySettledReceiptToLedger(ledger: KickbackLedger, record: RouteRecord): KickbackLedger {
+  const settlementId = record.receipt.settlementId;
+  if (!settlementId) return ledger;
+  const charges = receiptCharges(record);
+  const gates = { ...ledger.gates };
+  for (const [gate, laps] of Object.entries(charges.laps)) {
+    const entry = gates[gate] ?? defaultGateEntry();
+    gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
+  }
+  const prior = ledger.growth ?? { authored: 0, added: 0, byGate: {} };
+  const owner = Object.keys(charges.laps)[0] ?? 'prd_audit';
+  const growth = {
+    authored: prior.authored,
+    added: prior.added + charges.growth,
+    byGate: { ...prior.byGate, [owner]: (prior.byGate[owner] ?? 0) + charges.growth },
+  };
+  return {
+    ...ledger,
+    gates,
+    growth,
+    settlementReceipts: { ...(ledger.settlementReceipts ?? {}), [settlementId]: { gates: Object.keys(charges.laps) } },
+  };
+}
+
 function nextLedgerForReceipt(
   ledger: KickbackLedger,
   record: RouteRecord,
@@ -141,14 +166,8 @@ function nextLedgerForReceipt(
     const owner = Object.keys(charges.laps)[0] ?? 'prd_audit';
     growth.byGate[owner] = (growth.byGate[owner] ?? 0) + charges.growth;
   }
-  const settlementId = receiptSettlementId(record.roundId, record.receipt);
   return {
-    ledger: {
-      ...ledger,
-      gates,
-      growth,
-      settlementReceipts: { ...(ledger.settlementReceipts ?? {}), [settlementId]: { gates: Object.keys(charges.laps) } },
-    },
+    ledger: applySettledReceiptToLedger(ledger, record),
   };
 }
 
@@ -174,16 +193,7 @@ export async function reconcileReceiptLedgerUnlocked(
     if (!settlementId || ledger.settlementReceipts?.[settlementId]) continue;
     // Reconciliation deliberately uses the receipt's durable numbers rather
     // than current caps: the admission was already settled by the ref CAS.
-    const charges = receiptCharges(stored.record);
-    const gates = { ...ledger.gates };
-    for (const [gate, laps] of Object.entries(charges.laps)) {
-      const entry = gates[gate] ?? defaultGateEntry();
-      gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
-    }
-    const prior = ledger.growth ?? { authored: 0, added: 0, byGate: {} };
-    const owner = Object.keys(charges.laps)[0] ?? 'prd_audit';
-    const growth = { authored: prior.authored, added: prior.added + charges.growth, byGate: { ...prior.byGate, [owner]: (prior.byGate[owner] ?? 0) + charges.growth } };
-    ledger = { ...ledger, gates, growth, settlementReceipts: { ...(ledger.settlementReceipts ?? {}), [settlementId]: { gates: Object.keys(charges.laps) } } };
+    ledger = applySettledReceiptToLedger(ledger, stored.record);
   }
   await writeKickbackLedgerUnlocked(projectRoot, ledger);
 }
@@ -207,11 +217,15 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
         const wrote = await writeRouteRecord(input.projectRoot, stored, { ...stored.record, receipt: { ...receipt, acks: { ...(receipt.acks ?? {}), [input.dispatchingChild]: true } } }, { git });
         return wrote.kind === 'updated' ? { kind: 'acknowledged', settlementId: receipt.settlementId } as const : wrote.kind === 'restack-journal-open' ? { kind: 'halted', reason: `routing round ${input.roundId} has an open restack journal` } as const : { kind: 'retry' as const };
       }
-      const ledger = await readKickbackLedger(input.projectRoot);
-      const next = nextLedgerForReceipt(ledger, stored.record, input.budgets);
-      if (next.exhausted) return { kind: 'exhausted', ...next.exhausted } as const;
       const settlementId = receiptSettlementId(input.roundId, receipt);
-      const wrote = await writeRouteRecord(input.projectRoot, stored, { ...stored.record, receipt: { ...receipt, settlementId, acks: { ...(receipt.acks ?? {}), [input.dispatchingChild]: true } } }, { git });
+      const settledRecord = {
+        ...stored.record,
+        receipt: { ...receipt, settlementId, acks: { ...(receipt.acks ?? {}), [input.dispatchingChild]: true } },
+      };
+      const ledger = await readKickbackLedger(input.projectRoot);
+      const next = nextLedgerForReceipt(ledger, settledRecord, input.budgets);
+      if (next.exhausted) return { kind: 'exhausted', ...next.exhausted } as const;
+      const wrote = await writeRouteRecord(input.projectRoot, stored, settledRecord, { git });
       if (wrote.kind === 'restack-journal-open') return { kind: 'halted', reason: `routing round ${input.roundId} has an open restack journal` } as const;
       if (wrote.kind !== 'updated') return { kind: 'retry' as const };
       await writeKickbackLedgerUnlocked(input.projectRoot, next.ledger);
@@ -284,9 +298,12 @@ export async function rebuildLedgerFromReceipts(projectRoot: string, slug: strin
   await withKickbackLedgerLease(projectRoot, async () => {
     const refs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
     if (refs.exitCode !== 0) throw new Error('cannot enumerate route receipts');
-    const gates: KickbackLedger['gates'] = {};
-    let growth: PlanGrowthRecord = { authored: 0, added: 0, byGate: {} };
-    const settlementReceipts: NonNullable<KickbackLedger['settlementReceipts']> = {};
+    let ledger: KickbackLedger = {
+      version: 1,
+      gates: {},
+      growth: { authored: 0, added: 0, byGate: {} },
+      settlementReceipts: {},
+    };
     for (const ref of refs.stdout.split('\n').filter(Boolean)) {
       const id = parseRoundId(ref.split('/').at(-1) ?? '');
       if (!id) throw new Error('route receipt id is malformed');
@@ -294,19 +311,12 @@ export async function rebuildLedgerFromReceipts(projectRoot: string, slug: strin
       if (stored.kind !== 'record') throw new Error(`route receipt ${id} is unreadable`);
       const receipt = stored.record.receipt;
       for (const [gate, amount] of Object.entries(receipt.taskless ?? {})) {
-        const entry = gates[gate] ?? defaultGateEntry();
-        gates[gate] = { ...entry, count: entry.count + amount };
+        const entry = ledger.gates[gate] ?? defaultGateEntry();
+        ledger = { ...ledger, gates: { ...ledger.gates, [gate]: { ...entry, count: entry.count + amount } } };
       }
       if (!receipt.settlementId) continue;
-      const charges = receiptCharges(stored.record);
-      for (const [gate, laps] of Object.entries(charges.laps)) {
-        const entry = gates[gate] ?? defaultGateEntry();
-        gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
-      }
-      const owner = Object.keys(charges.laps)[0] ?? 'prd_audit';
-      growth = { authored: growth.authored, added: growth.added + charges.growth, byGate: { ...growth.byGate, [owner]: (growth.byGate[owner] ?? 0) + charges.growth } };
-      settlementReceipts[receipt.settlementId] = { gates: Object.keys(charges.laps) };
+      ledger = applySettledReceiptToLedger(ledger, stored.record);
     }
-    await writeKickbackLedgerUnlocked(projectRoot, { version: 1, gates, growth, settlementReceipts });
+    await writeKickbackLedgerUnlocked(projectRoot, ledger);
   });
 }
