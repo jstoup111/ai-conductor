@@ -666,9 +666,14 @@ export interface DaemonResult {
   restartPendingConsumed?: true;
 }
 
-/** A runFeature promise tagged with its slug so a race can identify the winner. */
-type Tagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
-type RepairTagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
+/** A settled pool worker, retaining whether it ran feature or repair work. */
+type WorkerResult =
+  | { kind: 'feature'; slug: string; outcome: FeatureOutcome }
+  | { kind: 'repair'; request: RepairRequest; outcome: FeatureOutcome };
+
+type Worker =
+  | { kind: 'feature'; slug: string; tagged: Promise<WorkerResult> }
+  | { kind: 'repair'; request: RepairRequest; tagged: Promise<WorkerResult> };
 
 /**
  * Task 1 (#651): the park check consulted immediately before every
@@ -927,13 +932,15 @@ export async function runDaemon(
     () => claims.list(),
     options.concurrency,
   );
-  const workers: Array<{ slug: string; tagged: Tagged | RepairTagged }> = [];
+  const workers: Worker[] = [];
+  const isFeatureInFlight = (slug: string): boolean =>
+    workers.some((worker) => worker.kind === 'feature' && worker.slug === slug);
   // Keep one completion observer for the current worker set. A busy poll must
   // not race every timer tick directly against live workers: every losing race
   // leaves another reaction attached until that worker settles.
-  let nextWorkerCompletion: Tagged | undefined;
+  let nextWorkerCompletion: Promise<WorkerResult> | undefined;
   let completionGeneration = 0;
-  let completedWorker: Awaited<Tagged> | undefined;
+  let completedWorker: WorkerResult | undefined;
   let wakeBusyPoll: (() => void) | undefined;
 
   const observeWorkerSet = (): void => {
@@ -944,7 +951,7 @@ export async function runDaemon(
       return;
     }
 
-    const completion = Promise.race(workers.map(({ tagged }) => tagged));
+    const completion: Promise<WorkerResult> = Promise.race(workers.map(({ tagged }) => tagged));
     nextWorkerCompletion = completion;
     void completion.then((worker) => {
       if (generation !== completionGeneration) return;
@@ -1012,9 +1019,10 @@ export async function runDaemon(
         deps.onExecutorSettled?.();
       }
     };
-    const tagged: Tagged = runFeature()
-      .then((outcome) => ({ slug: item.slug, outcome }))
+    const tagged: Promise<WorkerResult> = runFeature()
+      .then((outcome) => ({ kind: 'feature' as const, slug: item.slug, outcome }))
       .catch((err) => ({
+        kind: 'feature' as const,
         slug: item.slug,
         outcome: {
           slug: item.slug,
@@ -1022,7 +1030,7 @@ export async function runDaemon(
           reason: err instanceof Error ? err.message : String(err),
         },
       }));
-    workers.push({ slug: item.slug, tagged });
+    workers.push({ kind: 'feature', slug: item.slug, tagged });
     observeWorkerSet();
     return true;
   };
@@ -1036,7 +1044,7 @@ export async function runDaemon(
   const startRepair = deps.repairs ? async (request: RepairRequest): Promise<boolean> => {
     const claim = repairClaim(request);
     if (!claims.claim(claim)) return false;
-    const tagged: RepairTagged = (async () => {
+    const tagged: Promise<WorkerResult> = (async () => {
       try {
         if (deps.emitMaintenancePhase) {
           await timeMaintenancePhase({ phase: 'repair', prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) }, () => deps.repairs!.run(request), {
@@ -1046,13 +1054,13 @@ export async function runDaemon(
         } else {
           await deps.repairs!.run(request);
         }
-        return { slug: claim, outcome: { slug: claim, status: 'done' } };
+        return { kind: 'repair' as const, request, outcome: { slug: claim, status: 'done' } };
       } catch (error) {
         log(`[daemon] repair ${request.prUrl} error: ${error instanceof Error ? error.message : String(error)}`);
-        return { slug: claim, outcome: { slug: claim, status: 'error', reason: error instanceof Error ? error.message : String(error) } };
+        return { kind: 'repair' as const, request, outcome: { slug: claim, status: 'error', reason: error instanceof Error ? error.message : String(error) } };
       }
     })();
-    workers.push({ slug: claim, tagged });
+    workers.push({ kind: 'repair', request, tagged });
     observeWorkerSet();
     return true;
   } : undefined;
@@ -1083,17 +1091,30 @@ export async function runDaemon(
   const collectOne = async (): Promise<void> => {
     const completion = nextWorkerCompletion;
     if (!completion) throw new Error('daemon attempted to collect without a worker completion');
-    const { slug, outcome } = await completion;
-    claims.release(slug);
-    const workerIndex = workers.findIndex((worker) => worker.slug === slug);
+    const worker = await completion;
+    const workerIndex = workers.findIndex((candidate) => {
+      if (candidate.kind !== worker.kind) return false;
+      switch (worker.kind) {
+        case 'feature':
+          return candidate.kind === 'feature' && candidate.slug === worker.slug;
+        case 'repair':
+          return candidate.kind === 'repair' && candidate.request.prUrl === worker.request.prUrl;
+      }
+    });
     if (workerIndex >= 0) workers.splice(workerIndex, 1);
     observeWorkerSet();
-    // Repairs are pool work, not feature lifecycle work: they must free their
-    // reserved claim without consuming feature ceilings or terminal effects.
-    if (slug.startsWith('repair:')) {
-      maintenanceJob.trigger();
-      return;
+    switch (worker.kind) {
+      case 'repair':
+        // Repairs are pool work, not feature lifecycle work: they must free their
+        // reserved claim without consuming feature ceilings or terminal effects.
+        claims.release(repairClaim(worker.request));
+        maintenanceJob.trigger();
+        return;
+      case 'feature':
+        break;
     }
+    const { slug, outcome } = worker;
+    claims.release(slug);
     await deps.onFeatureTerminalEffects?.(outcome);
     // A terminal collection is a maintenance trigger, not an inline sweep:
     // a slow reconciler must never hold the slot-release path hostage.
@@ -1185,7 +1206,7 @@ export async function runDaemon(
     // a null seed is first-run init (record, no sweep — FR-5).
     if (lastSeenSha != null) {
       await deps.rekickSweep?.(current, {
-        isFeatureInFlight: (slug) => inFlight.has(slug),
+        isFeatureInFlight,
       });
     }
     lastSeenSha = current;
@@ -1288,11 +1309,11 @@ export async function runDaemon(
     ['reconcileHaltPrs', async () => runPhase({ phase: 'halt-pr-reconcile' }, async () => { await deps.reconcileHaltPrs?.(); })],
     ['reconcileParkedFeatures', async () => {
       if (!deps.emitMaintenancePhase) {
-        await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight: (slug) => inFlight.has(slug) });
+        await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight });
         return;
       }
       await timeMaintenancePhase({ phase: 'parked-reconcile' }, async () => {
-        const result = await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight: (slug) => inFlight.has(slug) });
+        const result = await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight });
         return {
           outcome: result?.outcome ?? 'completed',
           summary: result?.counts,
@@ -1301,7 +1322,7 @@ export async function runDaemon(
     }],
     ['sweepProviderScratch', async () => runPhase({ phase: 'provider-scratch' }, async () => { await deps.sweepProviderScratch?.(); })],
     ['sweepMergeableLabels', async () => runPhase({ phase: 'mergeable-sweep' }, async () => {
-      await deps.sweepMergeableLabels?.({ isFeatureInFlight: (slug) => inFlight.has(slug) });
+      await deps.sweepMergeableLabels?.({ isFeatureInFlight });
     })],
   ], log);
 
@@ -1549,7 +1570,7 @@ export async function runDaemon(
           parked: snapshot?.counts.parked ?? claims.listParked().length },
         oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
         slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
-        inFlight: workers.map((worker) => worker.slug),
+        inFlight: workers.map((worker) => worker.kind === 'feature' ? worker.slug : repairClaim(worker.request)),
         blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
         pollDurationMs: snapshot?.pollDurationMs ?? 0,
         rootRefreshPending: refreshJob !== undefined,

@@ -32,8 +32,9 @@ export type MaintenanceJobStep = readonly [name: string, run: () => Promise<void
  * for it. Repeated triggers during a run request one additional pass only.
  */
 export class MaintenanceJob {
-  private current: Promise<void> | undefined;
-  private rerunPending = false;
+  private lifecycle:
+    | { kind: 'idle' }
+    | { kind: 'running'; current: Promise<void>; rerunPending: boolean } = { kind: 'idle' };
   private closed = false;
 
   constructor(
@@ -43,38 +44,63 @@ export class MaintenanceJob {
 
   trigger(): void {
     if (this.closed) return;
-    if (this.current) {
-      this.rerunPending = true;
+    if (this.lifecycle.kind === 'running') {
+      this.lifecycle.rerunPending = true;
       return;
     }
-
-    this.current = this.run().finally(() => {
-      this.current = undefined;
-    });
+    this.start();
   }
 
-  /** Resolves when the currently running pass (and one coalesced rerun) finish. */
-  settled(): Promise<void> {
-    return this.current ?? Promise.resolve();
+  /** Resolves when the active pass and any chained coalesced rerun finish. */
+  async settled(): Promise<void> {
+    while (this.lifecycle.kind === 'running') {
+      const current = this.lifecycle.current;
+      await current;
+      // The settling transition can synchronously replace `current` with a
+      // requested rerun. Loop so callers never observe only the first pass.
+    }
   }
 
   /** Prevents future starts; an already-running pass is allowed to complete. */
   close(): void {
     this.closed = true;
-    this.rerunPending = false;
+    if (this.lifecycle.kind === 'running') this.lifecycle.rerunPending = false;
   }
 
-  private async run(): Promise<void> {
-    do {
-      this.rerunPending = false;
-      for (const [name, step] of this.steps) {
-        try {
-          await step();
-        } catch (error) {
-          this.log(`[daemon] ${name} error: ${error instanceof Error ? error.message : String(error)}`);
-        }
+  private start(): void {
+    const running: Extract<typeof this.lifecycle, { kind: 'running' }> = {
+      kind: 'running', current: Promise.resolve(), rerunPending: false,
+    };
+    this.lifecycle = running;
+    running.current = this.runPass().finally(() => {
+      // This transition has no idle gap: a trigger either sets rerunPending
+      // before it, or starts a fresh pass after it.
+      if (!this.closed && running.rerunPending) {
+        running.rerunPending = false;
+        running.current = this.runPass().finally(() => this.finish(running));
+      } else {
+        this.lifecycle = { kind: 'idle' };
       }
-    } while (!this.closed && this.rerunPending);
+    });
+  }
+
+  private finish(running: Extract<typeof this.lifecycle, { kind: 'running' }>): void {
+    if (!this.closed && running.rerunPending) {
+      running.rerunPending = false;
+      running.current = this.runPass().finally(() => this.finish(running));
+      return;
+    }
+    this.lifecycle = { kind: 'idle' };
+  }
+
+  private async runPass(): Promise<void> {
+    for (const [name, step] of this.steps) {
+      try {
+        await step();
+      } catch (error) {
+        this.log(`[daemon] ${name} error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 }
 

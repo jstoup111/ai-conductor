@@ -56,6 +56,25 @@ describe('MaintenanceJob', () => {
     expect(maxActive).toBe(1);
   });
 
+  it('reruns when triggered after the last step settles but before cleanup', async () => {
+    const lastStep = deferred<void>();
+    const step = vi.fn(async () => {
+      if (step.mock.calls.length === 1) await lastStep.promise;
+    });
+    const job = new MaintenanceJob([['sweep', step]]);
+
+    job.trigger();
+    lastStep.resolve();
+    // The first turn completes the step; the second passes the run's final
+    // loop check but precedes its promise-settlement cleanup.
+    await Promise.resolve();
+    await Promise.resolve();
+    job.trigger();
+
+    await job.settled();
+    expect(step).toHaveBeenCalledTimes(2);
+  });
+
   it('logs a step error, continues the ordered run, and settles without rejection', async () => {
     const calls: string[] = [];
     const log = vi.fn();

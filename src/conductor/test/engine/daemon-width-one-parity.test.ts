@@ -5,6 +5,18 @@ import { RepairQueue } from '../../src/engine/repair-queue.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 describe('daemon width-one parity', () => {
+  it('collects a repair-prefixed slug as a feature', async () => {
+    const terminalEffects = vi.fn();
+    const result = await runDaemon({
+      discoverBacklog: async () => [{ slug: 'repair:feature-slug' }],
+      runFeature: async (item): Promise<FeatureOutcome> => ({ slug: item.slug, status: 'done' }),
+      onFeatureTerminalEffects: terminalEffects,
+    }, { concurrency: 1, once: true, maxItems: 1 });
+
+    expect(terminalEffects).toHaveBeenCalledWith({ slug: 'repair:feature-slug', status: 'done' });
+    expect(result.processed).toEqual([{ slug: 'repair:feature-slug', status: 'done' }]);
+  });
+
   it('keeps feature backlog order and never exceeds its single slot', async () => {
     const claimed: string[] = [];
     let active = 0;
