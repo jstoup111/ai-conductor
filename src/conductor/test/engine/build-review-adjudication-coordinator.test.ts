@@ -1553,6 +1553,43 @@ describe('coordinateBuildReviewAdjudication', () => {
     ]);
   });
 
+  it('acts on a re-raised finding bound to a resolved case whose repair was never built', async () => {
+    // a-routed-fix-cannot-be-built-charged-and-reviewed-: case 630266b7 was
+    // charged past the budget (effect failed), resolved once its finding
+    // vanished, then re-raised after BUILD. Binding to it is not a regression
+    // of delivered work.
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-never-built', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The test needs a focused assertion.', resolution: 'resolved',
+        sources: [{ sourceId: 'implementationQuality:sha256:earlier-lap', outcome: 'acted', recordedAt: '2026-10-17T13:51:43.000Z' }],
+        effect: { id: 'effect-never-built', kind: 'action', status: 'failed', diagnostic: 'build-review kickback budget exhausted (cumulative)' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const rebound: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-never-built' }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => rebound), generateId: sequentialIds('rebound'),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
+    const after = await store.read();
+    if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+    expect(after.state.cases.find((record) => record.id === 'case-never-built')).toMatchObject({
+      resolution: 'resolved', effect: { status: 'failed' },
+    });
+    expect(after.state.cases.some((record) => record.id !== 'case-never-built' && record.effect.kind === 'action' && record.effect.status === 'applied')).toBe(true);
+  });
+
   it('halts a regression before reserving a sibling action effect it could never apply', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
