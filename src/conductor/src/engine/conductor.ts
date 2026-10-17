@@ -188,7 +188,7 @@ import {
 } from './child-context.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
-import { completeRerouteSync, parseBuilderClaim, rerouteRound, verifyPrerequisiteClaim } from './routing/prerequisite-claim.js';
+import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch, type ReceiptRoutingScope } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
@@ -10754,45 +10754,21 @@ export class Conductor {
           // all engine operations. A bad claim deliberately becomes this
           // region's ordinary failed attempt, not a whole-feature escalation.
           if (step.name === 'build' && routedPrerequisiteClaim !== undefined && routedClaimSlug !== undefined) {
-            const parsed = parseBuilderClaim(result.finalStructuredResult);
-            if (parsed.kind === 'malformed') {
-              result = { ...result, success: false, output: 'routed prerequisite claim is malformed' };
-            } else if (parsed.kind === 'claim') {
-              const verified = await verifyPrerequisiteClaim({
-                claim: parsed.claim,
-                host: routedPrerequisiteClaim.target.child,
-                slug: routedClaimSlug,
-                git: makeGitRunner(this.projectRoot),
-              });
-              if (verified.kind !== 'verified') {
-                result = { ...result, success: false, output: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
-              } else {
-                const moved = await rerouteRound({
-                  worktree: this.projectRoot,
-                  slug: routedClaimSlug,
-                  roundId: routedPrerequisiteClaim.roundId!,
-                  from: routedPrerequisiteClaim.target.child,
-                  to: verified.destination,
-                  evidence: [...(parsed.claim.paths ?? []), ...(parsed.claim.symbols ?? [])],
-                  git: makeGitRunner(this.projectRoot),
-                });
-                if (moved.kind === 'rerouted') {
-                  const synced = await completeRerouteSync({
-                    worktree: this.projectRoot, slug: routedClaimSlug,
-                    roundId: routedPrerequisiteClaim.roundId!, git: makeGitRunner(this.projectRoot),
-                  });
-                  if (synced.kind === 'completed') {
-                    // Re-enter through the region cursor, which activates the
-                    // admitted destination and never settles this reroute.
-                    i = indexOf('acceptance_specs') - 1;
-                    continue stepLoop;
-                  }
-                  result = { ...result, success: false, output: synced.detail };
-                } else {
-                  result = { ...result, success: false, output: moved.detail };
-                }
-              }
+            const settled = await settleRoutedBuildClaim({
+              structuredResult: result.finalStructuredResult,
+              worktree: this.projectRoot,
+              slug: routedClaimSlug,
+              roundId: routedPrerequisiteClaim.roundId,
+              host: routedPrerequisiteClaim.target.child,
+              git: makeGitRunner(this.projectRoot),
+            });
+            if (settled.kind === 'rerouted') {
+              // Re-enter through the region cursor, which activates the
+              // admitted destination and never settles this reroute.
+              i = indexOf('acceptance_specs') - 1;
+              continue stepLoop;
             }
+            if (settled.kind === 'failed') result = { ...result, success: false, output: settled.detail };
           }
 
           // An end_attempt policy is an ordinary failed provider attempt: it

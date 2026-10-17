@@ -301,3 +301,42 @@ export async function completeRerouteSync(
     ? { kind: 'completed', record: next }
     : { kind: 'refused', detail: `routing round ${input.roundId} sync compare-and-swap failed: ${wrote.kind}` };
 }
+
+export type SettleRoutedBuildClaimResult =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'rerouted' }
+  | { readonly kind: 'failed'; readonly detail: string };
+
+export interface SettleRoutedBuildClaimInput {
+  /** The routed BUILD provider's terminal structured payload. */
+  readonly structuredResult: unknown;
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly git?: GitRunner;
+}
+
+/**
+ * The terminal claim boundary of a routed BUILD, behind one result: parse the
+ * claim, verify it against the immutable tree, move the round and synchronize
+ * the worktree.  `failed` is the region's ordinary failed attempt, never a
+ * whole-feature escalation; `rerouted` means the destination is admitted.
+ */
+export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput): Promise<SettleRoutedBuildClaimResult> {
+  const parsed = parseBuilderClaim(input.structuredResult);
+  if (parsed.kind === 'none') return { kind: 'none' };
+  if (parsed.kind === 'malformed') return { kind: 'failed', detail: 'routed prerequisite claim is malformed' };
+  const git = input.git ?? makeGitRunner(input.worktree);
+  const verified = await verifyPrerequisiteClaim({ claim: parsed.claim, host: input.host, slug: input.slug, git });
+  if (verified.kind !== 'verified') return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
+  const moved = await rerouteRound({
+    worktree: input.worktree, slug: input.slug, roundId: input.roundId,
+    from: input.host, to: verified.destination,
+    evidence: [...(parsed.claim.paths ?? []), ...(parsed.claim.symbols ?? [])],
+    git,
+  });
+  if (moved.kind !== 'rerouted') return { kind: 'failed', detail: moved.detail };
+  const synced = await completeRerouteSync({ worktree: input.worktree, slug: input.slug, roundId: input.roundId, git });
+  return synced.kind === 'completed' ? { kind: 'rerouted' } : { kind: 'failed', detail: synced.detail };
+}

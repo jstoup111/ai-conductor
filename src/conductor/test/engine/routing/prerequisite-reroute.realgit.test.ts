@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { completeRerouteSync, rerouteRound, verifyPrerequisiteClaim } from '../../../src/engine/routing/prerequisite-claim.js';
+import { completeRerouteSync, rerouteRound, settleRoutedBuildClaim, verifyPrerequisiteClaim } from '../../../src/engine/routing/prerequisite-claim.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, rejectedPinRefFor } from '../../../src/engine/routing/routing-refs.js';
@@ -110,6 +110,28 @@ describe('verified prerequisite reroute (real local Git)', () => {
       expect((await readFile(join(subject.repo, 'src-a.ts'), 'utf8')).trim()).toBe('export const parseA = 1;');
       expect(await readFile(join(subject.repo, 'source.ts'), 'utf8').catch(() => undefined)).toBeUndefined();
       expect(await completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git })).toMatchObject({ kind: 'completed' });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('settles a routed BUILD claim behind one result: none, failed attempt, or admitted reroute', async () => {
+    const subject = await fixture();
+    try {
+      const settle = (structuredResult: unknown, host = c1) => settleRoutedBuildClaim({
+        structuredResult, worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git,
+      });
+      expect(await settle({ outcome: 'completed' })).toEqual({ kind: 'none' });
+      expect(await settle({ outcome: 'surprise' })).toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed' });
+      expect(await settle({ outcome: 'blocked-by-prerequisite', child: 2, symbols: ['missing'] })).toMatchObject({
+        kind: 'failed', detail: expect.stringMatching(/^routed prerequisite claim unverified: /),
+      });
+      // A failed claim moves no ref.
+      expect((await subject.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(subject.rejected);
+
+      expect(await settle({ outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] })).toEqual({ kind: 'rerouted' });
+      expect((await subject.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(subject.closed1);
+      expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({
+        kind: 'record', record: { hosts: { 1: 'rerouted', 2: 'admitted' } },
+      });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
