@@ -42,7 +42,7 @@ describe('executeFullSuite', () => {
           command,
           options: {
             cwd: resolve('/repo', 'packages/api'),
-            env: environment,
+            env: expect.objectContaining(environment),
             shell: true,
             timeoutMs: 42_000,
           },
@@ -60,6 +60,28 @@ describe('executeFullSuite', () => {
         stderr: '',
       },
     });
+  });
+
+  it('preserves the active Vitest temp root for a sparse child environment', async () => {
+    let environment: NodeJS.ProcessEnv | undefined;
+    await executeFullSuite({
+      projectRoot: '/repo',
+      testSuite: { command: 'npm test' },
+      environment: { PATH: '/fixture/bin' },
+      runner: async (_command, options) => {
+        environment = options.env;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      clock: () => new Date('2026-10-17T00:00:00.000Z'),
+    });
+
+    expect(environment).toEqual(expect.objectContaining({
+      PATH: '/fixture/bin',
+      AI_CONDUCTOR_TEST_TMP_ROOT: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
+      TMPDIR: process.env.TMPDIR,
+      TMP: process.env.TMP,
+      TEMP: process.env.TEMP,
+    }));
   });
 
   it('uses the aggregate default timeout when none is declared', async () => {

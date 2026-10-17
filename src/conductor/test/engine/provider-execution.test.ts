@@ -616,6 +616,7 @@ describe('executeProviderCandidates', () => {
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
       {
+        owner: { kind: 'registered-step', step: 'build_review' },
         step: 'build_review', runId: 'R', attempt: 1,
         member: 'security',
       },

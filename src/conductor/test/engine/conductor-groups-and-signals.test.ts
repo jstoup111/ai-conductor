@@ -4793,14 +4793,20 @@ describe('engine/conductor', () => {
         worktreeRoot: dir,
         repository: dir,
         featureSlug: 'self-host-identity',
-        captureIdentity: { step: 'build', runId: 'held-conductor-run', attempt: 0 },
+        captureIdentity: expect.objectContaining({
+          owner: { kind: 'registered-step', step: 'build' },
+          step: 'build', runId: 'held-conductor-run', attempt: 0,
+        }),
       }),
       claude: expect.objectContaining({
         worktreeRoot: dir,
         harnessRoot: dir,
         repository: dir,
         featureSlug: 'self-host-identity',
-        captureIdentity: { step: 'build', runId: 'held-conductor-run', attempt: 1 },
+        captureIdentity: expect.objectContaining({
+          owner: { kind: 'registered-step', step: 'build' },
+          step: 'build', runId: 'held-conductor-run', attempt: 1,
+        }),
       }),
     });
     for (const [attempt, lease] of leases.entries()) {

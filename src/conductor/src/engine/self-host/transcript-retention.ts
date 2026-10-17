@@ -442,7 +442,8 @@ function captureKey(identity: TranscriptSettlementKey): string {
   ].join('\u0000');
 }
 
-function transcriptOwnerKey(owner: TranscriptOwner): string {
+/** Stable closed key shared by dispatch allocation and retention settlement. */
+export function transcriptOwnerKey(owner: TranscriptOwner): string {
   switch (owner.kind) {
     case 'registered-step': return `step:${owner.step}`;
     case 'configured-group-member': return `member:${owner.parentGroup}:${owner.member}`;

@@ -407,6 +407,7 @@ import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-aud
 import {
   asTranscriptCaptureDispatchIdentity,
   TranscriptRetention,
+  transcriptOwnerKey,
   type TranscriptCaptureDispatchIdentity,
   type TranscriptRetentionOutcome,
 } from './self-host/transcript-retention.js';
@@ -728,17 +729,8 @@ export class Conductor {
     return { kind: 'registered-step', step };
   }
 
-  private transcriptOwnerKey(owner: TranscriptOwner): string {
-    switch (owner.kind) {
-      case 'registered-step': return `step:${owner.step}`;
-      case 'configured-group-member': return `member:${owner.parentGroup}:${owner.member}`;
-      case 'legacy-unknown-step': return 'legacy:unknown-step';
-    }
-    return assertNever(owner);
-  }
-
   private nextTranscriptCaptureAttempt(owner: TranscriptOwner, runId: string): TranscriptCaptureDispatchIdentity {
-    const key = `${runId}\u0000${this.transcriptOwnerKey(owner)}`;
+    const key = `${runId}\u0000${transcriptOwnerKey(owner)}`;
     const next = asTranscriptCaptureDispatchIdentity(
       (this.transcriptCaptureDispatches.get(key) ?? 0) + 1,
     );
@@ -750,7 +742,7 @@ export class Conductor {
     owner: TranscriptOwner,
   ): TranscriptCaptureDispatchIdentity | undefined {
     const runId = this.stepRunner.selfHostRunId?.();
-    return runId === undefined ? undefined : this.transcriptCaptureDispatches.get(`${runId}\u0000${this.transcriptOwnerKey(owner)}`);
+    return runId === undefined ? undefined : this.transcriptCaptureDispatches.get(`${runId}\u0000${transcriptOwnerKey(owner)}`);
   }
 
   /** Child-local suite selection has the same authoritative base as review. */
@@ -16826,10 +16818,6 @@ export class Conductor {
     return findResumeIndex(state, steps);
   }
 
-}
-
-function assertNever(value: never): never {
-  throw new Error(`Unhandled transcript owner: ${JSON.stringify(value)}`);
 }
 
 export { appendConductorRemediationTasks as appendRemediationTasks } from "./remediation-task-append.js";

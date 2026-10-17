@@ -613,7 +613,7 @@ describe('provider scratch homes', () => {
       worktreeRoot: '/worktree', runId: 'R', attempt: 0, provider: 'claude', member: '../escape/x:y',
     });
 
-    expect(relative(join('/worktree', '.daemon', 'scratch', 'R'), home)).toBe('0-claude-.._escape_x_y');
+    expect(relative(join('/worktree', '.daemon', 'scratch', 'R'), home)).toBe('0-claude-..%002Fescape%002Fx%003Ay');
   });
 
   it('releases an already released home idempotently', async () => {
@@ -761,6 +761,7 @@ describe('provider scratch homes', () => {
       ), 'utf8')).resolves.toBe('{"message":"interrupted"}\n');
       expect(emitted).toStrictEqual([{
         type: 'provider_transcripts_captured',
+        owner: { kind: 'registered-step', step: 'build' },
         step: 'build', runId: 'R', attempt: 1, provider: 'codex',
         path: '.pipeline/transcripts/build/R-a1-codex',
         files: 1, bytes: 26, interrupted: true, skipped: 0, omittedLines: 0,
@@ -988,6 +989,7 @@ describe('provider scratch homes', () => {
 
       expect(emitted).toStrictEqual([{
         type: 'provider_transcripts_harvest_failed',
+        owner: { kind: 'registered-step', step: 'build' },
         step: 'build', runId: 'R', attempt: 1, provider: 'codex',
         path: '.pipeline/transcripts/build/R-a1-codex', error: 'capture unavailable',
       }]);
