@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: stack-preflight
+Resolved at: 2026-10-17T14:07:55.948Z
 Slug: daemon-reconciliation-delays-first-feature-dispatc
 Class: needs-human
 Halting step: unknown
