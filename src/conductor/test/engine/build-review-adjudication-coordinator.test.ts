@@ -2383,6 +2383,55 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  describe('stranded deferral reservations', () => {
+    // An earlier lap reserved this deferral in a run with no filing capability,
+    // so its issue was never filed and the effect stayed reserved. The reducer
+    // then halted every later lap on "remediation effect is not finalized".
+    const strandedDeferral = (sourceIdValue: string) => ({
+      id: 'case-deferred', domain: 'build_review' as const, disposition: 'defer' as const, priority: 'low' as const, confidence: 'high' as const,
+      rationale: 'Out-of-scope duplication.', resolution: 'open' as const,
+      sources: [{ sourceId: sourceIdValue, outcome: 'deferred' as const, recordedAt: '2026-10-17T09:42:58.000Z' }],
+      effect: { id: 'effect-deferred', kind: 'deferral' as const, status: 'reserved' as const },
+    });
+
+    it('settles a deferral whose finding is gone so the lap routes instead of halting forever', async () => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      await seedCases(store, { version: 'v1', feature, cases: [strandedDeferral('implementationQuality:sha256-deferred-gone')] });
+      const events: RemediationCaseLifecycleEvent[] = [];
+
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => actionJudgement()), generateId: sequentialIds('lap-two'),
+        emit: async (event) => { events.push(event); },
+      });
+
+      expect(result).toMatchObject({ ok: true, route: 'build' });
+      const after = await store.read();
+      if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+      expect(after.state.cases.find((record) => record.id === 'case-deferred')).toMatchObject({
+        resolution: 'resolved',
+        effect: { id: 'effect-deferred', kind: 'deferral', status: 'failed', diagnostic: 'stranded reservation: deferral never filed' },
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'remediation_effect_failed', caseId: 'case-deferred', effectId: 'effect-deferred', effectKind: 'deferral',
+        reason: 'stranded reservation: deferral never filed',
+      }));
+    });
+
+    it('leaves a reserved deferral whose finding this lap still reports', async () => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      await seedCases(store, { version: 'v1', feature, cases: [strandedDeferral(sourceId)] });
+
+      await coordinateBuildReviewAdjudication(input(root, async () => actionJudgement()));
+
+      const after = await store.read();
+      if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+      expect(after.state.cases.find((record) => record.id === 'case-deferred')?.effect)
+        .not.toMatchObject({ diagnostic: 'stranded reservation: deferral never filed' });
+    });
+  });
+
   describe('stranded action reservations', () => {
     // An earlier lap reserved this action, then halted before its effect
     // boundary published the tasks (the pre-#3257 sibling-reservation defect).

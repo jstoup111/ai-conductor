@@ -153,6 +153,7 @@ export function isBuildReviewSettlementObligationCase(record: RemediationCaseRec
 }
 
 export const STRANDED_ACTION_RESERVATION_DIAGNOSTIC = 'stranded reservation: tasks never published';
+export const STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC = 'stranded reservation: deferral never filed';
 
 export type SettleStrandedActionReservationsResult =
   | { readonly ok: true; readonly settled: readonly { readonly caseId: string; readonly effectId: string }[] }
@@ -205,6 +206,42 @@ export async function settleStrandedBuildReviewActionReservations(input: {
           ...record,
           resolution: 'resolved',
           effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic: STRANDED_ACTION_RESERVATION_DIAGNOSTIC },
+        }
+        : record),
+    };
+  });
+  if (mutation.ok) return { ok: true, settled: mutation.value };
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: mutation.reason };
+}
+
+/**
+ * A deferral reserved by an earlier lap that never filed its issue (for
+ * example a run without a filing capability) can never be applied, and the
+ * reducer halts on it every lap. Settle it once its sources are absent from a
+ * mechanically complete lap, the same evidence the action settlement uses.
+ */
+export async function settleStrandedBuildReviewDeferralReservations(input: {
+  readonly store: RemediationCaseStore;
+  /** This lap's reported, unsuppressed rubric-namespaced source ids. */
+  readonly liveSourceIds: ReadonlySet<string>;
+}): Promise<SettleStrandedActionReservationsResult> {
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
+    const settled = state.cases.flatMap((record) =>
+      isOpenRemediationCase(record) && record.effect.kind === 'deferral' && record.effect.status === 'reserved'
+        && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId))
+        ? [{ caseId: record.id, effectId: record.effect.id }]
+        : []);
+    if (settled.length === 0) return { value: [] };
+    const stranded = new Set(settled.map(({ caseId }) => caseId));
+    return {
+      value: settled,
+      nextState: replaceCases(state, (record) => stranded.has(record.id) && record.effect.kind === 'deferral'
+        ? {
+          ...record,
+          resolution: 'resolved',
+          effect: { id: record.effect.id, kind: 'deferral', status: 'failed', diagnostic: STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC },
         }
         : record),
     };
