@@ -235,11 +235,17 @@ describe('reduceBuildReviewAdjudication', () => {
     })).route).toBe('halt');
   });
 
-  it('never routes an old applied action to BUILD when it covers no current source', () => {
+  it('routes an applied action that BUILD never attempted to BUILD even when it covers no current source', () => {
+    // A lap that halted after applying its actions left their published work
+    // order unbuilt; the next lap reports other findings. Halting here held
+    // that work forever, and PASS would stamp the gate done around it.
+    const rejectedCurrent: RemediationCaseRecord = {
+      ...reject(), sources: [{ sourceId: 'finding-2', outcome: 'rejected', recordedAt: '2026-08-31T00:00:00.000Z' }],
+    };
     expect(reduceBuildReviewAdjudication(reducerInput({
       currentSourceIds: ['finding-2'],
-      cases: [action()],
-    })).route).toBe('halt');
+      cases: [action(), rejectedCurrent],
+    }))).toMatchObject({ route: 'build', reason: 'applied action effect awaits its BUILD attempt' });
   });
 
   it.each(['reserved', 'failed'] as const)('halts when a refutation deferral is %s', (status) => {

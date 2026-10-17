@@ -2430,6 +2430,36 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it('routes a published repair that BUILD never attempted to BUILD when this lap only rejects its own finding', async () => {
+    // preserve-self-build-provider-transcripts-on-failed: a lap applied two
+    // repairs, then halted before BUILD; the next lap rejected its only finding
+    // and halted forever on "awaits its BUILD attempt".
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-pending', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'A repair published by an earlier lap.', resolution: 'open',
+        sources: [{ sourceId: 'implementationQuality:sha256-earlier-lap', outcome: 'acted', recordedAt: '2026-10-17T14:08:25.000Z' }],
+        effect: { id: 'effect-pending', kind: 'action', status: 'applied', workOrderId: 'order-pending' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-pending',
+      cases: [{ caseId: 'case-pending', priority: 'high', tasks: [{ title: 'The unbuilt repair' }] }],
+    });
+    const rejected: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'rejected', caseRef: 'case-rejected' }],
+      cases: [{ caseRef: 'case-rejected', disposition: 'reject', priority: 'low', confidence: 'high', rationale: 'Not actionable.', effect: { kind: 'none' } }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication(input(root, async () => rejected));
+
+    expect(result).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['case-pending'] } });
+  });
+
   describe('stranded deferral reservations', () => {
     // An earlier lap reserved this deferral in a run with no filing capability,
     // so its issue was never filed and the effect stayed reserved. The reducer
