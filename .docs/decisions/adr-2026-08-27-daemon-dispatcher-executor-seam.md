@@ -66,6 +66,11 @@ or root `.daemon/` state; dispatcher-owned adapters perform any such access on i
 The v1 executor runs in-process (wrapping today's `runFeature`), but the contract between
 the two sides is process-separable.
 
+> **Amended 2026-10-15 by #2392:** The executor now runs as a child process by default, forked
+> from the engine version pinned for that dispatch. `executor_isolation: in-process` keeps the v1
+> adapter as a rollback lever. Dispatcher-owned services are brokered over a typed IPC channel.
+> See adr-2026-10-15-per-dispatch-engine-pinned-executor D1, D4 and D5.
+
 **D2 — Serializable WorkOrder with a document manifest.** Dispatch crosses the seam as a
 plain serializable struct: repo identity, feature slug, pinned base SHA, and a document
 manifest — the spec/plan/story artifacts to execute against, as refs plus content hashes.
@@ -75,6 +80,12 @@ dispatcher can supply them directly. The manifest is **transport for the dispatc
 hop only**: it is not persisted as an artifact-resolution authority and does not alter the
 deterministic no-manifest identity ladder of `adr-2026-07-28-feature-aware-artifact-resolution`
 (D3 there remains binding).
+
+> **Amended 2026-10-15 by #2392:** The WorkOrder now carries engine identity. It gains
+> `engineVersionId`, the immutable `dist-versions` id resolved at claim time, plus a
+> `schemaVersion`. It is persisted to the worktree's `.pipeline/work-order.json` for the child
+> executor. The pin lasts for one dispatch; a re-dispatch resolves the current build again. See
+> adr-2026-10-15-per-dispatch-engine-pinned-executor D2 and D3.
 
 **D3 — WorkClaims formalizes the existing dispatch authority; it does not add a second one.**
 The in-memory `started`/`inFlight`/`parked` sets move behind a `WorkClaims` interface
@@ -116,6 +127,13 @@ expression stops being the universal guard; each shared operation declares its p
   `adr-2026-07-07-single-generation-stale-respawn` D2 from "no feature running" to "pool
   drained", preserving their mid-build-invariance intent. Precedent:
   `adr-2026-07-29-operator-park-scheduling-unit-boundary` D4 (drain, then decide).
+
+  > **Amended 2026-10-15 by #2392:** Stale-engine rebuilds no longer drain. A self-host rebuild
+  > runs as background maintenance while executors are busy, and its root mutations still go
+  > through D6. A stale supervisor restarts at a natural idle without stopping claims. It falls
+  > back to drain-then-act only after `supervisor_max_stale_hours` or an executor protocol
+  > mismatch. Operator-queued restarts keep drain-then-act. See
+  > adr-2026-10-15-per-dispatch-engine-pinned-executor D7 and D8.
 - *Periodic sweeps (`sweepBestEffort`):* run on a timer regardless of pool occupancy; the
   sweep context already carries `isFeatureInFlight` and per-op predicates skip in-flight
   slugs. Reap-gate fetch discipline (`adr-2026-07-29-defer-feature-worktree-reap…` D3
@@ -167,6 +185,11 @@ declares its sinks).
 **Explicitly out of scope:** multi-process or remote executors, durable/distributed claims,
 any transport, #564's run-state relocation, per-feature attachable tmux sessions, and any
 weakening of the ADR-010 single-daemon-process lock.
+
+> **Amended 2026-10-15 by #2392:** Multi-process executors and their IPC transport are now in
+> scope: one local child process per dispatch, under the single supervisor and its ADR-010 lock.
+> Remote executors and durable claims remain out of scope. See
+> adr-2026-10-15-per-dispatch-engine-pinned-executor D1 and D4.
 
 ## Consequences
 

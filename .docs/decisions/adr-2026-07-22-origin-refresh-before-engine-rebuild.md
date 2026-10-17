@@ -70,8 +70,18 @@ verified, ~95%.
   > (`adr-2026-08-27-daemon-dispatcher-executor-seam` D4/D5), which preserves this invariant's
   > intent (no in-flight build is ever re-based mid-run). The engine **rebuild** half remains
   > drained-boundary-only, and the minimum-interval rate limit below stays in force.
+  > **Amended 2026-10-15 by #2392:** The engine rebuild is no longer drained-boundary-only. In a
+  > self-host daemon with the stale-engine gates armed, it runs as a background maintenance job
+  > while executors are busy. That is safe because each executor is pinned to an immutable engine
+  > version per dispatch. The minimum-interval rate limit and fail-closed degradation stay in
+  > force. See adr-2026-10-15-per-dispatch-engine-pinned-executor D8.
 - **Quiescent-only, never mid-build** (adr-2026-07-03): the refresh runs inside the existing
   `inFlight.size === 0` guard; no new restart points.
+  > **Amended 2026-10-15 by #2392:** The rebuild no longer waits for `inFlight.size === 0`. It
+  > runs in the background maintenance job while executors are busy, and merged engine fixes reach
+  > the next dispatch. Each executor keeps its per-dispatch engine pin, so no build is swapped
+  > mid-run, and restarts still happen only at the boundaries of
+  > adr-2026-10-15-per-dispatch-engine-pinned-executor D7.
 - **Fail-closed** (adr-2026-07-03): fetch/rebuild/stamp failures degrade to the current
   engine + warning; indeterminate state never restarts.
 - **Non-convergence suppression** (adr-2026-07-03): unchanged; a docs-only merge that
