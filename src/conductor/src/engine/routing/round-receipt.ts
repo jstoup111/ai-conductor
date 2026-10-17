@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { StackedPrsConfig } from '../../types/config.js';
 import type { ChildId } from '../child-context.js';
 import {
   readKickbackLedger,
@@ -15,7 +16,62 @@ import {
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseChildId } from '../child-context.js';
 import { readRouteRecord, writeRouteRecord } from './route-record-store.js';
-import { parseRoundId, type RoundId, type RouteRecord } from './route-types.js';
+import { parseRoundId, routingEligible, type RoundId, type RouteRecord } from './route-types.js';
+
+/** The caller-established routing context required before receipt refs are read. */
+export interface ReceiptRoutingScope {
+  readonly cursor: { readonly kind: string };
+  readonly config: { readonly stacked_prs?: StackedPrsConfig } | undefined;
+}
+
+type RouteReceiptRecord =
+  | { readonly kind: 'ok'; readonly roundId: RoundId; readonly record: RouteRecord }
+  | { readonly kind: 'malformed'; readonly ref: string }
+  | { readonly kind: 'unreadable'; readonly ref?: string };
+
+/**
+ * Read every route receipt through the store after the single routing fence.
+ * A route namespace is durable state: a listing, id, or record-read failure is
+ * an explicit result for its consumer to settle or halt, never an exception.
+ */
+async function enumerateRouteReceiptRecords(input: {
+  readonly projectRoot: string;
+  readonly slug: string;
+  readonly routing: ReceiptRoutingScope;
+  readonly git: GitRunner;
+}): Promise<readonly RouteReceiptRecord[]> {
+  if (!routingEligible(input.routing.cursor, input.routing.config)) return [];
+  const prefix = `refs/conductor/${input.slug}/routes/`;
+  let listed: Awaited<ReturnType<GitRunner>>;
+  try {
+    listed = await input.git(['for-each-ref', '--format=%(refname)', prefix]);
+  } catch {
+    return [{ kind: 'unreadable' }];
+  }
+  if (listed.exitCode !== 0) return [{ kind: 'unreadable' }];
+
+  const records: RouteReceiptRecord[] = [];
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!roundId) {
+      records.push({ kind: 'malformed', ref });
+      continue;
+    }
+    try {
+      const stored = await readRouteRecord(input.projectRoot, input.slug, roundId, { git: input.git });
+      if (stored.kind !== 'record') {
+        records.push({ kind: 'unreadable', ref });
+      } else if (stored.record.roundId !== roundId) {
+        records.push({ kind: 'malformed', ref });
+      } else {
+        records.push({ kind: 'ok', roundId, record: stored.record });
+      }
+    } catch {
+      records.push({ kind: 'unreadable', ref });
+    }
+  }
+  return records;
+}
 
 export interface RoutedRepairCreditInput {
   readonly projectRoot: string;
@@ -75,6 +131,7 @@ export interface SettleRoundAtDispatchInput {
   readonly dispatchingChild: ChildId;
   /** The already-resolved feature allowances. */
   readonly budgets: readonly PendingRepairSettlementBudget[];
+  readonly routing: ReceiptRoutingScope;
   readonly git?: GitRunner;
 }
 
@@ -179,27 +236,26 @@ function nextLedgerForReceipt(
 export async function reconcileReceiptLedgerUnlocked(
   projectRoot: string,
   slug: string,
+  routing: ReceiptRoutingScope,
   git: GitRunner = makeGitRunner(projectRoot),
-): Promise<void> {
-  const refs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
-  if (refs.exitCode !== 0) throw new Error('cannot enumerate route receipts');
+): Promise<{ readonly kind: 'reconciled' | 'malformed' | 'unreadable' }> {
+  const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
   let ledger = await readKickbackLedger(projectRoot);
-  for (const ref of refs.stdout.split('\n').filter(Boolean)) {
-    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
-    if (!roundId) throw new Error('route receipt id is malformed');
-    const stored = await readRouteRecord(projectRoot, slug, roundId, { git });
-    if (stored.kind !== 'record') throw new Error(`route receipt ${roundId} is unreadable`);
-    const settlementId = stored.record.receipt.settlementId;
+  for (const item of records) {
+    if (item.kind !== 'ok') return { kind: item.kind };
+    const settlementId = item.record.receipt.settlementId;
     if (!settlementId || ledger.settlementReceipts?.[settlementId]) continue;
     // Reconciliation deliberately uses the receipt's durable numbers rather
     // than current caps: the admission was already settled by the ref CAS.
-    ledger = applySettledReceiptToLedger(ledger, stored.record);
+    ledger = applySettledReceiptToLedger(ledger, item.record);
   }
   await writeKickbackLedgerUnlocked(projectRoot, ledger);
+  return { kind: 'reconciled' };
 }
 
-export async function reconcileReceiptLedger(projectRoot: string, slug: string, git?: GitRunner): Promise<void> {
-  await withKickbackLedgerLease(projectRoot, () => reconcileReceiptLedgerUnlocked(projectRoot, slug, git));
+export async function reconcileReceiptLedger(projectRoot: string, slug: string, routing: ReceiptRoutingScope, git?: GitRunner): Promise<void> {
+  const result = await withKickbackLedgerLease(projectRoot, () => reconcileReceiptLedgerUnlocked(projectRoot, slug, routing, git));
+  if (result.kind !== 'reconciled') throw new Error(`route receipt reconciliation is ${result.kind}`);
 }
 
 /** Settle exactly once at the current routed host's BUILD dispatch. */
@@ -207,7 +263,8 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
   const git = input.git ?? makeGitRunner(input.projectRoot);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await withKickbackLedgerLease(input.projectRoot, async () => {
-      await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, git);
+      const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
+      if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       const stored = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
       if (stored.kind !== 'record') return { kind: 'halted', reason: `routing round ${input.roundId} is unreadable` } as const;
       if (currentHost(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
@@ -237,16 +294,12 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
 }
 
 /** Task ids in open, uncharged frozen allocations are not authored-plan work. */
-export async function pendingAllocationTaskIds(projectRoot: string, slug: string, git: GitRunner = makeGitRunner(projectRoot)): Promise<string[]> {
-  const refs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
-  if (refs.exitCode !== 0) throw new Error('cannot enumerate route receipts');
+export async function pendingAllocationTaskIds(projectRoot: string, slug: string, routing: ReceiptRoutingScope, git: GitRunner = makeGitRunner(projectRoot)): Promise<string[]> {
+  const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
   const ids = new Set<string>();
-  for (const ref of refs.stdout.split('\n').filter(Boolean)) {
-    const id = parseRoundId(ref.split('/').at(-1) ?? '');
-    if (!id) throw new Error('route receipt id is malformed');
-    const record = await readRouteRecord(projectRoot, slug, id, { git });
-    if (record.kind !== 'record') throw new Error(`route receipt ${id} is unreadable`);
-    if (!record.record.receipt.settlementId) for (const allocation of Object.values(record.record.allocation)) for (const taskId of allocation.remTaskIds) ids.add(taskId);
+  for (const item of records) {
+    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
+    if (!item.record.receipt.settlementId) for (const allocation of Object.values(item.record.allocation)) for (const taskId of allocation.remTaskIds) ids.add(taskId);
   }
   return [...ids].sort();
 }
@@ -261,18 +314,15 @@ export async function chargeTasklessAtAdmission(input: {
   readonly slug: string;
   readonly roundId: RoundId;
   readonly gate: string;
+  readonly routing: ReceiptRoutingScope;
   readonly git?: GitRunner;
 }): Promise<{ readonly kind: 'charged'; readonly count: number } | { readonly kind: 'exhausted'; readonly count: number } | { readonly kind: 'halted'; readonly reason: string }> {
   const git = input.git ?? makeGitRunner(input.projectRoot);
-  const refs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${input.slug}/routes/`]);
-  if (refs.exitCode !== 0) return { kind: 'halted', reason: 'cannot enumerate route receipts' };
+  const records = await enumerateRouteReceiptRecords({ ...input, git });
   let count = 0;
-  for (const ref of refs.stdout.split('\n').filter(Boolean)) {
-    const id = parseRoundId(ref.split('/').at(-1) ?? '');
-    if (!id) return { kind: 'halted', reason: 'route receipt id is malformed' };
-    const stored = await readRouteRecord(input.projectRoot, input.slug, id, { git });
-    if (stored.kind !== 'record') return { kind: 'halted', reason: `route receipt ${id} is unreadable` };
-    count += stored.record.receipt.taskless?.[input.gate] ?? 0;
+  for (const item of records) {
+    if (item.kind !== 'ok') return { kind: 'halted', reason: `route receipt is ${item.kind}` };
+    count += item.record.receipt.taskless?.[input.gate] ?? 0;
   }
   // Keep this numeric literal local to routing so taskless admission doesn't
   // import the legacy self-heal machinery and accidentally bump its ledger.
@@ -292,31 +342,33 @@ export async function chargeTasklessAtAdmission(input: {
 }
 
 /** Recreate only receipt-derived accounting after a disposable worktree loss. */
-export async function rebuildLedgerFromReceipts(projectRoot: string, slug: string, git: GitRunner = makeGitRunner(projectRoot)): Promise<void> {
+export async function rebuildLedgerFromReceipts(
+  projectRoot: string,
+  slug: string,
+  routing: ReceiptRoutingScope,
+  git: GitRunner = makeGitRunner(projectRoot),
+): Promise<{ readonly kind: 'rebuilt' | 'present' | 'unreadable' }> {
   const exists = await access(join(projectRoot, '.pipeline', 'kickback-ledger.json')).then(() => true).catch(() => false);
-  if (exists) return;
-  await withKickbackLedgerLease(projectRoot, async () => {
-    const refs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
-    if (refs.exitCode !== 0) throw new Error('cannot enumerate route receipts');
+  if (exists) return { kind: 'present' };
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
     let ledger: KickbackLedger = {
       version: 1,
       gates: {},
       growth: { authored: 0, added: 0, byGate: {} },
       settlementReceipts: {},
     };
-    for (const ref of refs.stdout.split('\n').filter(Boolean)) {
-      const id = parseRoundId(ref.split('/').at(-1) ?? '');
-      if (!id) throw new Error('route receipt id is malformed');
-      const stored = await readRouteRecord(projectRoot, slug, id, { git });
-      if (stored.kind !== 'record') throw new Error(`route receipt ${id} is unreadable`);
-      const receipt = stored.record.receipt;
+    for (const item of records) {
+      if (item.kind !== 'ok') return { kind: 'unreadable' } as const;
+      const receipt = item.record.receipt;
       for (const [gate, amount] of Object.entries(receipt.taskless ?? {})) {
         const entry = ledger.gates[gate] ?? defaultGateEntry();
         ledger = { ...ledger, gates: { ...ledger.gates, [gate]: { ...entry, count: entry.count + amount } } };
       }
       if (!receipt.settlementId) continue;
-      ledger = applySettledReceiptToLedger(ledger, stored.record);
+      ledger = applySettledReceiptToLedger(ledger, item.record);
     }
     await writeKickbackLedgerUnlocked(projectRoot, ledger);
+    return { kind: 'rebuilt' } as const;
   });
 }
