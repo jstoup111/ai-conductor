@@ -8,6 +8,7 @@ import { isBuiltInProviderId } from '../../execution/provider-catalog.js';
 import type { SelfHostProviderId } from './provider-home.js';
 import { isStepName } from '../execution-identity.js';
 import { ConductorEventEmitter, type EventHandler } from '../../ui/events.js';
+import type { TranscriptCaptureSource } from './transcript-harvest.js';
 
 /** Every terminal step disposition that decides an attempt's captured transcripts. */
 export type TranscriptRetentionOutcome =
@@ -54,7 +55,11 @@ export type TranscriptCaptureMember =
   | { readonly kind: 'absent' }
   | { readonly kind: 'present'; readonly value: string };
 
-export interface TranscriptCaptureIdentity {
+/**
+ * The normalized key used to settle one harvested capture.  It is projected
+ * from its source so capture naming and settlement cannot drift apart.
+ */
+export interface TranscriptSettlementKey {
   readonly step: StepName;
   readonly member: TranscriptCaptureMember;
   readonly runId: string;
@@ -62,21 +67,18 @@ export interface TranscriptCaptureIdentity {
 }
 
 /** Build the sole step/member identity used for capture recording and settlement. */
-export function transcriptCaptureIdentity(input: {
-  readonly step: StepName;
-  readonly runId: string;
-  readonly attempt: number;
-  readonly member?: string;
-}): TranscriptCaptureIdentity {
+export function transcriptSettlementKey(
+  source: TranscriptCaptureSource & { readonly step: StepName },
+): TranscriptSettlementKey {
   return {
-    step: input.step,
-    member: input.member === undefined ? { kind: 'absent' } : { kind: 'present', value: input.member },
-    runId: input.runId,
-    attempt: input.attempt,
+    step: source.step,
+    member: source.member === undefined ? { kind: 'absent' } : { kind: 'present', value: source.member },
+    runId: source.runId,
+    attempt: source.attempt,
   };
 }
 
-type CapturedTranscript = TranscriptCaptureIdentity & {
+type CapturedTranscript = TranscriptSettlementKey & {
   readonly path: string;
   readonly interrupted: boolean;
 };
@@ -177,7 +179,7 @@ export class TranscriptRetention {
       if (!isStepName(event.step)) return this.retain(event.path);
       const step = event.step;
       return this.capture({
-        ...transcriptCaptureIdentity({
+        ...transcriptSettlementKey({
           step,
           runId: event.runId,
           attempt: event.attempt,
@@ -207,13 +209,13 @@ export class TranscriptRetention {
 
   /** Settle exactly one provider capture dispatch without affecting a later retry. */
   async settleAttempt(
-    identity: Omit<TranscriptCaptureIdentity, 'attempt' | 'member'> & {
+    identity: Omit<TranscriptSettlementKey, 'attempt' | 'member'> & {
       readonly attempt: TranscriptCaptureDispatchIdentity;
       readonly member?: string;
     },
     outcome: TranscriptRetentionOutcome,
   ): Promise<void> {
-    await this.settleKeys([captureKey(transcriptCaptureIdentity(identity))], outcome);
+    await this.settleKeys([captureKey(transcriptSettlementKey(identity))], outcome);
   }
 
   /** Settle all captured members of one terminal lifecycle step by their own identities. */
@@ -429,7 +431,7 @@ function isTranscriptOwnerStep(value: unknown): value is TranscriptOwnerStep {
   return value === 'unknown-step' || isStepName(value);
 }
 
-function captureKey(identity: TranscriptCaptureIdentity): string {
+function captureKey(identity: TranscriptSettlementKey): string {
   return [
     identity.step,
     identity.runId,

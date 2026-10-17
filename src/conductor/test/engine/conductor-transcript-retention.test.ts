@@ -15,11 +15,11 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import type { StepRunner } from '../../src/engine/step-runner-types.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
-import { transcriptCaptureIdentity } from '../../src/engine/self-host/transcript-retention.js';
+import { transcriptSettlementKey } from '../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // @ts-expect-error A rubric is a member identity, never a lifecycle StepName.
-transcriptCaptureIdentity({ step: 'rubric-security', runId: 'review', attempt: 1 });
+transcriptSettlementKey({ step: 'rubric-security', runId: 'review', attempt: 1 });
 
 describe('conductor transcript retention wiring', () => {
   it('removes the retention capture listener when its run ends', async () => {
@@ -558,15 +558,16 @@ describe('conductor transcript retention wiring', () => {
       provisionProviderHome: async (options) => ({
         provider: 'codex', homeDir: root, childEnv: () => ({}), childArgs: () => [],
         teardown: async () => {
-          const path = join('.pipeline', 'transcripts', String(options.step), `${options.runId}-a${options.attempt}-codex`);
-          const content = options.attempt === 1
+          const identity = options.captureIdentity!;
+          const path = join('.pipeline', 'transcripts', identity.step, `${identity.runId}-a${identity.attempt}-codex`);
+          const content = identity.attempt === 1
             ? firstCapture
-            : `{"attempt":${options.attempt},"message":"dispatch ${options.attempt}"}\n`;
+            : `{"attempt":${identity.attempt},"message":"dispatch ${identity.attempt}"}\n`;
           await mkdir(join(root, path), { recursive: true });
           await writeFile(join(root, path, 'session.jsonl'), content);
           transcriptWrites.push({ path, content });
           await events.emit({ type: 'provider_transcripts_captured', step: 'build',
-            runId: options.runId ?? 'retry-flow', attempt: options.attempt ?? 1, provider: 'codex', path,
+            runId: identity.runId, attempt: identity.attempt, provider: 'codex', path,
             files: 1, bytes: 3, interrupted: false, skipped: 0, omittedLines: 0 });
         },
       }),

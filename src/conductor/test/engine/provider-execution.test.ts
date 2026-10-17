@@ -617,14 +617,14 @@ describe('executeProviderCandidates', () => {
       expect.anything(),
       {
         step: 'build_review', runId: 'R', attempt: 1,
-        member: { kind: 'present', value: 'security' },
+        member: 'security',
       },
     );
   });
 
   // Covers: task:rem-as-built-rem-ab-capture-dispatch-seq
   it('uses a capture-only sequence for auxiliary retries without changing their escalation attempts', async () => {
-    const prepared: Array<{ step: string; runId: string; attempt: number; member: { kind: 'present'; value: string } }> = [];
+    const prepared: Array<{ step: string; runId: string; attempt: number; member: string }> = [];
     await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: 'security', runId: 'R',
       policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: true, min_confidence: 0 },
@@ -633,7 +633,7 @@ describe('executeProviderCandidates', () => {
       options: { prompt: 'review', cwd: '/workspace' },
       nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
       prepareCandidateSelfHost: async (_candidate, _runtime, identity) => {
-        if (identity?.member.kind !== 'present') throw new Error('expected auxiliary capture identity');
+        if (identity?.member !== 'security') throw new Error('expected auxiliary capture identity');
         prepared.push({
           step: identity.step,
           runId: identity.runId,
@@ -645,8 +645,8 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(prepared).toEqual([
-      { step: 'build_review', runId: 'R', attempt: 1, member: { kind: 'present', value: 'security' } },
-      { step: 'build_review', runId: 'R', attempt: 2, member: { kind: 'present', value: 'security' } },
+      { step: 'build_review', runId: 'R', attempt: 1, member: 'security' },
+      { step: 'build_review', runId: 'R', attempt: 2, member: 'security' },
     ]);
   });
 

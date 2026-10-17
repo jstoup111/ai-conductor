@@ -34,32 +34,41 @@ export interface FailedTranscriptHarvest {
 
 export type TranscriptHarvestResult = CapturedTranscriptHarvest | FailedTranscriptHarvest;
 
-export interface TranscriptCaptureIdentity {
+/** Identifies where a harvested transcript came from and where it is stored. */
+export interface TranscriptCaptureSource {
   readonly step: TranscriptOwnerStep;
   readonly runId: string;
   readonly attempt: number;
   readonly member?: string;
+}
+
+export type ProviderTranscriptCaptureSource = TranscriptCaptureSource & {
   readonly provider: string;
+};
+
+/** Build the one source identity shared by capture naming and retention. */
+export function transcriptCaptureSource(input: TranscriptCaptureSource): TranscriptCaptureSource {
+  return input;
 }
 
 /** The one naming scheme used by every self-host transcript producer. */
-export function transcriptCapture(identity: TranscriptCaptureIdentity & { readonly worktreeRoot: string }): {
+export function transcriptCapture(source: ProviderTranscriptCaptureSource & { readonly worktreeRoot: string }): {
   readonly path: string;
   readonly destination: string;
 } {
-  const name = [`${identity.runId}-a${identity.attempt}`, identity.member === undefined ? undefined : sanitizeProviderMember(identity.member), identity.provider]
+  const name = [`${source.runId}-a${source.attempt}`, source.member === undefined ? undefined : sanitizeProviderMember(source.member), source.provider]
     .filter((part): part is string => part !== undefined).join('-');
-  const path = join('.pipeline', 'transcripts', identity.step, name);
-  return { path, destination: join(identity.worktreeRoot, path) };
+  const path = join('.pipeline', 'transcripts', source.step, name);
+  return { path, destination: join(source.worktreeRoot, path) };
 }
 
 /** Project a harvest result onto the event spine; teardown telemetry is best-effort. */
 export async function emitTranscriptHarvest(
   events: ConductorEventEmitter | undefined,
-  identity: TranscriptCaptureIdentity & { readonly path: string; readonly interrupted: boolean },
+  source: ProviderTranscriptCaptureSource & { readonly path: string; readonly interrupted: boolean },
   result: TranscriptHarvestResult,
 ): Promise<void> {
-  const { interrupted, ...identityFields } = identity;
+  const { interrupted, ...identityFields } = source;
   const event: ConductorEvent = result.kind === 'captured'
     ? {
         type: 'provider_transcripts_captured', ...identityFields, interrupted,

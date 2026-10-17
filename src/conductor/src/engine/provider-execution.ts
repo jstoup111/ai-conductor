@@ -49,9 +49,9 @@ import {
 } from './provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
 import {
-  transcriptCaptureIdentity,
-  type TranscriptCaptureIdentity,
-} from './self-host/transcript-retention.js';
+  transcriptCaptureSource,
+  type TranscriptCaptureSource,
+} from './self-host/transcript-harvest.js';
 import type { SelfHostProviderId } from './self-host/provider-home.js';
 import {
   CODEX_DISPLAY_NAME,
@@ -262,7 +262,7 @@ export function createCandidateSafetyBoundary(options: {
 export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
-  identity?: TranscriptCaptureIdentity,
+  identity?: TranscriptCaptureSource,
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
@@ -909,7 +909,7 @@ export async function executeProviderCandidates({
   // closed identity. A rubric can only inhabit `member`, never `step`.
   const selfHostCaptureIdentity = runId === undefined
     ? undefined
-    : transcriptCaptureIdentity({
+    : transcriptCaptureSource({
       step,
       runId,
       attempt: captureAttempt ?? attempt,
