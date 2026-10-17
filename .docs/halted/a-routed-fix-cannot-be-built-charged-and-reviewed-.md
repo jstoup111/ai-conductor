@@ -1,23 +1,22 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-17T09:27:05.907Z
+Status: halted
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-a-routed-fix-cannot-be-built-charged-and-reviewed-
-Head SHA: 64c1eae93e79831d4fa0783f51dcbcfb6023deda
-Halted at: 2026-10-16T21:24:49.551Z
+Head SHA: 461763468653c0251eeadd6da8fb78cecabe0abc
+Halted at: 2026-10-17T09:42:58.118Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: current remediation source coverage is incomplete or contradictory
-decision stop a5febe4e-b073-4560-9636-6cee4cd74ad5 (owner: architecture; sources: eventSpine:sha256:ae292657ba4d8920f0703cd84fe6378dabd36e52b541951f3a91af9a7c78ca83): The finding says round-receipt.ts:155-188 rebuilds the kickback ledger from route-record receipts instead of reading ConductorEvents. The approved plan requires exactly that. Task 62 requires reconcileReceiptLedger to apply each settled receipt whose settlement id is missing from settlementReceipts. Task 67 requires rebuildLedgerFromReceipts to rebuild laps, growth and taskless counters from every receipt when the flat ledger is absent. Task 60 makes the receipt CAS the source of truth that is written before the ledger. BUILD cannot move this accounting onto the event spine without breaking admitted Tasks 60, 62 and 67, and no admitted task allows that change. Prior case 2371023b sent the same kind of question (receipt budget state as durable coordination state read outside the spine) to architecture for the `taskless` field. This source raises it for the laps/growth reconstruction path, so it goes to the same owner.
+build_review adjudication halted: remediation effect is not finalized
+decision stop 249e1188-f23a-4a0b-b982-4eb774631b0f (owner: architecture; sources: eventSpine:sha256:51d2abe81f75d4439965b50cd593263b7f0713c561f4fea68f5dfda832f82a5d): This is the third time this finding has come up, now under another drifted id (prior cases ca6848c7 and b83b17f2). The finding is that round-stamp-cli.ts:83-86 stamps a `Round:` trailer that is later read to decide routed-round membership. The approved plan requires that behavior. Task 52 requires the prepare-commit-msg hook to stamp `Round: <roundId>` through round-stamp-cli.ts. Task 58 requires rerouteRound to refuse when `rev-list closed/c1..feat/c1/demo` contains a commit with no `Round: r1` trailer. Both tasks are completed. No admitted task allows moving the membership decision onto the event spine, so BUILD cannot remove this channel without breaking Tasks 52 and 58. Whether an engine-stamped trailer is acceptable coordination input under the event-spine principle is the architecture question already sent to architecture. This source rejoins that case and opens no new work.
+review infrastructure faults remain uncovered for this lap; they stay blocking in the mechanical lane after this route
 route: halt
 ca6848c7-7ca0-46eb-a06b-91de54d92c78 [escalate/resolved] sources: eventSpine:sha256:d696acee9c920ae2bd6c639d28d00e0a5c45be66f8a9b9826f35d81f69ecf644; effect: none
 b83b17f2-b7a4-4e20-bd3e-b3807ab8cf28 [escalate/resolved] sources: eventSpine:sha256:f865a5c26853011e92850884d780c96ef5abcedc926b281ea1a982f39d6635c9; effect: none
@@ -33,5 +32,10 @@ d59fd982-2ce3-44f7-bdcd-108fdd5be009 [act/resolved] sources: implementationQuali
 041da610-04be-4208-a9f6-a8c4850b3086 [act/resolved] sources: implementationQuality:sha256:4edabd9e673b22dbd2c20745b479cb5827807c9e4b5c497a97f036cb3ce40239; effect: action:applied:73886e1a-0351-4c26-8fd5-bd8491fd7da8
 21d793f1-bc8e-44e5-b97f-cb771bd3196b [act/resolved] sources: implementationQuality:sha256:93c267975bad22eddd4834f1da2f9367920387e7589e0a4fa347f3c3677323ce; effect: action:applied:78b1aa5c-5b57-47a1-a323-16fd45d0af20
 f3dd9a21-5eef-4d2f-8df4-c140dd7ca088 [act/resolved] sources: testQuality:sha256:903cba4f9c2b325b45b9b9d856e39162d5a06df43d60d351535454410f2f1362; effect: action:applied:01901d86-d660-4199-9723-b841eef3031d
-a5febe4e-b073-4560-9636-6cee4cd74ad5 [escalate/open] sources: eventSpine:sha256:ae292657ba4d8920f0703cd84fe6378dabd36e52b541951f3a91af9a7c78ca83; effect: none
+a5febe4e-b073-4560-9636-6cee4cd74ad5 [escalate/resolved] sources: eventSpine:sha256:ae292657ba4d8920f0703cd84fe6378dabd36e52b541951f3a91af9a7c78ca83; effect: none
+09fde20c-9119-4b97-b0fc-97ae1b223c05 [act/resolved] sources: implementationQuality:sha256:35a039574b5d1db6cb6ba8219248c90d7669aa07c5ce1da262ddbd3ee63af103; effect: action:applied:0aeb911c-f5c6-4bab-806b-8e67fc516cea
+094a655e-a3c5-4d50-9ced-e0cfdc90f666 [act/resolved] sources: implementationQuality:sha256:3c9eef53a432153137874b35caae5a848e4c752273d08dc7046073f49e25e5a9; effect: action:applied:693a1264-c55f-4338-bae6-ac6fcf585243
+c263dcae-3756-410a-a145-7aae42e9cee3 [act/resolved] sources: implementationQuality:sha256:f113df751f02e66711e033241dec91d70667e1c4e852a91dd47beef5b0144a26; effect: action:applied:364b2b08-fbe7-4293-8bea-252d39dbf76c
+c6cbfe95-66c4-4eab-8b36-fd25ba3dbe9d [defer/open] sources: implementationQuality:sha256:f006bbd908a17a85b19f23597857e09e4bf0a19d8df4a0546fee3dd95b75c134; effect: deferral:reserved:de7d44f2-21b6-40ca-abe6-77416fd4ffb2
+249e1188-f23a-4a0b-b982-4eb774631b0f [escalate/open] sources: eventSpine:sha256:51d2abe81f75d4439965b50cd593263b7f0713c561f4fea68f5dfda832f82a5d; effect: none
 ```
