@@ -148,6 +148,16 @@ export interface BuildReviewAdjudicationCoordinatorInput {
   readonly emit?: (event: RemediationCaseLifecycleEvent) => void | Promise<void>;
 }
 
+/**
+ * The repairs a BUILD route carries: those covering a current source, else the
+ * published work BUILD never attempted that the reducer routed on its own.
+ */
+function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], currentSourceSet: ReadonlySet<string>): string[] {
+  const eligible = cases.filter(isBuildEligibleActionCase);
+  const current = eligible.filter((record) => record.sources.some((source) => currentSourceSet.has(source.sourceId)));
+  return (current.length > 0 ? current : eligible).map((record) => record.id);
+}
+
 export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudicationCoordinatorInput): Promise<BuildReviewAdjudicationCoordinatorResult> {
   const sources = projectBuildReviewAggregateSources(input.aggregate);
   if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
@@ -448,8 +458,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       const currentSourceSet = new Set(exitSourceIds);
       const durable = {
         repairCaseIds: transition.route === 'build'
-          ? settledCases.filter((record) => isBuildEligibleActionCase(record) && record.sources.some((source) => currentSourceSet.has(source.sourceId)))
-            .map((record) => record.id)
+          ? buildRouteRepairCaseIds(settledCases, currentSourceSet)
           : [],
         decisionStops: settledCases.filter((record) => isBuildReviewDecisionStop(record) && record.sources.some((source) => currentSourceSet.has(source.sourceId)))
           .map((record) => ({

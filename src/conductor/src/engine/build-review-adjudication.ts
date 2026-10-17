@@ -112,13 +112,15 @@ export function reduceBuildReviewAdjudication(input: {
   }
   // An open applied action that covers no current source is not benign
   // history: attempted history is resolved by reconciliation before it gets
-  // here, so what remains is a published work order BUILD never attempted.
-  // PASS would stamp the gate done around durable unfinished work.
+  // here, so what remains is a published work order BUILD never attempted
+  // (typically a lap that halted after applying it). PASS would stamp the gate
+  // done around durable unfinished work, and halting held it forever, so the
+  // published work goes to BUILD.
   if (input.cases.some(isBuildEligibleActionCase)) {
     return {
-      route: 'halt',
+      route: 'build',
       remainingMechanical: input.mechanical !== 'healthy',
-      reason: 'applied action effect awaits its BUILD attempt outside the current sources',
+      reason: 'applied action effect awaits its BUILD attempt',
     };
   }
   if (input.mechanical === 'halt') {
