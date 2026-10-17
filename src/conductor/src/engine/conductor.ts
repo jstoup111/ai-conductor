@@ -5828,11 +5828,9 @@ export class Conductor {
         harnessRoot,
         repository: this.projectRoot,
         featureSlug,
-        runId,
         // Capture identity, not retry state: captures must never collide when
         // a legacy runner dispatches more than once in the same lifecycle.
-        attempt: captureAttempt,
-        step: name,
+        captureIdentity: { step: name, runId, attempt: captureAttempt },
         events: this.events,
         injectedToken: daemonToken,
       });
@@ -6010,10 +6008,12 @@ export class Conductor {
               worktreeRoot: this.projectRoot,
               repository: this.projectRoot,
               featureSlug,
-              runId: identity.runId,
-              attempt: identity.attempt,
-              step: name,
-              ...(identity.member?.kind === 'present' ? { member: identity.member.value } : {}),
+              captureIdentity: {
+                step: name,
+                runId: identity.runId,
+                attempt: identity.attempt,
+                ...(identity.member === undefined ? {} : { member: identity.member }),
+              },
               events: this.events,
             });
             ownershipTransferred = true;
@@ -6024,10 +6024,12 @@ export class Conductor {
             harnessRoot: liveCheckout,
             repository: this.projectRoot,
             featureSlug,
-            runId: identity.runId,
-            attempt: identity.attempt,
-            step: name,
-            ...(identity.member?.kind === 'present' ? { member: identity.member.value } : {}),
+            captureIdentity: {
+              step: name,
+              runId: identity.runId,
+              attempt: identity.attempt,
+              ...(identity.member === undefined ? {} : { member: identity.member }),
+            },
             events: this.events,
             injectedToken: daemonToken,
           });

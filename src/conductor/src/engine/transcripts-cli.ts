@@ -87,7 +87,7 @@ async function sessionFile(worktree: string, capture: Capture): Promise<string |
   const selection = provider?.selfHostShape?.transcripts.sessionFile;
   if (!selection) return undefined;
   const candidates = await findFiles(join(captureRoot, selection.root), selection.root);
-  const excluded = selection.excludedPathSegments ?? [];
+  const excluded: readonly string[] = 'excludedPathSegments' in selection ? selection.excludedPathSegments : [];
   const topLevel = candidates.filter((path) =>
     !relative(captureRoot, path).split(sep).some((segment) => excluded.includes(segment)),
   );

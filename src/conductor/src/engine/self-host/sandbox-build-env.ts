@@ -44,7 +44,7 @@ import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/p
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { resolveSkillName } from '../skill-names.js';
-import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, type TranscriptHarvestResult } from './transcript-harvest.js';
+import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
 import { collectKnownSecrets } from './transcript-sanitize.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { StepName } from '../../types/steps.js';
@@ -136,29 +136,22 @@ interface ProvisionOptionsBase {
   injectedToken?: string;
 }
 
+export type SandboxCaptureIdentity = TranscriptCaptureSource & { readonly step: StepName };
+
 type SandboxScratchLeaseIdentity = {
   readonly repository: string;
   readonly featureSlug: string;
-  readonly runId: string;
-  readonly attempt: number;
-  /** Owning conductor step, retained in the scratch lease. */
-  readonly step?: StepName;
-  /** Concurrent auxiliary member sharing this run/attempt; keys its own scratch home. */
-  readonly member?: string;
+  readonly captureIdentity: SandboxCaptureIdentity;
 };
 
 /** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
 export type ProvisionOptions = ProvisionOptionsBase & (
   | (SandboxScratchLeaseIdentity & { readonly baseDir?: undefined })
-  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number; readonly step?: StepName; readonly member?: string }
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly captureIdentity?: SandboxCaptureIdentity }
 );
 
-type TranscriptCapture = {
+type TranscriptCapture = SandboxCaptureIdentity & {
   readonly worktreeRoot: string;
-  readonly step: StepName;
-  readonly runId: string;
-  readonly attempt: number;
-  readonly member?: string;
   readonly events?: ConductorEventEmitter;
 };
 
@@ -254,10 +247,10 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     worktreeRoot: opts.worktreeRoot,
     repository: opts.repository,
     featureSlug: opts.featureSlug,
-    runId: opts.runId,
-    attempt: opts.attempt,
-    step: opts.step,
-    member: opts.member,
+    runId: opts.captureIdentity!.runId,
+    attempt: opts.captureIdentity!.attempt,
+    step: opts.captureIdentity!.step,
+    member: opts.captureIdentity!.member,
     provider: provider.id,
   });
   const parentEnv = opts.parentEnv ?? process.env;
@@ -330,9 +323,9 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     if (usesScratch) {
         await releaseScratchHome({
           worktreeRoot: opts.worktreeRoot,
-          runId: opts.runId!,
-          attempt: opts.attempt!,
-          member: opts.member,
+          runId: opts.captureIdentity!.runId,
+          attempt: opts.captureIdentity!.attempt,
+          member: opts.captureIdentity!.member,
           provider: provider.id,
         });
     } else if (configDir) {
@@ -353,22 +346,15 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     usesScratch
       ? () => releaseScratchHome({
         worktreeRoot: opts.worktreeRoot,
-        runId: opts.runId!,
-        attempt: opts.attempt!,
-        member: opts.member,
+        runId: opts.captureIdentity!.runId,
+        attempt: opts.captureIdentity!.attempt,
+        member: opts.captureIdentity!.member,
         provider: provider.id,
       }).then(() => {})
       : undefined,
-    opts.step === undefined || opts.runId === undefined || opts.attempt === undefined
+    opts.captureIdentity === undefined
       ? undefined
-      : {
-        worktreeRoot: opts.worktreeRoot,
-        step: opts.step,
-        runId: opts.runId,
-        attempt: opts.attempt,
-        ...(opts.member === undefined ? {} : { member: opts.member }),
-        events: opts.events,
-      },
+      : { worktreeRoot: opts.worktreeRoot, ...opts.captureIdentity, events: opts.events },
     opts.injectedToken,
   );
 }

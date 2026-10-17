@@ -230,8 +230,7 @@ describe('minimal Claude self-host sandbox', () => {
       ...defaulted,
       repository: 'owner/repository',
       featureSlug: 'sandbox-build-env',
-      runId: 'run-12',
-      attempt: 1,
+      captureIdentity: { step: 'build', runId: 'run-12', attempt: 1 },
     });
     try {
       expect([sandbox.configDir, sandbox.childEnv().CLAUDE_CONFIG_DIR]).toEqual([
@@ -239,7 +238,7 @@ describe('minimal Claude self-host sandbox', () => {
         expect.stringMatching(new RegExp(`^${scratchRoot}`)),
       ]);
       const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
-      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt']);
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
       expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'sandbox-build-env', runId: 'run-12', attempt: 1, ownerPid: process.pid });
       expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
 
@@ -278,8 +277,7 @@ describe('minimal Claude self-host sandbox', () => {
       ...defaulted,
       repository: 'owner/repository',
       featureSlug: 'sandbox-build-env-failure',
-      runId: 'run-15',
-      attempt: 2,
+      captureIdentity: { step: 'build', runId: 'run-15', attempt: 2 },
       fs: failingFs,
     })).rejects.toThrow('post-acquire Claude provisioning failure');
     expect(observedLease).toMatchObject({
@@ -310,7 +308,7 @@ describe('minimal Claude self-host sandbox', () => {
     const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
     persister.start();
     const sandbox = await provisionSandboxBuildEnv(options({
-      step: 'build', runId: 'r1', attempt: 1, events,
+      captureIdentity: { step: 'build', runId: 'r1', attempt: 1 }, events,
     }));
     const session = join(sandbox.configDir, 'projects', 'w', 's.jsonl');
     const subagent = join(sandbox.configDir, 'projects', 'w', 's', 'subagents', 'a.jsonl');
@@ -344,7 +342,7 @@ describe('minimal Claude self-host sandbox', () => {
     const previous = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     const hadPrevious = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    const sandbox = await provisionSandboxBuildEnv(options({ step: 'build', runId: 'r-token', attempt: 1 }));
+    const sandbox = await provisionSandboxBuildEnv(options({ captureIdentity: { step: 'build', runId: 'r-token', attempt: 1 } }));
     try {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
       expect(sandbox.childEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe(token);
@@ -373,7 +371,7 @@ describe('minimal Claude self-host sandbox', () => {
     events.on('provider_transcripts_captured', (event) => { captured.push(event); });
     events.on('provider_transcripts_harvest_failed', (event) => { failed.push(event); });
     const sandbox = await provisionSandboxBuildEnv(options({
-      step: 'build', runId: 'r1', attempt: 1, member: 'rubric-a', events,
+      captureIdentity: { step: 'build', runId: 'r1', attempt: 1, member: 'rubric-a' }, events,
     }));
     await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
     await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), '{"type":"assistant"}\n');
@@ -391,7 +389,7 @@ describe('minimal Claude self-host sandbox', () => {
     const failed: unknown[] = [];
     events.on('provider_transcripts_harvest_failed', (event) => { failed.push(event); });
     const sandbox = await provisionSandboxBuildEnv(options({
-      step: 'build', runId: 'r1', attempt: 1, events,
+      captureIdentity: { step: 'build', runId: 'r1', attempt: 1 }, events,
     }));
     await mkdir(join(worktree, '.pipeline'), { recursive: true });
     await writeFile(join(worktree, '.pipeline', 'transcripts'), 'not a directory');

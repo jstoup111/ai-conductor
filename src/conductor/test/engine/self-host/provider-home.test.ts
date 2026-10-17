@@ -5,6 +5,9 @@ import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, s
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import {
   ProviderHomeProvisionError,
   provisionProviderHome,
@@ -17,8 +20,32 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 
 const execFile = promisify(execFileCb);
+const conductorRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+function stepOnlyCaptureIdentityDiagnostics(): readonly ts.Diagnostic[] {
+  const fixturePath = join(conductorRoot, 'test/fixtures/provider-home-step-only-capture.ts');
+  const fixture = [
+    "import type { ProviderHomeCaptureIdentity } from '../../src/engine/self-host/provider-home.js';",
+    '// @ts-expect-error Capture identity is all-or-nothing.',
+    "const partial: ProviderHomeCaptureIdentity = { step: 'build' };",
+    'void partial;',
+  ].join('\n');
+  const config = ts.readConfigFile(join(conductorRoot, 'tsconfig.json'), ts.sys.readFile);
+  const options = ts.parseJsonConfigFileContent(config.config, ts.sys, conductorRoot).options;
+  const host = ts.createCompilerHost(options, true);
+  const readFile = host.readFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+  host.fileExists = (fileName) => fileName === fixturePath || fileExists(fileName);
+  host.readFile = (fileName) => fileName === fixturePath ? fixture : readFile(fileName);
+  const program = ts.createProgram({ rootNames: [fixturePath], options, host });
+  return ts.getPreEmitDiagnostics(program).filter((diagnostic) => diagnostic.file?.fileName === fixturePath);
+}
 
 describe('provider-aware self-host homes', () => {
+  it('rejects a partial capture identity at compile time', () => {
+    expect(stepOnlyCaptureIdentityDiagnostics().map(({ code }) => code)).not.toContain(2578);
+  });
+
   it('keys its copied skill catalogs by frontmatter name while pruning operator-only directories', async () => {
     const root = await mkdtemp(join(tmpdir(), 'provider-home-frontmatter-names-'));
     const worktree = join(root, 'worktree');
@@ -61,7 +88,7 @@ describe('provider-aware self-host homes', () => {
       persister.start();
       const home = await provisionProviderHome({
         provider: { id: provider }, worktreeRoot: worktree, baseDir: root,
-        step: 'build', runId: 'run-9', attempt: 1, events,
+        captureIdentity: { step: 'build', runId: 'run-9', attempt: 1 }, events,
       });
       const auth = '{"OPENAI_API_KEY":"sk-test-0123456789","refresh":"rt-abcdefgh"}';
       const transcript = join(home.homeDir, 'sessions', '2026', '10', '10', 'rollout-x.jsonl');
@@ -87,6 +114,25 @@ describe('provider-aware self-host homes', () => {
     },
   );
 
+  it('does not capture or emit transcript events without a complete identity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-no-capture-'));
+    const worktree = join(root, 'worktree');
+    const events = new ConductorEventEmitter();
+    const captured: unknown[] = [];
+    events.on('provider_transcripts_captured', (event) => { captured.push(event); });
+    await mkdir(join(worktree, 'skills'), { recursive: true });
+    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root, events });
+    try {
+      await mkdir(join(home.homeDir, 'sessions'), { recursive: true });
+      await writeFile(join(home.homeDir, 'sessions', 'session.jsonl'), '{"type":"assistant"}\n');
+      await home.teardown();
+      await expect(access(join(worktree, '.pipeline', 'transcripts'))).rejects.toThrow();
+      expect(captured).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each(['codex', 'pi'] as const)(
     'keeps concurrent member and later-attempt %s captures separate',
     async (provider) => {
@@ -95,7 +141,7 @@ describe('provider-aware self-host homes', () => {
       await mkdir(join(worktree, 'skills'), { recursive: true });
       const provision = (attempt: number, member?: string) => provisionProviderHome({
         provider: { id: provider }, worktreeRoot: worktree, baseDir: root,
-        step: 'build', runId: 'run-9', attempt, member,
+        captureIdentity: { step: 'build', runId: 'run-9', attempt, ...(member === undefined ? {} : { member }) },
       });
       try {
         const [a, b] = await Promise.all([provision(1, 'rubric-a'), provision(1, 'rubric-b')]);
@@ -170,8 +216,7 @@ describe('provider-aware self-host homes', () => {
         worktreeRoot: worktree,
         repository: 'owner/repository',
         featureSlug: 'provider-home-unavailable',
-        runId: 'run-2',
-        attempt: 1,
+        captureIdentity: { step: 'build', runId: 'run-2', attempt: 1 },
       }).then(() => undefined, (failure: unknown) => failure);
       await expect(access(scratchHome)).rejects.toThrow();
       expect(error).toBe(unavailable);
@@ -194,14 +239,11 @@ describe('provider-aware self-host homes', () => {
       worktreeRoot: worktree,
       repository: 'owner/repository',
       featureSlug: 'provider-home',
-      runId: 'run-11',
-      attempt: 2,
+      captureIdentity: { step: 'build', runId: 'run-11', attempt: 2 },
     });
     const explicitHome = await provisionProviderHome({
       provider: { id: 'codex' },
       worktreeRoot: worktree,
-      runId: 'run-11',
-      attempt: 2,
       baseDir: explicitBaseDir,
     });
     try {
@@ -212,7 +254,7 @@ describe('provider-aware self-host homes', () => {
         expect.stringMatching(new RegExp(`^${explicitBaseDir}/self-host-codex-`)),
       ]);
       const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
-      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt']);
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
       expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'provider-home', runId: 'run-11', attempt: 2, ownerPid: process.pid });
       expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
     } finally {
@@ -336,8 +378,7 @@ describe('provider-aware self-host homes', () => {
         worktreeRoot: worktree,
         repository: 'owner/repository',
         featureSlug: 'provider-home-missing-skills',
-        runId: 'run-14',
-        attempt: 5,
+        captureIdentity: { step: 'build', runId: 'run-14', attempt: 5 },
         fs,
       })).rejects.toEqual(expect.objectContaining({
         name: ProviderHomeProvisionError.name,
@@ -375,8 +416,7 @@ describe('provider-aware self-host homes', () => {
         worktreeRoot: worktree,
         repository: 'owner/repository',
         featureSlug: 'provider-home-failure',
-        runId: 'run-14',
-        attempt: 3,
+        captureIdentity: { step: 'build', runId: 'run-14', attempt: 3 },
       })).rejects.toThrow('Failed to provision isolated claude self-host home: post-acquire failure');
       expect(observedLease).toMatchObject({
         repository: 'owner/repository',
@@ -410,8 +450,7 @@ describe('provider-aware self-host homes', () => {
       worktreeRoot: worktree,
       repository: 'owner/repository',
       featureSlug: 'provider-home-clean',
-      runId: 'run-14',
-      attempt: 4,
+      captureIdentity: { step: 'build', runId: 'run-14', attempt: 4 },
     });
     try {
       expect(home.homeDir).toContain(join('.daemon', 'scratch', 'run-14', '4-codex'));
