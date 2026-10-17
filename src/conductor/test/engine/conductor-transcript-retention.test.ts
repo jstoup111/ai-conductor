@@ -296,7 +296,7 @@ describe('conductor transcript retention wiring', () => {
     let dispatch = 0;
     const runner: StepRunner = {
       selfHostRunId: () => 'configured-retry',
-      run: async (_step, _state, options) => {
+      run: async (_step, _state, _options) => {
         dispatch += 1;
         const path = join('.pipeline', 'transcripts', 'build_review', `dispatch-${dispatch}`);
         await mkdir(join(root, path), { recursive: true });

@@ -84,7 +84,7 @@ describe('conductor self-host catalog shape', () => {
     const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['pi', 'codex', 'claude'] } as ProviderExecutionContext;
     const runner: StepRunner = { run: async () => {
       for (const [index, next] of [candidate('pi', 'openrouter/m'), candidate('pi', 'deepseek/m'), candidate('codex', 'gpt-6'), candidate('claude', 'opus')].entries()) {
-        const prepared = await providerExecution.prepareCandidateSelfHost!(next, runtimes.get(next.providerKey) as never, { runId: 'catalog-shape', attempt: index + 1 });
+        const prepared = await providerExecution.prepareCandidateSelfHost!(next, runtimes.get(next.providerKey) as never, { step: next.step, runId: 'catalog-shape', attempt: index + 1 });
         expect(prepared).toBeDefined();
         preparedEnvs.push(prepared!.env);
         await prepared!.teardown();
@@ -114,7 +114,7 @@ describe('conductor self-host catalog shape', () => {
     const provisionProviderHome = vi.fn();
     const runtimes = new ProviderRuntimeSet([{ key: 'pi', provider: { invoke: vi.fn() }, policy: {} }] as never);
     const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['pi'] } as ProviderExecutionContext;
-    const runner: StepRunner = { run: async () => providerExecution.prepareCandidateSelfHost!(candidate('pi', 'openrouter/m'), runtimes.get('pi') as never, { runId: 'catalog-shape', attempt: 1 }).then(() => ({ success: true })) };
+    const runner: StepRunner = { run: async () => providerExecution.prepareCandidateSelfHost!(candidate('pi', 'openrouter/m'), runtimes.get('pi') as never, { step: 'build', runId: 'catalog-shape', attempt: 1 }).then(() => ({ success: true })) };
     const fingerprint = vi.mocked(liveBoundary.fingerprintLiveBoundary);
     fingerprint.mockClear();
 
@@ -135,7 +135,7 @@ describe('conductor self-host catalog shape', () => {
       ] as never);
       const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['pi'] } as ProviderExecutionContext;
       const runner: StepRunner = { run: async () => {
-        await providerExecution.prepareCandidateSelfHost!(candidate('pi', 'openrouter/m'), runtimes.get('pi') as never, { runId: 'catalog-shape', attempt: 1 });
+        await providerExecution.prepareCandidateSelfHost!(candidate('pi', 'openrouter/m'), runtimes.get('pi') as never, { step: 'build', runId: 'catalog-shape', attempt: 1 });
         candidatePrepared = true;
         return { success: true };
       } };
@@ -212,7 +212,7 @@ describe('conductor self-host catalog shape', () => {
       const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] } as ProviderExecutionContext;
       let claudeEnv: NodeJS.ProcessEnv | undefined;
       const runner: StepRunner = { run: async () => {
-        const prepared = await providerExecution.prepareCandidateSelfHost!(candidate('claude', 'opus'), runtimes.get('claude') as never, { runId: 'catalog-shape', attempt: 0, member: 'testQuality' });
+        const prepared = await providerExecution.prepareCandidateSelfHost!(candidate('claude', 'opus'), runtimes.get('claude') as never, { step: 'build', runId: 'catalog-shape', attempt: 0, member: 'testQuality' });
         claudeEnv = prepared!.env;
         await prepared!.teardown();
         return { success: true };
