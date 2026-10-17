@@ -15,6 +15,9 @@ import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
 import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './as-built-contract.js';
 import { selectFeaturePlan } from './artifacts.js';
 import { listExistingChildren, pipelinePathFor, type ChildId } from './child-context.js';
+import { resolveActiveChild } from './child-cursor.js';
+import { loadConfig } from './config.js';
+import { routingEligible } from './routing/route-types.js';
 import { readState } from './state.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
@@ -978,8 +981,13 @@ export async function readGrowthAccounting(
     const hasChildState = await access(join(projectRoot, '.pipeline', 'children')).then(() => true).catch(() => false);
     if (slug && hasChildState) {
       try {
-        const { pendingAllocationTaskIds } = await import('./routing/round-receipt.js');
-        routedPending = new Set(await pendingAllocationTaskIds(projectRoot, slug));
+        const config = await loadConfig(projectRoot);
+        if (!config.ok) return { growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap), authoredSource: 'unresolved' };
+        const cursor = await resolveActiveChild(projectRoot, slug);
+        if (routingEligible(cursor, config.config)) {
+          const { pendingAllocationTaskIds } = await import('./routing/round-receipt.js');
+          routedPending = new Set(await pendingAllocationTaskIds(projectRoot, slug, { cursor, config: config.config }));
+        }
       } catch {
         // Route records are a fail-closed accounting input.  Leave the count
         // unreconciled rather than manufacture a denominator from the leaf.

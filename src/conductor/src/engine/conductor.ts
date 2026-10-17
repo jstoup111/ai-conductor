@@ -190,7 +190,7 @@ import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } 
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { completeRerouteSync, parseBuilderClaim, rerouteRound, verifyPrerequisiteClaim } from './routing/prerequisite-claim.js';
 import { routingEligible, type RoundId } from './routing/route-types.js';
-import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch } from './routing/round-receipt.js';
+import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch, type ReceiptRoutingScope } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
@@ -6319,8 +6319,13 @@ export class Conductor {
         // N=1 path byte-for-byte free of route-ref probes.
         if (this.config.stacked_prs?.route_whole_feature_fixes === true && await hasDurableChildState(this.projectRoot, resumeSlug)) {
           try {
-            await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug);
-            await reconcileReceiptLedger(this.projectRoot, resumeSlug);
+            const receiptCursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
+            const routing = { cursor: receiptCursor, config: this.config };
+            if (routingEligible(receiptCursor, this.config)) {
+              const rebuilt = await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug, routing);
+              if (rebuilt.kind === 'unreadable') throw new Error('route receipts are unreadable');
+              await reconcileReceiptLedger(this.projectRoot, resumeSlug, routing);
+            }
           } catch {
             await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
             return;
@@ -9735,13 +9740,14 @@ export class Conductor {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             const cursor = slug ? await this.resolveActiveChild(this.projectRoot, slug) : undefined;
             const execution = cursor && slug ? resolveExecutionChild(cursor, slug) : undefined;
-            if (slug && execution?.source === 'routed-host' && execution.roundId !== undefined) {
+            if (slug && cursor !== undefined && execution?.source === 'routed-host' && execution.roundId !== undefined) {
               const routed = await settleRoundAtDispatch({
                 projectRoot: this.projectRoot,
                 slug,
                 roundId: execution.roundId,
                 dispatchingChild: execution.target.child,
                 budgets,
+                routing: { cursor, config: this.config },
               });
               if (routed.kind === 'halted' || routed.kind === 'refused') settlementFailure = routed.reason;
               else settlement = routed;
@@ -14879,7 +14885,7 @@ export class Conductor {
       readonly findingId: (host: ChildId) => string;
       readonly reason: string;
       readonly retryHint?: string;
-      readonly mutateReceipt: (input: { readonly slug: string; readonly roundId: RoundId }) => Promise<boolean>;
+      readonly mutateReceipt: (input: { readonly slug: string; readonly roundId: RoundId; readonly routing: ReceiptRoutingScope }) => Promise<boolean>;
     },
   ): Promise<void> {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
@@ -14904,7 +14910,7 @@ export class Conductor {
     });
     if (created.kind !== 'created') return;
 
-    if (!await input.mutateReceipt({ slug, roundId })) return;
+    if (!await input.mutateReceipt({ slug, roundId, routing: { cursor, config: this.config } })) return;
 
     const stored = await readRouteRecord(this.projectRoot, slug, roundId);
     if (stored.kind !== 'record') return;
@@ -14920,8 +14926,8 @@ export class Conductor {
       findingId: () => 'manual-test-fail',
       reason: 'manual-test',
       retryHint: evidence,
-      mutateReceipt: async ({ slug, roundId }) =>
-        (await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test' })).kind === 'charged',
+      mutateReceipt: async ({ slug, roundId, routing }) =>
+        (await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test', routing })).kind === 'charged',
     });
   }
 

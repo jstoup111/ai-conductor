@@ -37,14 +37,15 @@ describe('round receipt settlement', () => {
     const subject = await fixture();
     try {
       const budgets = [{ gate: 'prd_audit' as const, lapCap: 2, growthCap: 4, growth: { authored: 4, added: 0, byGate: {}, remaining: 4 }, authoredSource: 'plan' as const }];
-      const first = await settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: child, budgets, git: subject.git });
+      const routing = { cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } } } as const;
+      const first = await settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: child, budgets, routing, git: subject.git });
       expect(first.kind).toBe('settled');
       const ledger = await readKickbackLedger(subject.root);
       expect(ledger.gates.prd_audit?.laps).toBe(1);
       expect(ledger.growth?.added).toBe(1);
       expect(Object.keys(ledger.settlementReceipts ?? {})).toHaveLength(1);
 
-      expect((await settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: child, budgets, git: subject.git })).kind).toBe('acknowledged');
+      expect((await settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: child, budgets, routing, git: subject.git })).kind).toBe('acknowledged');
       expect((await readKickbackLedger(subject.root)).growth?.added).toBe(1);
       expect(await readRouteRecord(subject.root, 'demo', roundId)).toMatchObject({
         kind: 'record', record: { receipt: { acks: { 1: true } } },

@@ -15,7 +15,7 @@ import { readRestackJournal } from './restack-journal.js';
 import { haltRestack } from './restack-move.js';
 import { recoverRestackJournal } from './restack-recovery.js';
 import { loadConfig } from '../config.js';
-import { routingSettingOn } from '../routing/route-types.js';
+import { routingEligible, routingSettingOn } from '../routing/route-types.js';
 import { drainRoutingOutboxes } from '../routing/route-record-store.js';
 import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
@@ -113,12 +113,15 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   if (!durable) return { kind: recovery.kind === 'none' && secondRecovery.kind === 'none' ? 'no-stack' : 'recovered' };
 
   const config = await loadConfig(options.worktree);
-  if (config.ok && routingSettingOn(config.config)) {
+  const receiptCursor = config.ok && routingSettingOn(config.config)
+    ? await resolveActiveChild(options.worktree, options.slug, { git: options.git })
+    : undefined;
+  if (config.ok && receiptCursor !== undefined && routingEligible(receiptCursor, config.config)) {
     // A receipt CAS may survive a process crash before its ledger write.  Do
     // this after journal recovery, while route refs are stable, before any
     // resumed host can dispatch again.
     try {
-      await reconcileReceiptLedger(options.worktree, options.slug, options.git);
+      await reconcileReceiptLedger(options.worktree, options.slug, { cursor: receiptCursor, config: config.config }, options.git);
     } catch {
       return { kind: 'unavailable', detail: 'cannot reconcile routed receipt ledger' };
     }
@@ -134,7 +137,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     if (reconciled.kind === 'navigate-leaf-to-build') return reconciled;
   }
 
-  const cursor = await resolveActiveChild(options.worktree, options.slug, { git: options.git });
+  const cursor = receiptCursor ?? await resolveActiveChild(options.worktree, options.slug, { git: options.git });
   if (cursor.kind === 'no-child') return { kind: 'no-stack' };
   if (cursor.kind === 'divergent') {
     await haltRestack(options.worktree, cursor.check, options.events, { child: cursor.child });
