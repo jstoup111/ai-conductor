@@ -217,6 +217,36 @@ export async function settleStrandedBuildReviewActionReservations(input: {
 }
 
 /**
+ * An open case whose effect already failed (for example an action charged past
+ * the kickback budget) is terminal for that effect, yet the reducer halts on
+ * it every lap. Once its sources are absent from a mechanically complete lap,
+ * its finding is gone: resolve the case and keep the failure diagnostic.
+ */
+export async function resolveAbsentFailedBuildReviewCases(input: {
+  readonly store: RemediationCaseStore;
+  /** This lap's reported, unsuppressed rubric-namespaced source ids. */
+  readonly liveSourceIds: ReadonlySet<string>;
+}): Promise<SettleStrandedActionReservationsResult> {
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
+    const settled = state.cases.flatMap((record) =>
+      isOpenRemediationCase(record) && record.effect.kind !== 'none' && record.effect.status === 'failed'
+        && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId))
+        ? [{ caseId: record.id, effectId: record.effect.id }]
+        : []);
+    if (settled.length === 0) return { value: [] };
+    const absent = new Set(settled.map(({ caseId }) => caseId));
+    return {
+      value: settled,
+      nextState: replaceCases(state, (record) => absent.has(record.id) ? { ...record, resolution: 'resolved' } : record),
+    };
+  });
+  if (mutation.ok) return { ok: true, settled: mutation.value };
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: mutation.reason };
+}
+
+/**
  * A deferral reserved by an earlier lap that never filed its issue (for
  * example a run without a filing capability) can never be applied, and the
  * reducer halts on it every lap. Settle it once its sources are absent from a

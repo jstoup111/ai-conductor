@@ -17,7 +17,7 @@ import { parsePlanTaskBodies } from './plan-task-parse.js';
 import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, resolveAbsentFailedBuildReviewCases, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
@@ -240,6 +240,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       await input.emit?.({
         type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId, effectId, effectKind: 'action', reason: STRANDED_ACTION_RESERVATION_DIAGNOSTIC,
+      });
+    }
+    const absentFailed = await resolveAbsentFailedBuildReviewCases({ store, liveSourceIds: strandedLiveSourceIds });
+    if (!absentFailed.ok) return failStore('case store', absentFailed);
+    for (const { caseId } of absentFailed.settled) {
+      await input.emit?.({
+        type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
+        caseId, resolution: 'resolved',
       });
     }
     const strandedDeferrals = await settleStrandedBuildReviewDeferralReservations({ store, liveSourceIds: strandedLiveSourceIds });
