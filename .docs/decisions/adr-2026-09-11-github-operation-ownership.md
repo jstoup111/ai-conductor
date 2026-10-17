@@ -34,6 +34,8 @@ Extend the canonical tracker-client boundary with typed operations and canonical
 
 Authorization binds actor, repository, target, and operation. Resolve identity and evidence again for a retry or different target; a prior authorized call is not blanket permission for the rest of a workflow.
 
+> **Amended 2026-10-17 by #2945:** The registry gains `stack.read`, `stack.create`, `stack.add` (a new `stack` resource kind) and `pull-request.retarget`. `stack.create` is the second exact-target exemption beside initial PR creation. It is bound to the leaf's committed ownership. `stack.add` targets the `stack` kind and is authorized only for the stack number in the feature's publication record. Payloads are validated against that record by the publication module before the boundary is called, because authorization does not see payloads (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 13).
+
 ### D2 — Feature resources use committed ownership
 
 Existing feature PRs and remote feature branches require a single unambiguous committed intake owner matching the machine-resolved operator. Resolve the canonical repository and exact branch/PR identity, not a cwd guess or body marker alone.
@@ -48,6 +50,8 @@ A source issue is a separate mutation target: an owned feature does not authoriz
 > operation is refused `invalid-target`. Every other branch resolves exactly as before. Push targets
 > and PR binding remain the checked-out branch's own. Committed-owner checks are unchanged, so a child
 > branch never gains authority a leaf branch lacks.
+
+> **Amended 2026-10-17 by #2945:** For FINISH stack publication only, the engine pushes a named child ref from the leaf's worktree, so a push target need not be the checked-out branch. `conduct github-operation` still binds to the checked-out branch, and it refuses any push to, or PR bind of, a child branch whose member the publication record does not list (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decisions 4, 13).
 
 ### D3 — Pre-spec intake and creation
 

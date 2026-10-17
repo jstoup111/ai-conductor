@@ -64,6 +64,8 @@ approve pull requests, and have no alternate GitHub App/PAT secret.
    ambiguous by reconciliation; they never cause a record to be fabricated. The engine path already
    knows its slug and does not depend on inference.
 
+   > **Amended 2026-10-17 by #2945:** A PR whose head ref is a stacked child branch (`feat/c<k>/<slug>`) is `not-applicable` with classification `stack-child`, decided from the head ref before any body declaration is read. Only the leaf of a stacked feature can be its implementation PR (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 8).
+
 4. **Required premerge check.** Add an always-reporting `pull_request` GitHub Action with no path
    filter. For a deterministically associated implementation PR it runs the shared verifier against
    the PR head; a missing/invalid record fails. Non-implementation and record-only repair PRs report
@@ -77,6 +79,8 @@ approve pull requests, and have no alternate GitHub App/PAT secret.
    record, canonical hash, and exact checked-out commit. This keeps the required check usable with
    read-only CI credentials.
 
+   > **Amended 2026-10-17 by #2945:** The check reads the PR's head ref from the `pull_request` event. When the head ref is unavailable it fails, naming the missing field, instead of reporting `not-applicable`. A child head reports success as `not-applicable` (`stack-child`) (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 8).
+
 5. **Post-merge reconciliation through human repair PRs.** On a merged PR, an Action reruns the
    association and verifier against `main`. If valid, it exits. If the association is proven and the
    record is absent/invalid, it creates or updates a deterministic record-only branch and PR. The
@@ -84,6 +88,8 @@ approve pull requests, and have no alternate GitHub App/PAT secret.
    `main`, enables auto-merge, requests/creates an approval, or merges. Because `GITHUB_TOKEN`-created
    PR events do not recursively launch the normal PR workflow, the reconciliation job runs the same
    verifier on its repair commit and posts the stable required status itself.
+
+   > **Amended 2026-10-17 by #2945:** Reconciliation applies the same head-ref `stack-child` rule, so a merged child never opens a record-only repair PR, whatever its body mentions. Reconcile without a readable head ref opens no repair (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 8).
 
 6. **Least-privilege Action authorization.** Enable the repository setting permitting Actions to
    create pull requests. Keep the repository default token read-only; grant the reconciliation job
@@ -98,6 +104,8 @@ approve pull requests, and have no alternate GitHub App/PAT secret.
    generated on this feature branch for human review. Ambiguous, absent, or contradictory matches are
    emitted in a machine-readable report and skipped. Candidate counts and local processed markers
    are discovery hints only. The audit is idempotent and never rewrites a valid record.
+
+   > **Amended 2026-10-17 by #2945:** The audit applies the same head-ref `stack-child` rule (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 8).
 
 8. **Carry forward stable behavior.** Records still land on implementation branches before human
    merge through the #937 sequence; canonical hashing and story resolution, stem/hash discovery
