@@ -189,7 +189,7 @@ import {
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { completeRerouteSync, parseBuilderClaim, rerouteRound, verifyPrerequisiteClaim } from './routing/prerequisite-claim.js';
-import { routingEligible, type RoundId } from './routing/route-types.js';
+import { assertNever, routingEligible, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch, type ReceiptRoutingScope } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
@@ -4698,7 +4698,16 @@ export class Conductor {
                 : {}),
             });
             if (routed.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
-            const created = await createRouteRecord(this.projectRoot, this.featureSlug, { roundId, kind: 'audit', items: routed.items, allocation: routed.allocation });
+            const lapSources = new Set(routedFixes.map((gap) => (gap as CriterionBoundRemediationGap).gateSource));
+            const receipt = {
+              laps: {
+                ...(lapSources.has(PRD_AUDIT_REMEDIATION_GATE_SOURCE) ? { prd_audit: 1 } : {}),
+                ...(lapSources.has('as-built') ? { architecture_review_as_built: 1 } : {}),
+              },
+              growth: Object.values(routed.allocation).reduce((total, allocation) => total + allocation.remTaskIds.length, 0),
+              taskless: {}, echo: {}, acks: {},
+            };
+            const created = await createRouteRecord(this.projectRoot, this.featureSlug, { roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt });
             if (created.kind !== 'created') return { kind: 'halt', haltClass: 'needs-human', detail: `routing record creation failed: ${created.kind}` };
             const firstHost = routed.hosts[0];
             if (firstHost === undefined) return { kind: 'halt', haltClass: 'needs-human', detail: 'routing produced no host' };
@@ -7003,7 +7012,24 @@ export class Conductor {
         // A taskless manual-test failure still belongs to the routed round
         // protocol on stacked features.  It carries no rem block, but the
         // retry hint and its one admission charge are durable on the record.
-        await this.admitRoutedManualTestKickback(state, evidence);
+        const routedAdmission = await this.admitRoutedManualTestKickback(state, evidence);
+        switch (routedAdmission.kind) {
+          case 'admitted':
+            break;
+          case 'exhausted':
+          case 'halted': {
+            const reason = routedAdmission.reason;
+            await this.writeHaltMarker(reason + '\n', 'needs-human');
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            const prUrl = await this.surfaceRemediationPr(reason);
+            await this.emitLoopHalt(reason, prUrl);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return { action: 'return' };
+          }
+          default:
+            return assertNever(routedAdmission);
+        }
 
         // Task 7: Merged-PR guard on manual_test kickback (TS-1).
         // Before committing the rewind, check if the recorded PR has been
@@ -14885,21 +14911,29 @@ export class Conductor {
       readonly findingId: (host: ChildId) => string;
       readonly reason: string;
       readonly retryHint?: string;
-      readonly mutateReceipt: (input: { readonly slug: string; readonly roundId: RoundId; readonly routing: ReceiptRoutingScope }) => Promise<boolean>;
+      readonly mutateReceipt: (input: { readonly slug: string; readonly roundId: RoundId; readonly routing: ReceiptRoutingScope }) => Promise<
+        { readonly kind: 'charged' } | { readonly kind: 'exhausted'; readonly reason: string } | { readonly kind: 'halted'; readonly reason: string }
+      >;
     },
-  ): Promise<void> {
+  ): Promise<
+    | { readonly kind: 'admitted' }
+    | { readonly kind: 'exhausted'; readonly reason: string }
+    | { readonly kind: 'halted'; readonly reason: string }
+  > {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
-    if (!slug) return;
+    // The flat path remains authoritative when routing does not apply.  Its
+    // caller still emits and navigates through the legacy kickback flow.
+    if (!slug) return { kind: 'admitted' };
 
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-    if (!routingEligible(cursor, this.config)) return;
-    if (!await hasDurableChildState(this.projectRoot, slug)) return;
+    if (!routingEligible(cursor, this.config)) return { kind: 'admitted' };
+    if (!await hasDurableChildState(this.projectRoot, slug)) return { kind: 'admitted' };
 
     const execution = resolveExecutionChild(cursor, slug);
-    if (execution.source !== 'cursor' && execution.source !== 'routed-host') return;
+    if (execution.source !== 'cursor' && execution.source !== 'routed-host') return { kind: 'admitted' };
 
     const roundId = await nextRoundId(this.projectRoot, slug);
-    if (typeof roundId !== 'string') return;
+    if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
 
     const host = execution.target.child;
     const created = await createRouteRecord(this.projectRoot, slug, {
@@ -14908,26 +14942,55 @@ export class Conductor {
       items: [{ findingId: input.findingId(host), kind: 'audit', owner: host, host, reason: input.reason, fallback: [] }],
       allocation: { [host]: { remTaskIds: [], blockBodies: [], ...(input.retryHint === undefined ? {} : { retryHint: input.retryHint }) } },
     });
-    if (created.kind !== 'created') return;
+    if (created.kind !== 'created') return { kind: 'halted', reason: `routing round ${roundId} record creation failed: ${created.kind}` };
 
-    if (!await input.mutateReceipt({ slug, roundId, routing: { cursor, config: this.config } })) return;
+    let receiptMutation: Awaited<ReturnType<typeof input.mutateReceipt>>;
+    try {
+      receiptMutation = await input.mutateReceipt({ slug, roundId, routing: { cursor, config: this.config } });
+    } catch (error) {
+      return { kind: 'halted', reason: `routing round ${roundId} receipt mutation failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    switch (receiptMutation.kind) {
+      case 'charged':
+        break;
+      case 'exhausted':
+        return receiptMutation;
+      case 'halted':
+        return { kind: 'halted', reason: `routing round ${roundId} receipt mutation failed: ${receiptMutation.reason}` };
+      default:
+        return assertNever(receiptMutation);
+    }
 
-    const stored = await readRouteRecord(this.projectRoot, slug, roundId);
-    if (stored.kind !== 'record') return;
+    let stored: Awaited<ReturnType<typeof readRouteRecord>>;
+    try {
+      stored = await readRouteRecord(this.projectRoot, slug, roundId);
+    } catch (error) {
+      return { kind: 'halted', reason: `routing round ${roundId} record reread failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (stored.kind !== 'record') return { kind: 'halted', reason: `routing round ${roundId} record reread failed: ${stored.kind}` };
 
-    await admitRound(this.projectRoot, slug, stored.record, host, {
+    const admitted = await admitRound(this.projectRoot, slug, stored.record, host, {
       persist: async (event) => { await this.events.emitOrThrow(event); return 'persisted'; },
     });
+    return admitted.kind === 'admitted'
+      ? { kind: 'admitted' }
+      : { kind: 'halted', reason: `routing round ${roundId} admission failed: ${admitted.detail}` };
   }
 
   /** Records the taskless routed receipt for a manual-test kickback. */
-  private async admitRoutedManualTestKickback(state: ConductState, evidence: string): Promise<void> {
-    await this.admitRoutedTasklessKickback(state, {
+  private async admitRoutedManualTestKickback(state: ConductState, evidence: string): ReturnType<Conductor['admitRoutedTasklessKickback']> {
+    return this.admitRoutedTasklessKickback(state, {
       findingId: () => 'manual-test-fail',
       reason: 'manual-test',
       retryHint: evidence,
-      mutateReceipt: async ({ slug, roundId, routing }) =>
-        (await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test', routing })).kind === 'charged',
+      mutateReceipt: async ({ slug, roundId, routing }) => {
+        const charged = await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test', routing });
+        return charged.kind === 'charged'
+          ? { kind: 'charged' }
+          : charged.kind === 'exhausted'
+            ? { kind: 'exhausted', reason: `routing round ${roundId} manual_test admission is exhausted at ${charged.count}` }
+            : { kind: 'halted', reason: charged.reason };
+      },
     });
   }
 
@@ -14936,17 +14999,21 @@ export class Conductor {
     state: ConductState,
     target: StepName,
     count: number,
-  ): Promise<void> {
-    if (ALL_STEPS.some((step) => step.name === target) || isRegionStep(target)) return;
+  ): ReturnType<Conductor['admitRoutedTasklessKickback']> {
+    // `target` is the originating gate id.  Even a built-in target must retain
+    // its echo; only its later ledger/navigate handling differs.
 
-    await this.admitRoutedTasklessKickback(state, {
+    return this.admitRoutedTasklessKickback(state, {
       findingId: () => `custom-${target}`,
       reason: 'custom-step',
       mutateReceipt: async ({ slug, roundId }) => {
         const stored = await readRouteRecord(this.projectRoot, slug, roundId);
-        if (stored.kind !== 'record') return false;
+        if (stored.kind !== 'record') return { kind: 'halted', reason: `record is ${stored.kind}` };
         const receipt = { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } };
-        return (await writeRouteRecord(this.projectRoot, stored, { ...stored.record, receipt })).kind === 'updated';
+        const wrote = await writeRouteRecord(this.projectRoot, stored, { ...stored.record, receipt });
+        return wrote.kind === 'updated'
+          ? { kind: 'charged' }
+          : { kind: 'halted', reason: `echo.${target} write refused: ${wrote.kind}` };
       },
     });
   }
@@ -15011,7 +15078,21 @@ export class Conductor {
         // A configured post-region step keeps its established flat ledger
         // bump, then records that bumped count on a taskless routed receipt.
         // No plan task is appended for this shape.
-        await this.admitRoutedCustomStepKickback(state, target, count);
+        const routedAdmission = await this.admitRoutedCustomStepKickback(state, target, count);
+        switch (routedAdmission.kind) {
+          case 'admitted':
+            break;
+          case 'exhausted':
+          case 'halted': {
+            const reason = routedAdmission.reason;
+            await this.writeHaltMarker(reason + '\n', 'needs-human');
+            const prUrl = await this.surfaceRemediationPr(reason);
+            await this.emitLoopHalt(reason, prUrl);
+            return 'halt';
+          }
+          default:
+            return assertNever(routedAdmission);
+        }
         const hasContract = hasCompletionContract(target, this.config);
         const disposition = await this.resolveDecideEntryDisposition({
           target,

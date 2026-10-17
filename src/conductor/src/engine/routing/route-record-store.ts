@@ -189,12 +189,12 @@ export async function writeRoutingTransaction(
 export async function createRouteRecord(
   worktree: string,
   slug: string,
-  input: Pick<RouteRecord, 'roundId' | 'kind' | 'items' | 'allocation'>,
+  input: Pick<RouteRecord, 'roundId' | 'kind' | 'items' | 'allocation'> & { readonly receipt?: RouteRecord['receipt'] },
   dependencies: RouteRecordStoreDependencies = {},
 ): Promise<{ readonly kind: 'created'; readonly record: RouteRecord } | Exclude<WriteRouteRecordResult, { readonly kind: 'updated' }>> {
   const hosts = Object.keys(input.allocation).reduce((result, value) => ({ ...result, [value]: 'pending' as const }), {} as Record<string, RouteRecord['hosts'][keyof RouteRecord['hosts']]>);
   if (Object.keys(hosts).length === 0) return { kind: 'unavailable' };
-  const record: RouteRecord = { ...input, phase: 'prepared', hosts, currentHostIndex: 0, receipt: {}, outbox: [] };
+  const record: RouteRecord = { ...input, phase: 'prepared', hosts, currentHostIndex: 0, receipt: input.receipt ?? {}, outbox: [] };
   const write = await writeRoutingTransaction(worktree, slug, [{ kind: 'create-record', record }], dependencies);
   return write.kind === 'updated' ? { kind: 'created', record } : write;
 }

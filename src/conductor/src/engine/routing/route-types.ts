@@ -188,15 +188,28 @@ export interface FrozenHostAllocation {
 /** Frozen rem-* task ids and their exact block bodies, grouped by host child. */
 export type FrozenAllocation = Readonly<Record<ChildId, FrozenHostAllocation>>;
 
-/** Per-gate charges and durable counter echoes, keyed by their gate id. */
-export type ReceiptCharges = Readonly<Record<string, number>>;
+/** The only whole-feature remediation gates that can consume a route lap. */
+export const WHOLE_FEATURE_BUDGET_GATES = ['prd_audit', 'architecture_review_as_built'] as const;
+export type WholeFeatureBudgetGate = typeof WHOLE_FEATURE_BUDGET_GATES[number];
+
+/** A taskless retry is deliberately separate from whole-feature lap charges. */
+export type TasklessReceiptGate = 'manual_test';
+
+/** A configured custom step's durable counter echo. */
+export type CustomStepReceiptGate = string & { readonly __brand: 'CustomStepReceiptGate' };
+
+/** Per-gate charges and durable counter echoes, keyed by their closed domain. */
+export type ReceiptCharges<Key extends string> = Readonly<Partial<Record<Key, number>>>;
+export type ReceiptLapCharges = ReceiptCharges<WholeFeatureBudgetGate>;
+export type ReceiptTasklessCharges = ReceiptCharges<TasklessReceiptGate>;
+export type ReceiptEchoCharges = ReceiptCharges<CustomStepReceiptGate>;
 
 /** The durable settlement state for a routing round. */
 export interface RoundReceipt {
-  readonly laps?: ReceiptCharges;
+  readonly laps?: ReceiptLapCharges;
   readonly growth?: number;
-  readonly taskless?: ReceiptCharges;
-  readonly echo?: ReceiptCharges;
+  readonly taskless?: ReceiptTasklessCharges;
+  readonly echo?: ReceiptEchoCharges;
   readonly settlementId?: string;
   readonly acks?: Readonly<Record<ChildId, true>>;
 }
@@ -330,13 +343,16 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-function parseReceiptCharges(value: unknown): ReceiptCharges | undefined {
+function parseReceiptCharges<Key extends string>(
+  value: unknown,
+  allowed: readonly Key[] | undefined,
+): ReceiptCharges<Key> | undefined {
   if (!isRecord(value)) return undefined;
-  const charges: Record<string, number> = {};
+  const charges: Partial<Record<Key, number>> = {};
   for (const [gate, count] of Object.entries(value)) {
     const parsed = nonNegativeInteger(count);
-    if (!nonEmptyString(gate) || parsed === undefined) return undefined;
-    charges[gate] = parsed;
+    if (!nonEmptyString(gate) || parsed === undefined || (allowed !== undefined && !allowed.includes(gate as Key))) return undefined;
+    charges[gate as Key] = parsed;
   }
   return charges;
 }
@@ -346,10 +362,10 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
   if (Object.keys(value).length === 0) {
     return { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} };
   }
-  const laps = parseReceiptCharges(value.laps);
+  const laps = parseReceiptCharges(value.laps, WHOLE_FEATURE_BUDGET_GATES);
   const growth = nonNegativeInteger(value.growth);
-  const taskless = parseReceiptCharges(value.taskless);
-  const echo = parseReceiptCharges(value.echo);
+  const taskless = parseReceiptCharges(value.taskless, ['manual_test'] as const);
+  const echo = parseReceiptCharges<CustomStepReceiptGate>(value.echo, undefined);
   if (!laps || growth === undefined || !taskless || !echo || !isRecord(value.acks)) return undefined;
   const acks: Record<ChildId, true> = {} as Record<ChildId, true>;
   for (const [rawChild, acknowledged] of Object.entries(value.acks)) {

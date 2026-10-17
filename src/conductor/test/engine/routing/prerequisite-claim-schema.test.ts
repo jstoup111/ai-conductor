@@ -13,6 +13,7 @@ describe('routed build prerequisite claim schema', () => {
     expect(PREREQUISITE_CLAIM_SCHEMA.oneOf[1].required).toContain('child');
     expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', symbols: ['parseB'], child: 2 }))
       .toEqual({ kind: 'claim', claim: { outcome: 'blocked-by-prerequisite', symbols: ['parseB'], child: 2 } });
+    expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', symbols: ['parseB'], child: '2' })).toEqual({ kind: 'malformed' });
     expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', symbols: ['parseB'] })).toEqual({ kind: 'malformed' });
     expect(parseBuilderClaim({ outcome: 'unknown', child: 2 })).toEqual({ kind: 'malformed' });
     expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, extra: true })).toEqual({ kind: 'malformed' });

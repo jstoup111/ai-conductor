@@ -1,7 +1,10 @@
 // Covers: task:20
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
-import { deriveTaskBoundOwner } from '../../../src/engine/routing/owner-derivation.js';
+import { deriveTaskBoundOwner, resolveRemediationTaskChild } from '../../../src/engine/routing/owner-derivation.js';
 
 const envelope: Pick<CoverageBindingEnvelope, 'sliceMembership'> = {
   sliceMembership: {
@@ -17,6 +20,20 @@ const remPlan = [
 ].join('\n');
 
 describe('deriveTaskBoundOwner', () => {
+  it('recovers rem membership from the feature-slug plan when sibling plans also exist', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'owner-derivation-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ feature_desc: 'demo' }));
+      await writeFile(join(root, '.docs', 'plans', 'demo.md'), remPlan);
+      await writeFile(join(root, '.docs', 'plans', 'another-feature.md'), `### Task ${remTaskId}\n**Child:** 2\n`);
+      await expect(resolveRemediationTaskChild(root, remTaskId, undefined)).resolves.toEqual({ kind: 'resolved', child: 1 });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('derives an authored task owner from the sealed task slice', () => {
     expect(deriveTaskBoundOwner({
       taskIds: ['T1'], envelope, planText: '', appendedChildren: {}, declaredPositions: [1, 2, 3],
