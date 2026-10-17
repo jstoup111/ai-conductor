@@ -26,7 +26,7 @@ function protectedRoutingRefWrites(source: string, fileName = 'fixture.ts'): str
       && argument.elements.some((element) => ts.isStringLiteral(element)
         && (element.text === 'update-ref' || element.text === 'symbolic-ref')))) {
       const text = node.getText(file);
-      if (/refs\/conductor\/[^'"`]+\/(?:routes\/|repairing\b)/.test(text)) writes.push(text);
+      if (/refs\/conductor\/[^'"`]+\/(?:routes\/|repairing\b)/.exec(text)) writes.push(text);
     }
     ts.forEachChild(node, visit);
   };
