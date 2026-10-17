@@ -2460,8 +2460,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const result = await runDaemon(
     {
       claims: workClaims,
-      repairQueue,
-      runRepair: async (request: RepairRequest) => {
+      repairs: { queue: repairQueue, run: async (request: RepairRequest) => {
         // Re-read before touching a worktree: queued state is advisory and
         // may have been resolved while the pool was full.
         const state = await tracker.readPullRequestMergeState(request.prUrl, projectRoot, log);
@@ -2488,7 +2487,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         }
         await run();
         queuedRepairRunners.delete(request.prUrl);
-      },
+      } },
       emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),
@@ -2809,7 +2808,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // deleted worktree). Removing either silently reverts this sweep to a
       // no-op fallback path — the same failure mode as the bindings above.
       reconcileParkedFeatures: async ({ disposeHaltWatcher, isFeatureInFlight }) => {
-        await reconcileParkedFeatures({
+        return reconcileParkedFeatures({
           projectRoot,
           log: (message) => log(message, true),
           cache: parkedSweepCache,
@@ -2837,9 +2836,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           tracker,
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
-          repairQueue,
+          repairs: {
+            queue: repairQueue,
+            register: (request, run) => queuedRepairRunners.set(request.prUrl, run),
+          },
           isRepairRunning: (prUrl) => workClaims.list().includes(`repair:${prUrl}`),
-          registerRepair: (request, run) => queuedRepairRunners.set(request.prUrl, run),
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).

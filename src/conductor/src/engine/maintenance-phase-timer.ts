@@ -1,10 +1,14 @@
 import type {
   ConductorEvent,
-  MaintenancePhase,
   MaintenancePhaseOutcome,
 } from '../types/events.js';
 
 type MaintenancePhaseEvent = Extract<ConductorEvent, { type: 'daemon_maintenance_phase' }>;
+export type MaintenancePhaseInput = MaintenancePhaseEvent extends infer Event
+  ? Event extends MaintenancePhaseEvent
+    ? Omit<Event, 'type' | 'durationMs' | 'outcome'>
+    : never
+  : never;
 
 export interface MaintenancePhaseTimerOptions {
   readonly now: () => number;
@@ -12,8 +16,8 @@ export interface MaintenancePhaseTimerOptions {
 }
 
 /** Times one maintenance phase and records its terminal outcome on the event spine. */
-export async function timeMaintenancePhase<T extends MaintenancePhaseOutcome | void>(
-  phase: MaintenancePhase,
+export async function timeMaintenancePhase<T extends MaintenancePhaseOutcome | void, P extends MaintenancePhaseInput>(
+  phase: P,
   run: () => Promise<T>,
   { now, emit }: MaintenancePhaseTimerOptions,
 ): Promise<T> {
@@ -23,18 +27,18 @@ export async function timeMaintenancePhase<T extends MaintenancePhaseOutcome | v
     const result = await run();
     await emit({
       type: 'daemon_maintenance_phase',
-      phase,
+      ...phase,
       durationMs: now() - startedAt,
       outcome: result ?? 'completed',
-    });
+    } as MaintenancePhaseEvent);
     return result;
   } catch (error) {
     await emit({
       type: 'daemon_maintenance_phase',
-      phase,
+      ...phase,
       durationMs: now() - startedAt,
       outcome: 'failed',
-    });
+    } as MaintenancePhaseEvent);
     throw error;
   }
 }

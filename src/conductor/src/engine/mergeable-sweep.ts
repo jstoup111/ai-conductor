@@ -418,9 +418,10 @@ export interface SweepOpts {
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
   /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
-  repairQueue?: RepairQueue;
-  /** Captures the sanctioned adapter call-site for a queued request. */
-  registerRepair?: (request: RepairRequest, run: () => Promise<void>) => void;
+  repairs?: {
+    queue: RepairQueue;
+    register: (request: RepairRequest, run: () => Promise<void>) => void;
+  };
   /** True while a pooled repair has already claimed this PR. */
   isRepairRunning?: (prUrl: string) => boolean;
   /**
@@ -466,8 +467,7 @@ export async function sweepMergeableLabels({
   operations,
   autoresolve,
   ciFix,
-  repairQueue,
-  registerRepair,
+  repairs,
   isRepairRunning,
   teardownWorktree,
   shippedRecordProbe,
@@ -906,22 +906,22 @@ export async function sweepMergeableLabels({
     }
 
     const enqueue = (request: RepairRequest, run?: () => Promise<void>): void => {
-      if (!repairQueue) return;
+      if (!repairs) return;
       if (isRepairRunning?.(request.prUrl)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
         return;
       }
-      if (!repairQueue.enqueue(request)) {
+      if (!repairs.queue.enqueue(request)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already queued)`);
       } else if (run) {
-        registerRepair?.(request, run);
+        repairs.register(request, run);
       }
     };
 
     // Daemon calls hand work to its pool.  Standalone callers predate that
     // queue and retain the synchronous, bounded dispatch contract below.
     if (autoresolve?.enabled) {
-      if (repairQueue) {
+      if (repairs) {
         for (const { entry, state } of conflictingCandidates) {
           const elig = await autoresolve.isEligible(entry, state);
           if (!elig.eligible) continue;
@@ -969,7 +969,7 @@ export async function sweepMergeableLabels({
     }
 
     if (ciFix?.enabled) {
-      if (repairQueue) {
+      if (repairs) {
         for (const { entry, state } of failedCandidates) {
           const elig = await ciFix.isEligible(entry, state);
           if (!elig.eligible) continue;

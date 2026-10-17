@@ -1963,7 +1963,7 @@ describe('sweepMergeableLabels — Task 11: former inline dispatch seam', () => 
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
-      repairQueue: queue,
+      repairs: { queue, register: () => {} },
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -1996,7 +1996,7 @@ describe('sweepMergeableLabels — Task 11: former inline dispatch seam', () => 
       projectRoot: tmpDir,
       runGh: gh,
       log: (msg) => logs.push(msg),
-      repairQueue: queue,
+      repairs: { queue, register: () => {} },
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -2087,7 +2087,7 @@ describe('sweepMergeableLabels — Task 12: former one-dispatch cap', () => {
       projectRoot: tmpDir,
       runGh: gh,
       log: (msg) => logs.push(msg),
-      repairQueue: queue,
+      repairs: { queue, register: () => {} },
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -2309,7 +2309,7 @@ describe('sweepMergeableLabels — Task 8: shipped_pr_readiness events', () => {
         calls += 1;
         if (calls === 1) throw new Error('ledger unavailable');
       },
-      repairQueue: queue,
+      repairs: { queue, register: () => {} },
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -2571,7 +2571,7 @@ describe('sweepMergeableLabels — draft PRs are observed but never resolved', (
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
-      repairQueue: queue,
+      repairs: { queue, register: () => {} },
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -2608,7 +2608,7 @@ describe('sweepMergeableLabels — Task 13 repair queue', () => {
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
-      repairQueue: queue,
+      repairs: { queue, register: () => {} },
       ciFix: { enabled: true, isEligible: async () => ({ eligible: true }), dispatch: ciDispatch },
       autoresolve: { enabled: true, isEligible: async () => ({ eligible: true }), dispatch: resolveDispatch },
     });
@@ -2650,7 +2650,7 @@ describe('sweepMergeableLabels — Task 13 repair queue', () => {
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
-      repairQueue: queue,
+      repairs: { queue, register: () => {} },
       isRepairRunning: (prUrl) => prUrl === running,
       log: (message) => logs.push(message),
       ciFix: { enabled: true, isEligible: async (watch) => ({ eligible: watch.prUrl !== preflightFailed }), dispatch: vi.fn() },
