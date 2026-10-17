@@ -408,6 +408,11 @@ fi
       teardownWorktree: async () => {},
       markProcessed: async () => {},
       daemon: true,
+      // This acceptance fixture exercises executor-side setup triage. Production
+      // WorkOrder executors defer cross-project terminal effects to collection;
+      // keeping that boundary here prevents fixture signals from touching the
+      // process-level engineer store.
+      deferTerminalEffects: true,
       runSetupTriage,
       provider: {
         invoke: async () => ({ success: true, output: '', exitCode: 0 }),

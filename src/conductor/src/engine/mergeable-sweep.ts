@@ -44,6 +44,7 @@ import {
   routeShippedReadiness,
   type ShippedReadinessVerdict,
 } from './shipped-readiness.js';
+import { type RepairQueue, type RepairRequest } from './repair-queue.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -156,6 +157,13 @@ export async function maybeClearReadinessLabel(
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
+
+/**
+ * In-process, per-project serialization for watch-registry read-modify-write
+ * updates. Each waiter keeps the tail promise alive until its own mutation has
+ * either persisted or failed, so a throwing mutation cannot strand the queue.
+ */
+const watchUpdateLocks = new Map<string, Promise<void>>();
 
 /**
  * Hard cap on the number of entries retained in the watch registry. The
@@ -298,6 +306,53 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
   }
 }
 
+/**
+ * Apply a watch-registry mutation as one serialized read-modify-write update.
+ * Mutator failures deliberately propagate before `rewriteWatch`, preserving
+ * the existing bytes while still releasing the per-project mutex.
+ */
+export async function updateWatch(
+  projectRoot: string,
+  mutate: (entries: WatchEntry[]) => WatchEntry[] | Promise<WatchEntry[]>,
+): Promise<void> {
+  const previous = watchUpdateLocks.get(projectRoot) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => done);
+  watchUpdateLocks.set(projectRoot, tail);
+
+  await previous;
+  try {
+    await rewriteWatch(projectRoot, await mutate(await readWatch(projectRoot)));
+  } finally {
+    release();
+    if (watchUpdateLocks.get(projectRoot) === tail) watchUpdateLocks.delete(projectRoot);
+  }
+}
+
+/** Apply only the fields the sweep changed, preserving concurrent updates. */
+function mergeSweepEntry(
+  before: WatchEntry,
+  after: WatchEntry,
+  fresh: WatchEntry,
+): WatchEntry {
+  const merged: Record<string, unknown> = { ...fresh };
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (Object.is(before[key as keyof WatchEntry], after[key as keyof WatchEntry])) continue;
+    if (key in after) merged[key] = after[key as keyof WatchEntry];
+    else delete merged[key];
+  }
+  return {
+    ...merged,
+    prUrl: fresh.prUrl,
+    slug: fresh.slug,
+    repoCwd: fresh.repoCwd,
+  };
+}
+
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -383,6 +438,13 @@ export interface SweepOpts {
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
+  /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
+  repairs?: {
+    queue: RepairQueue;
+    register: (request: RepairRequest, run: () => Promise<void>) => void;
+  };
+  /** True while a pooled repair has already claimed this PR. */
+  isRepairRunning?: (prUrl: string) => boolean;
   /**
    * Optional worktree teardown seam for the shipped-record gate.
    * MERGED and CLOSED may use this dependency; NOTFOUND never does.
@@ -426,6 +488,8 @@ export async function sweepMergeableLabels({
   operations,
   autoresolve,
   ciFix,
+  repairs,
+  isRepairRunning,
   teardownWorktree,
   shippedRecordProbe,
   canRemoveWorktree,
@@ -452,13 +516,9 @@ export async function sweepMergeableLabels({
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
-    // Task 17 (AC1/AC2): PRs whose `mergeable` field is CONFLICTING, gathered
-    // during the label pass so the autoresolve dispatch below never re-fetches
-    // PR state. Only populated/consulted when autoresolve is configured.
+    // Repair candidates are gathered from the one merge-state read per entry;
+    // the sweep neither re-reads state nor awaits a repair session.
     const conflictingCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
-    // Task 10 (AC1/AC2): PRs whose `checksOutcome` is 'failed', gathered
-    // during the label pass so the ciFix dispatch below never re-fetches
-    // PR state. Only populated/consulted when ciFix is configured.
     const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
     for (let entry of entries) {
@@ -866,150 +926,153 @@ export async function sweepMergeableLabels({
       }
     }
 
-    // Task 17: after the label pass, dispatch resolution for the first
-    // eligible CONFLICTING PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastResolveAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // autoresolve is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
-    if (autoresolve?.enabled) {
-      let dispatched = false;
-      for (const { entry, state } of conflictingCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
-        const elig = await autoresolve.isEligible(entry, state);
-        if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-          continue;
-        }
-
-        dispatched = true;
-        const now = autoresolve.now ? autoresolve.now() : new Date();
-        const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
-          lastResolveAt: now.toISOString(),
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        const dispatchResult = await autoresolve.dispatch(updated);
-        if (dispatchResult?.kind === 'refreshed') {
-          survivors[idx] = { ...updated, resolveAttempts: 0 };
-        } else if (dispatchResult?.kind === 'escalated') {
-          survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
-        } else if (dispatchResult?.kind === 'published-stack') {
-          // A stacked branch is intentionally escalated before any replay.
-          // That is not an exhausted resolution attempt, so preserve the
-          // counter which existed when this sweep began.
-          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-        } else if (dispatchResult?.kind === 'setup-stop') {
-          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-          try {
-            await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-            await upsertComment(
-              entryGh,
-              entry.repoCwd,
-              entry.prUrl,
-              '<!-- conductor:rebase-setup -->',
-              '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-              log,
-            );
-          } catch (err) {
-            log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
-          }
-        }
+    const enqueue = (request: RepairRequest, run?: () => Promise<void>): void => {
+      if (!repairs) return;
+      if (isRepairRunning?.(request.prUrl)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
+        return;
       }
-    }
+      if (!repairs.queue.enqueue(request)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already queued)`);
+      } else if (run) {
+        repairs.register(request, run);
+      }
+    };
 
-    // Task 10: after the label pass, dispatch CI fix for the first
-    // eligible failed PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastCiFixAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // ciFix is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
-    if (ciFix?.enabled) {
-      let dispatched = false;
-      for (const { entry, state } of failedCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
-        const elig = await ciFix.isEligible(entry, state);
-        if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-          continue;
+    // Daemon calls hand work to its pool.  Standalone callers predate that
+    // queue and retain the synchronous, bounded dispatch contract below.
+    if (autoresolve?.enabled) {
+      if (repairs) {
+        for (const { entry, state } of conflictingCandidates) {
+          const elig = await autoresolve.isEligible(entry, state);
+          if (!elig.eligible) continue;
+          const queuedAt = now().toISOString();
+          const request = { kind: 'autoresolve' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
+          enqueue(request, async () => { await autoresolve.dispatch(entry); });
         }
-
-        dispatched = true;
-        const now = ciFix.now ? ciFix.now() : new Date();
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        // The label pass may have set ciFailureDetected since this candidate
-        // was collected. Reserve from that current survivor so a later refund
-        // cannot discard the observed failure transition.
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
-          lastCiFixAt: now.toISOString(),
-          ciFailureDetected: true,
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        try {
-          const dispatchResult = await ciFix.dispatch(updated, state);
-          // Only an affirmative pre-provider refusal can restore the exact
-          // reservation. A local publication is not GitHub green; remote green
-          // is reconciled by the normal state transition on a later sweep.
-          if (dispatchResult?.kind === 'needs-human') {
-            survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
+      } else {
+        let dispatched = false;
+        for (const { entry, state } of conflictingCandidates) {
+          const entryGh = runnerForEntry(gh, entry, operations);
+          const eligibility = await autoresolve.isEligible(entry, state);
+          if (!eligibility.eligible) continue;
+          if (dispatched) {
+            log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+            continue;
+          }
+          dispatched = true;
+          const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+          const current = idx >= 0 ? survivors[idx] : entry;
+          const updated: WatchEntry = {
+            ...current,
+            resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
+            lastResolveAt: (autoresolve.now ? autoresolve.now() : new Date()).toISOString(),
+          };
+          if (idx >= 0) survivors[idx] = updated;
+          const result = await autoresolve.dispatch(updated);
+          if (result?.kind === 'refreshed') {
+            survivors[idx] = { ...updated, resolveAttempts: 0 };
+          } else if (result?.kind === 'escalated') {
+            survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
+          } else if (result?.kind === 'published-stack') {
+            survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
+          } else if (result?.kind === 'setup-stop') {
+            survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
             try {
               await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-              await upsertComment(
-                entryGh,
-                entry.repoCwd,
-                entry.prUrl,
-                '<!-- conductor:ci-fix-setup -->',
-                '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-                log,
-              );
+              await upsertComment(entryGh, entry.repoCwd, entry.prUrl, '<!-- conductor:rebase-setup -->', '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.', log);
             } catch (err) {
-              log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
+              log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
             }
-          } else if (dispatchResult?.kind === 'not-started' || dispatchResult?.kind === 'branch-gone') {
-            survivors[idx] = {
-              // Preserve the state transition from the label pass (notably a
-              // newly detected CI failure), while refunding only the fields
-              // this reservation changed.
-              ...current,
-              ciFixAttempts: entry.ciFixAttempts,
-              ...(entry.lastCiFixAt === undefined
-                ? { lastCiFixAt: undefined }
-                : { lastCiFixAt: entry.lastCiFixAt }),
-            };
           }
-        } catch (err) {
-          // Task 11: dispatch error is logged but not propagated (AC1b)
-          // The bumped counter persists (already written to survivors[idx])
-          log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
         }
       }
     }
 
-    // Task 1: cap the persisted registry so it cannot grow without bound.
-    // survivors is append-ordered oldest-first, so trim from the front.
-    const trimmed =
-      survivors.length > MAX_WATCH_ENTRIES ? survivors.slice(-MAX_WATCH_ENTRIES) : survivors;
-    if (trimmed !== survivors) {
-      const dropped = survivors.slice(0, survivors.length - MAX_WATCH_ENTRIES);
-      for (const entry of dropped) {
-        log?.(
-          `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
-        );
+    if (ciFix?.enabled) {
+      if (repairs) {
+        for (const { entry, state } of failedCandidates) {
+          const elig = await ciFix.isEligible(entry, state);
+          if (!elig.eligible) continue;
+          const queuedAt = now().toISOString();
+          const request = { kind: 'ci-fix' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
+          enqueue(request, async () => { await ciFix.dispatch(entry, state); });
+        }
+      } else {
+        let dispatched = false;
+        for (const { entry, state } of failedCandidates) {
+          const entryGh = runnerForEntry(gh, entry, operations);
+          const eligibility = await ciFix.isEligible(entry, state);
+          if (!eligibility.eligible) continue;
+          if (dispatched) {
+            log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+            continue;
+          }
+          dispatched = true;
+          const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+          const current = idx >= 0 ? survivors[idx] : entry;
+          const updated: WatchEntry = {
+            ...current,
+            ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
+            lastCiFixAt: (ciFix.now ? ciFix.now() : new Date()).toISOString(),
+            ciFailureDetected: true,
+          };
+          if (idx >= 0) survivors[idx] = updated;
+          try {
+            const result = await ciFix.dispatch(updated, state);
+            if (result?.kind === 'needs-human') {
+              survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
+              try {
+                await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+                await upsertComment(entryGh, entry.repoCwd, entry.prUrl, '<!-- conductor:ci-fix-setup -->', '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.', log);
+              } catch (err) {
+                log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
+              }
+            } else if (result?.kind === 'not-started' || result?.kind === 'branch-gone') {
+              survivors[idx] = {
+                ...current,
+                ciFixAttempts: entry.ciFixAttempts,
+                ...(entry.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: entry.lastCiFixAt }),
+              };
+            }
+          } catch (err) {
+            log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
+          }
+        }
       }
     }
-    await rewriteWatch(projectRoot, trimmed);
+
+    // Reconcile the sweep result against the lock-protected, current registry.
+    // A concurrent update can land while the asynchronous GitHub work above is
+    // in progress; retain its fields unless this sweep changed that same field.
+    const identity = (entry: WatchEntry): string => `${entry.repoCwd}\0${entry.prUrl}\0${entry.slug}`;
+    const before = new Map(entries.map((entry) => [identity(entry), entry]));
+    const after = new Map(survivors.map((entry) => [identity(entry), entry]));
+    await updateWatch(projectRoot, (freshEntries) => {
+      const currentSurvivors = freshEntries.flatMap((fresh) => {
+        const key = identity(fresh);
+        const original = before.get(key);
+        const updated = after.get(key);
+        // Entries enrolled after the sweep began were never observed by it, so
+        // they survive unchanged. Entries that were observed and omitted were
+        // deliberately pruned by this sweep.
+        if (!original) return [fresh];
+        if (!updated) return [];
+        return [mergeSweepEntry(original, updated, fresh)];
+      });
+      // Task 1: cap the fresh survivor set while holding the same update lock.
+      const trimmed = currentSurvivors.length > MAX_WATCH_ENTRIES
+        ? currentSurvivors.slice(-MAX_WATCH_ENTRIES)
+        : currentSurvivors;
+      if (trimmed.length !== currentSurvivors.length) {
+        for (const entry of currentSurvivors.slice(0, currentSurvivors.length - MAX_WATCH_ENTRIES)) {
+          log?.(
+            `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
+          );
+        }
+      }
+      return trimmed;
+    });
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted (FR-15).
     log?.(`[mergeable-sweep] sweep error: ${err}`);

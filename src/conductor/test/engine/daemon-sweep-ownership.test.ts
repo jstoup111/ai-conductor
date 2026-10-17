@@ -221,8 +221,8 @@ describe('engine/daemon — per-sweep ownership gate', () => {
     const res = await runDaemon(deps, { concurrency: 1, once: true });
     expect(res.stoppedReason).toBe('lock_lost');
 
-    // The first call should come before discovery, and we only run one feature
-    // Second call detects loss and stops
+    // Startup discovery is the single awaited refresh before loop ownership
+    // polling; the second call still detects loss before another dispatch.
     expect(callOrder).toContain('lockOwnershipLost(1)');
     expect(callOrder).toContain('discoverBacklog');
     expect(callOrder).toContain('runFeature');
@@ -233,7 +233,7 @@ describe('engine/daemon — per-sweep ownership gate', () => {
     const discoverIdx = callOrder.indexOf('discoverBacklog');
     const secondOwnershipCall = callOrder.indexOf('lockOwnershipLost(2)');
 
-    expect(firstOwnershipCall).toBeLessThan(discoverIdx);
+    expect(firstOwnershipCall).toBeGreaterThan(discoverIdx);
     expect(secondOwnershipCall).toBeGreaterThan(discoverIdx);
   });
 });

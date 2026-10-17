@@ -485,8 +485,8 @@ describe('FR-14: sweep cadence in daemon.ts', () => {
     const firstSweep = order.indexOf('sweep');
     const firstDispatch = order.findIndex((e) => e.startsWith('dispatch:'));
     expect(firstSweep).toBeGreaterThanOrEqual(0);
-    // The startup sweep runs (step 1 of daemon startup) before the loop dispatches.
-    expect(firstSweep).toBeLessThan(firstDispatch);
+    // Dispatch-first maintenance deliberately keeps the initial sweep off the claim path.
+    expect(firstSweep).toBeGreaterThan(firstDispatch);
   });
 
   it('sweep called once per idle poll tick (after each sleep)', async () => {

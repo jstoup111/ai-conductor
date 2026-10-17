@@ -217,11 +217,19 @@ import {
   readPersistedBaseSha,
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
-import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
 import {
+  scanInheritedState,
+  renderDashboard,
+  type InheritedState,
+  type ParkedEntry,
+  type ScanInheritedStateDeps,
+} from './engine/daemon-dashboard.js';
+import {
+  createParkedReconciliationMemo,
   isReclaimOperationFailure,
   reconcileParkedFeatures,
   type ParkClassification,
+  type ParkedSweepResult,
 } from './engine/park-reconciliation.js';
 import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
@@ -244,7 +252,8 @@ import {
 } from './engine/daemon-rekick.js';
 import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { enrollWatch, sweepMergeableLabels, type SweepOpts } from './engine/mergeable-sweep.js';
+import { enrollWatch, sweepMergeableLabels, updateWatch, type SweepOpts } from './engine/mergeable-sweep.js';
+import { RepairQueue, type RepairRequest } from './engine/repair-queue.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { isPaused } from './engine/pause-marker.js';
 import {
@@ -1013,6 +1022,108 @@ export function createDaemonSweepBinding(
   return { ...options, onEvent: (event) => { void events.emit(event); } };
 }
 
+/** The small composition boundary for the deferred, observational startup dashboard. */
+export interface StartupDashboardBindingOptions {
+  pausedAtBoot: boolean;
+  projectRoot: string;
+  worktreeBase: string;
+  processedDir: string;
+  showCompleted?: boolean;
+  log: (message: string) => void;
+  discoverTick: (options: { refresh: boolean }) => Promise<BacklogItem[]>;
+  scanInheritedState?: (deps: ScanInheritedStateDeps) => Promise<InheritedState>;
+  prStateProbe?: ScanInheritedStateDeps['prStateProbe'];
+  listOperatorParkedSlugs: (projectRoot: string) => Promise<string[]>;
+  reconcileParkedFeatures: (options: {
+    projectRoot: string;
+    autoCleanup: false;
+    reclaimMergedWorktrees: false;
+  }) => Promise<ParkedSweepResult>;
+  isOperatorParked: (projectRoot: string, slug: string, onError: (error: Error) => void) => Promise<boolean>;
+  getProvenanceType: (projectRoot: string, slug: string) => Promise<'auto' | 'operator' | null>;
+  writeDashboard: (persisted: string, console: string) => void;
+}
+
+/**
+ * Keeps the first startup discovery as the dashboard's sole eligibility input.
+ * It is exported so the callback can be exercised with boundary fakes without
+ * starting a daemon or inspecting its source text.
+ */
+export function createStartupDashboardBinding(options: StartupDashboardBindingOptions): {
+  discoverAndCacheStartup: (options: { refresh: boolean }) => Promise<BacklogItem[]>;
+  renderStartupDashboard: () => Promise<void>;
+} {
+  let cachedStartupDiscovery: BacklogItem[] | undefined;
+  const discoverAndCacheStartup = async (discoverOptions: { refresh: boolean }): Promise<BacklogItem[]> => {
+    const result = await options.discoverTick(discoverOptions);
+    cachedStartupDiscovery ??= result;
+    return result;
+  };
+
+  return {
+    discoverAndCacheStartup,
+    renderStartupDashboard: async () => {
+      if (options.pausedAtBoot) return;
+      const state = await (options.scanInheritedState ?? scanInheritedState)({
+        worktreeBase: options.worktreeBase,
+        processedDir: options.processedDir,
+        discover: () => Promise.resolve(cachedStartupDiscovery ?? []),
+        log: options.log,
+        prStateProbe: options.prStateProbe,
+      });
+      const candidateSlugs = new Set<string>([
+        ...state.halted.map((entry) => entry.slug),
+        ...state.inProgress.map((entry) => entry.slug),
+        ...state.eligible.map((entry) => entry.slug),
+        ...state.processed.map((entry) => entry.slug),
+        ...(state.waiting ?? []).map((entry) => entry.slug),
+        ...await options.listOperatorParkedSlugs(options.projectRoot),
+      ]);
+      const reconciliation = await options.reconcileParkedFeatures({
+        projectRoot: options.projectRoot,
+        autoCleanup: false,
+        reclaimMergedWorktrees: false,
+      });
+      const annotations = new Map(reconciliation.entries.map(({ slug, classification }) => [
+        slug,
+        classification === 'orphan' ? 'orphan' : classification === 'merged' ? 'merged-ready' : undefined,
+      ] as const));
+      const parked: ParkedEntry[] = [];
+      for (const slug of candidateSlugs) {
+        if (await options.isOperatorParked(options.projectRoot, slug, (error) =>
+          options.log(`anomaly checking if ${slug} is parked: ${error.message}`),
+        )) {
+          const provenance = await options.getProvenanceType(options.projectRoot, slug);
+          let reason: string | undefined;
+          if (provenance === 'auto') {
+            try {
+              const markerPath = join(options.projectRoot, '.daemon', 'parked', slug);
+              const content = await readFile(markerPath, 'utf-8');
+              const firstLine = content.split('\n')[0];
+              if (firstLine?.startsWith('auto-parked:')) {
+                reason = firstLine.substring('auto-parked:'.length).trim();
+              }
+            } catch {
+              // Marker metadata is enrichment only.
+            }
+          }
+          parked.push({
+            slug,
+            provenance: provenance ?? undefined,
+            reason,
+            annotation: annotations.get(slug),
+          });
+        }
+      }
+      const dashboardState = { ...state, parked };
+      options.writeDashboard(
+        renderDashboard(dashboardState),
+        renderDashboard(dashboardState, { includeCompleted: options.showCompleted }),
+      );
+    },
+  };
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
@@ -1053,6 +1164,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
   const parkedSweepCache = new Map<string, ParkClassification>();
+  // Task 17: daemon-lifetime only; never persists a parked-reconcile result.
+  const parkedReconciliationMemo = createParkedReconciliationMemo();
   const reconcileParkedAutoCleanup = config?.reconcile_parked_auto_cleanup ?? true;
   const reclaimMergedWorktrees = config?.reclaim_merged_worktrees ?? true;
 
@@ -2246,6 +2359,39 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 
   const processedDir = join(projectRoot, '.daemon/processed');
+  // The first discovery is the startup refresh that admits the first claim.
+  // The deferred dashboard is observational: it receives that exact cached
+  // result and therefore neither repeats discovery nor refreshes the root.
+  const startupDashboard = createStartupDashboardBinding({
+    pausedAtBoot,
+    projectRoot,
+    worktreeBase,
+    processedDir,
+    showCompleted,
+    log,
+    discoverTick,
+    prStateProbe: async (prUrl) => {
+      const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
+      return state === 'OPEN' ? { prUrl, state: 'open' } : state === 'CLOSED' ? { prUrl, state: 'closed' } : undefined;
+    },
+    listOperatorParkedSlugs,
+    reconcileParkedFeatures: ({ projectRoot: root, autoCleanup, reclaimMergedWorktrees: reclaim }) =>
+      reconcileParkedFeatures({
+        projectRoot: root,
+        getIssueState: tracker.getIssueState.bind(tracker),
+        autoCleanup,
+        reclaimMergedWorktrees: reclaim,
+        verbose: config?.daemon_verbose ?? false,
+        worktreeLifecycle,
+      }),
+    isOperatorParked,
+    getProvenanceType,
+    writeDashboard: (persisted, consoleOutput) => {
+      logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(`\n${persisted}`)}`));
+      console.log(`${chalk.dim('[daemon]')} \n${consoleOutput}`);
+    },
+  });
+  const { discoverAndCacheStartup } = startupDashboard;
 
   // ADR-013 re-kick sweep: hydrate the durable per-feature last-rekick SHA
   // guard before either the startup or live sweep can run. Clearing a marker
@@ -2307,10 +2453,43 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         makeWatchHaltClearedSeam(worktreeBase, { recordRemote: { events } })(slug, onCleared)
     : undefined;
 
+  // Maintenance discovers repairs; the dispatcher owns their pool claims and
+  // invokes these captured sanctioned call-sites at claim time.
+  const repairQueue = new RepairQueue();
+  const queuedRepairRunners = new Map<string, () => Promise<void>>();
   const result = await runDaemon(
     {
       claims: workClaims,
-      discoverBacklog: discoverTick,
+      repairs: { queue: repairQueue, run: async (request: RepairRequest) => {
+        // Re-read before touching a worktree: queued state is advisory and
+        // may have been resolved while the pool was full.
+        const state = await tracker.readPullRequestMergeState(request.prUrl, projectRoot, log);
+        if (state.state === 'MERGED' || state.state === 'CLOSED' || state.isDraft ||
+          (request.kind === 'ci-fix' && state.checksOutcome === 'green') ||
+          (request.kind === 'autoresolve' && state.mergeable !== 'CONFLICTING') ||
+          (request.slug && isWorkClaimActive(request.slug))) {
+          log(`[daemon] dropping repair ${request.prUrl}: no longer eligible`);
+          return;
+        }
+        // Claim time, rather than sweep time, owns attempt accounting. A
+        // restart after this serialized write intentionally consumes an
+        // attempt; a queued/held request does not.
+        await updateWatch(projectRoot, (entries) => entries.map((entry) => {
+          if (entry.prUrl !== request.prUrl) return entry;
+          return request.kind === 'ci-fix'
+            ? { ...entry, ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1, lastCiFixAt: new Date().toISOString() }
+            : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1 };
+        }));
+        const run = queuedRepairRunners.get(request.prUrl);
+        if (!run) {
+          log(`[daemon] dropping repair ${request.prUrl}: no registered adapter`);
+          return;
+        }
+        await run();
+        queuedRepairRunners.delete(request.prUrl);
+      } },
+      emitMaintenancePhase: (event) => events.emit(event),
+      discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),
       sweepProviderScratch: () => sweepFeatureWorktreeScratch({
         worktreeBase,
@@ -2537,110 +2716,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       })(),
       isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
-      // FR-1: scan inherited state and render the dashboard to both sinks
-      // (console + daemon.log via `log`) before any dispatch. Pass the priority
-      // resolver so the dashboard can capture and display band annotations / fallback mode.
-      renderStartupDashboard: async () => {
-        // Task 14 (FR-4/FR-7): a daemon booting paused must dispatch/discover
-        // NOTHING — including the informational startup dashboard's backlog
-        // scan, which would otherwise call discoverBacklog({refresh:true})
-        // unconditionally (before the pause-gated loop below ever runs). Skip
-        // the scan entirely when paused at boot; the boot-time log line above
-        // already told the operator why nothing is happening.
-        if (pausedAtBoot) return;
-        const state = await scanInheritedState({
-          worktreeBase,
-          processedDir,
-          discover: () => discoverTick({ refresh: true }),
-          log,
-          prStateProbe: async (prUrl) => {
-            const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
-            return state === 'OPEN'
-              ? { prUrl, state: 'open' }
-              : state === 'CLOSED'
-                ? { prUrl, state: 'closed' }
-                : undefined;
-          },
-        });
-        // Task 11 (operator-park, FR-6): PARKED outranks every other group.
-        // `scanInheritedState` has no concept of parking, so compute the
-        // parked overlay here — every slug the scan surfaced, PLUS a listing
-        // of `.daemon/parked/` itself so a stale park (no worktree, no
-        // backlog entry) still renders instead of vanishing silently.
-        const candidateSlugs = new Set<string>([
-          ...state.halted.map((h) => h.slug),
-          ...state.inProgress.map((p) => p.slug),
-          ...state.eligible.map((e) => e.slug),
-          ...state.processed.map((p) => p.slug),
-          ...(state.waiting ?? []).map((w) => w.slug),
-        ]);
-        for (const slug of await listOperatorParkedSlugs(projectRoot)) {
-          candidateSlugs.add(slug);
-        }
-        const reconciliation = await reconcileParkedFeatures({
-          projectRoot,
-          getIssueState: tracker.getIssueState.bind(tracker),
-          // Rendering is observational. The daemon sweep below owns cleanup
-          // and is the sole consumer of the startup-resolved toggle.
-          autoCleanup: false,
-          reclaimMergedWorktrees: false,
-          verbose: config?.daemon_verbose ?? false,
-          worktreeLifecycle,
-        });
-        const annotations = new Map(
-          reconciliation.entries.map(({ slug, classification }) => [
-            slug,
-            classification === 'orphan'
-              ? 'orphan'
-              : classification === 'merged'
-                ? 'merged-ready'
-                : undefined,
-          ] as const),
-        );
-        const parked: ParkedEntry[] = [];
-        for (const slug of candidateSlugs) {
-          if (await isOperatorParked(projectRoot, slug, (err) =>
-            log(`anomaly checking if ${slug} is parked: ${err.message}`),
-          )) {
-            // Fetch provenance (auto vs operator) and reason if available
-            const provenance = await getProvenanceType(projectRoot, slug);
-            let reason: string | undefined;
-
-            // For auto-parks, try to extract reason from marker body
-            if (provenance === 'auto') {
-              try {
-                const markerPath = join(projectRoot, '.daemon', 'parked', slug);
-                const content = await readFile(markerPath, 'utf-8');
-                const lines = content.split('\n');
-                if (lines[0]?.startsWith('auto-parked:')) {
-                  reason = lines[0].substring('auto-parked:'.length).trim();
-                }
-              } catch {
-                // Ignore read errors — marker exists but reason extraction failed
-              }
-            }
-
-            parked.push({
-              slug,
-              provenance: provenance || undefined,
-              reason,
-              annotation: annotations.get(slug),
-            });
-          }
-        }
-        // Task 3: split the previously single tee'd call so the persisted
-        // daemon.log NEVER carries the PROCESSED group (kept lean for
-        // grep/tail), while the console optionally shows it per
-        // `showCompleted` (--completed/--all). Uses the same formatting
-        // conventions as the `log()` closure above.
-        const dashboardState = { ...state, parked };
-        logSink?.write(
-          formatDaemonLogLine(`[daemon] ${stripAnsi(`\n${renderDashboard(dashboardState)}`)}`),
-        );
-        console.log(
-          `${chalk.dim('[daemon]')} \n${renderDashboard(dashboardState, { includeCompleted: showCompleted })}`,
-        );
-      },
+      renderStartupDashboard: startupDashboard.renderStartupDashboard,
       // FR-4: resolve the base-branch tip SHA from the SAME local default branch
       // the backlog reads. A scheduler-approved refresh fast-forwards it first
       // so the SHA reflects origin's latest (driving ADR-013 re-kick on advance).
@@ -2721,6 +2797,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           runGit: haltPrGit,
           operations: haltPrOperations,
           cache: haltPrSweepCache,
+          isFeatureInFlight: isWorkClaimActive,
         });
       },
       // adr-2026-07-27 Decisions 4 + 6: the sweep only converges if BOTH
@@ -2731,13 +2808,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // deleted worktree). Removing either silently reverts this sweep to a
       // no-op fallback path — the same failure mode as the bindings above.
       reconcileParkedFeatures: async ({ disposeHaltWatcher, isFeatureInFlight }) => {
-        await reconcileParkedFeatures({
+        return reconcileParkedFeatures({
           projectRoot,
           log: (message) => log(message, true),
           cache: parkedSweepCache,
+          memo: parkedReconciliationMemo,
           autoCleanup: reconcileParkedAutoCleanup,
           reclaimMergedWorktrees,
           isFeatureInFlight,
+          inFlightSlugs: () => workClaims.list(),
           onEvent: (event) => { void events.emit(event); },
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events }),
@@ -2757,6 +2836,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           tracker,
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
+          repairs: {
+            queue: repairQueue,
+            register: (request, run) => queuedRepairRunners.set(request.prUrl, run),
+          },
+          isRepairRunning: (prUrl) => workClaims.list().includes(`repair:${prUrl}`),
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).

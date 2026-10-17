@@ -111,27 +111,29 @@ describe('provider-aware self-host homes', () => {
     const root = await mkdtemp(join(tmpdir(), 'provider-home-scratch-'));
     const worktree = join(root, 'worktree');
     const explicitBaseDir = join(root, 'explicit-homes');
-    await Promise.all([
-      mkdir(join(worktree, 'skills'), { recursive: true }),
-      mkdir(explicitBaseDir, { recursive: true }),
-    ]);
-
-    const home = await provisionProviderHome({
-      provider: { id: 'codex' },
-      worktreeRoot: worktree,
-      repository: 'owner/repository',
-      featureSlug: 'provider-home',
-      runId: 'run-11',
-      attempt: 2,
-    });
-    const explicitHome = await provisionProviderHome({
-      provider: { id: 'codex' },
-      worktreeRoot: worktree,
-      runId: 'run-11',
-      attempt: 2,
-      baseDir: explicitBaseDir,
-    });
+    let home: Awaited<ReturnType<typeof provisionProviderHome>> | undefined;
+    let explicitHome: Awaited<ReturnType<typeof provisionProviderHome>> | undefined;
     try {
+      await Promise.all([
+        mkdir(join(worktree, 'skills'), { recursive: true }),
+        mkdir(explicitBaseDir, { recursive: true }),
+      ]);
+
+      home = await provisionProviderHome({
+        provider: { id: 'codex' },
+        worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home',
+        runId: 'run-11',
+        attempt: 2,
+      });
+      explicitHome = await provisionProviderHome({
+        provider: { id: 'codex' },
+        worktreeRoot: worktree,
+        runId: 'run-11',
+        attempt: 2,
+        baseDir: explicitBaseDir,
+      });
       const scratchRoot = join(worktree, '.daemon', 'scratch', 'run-11', '2-codex');
       expect([home.homeDir, home.childEnv().CODEX_HOME, explicitHome.homeDir]).toEqual([
         expect.stringMatching(new RegExp(`^${scratchRoot}/self-host-codex-`)),
@@ -143,7 +145,7 @@ describe('provider-aware self-host homes', () => {
       expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'provider-home', runId: 'run-11', attempt: 2, ownerPid: process.pid });
       expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
     } finally {
-      await Promise.all([home.teardown(), explicitHome.teardown()]);
+      await Promise.all([home?.teardown(), explicitHome?.teardown()]);
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -321,30 +323,31 @@ describe('provider-aware self-host homes', () => {
   it('keeps a git worktree clean while its provider home exists under ignored scratch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'provider-home-clean-worktree-'));
     const worktree = join(root, 'worktree');
-    await mkdir(join(worktree, 'skills'), { recursive: true });
-    await Promise.all([
-      writeFile(join(worktree, '.gitignore'), '.daemon/\n'),
-      writeFile(join(worktree, 'skills', 'SKILL.md'), 'skill\n'),
-    ]);
-    await execFile('git', ['init', '--quiet', '-b', 'main', worktree]);
-    await execFile('git', ['-C', worktree, 'config', 'user.email', 'task14@example.test']);
-    await execFile('git', ['-C', worktree, 'config', 'user.name', 'Task Fourteen']);
-    await execFile('git', ['-C', worktree, 'add', '.']);
-    await execFile('git', ['-C', worktree, 'commit', '--quiet', '-m', 'fixture']);
-
-    const home = await provisionProviderHome({
-      provider: { id: 'codex' },
-      worktreeRoot: worktree,
-      repository: 'owner/repository',
-      featureSlug: 'provider-home-clean',
-      runId: 'run-14',
-      attempt: 4,
-    });
+    let home: Awaited<ReturnType<typeof provisionProviderHome>> | undefined;
     try {
+      await mkdir(join(worktree, 'skills'), { recursive: true });
+      await Promise.all([
+        writeFile(join(worktree, '.gitignore'), '.daemon/\n'),
+        writeFile(join(worktree, 'skills', 'SKILL.md'), 'skill\n'),
+      ]);
+      await execFile('git', ['init', '--quiet', '-b', 'main', worktree]);
+      await execFile('git', ['-C', worktree, 'config', 'user.email', 'task14@example.test']);
+      await execFile('git', ['-C', worktree, 'config', 'user.name', 'Task Fourteen']);
+      await execFile('git', ['-C', worktree, 'add', '.']);
+      await execFile('git', ['-C', worktree, 'commit', '--quiet', '-m', 'fixture']);
+
+      home = await provisionProviderHome({
+        provider: { id: 'codex' },
+        worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-clean',
+        runId: 'run-14',
+        attempt: 4,
+      });
       expect(home.homeDir).toContain(join('.daemon', 'scratch', 'run-14', '4-codex'));
       expect((await execFile('git', ['-C', worktree, 'status', '--porcelain'])).stdout).toBe('');
     } finally {
-      await home.teardown();
+      await home?.teardown();
       await rm(root, { recursive: true, force: true });
     }
   });
