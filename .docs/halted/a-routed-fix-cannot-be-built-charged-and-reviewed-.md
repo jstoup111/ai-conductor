@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-10-17T13:52:58.876Z
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
 Halting step: unknown
