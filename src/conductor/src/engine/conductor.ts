@@ -189,7 +189,7 @@ import {
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { completeRerouteSync, parseBuilderClaim, rerouteRound, verifyPrerequisiteClaim } from './routing/prerequisite-claim.js';
-import { assertNever, routingEligible, type RoundId } from './routing/route-types.js';
+import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch, type ReceiptRoutingScope } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
@@ -15039,7 +15039,11 @@ export class Conductor {
       mutateReceipt: async ({ slug, roundId }) => {
         const stored = await readRouteRecord(this.projectRoot, slug, roundId);
         if (stored.kind !== 'record') return { kind: 'halted', reason: `record is ${stored.kind}` };
-        const receipt = { ...stored.record.receipt, echo: { ...(stored.record.receipt.echo ?? {}), [target]: count } };
+        const receipt = {
+          ...emptyUnsettledReceipt(),
+          ...stored.record.receipt,
+          echo: { ...stored.record.receipt.echo, [target]: count },
+        };
         const wrote = await writeRouteRecord(this.projectRoot, stored, { ...stored.record, receipt });
         return wrote.kind === 'updated'
           ? { kind: 'charged' }
