@@ -89,7 +89,7 @@ import type {
   SelfHostAuthContext,
   SelfHostInvocation,
 } from '../execution/llm-provider.js';
-import type { ConductState, ConductorEvent, ExecutionContext } from '../types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext, TranscriptOwner } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -720,8 +720,25 @@ export class Conductor {
    * non-consuming retries decrement the retry-budget attempt before their next
    * dispatch, so that value is not a safe capture identity.
    */
-  private nextTranscriptCaptureAttempt(step: StepName, runId: string): TranscriptCaptureDispatchIdentity {
-    const key = `${runId}\u0000${step}`;
+  private transcriptOwner(step: StepName, executionContext?: ExecutionContext): TranscriptOwner {
+    const subject = executionContext?.subject;
+    if (subject?.kind === 'configured-member') {
+      return { kind: 'configured-group-member', parentGroup: subject.parentGroup, member: subject.member };
+    }
+    return { kind: 'registered-step', step };
+  }
+
+  private transcriptOwnerKey(owner: TranscriptOwner): string {
+    switch (owner.kind) {
+      case 'registered-step': return `step:${owner.step}`;
+      case 'configured-group-member': return `member:${owner.parentGroup}:${owner.member}`;
+      case 'legacy-unknown-step': return 'legacy:unknown-step';
+    }
+    return assertNever(owner);
+  }
+
+  private nextTranscriptCaptureAttempt(owner: TranscriptOwner, runId: string): TranscriptCaptureDispatchIdentity {
+    const key = `${runId}\u0000${this.transcriptOwnerKey(owner)}`;
     const next = asTranscriptCaptureDispatchIdentity(
       (this.transcriptCaptureDispatches.get(key) ?? 0) + 1,
     );
@@ -730,10 +747,10 @@ export class Conductor {
   }
 
   private currentTranscriptCaptureAttempt(
-    step: StepName,
+    owner: TranscriptOwner,
   ): TranscriptCaptureDispatchIdentity | undefined {
     const runId = this.stepRunner.selfHostRunId?.();
-    return runId === undefined ? undefined : this.transcriptCaptureDispatches.get(`${runId}\u0000${step}`);
+    return runId === undefined ? undefined : this.transcriptCaptureDispatches.get(`${runId}\u0000${this.transcriptOwnerKey(owner)}`);
   }
 
   /** Child-local suite selection has the same authoritative base as review. */
@@ -901,18 +918,18 @@ export class Conductor {
 
   /** Settle one harvested self-host attempt without touching another retry. */
   private async settleTranscriptAttempt(
-    step: StepName,
+    owner: TranscriptOwner,
     captureAttempt: TranscriptCaptureDispatchIdentity | undefined,
     outcome: TranscriptRetentionOutcome,
     member?: string,
   ): Promise<void> {
     const runId = this.stepRunner.selfHostRunId?.();
     if (runId === undefined || captureAttempt === undefined) {
-      await this.transcriptRetention.settle(step, outcome);
+      await this.transcriptRetention.settle(owner, outcome);
       return;
     }
     await this.transcriptRetention.settleAttempt({
-      step,
+      owner,
       runId,
       attempt: captureAttempt,
       ...(member === undefined ? {} : { member }),
@@ -928,13 +945,13 @@ export class Conductor {
   private async settleTranscriptTerminal(
     event: Extract<ConductorEvent,
       { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' }>,
-    captureAttempt = this.currentTranscriptCaptureAttempt(event.step),
-    member?: string,
+    owner = this.transcriptOwner(event.step, event.executionContext),
+    captureAttempt = this.currentTranscriptCaptureAttempt(owner),
   ): Promise<void> {
     const outcome = transcriptTerminalOutcome(event);
-    await this.settleTranscriptAttempt(event.step, captureAttempt, outcome, member);
+    await this.settleTranscriptAttempt(owner, captureAttempt, outcome);
     const runId = this.stepRunner.selfHostRunId?.();
-    if (runId !== undefined) await this.transcriptRetention.settleStepRun(event.step, runId, outcome);
+    if (runId !== undefined) await this.transcriptRetention.settleStepRun(owner, runId, outcome);
   }
 
   /**
@@ -2546,18 +2563,20 @@ export class Conductor {
     });
     this.events.on('build_stall', (event) => {
       if (event.type === 'build_stall') {
+        const owner = this.transcriptOwner(event.step);
         return this.settleTranscriptAttempt(
-          event.step,
-          this.currentTranscriptCaptureAttempt(event.step),
+          owner,
+          this.currentTranscriptCaptureAttempt(owner),
           'stalled',
         );
       }
     });
     this.events.on('loop_halt', (event) => {
       if (event.type === 'loop_halt' && event.step !== undefined) {
+        const owner = this.transcriptOwner(event.step);
         return this.settleTranscriptAttempt(
-          event.step,
-          this.currentTranscriptCaptureAttempt(event.step),
+          owner,
+          this.currentTranscriptCaptureAttempt(owner),
           'halted',
         );
       }
@@ -2567,13 +2586,10 @@ export class Conductor {
       // Configured groups report their parent as the lifecycle step. Their
       // transcript owner is the member, carried in the execution context.
       // Without that context, retain all earlier members for the event step.
-      const member = event.executionContext?.subject.kind === 'configured-member'
-        ? event.executionContext.subject.member
-        : undefined;
-      const step = (member ?? event.step) as StepName;
+      const owner = this.transcriptOwner(event.step, event.executionContext);
       const runId = this.stepRunner.selfHostRunId?.();
       return this.transcriptRetention.settleBeforeRetry({
-        step,
+        owner,
         ...(runId === undefined ? {} : { runId }),
       });
     });
@@ -5884,16 +5900,17 @@ export class Conductor {
       }
     }
 
-    const previousCaptureAttempt = this.currentTranscriptCaptureAttempt(name);
+    const transcriptOwner = this.transcriptOwner(name, executionContext);
+    const previousCaptureAttempt = this.currentTranscriptCaptureAttempt(transcriptOwner);
     const captureAttempt = this.nextTranscriptCaptureAttempt(
-      name,
+      transcriptOwner,
       this.stepRunner.selfHostRunId?.() ?? this.featureSlug ?? state.feature_desc ?? 'unknown-run',
     );
     // A newly admitted dispatch is conclusive evidence that the preceding
     // capture did not produce this result. This also covers non-consuming
     // provider retries, which do not emit a retry-budget transition.
     if (previousCaptureAttempt !== undefined) {
-      await this.settleTranscriptAttempt(name, previousCaptureAttempt, 'failed');
+      await this.settleTranscriptAttempt(transcriptOwner, previousCaptureAttempt, 'failed');
     }
 
     // Compatibility seam for injected/legacy runners which do not route via
@@ -5931,7 +5948,7 @@ export class Conductor {
         featureSlug,
         // Capture identity, not retry state: captures must never collide when
         // a legacy runner dispatches more than once in the same lifecycle.
-        captureIdentity: { step: name, runId, attempt: captureAttempt },
+        captureIdentity: { owner: transcriptOwner, step: name, runId, attempt: captureAttempt },
         events: this.events,
         injectedToken: daemonToken,
       });
@@ -6110,6 +6127,7 @@ export class Conductor {
               repository: this.projectRoot,
               featureSlug,
               captureIdentity: {
+                owner: transcriptOwner,
                 step: name,
                 runId: identity.runId,
                 attempt: identity.attempt,
@@ -6126,6 +6144,7 @@ export class Conductor {
             repository: this.projectRoot,
             featureSlug,
             captureIdentity: {
+              owner: transcriptOwner,
               step: name,
               runId: identity.runId,
               attempt: identity.attempt,
@@ -14837,9 +14856,10 @@ export class Conductor {
             }
           }
           if (step.name === 'build') {
+            const owner = this.transcriptOwner(step.name);
             await this.settleTranscriptAttempt(
-              step.name,
-              this.currentTranscriptCaptureAttempt(step.name),
+              owner,
+              this.currentTranscriptCaptureAttempt(owner),
               completedBuildMadeProgress ? 'succeeded-with-progress' : 'succeeded-without-progress',
             );
           }
@@ -16806,6 +16826,10 @@ export class Conductor {
     return findResumeIndex(state, steps);
   }
 
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled transcript owner: ${JSON.stringify(value)}`);
 }
 
 export { appendConductorRemediationTasks as appendRemediationTasks } from "./remediation-task-append.js";

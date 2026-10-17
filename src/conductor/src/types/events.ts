@@ -40,7 +40,19 @@ export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
 /** Legacy leases written before a conductor step was recorded own this bucket. */
 export const LEGACY_TRANSCRIPT_OWNER_STEP = 'unknown-step' as const;
+/** @deprecated Use TranscriptOwner for newly captured transcripts. */
 export type TranscriptOwnerStep = StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
+
+/**
+ * A transcript belongs either to a registered lifecycle step, a configured
+ * member executing under its registered parent group, or an old lease whose
+ * owner could not be reconstructed.  Do not represent configured members as
+ * StepName: their names are deliberately outside that registry.
+ */
+export type TranscriptOwner =
+  | { readonly kind: 'registered-step'; readonly step: StepName }
+  | { readonly kind: 'configured-group-member'; readonly parentGroup: string; readonly member: string }
+  | { readonly kind: 'legacy-unknown-step' };
 
 /** Closed disposition of pull-request publication for a completed run. */
 export type RunPrDisposition = 'opened' | 'none' | 'unrecorded';
@@ -1148,7 +1160,9 @@ type ConductorEventBody =
   | {
       /** Allowlisted provider transcripts were captured before a scratch home was retired. */
       type: 'provider_transcripts_captured';
-      step: TranscriptOwnerStep;
+      /** Closed owner for new captures; old ledgers retain `step`. */
+      owner?: TranscriptOwner;
+      step?: StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
       runId: string;
       attempt: number;
       member?: string;
@@ -1163,7 +1177,8 @@ type ConductorEventBody =
   | {
       /** Provider transcript capture failed, but scratch-home retirement continued. */
       type: 'provider_transcripts_harvest_failed';
-      step: TranscriptOwnerStep;
+      owner?: TranscriptOwner;
+      step?: StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
       runId: string;
       attempt: number;
       member?: string;

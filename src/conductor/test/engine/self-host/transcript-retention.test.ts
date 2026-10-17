@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import {
   asTranscriptCaptureDispatchIdentity,
+  foldTranscriptLedger,
   TranscriptRetention,
 } from '../../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -33,12 +34,12 @@ async function capture(
   step: 'build' | 'build_review',
   interrupted = false,
   bytes = 3,
-  identity: { runId?: string; attempt?: number; member?: string } = {},
+  identity: { runId?: string; attempt?: number; member?: string; owner?: { kind: 'configured-group-member'; parentGroup: 'explore'; member: string } } = {},
 ) {
   await mkdir(join(root, path), { recursive: true });
   await writeFile(join(root, path, 'session.jsonl'), 'x'.repeat(bytes));
   await events.emit({
-    type: 'provider_transcripts_captured', step, runId: identity.runId ?? 'run', attempt: identity.attempt ?? 1,
+    type: 'provider_transcripts_captured', ...(identity.owner === undefined ? {} : { owner: identity.owner }), step, runId: identity.runId ?? 'run', attempt: identity.attempt ?? 1,
     ...(identity.member === undefined ? {} : { member: identity.member }), provider: 'codex', path,
     files: 1, bytes, interrupted, skipped: 0, omittedLines: 0,
   });
@@ -50,6 +51,36 @@ async function persisted(root: string) {
 }
 
 describe('TranscriptRetention', () => {
+  it('keeps a configured group-member capture pending through its own verdict, records it in the ledger, and caps retained members', async () => {
+    const { root, events, persister } = await fixture();
+    const retention = new TranscriptRetention(root, events, { maxCaptures: 1 });
+    const owner = { kind: 'configured-group-member', parentGroup: 'explore', member: 'custom-review' } as const;
+    const successful = '.pipeline/transcripts/custom-review/successful';
+    const failed = '.pipeline/transcripts/custom-review/failed';
+    const newest = '.pipeline/transcripts/custom-review/newest';
+    try {
+      await retention.ready();
+      await capture(events, root, successful, 'build_review', false, 3, { owner, attempt: 1 });
+      expect(foldTranscriptLedger(await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).get(successful))
+        .toMatchObject({ owner, step: 'custom-review', state: 'pending' });
+      await retention.settleAttempt({ owner, runId: 'run', attempt: asTranscriptCaptureDispatchIdentity(1) }, 'succeeded-with-progress');
+      await expect(access(join(root, successful))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      await capture(events, root, failed, 'build_review', false, 3, { owner, attempt: 2 });
+      await retention.settleAttempt({ owner, runId: 'run', attempt: asTranscriptCaptureDispatchIdentity(2) }, 'failed');
+      await expect(access(join(root, failed))).resolves.toBeUndefined();
+
+      await capture(events, root, newest, 'build_review', false, 3, { owner, attempt: 3 });
+      await retention.settleAttempt({ owner, runId: 'run', attempt: asTranscriptCaptureDispatchIdentity(3) }, 'failed');
+      await expect(access(join(root, failed))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_evicted'))
+        .toEqual([expect.objectContaining({ path: failed, reason: 'count' })]);
+    } finally {
+      retention.stop();
+      persister.stop();
+    }
+  });
+
   it('uses its production defaults to evict exactly the oldest of 21 captures by count', async () => {
     const { root, events, persister } = await fixture();
     const retention = new TranscriptRetention(root, events);

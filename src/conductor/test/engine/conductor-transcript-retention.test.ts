@@ -126,7 +126,7 @@ describe('conductor transcript retention wiring', () => {
       await mkdir(join(root, first), { recursive: true });
       await writeFile(join(root, first, 'session.jsonl'), '{}\n');
       await events.emit({
-        type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 1,
+        type: 'provider_transcripts_captured', owner: { kind: 'configured-group-member', parentGroup: 'ship_validation', member: 'build_review' }, step: 'build_review', runId: 'review', attempt: 1,
         member: 'build_review', provider: 'codex', path: first, files: 1, bytes: 3,
         interrupted: false, skipped: 0, omittedLines: 0,
       });
@@ -140,7 +140,7 @@ describe('conductor transcript retention wiring', () => {
       await mkdir(join(root, second), { recursive: true });
       await writeFile(join(root, second, 'session.jsonl'), '{}\n');
       await events.emit({
-        type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 2,
+        type: 'provider_transcripts_captured', owner: { kind: 'configured-group-member', parentGroup: 'ship_validation', member: 'build_review' }, step: 'build_review', runId: 'review', attempt: 2,
         member: 'build_review', provider: 'codex', path: second, files: 1, bytes: 3,
         interrupted: false, skipped: 0, omittedLines: 0,
       });
@@ -302,7 +302,7 @@ describe('conductor transcript retention wiring', () => {
         await mkdir(join(root, path), { recursive: true });
         await writeFile(join(root, path, 'session.jsonl'), '{}\n');
         await events.emit({
-          type: 'provider_transcripts_captured', step: 'build_review', runId: 'configured-retry',
+          type: 'provider_transcripts_captured', owner: { kind: 'configured-group-member', parentGroup: 'explore', member: 'build_review' }, step: 'build_review', runId: 'configured-retry',
           // The group retry budget restarts at one; capture identity is the
           // directory/dispatch sequence, not this lifecycle attempt.
           attempt: 1, member: dispatch === 1 ? 'rubric-security' : 'build_review',
@@ -446,7 +446,7 @@ describe('conductor transcript retention wiring', () => {
       await mkdir(join(root, path), { recursive: true });
       await writeFile(join(root, path, 'session.jsonl'), '{}\n');
       await events.emit({
-        type: 'provider_transcripts_captured', step: 'build_review', runId: 'review', attempt: 1,
+        type: 'provider_transcripts_captured', owner: { kind: 'configured-group-member', parentGroup: 'ship_validation', member: 'build_review' }, step: 'build_review', runId: 'review', attempt: 1,
         member: 'build_review', provider: 'codex', path, files: 1, bytes: 3,
         interrupted: false, skipped: 0, omittedLines: 0,
       });

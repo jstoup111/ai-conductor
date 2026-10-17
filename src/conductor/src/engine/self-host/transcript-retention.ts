@@ -3,7 +3,7 @@ import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { StepName } from '../../types/steps.js';
-import type { TranscriptOwnerStep } from '../../types/events.js';
+import type { TranscriptOwner } from '../../types/events.js';
 import { isBuiltInProviderId } from '../../execution/provider-catalog.js';
 import type { SelfHostProviderId } from './provider-home.js';
 import { isStepName } from '../execution-identity.js';
@@ -60,7 +60,7 @@ export type TranscriptCaptureMember =
  * from its source so capture naming and settlement cannot drift apart.
  */
 export interface TranscriptSettlementKey {
-  readonly step: StepName;
+  readonly owner: TranscriptOwner;
   readonly member: TranscriptCaptureMember;
   readonly runId: string;
   readonly attempt: number;
@@ -68,10 +68,10 @@ export interface TranscriptSettlementKey {
 
 /** Build the sole step/member identity used for capture recording and settlement. */
 export function transcriptSettlementKey(
-  source: TranscriptCaptureSource & { readonly step: StepName },
+  source: Pick<TranscriptCaptureSource, 'owner' | 'runId' | 'attempt' | 'member'> & { readonly step?: StepName | 'unknown-step' },
 ): TranscriptSettlementKey {
   return {
-    step: source.step,
+    owner: ownerFromSource(source),
     member: source.member === undefined ? { kind: 'absent' } : { kind: 'present', value: source.member },
     runId: source.runId,
     attempt: source.attempt,
@@ -85,6 +85,8 @@ type CapturedTranscript = TranscriptSettlementKey & {
 
 type TranscriptEventRecord = {
   readonly type?: unknown;
+  readonly owner?: unknown;
+  /** Compatibility with ledgers written before owner identities were closed. */
   readonly step?: unknown;
   readonly path?: unknown;
   readonly interrupted?: unknown;
@@ -97,7 +99,9 @@ type TranscriptEventRecord = {
 
 export type TranscriptLedgerState = 'pending' | 'retained' | 'pruned' | 'evicted';
 export interface TranscriptLedgerCapture {
-  readonly step: TranscriptOwnerStep;
+  readonly owner: TranscriptOwner;
+  /** Projected owner step for path-oriented readers. */
+  readonly step: string;
   readonly runId: string;
   readonly attempt: number;
   readonly member?: string;
@@ -119,10 +123,11 @@ export function foldTranscriptLedger(content: string): Map<string, TranscriptLed
     let event: TranscriptEventRecord;
     try { event = JSON.parse(line) as TranscriptEventRecord; } catch { continue; }
     if (typeof event.path !== 'string') continue;
-    if (event.type === 'provider_transcripts_captured' && isTranscriptOwnerStep(event.step)) {
+    const owner = transcriptOwnerFromEvent(event);
+    if (event.type === 'provider_transcripts_captured' && owner !== undefined) {
       const capturedAt = typeof event.ts === 'string' ? Date.parse(event.ts) : Number.NaN;
       captures.set(event.path, {
-        step: event.step, runId: typeof event.runId === 'string' ? event.runId : 'unknown',
+        owner, step: transcriptOwnerStep(owner), runId: typeof event.runId === 'string' ? event.runId : 'unknown',
         attempt: typeof event.attempt === 'number' ? event.attempt : 0,
         ...(typeof event.member === 'string' ? { member: event.member } : {}),
         provider: typeof event.provider === 'string' && isBuiltInProviderId(event.provider)
@@ -173,14 +178,9 @@ export class TranscriptRetention {
     this.maxBytes = dependencies.maxBytes ?? TRANSCRIPT_RETENTION_MAX_BYTES;
     this.capturedHandler = (event) => {
       if (event.type !== 'provider_transcripts_captured') return;
-      // Legacy unknown-step captures have no lifecycle terminal that can
-      // settle them. Retain them immediately rather than inventing an
-      // incomplete identity outside the StepName domain.
-      if (!isStepName(event.step)) return this.retain(event.path);
-      const step = event.step;
       return this.capture({
         ...transcriptSettlementKey({
-          step,
+          owner: event.owner ?? transcriptOwnerFromEvent(event) ?? { kind: 'legacy-unknown-step' },
           runId: event.runId,
           attempt: event.attempt,
           ...(event.member === undefined ? {} : { member: event.member }),
@@ -202,14 +202,17 @@ export class TranscriptRetention {
     this.events.off('provider_transcripts_captured', this.capturedHandler);
   }
 
-  async settle(step: StepName, outcome: TranscriptRetentionOutcome): Promise<void> {
-    const keys = [...this.pending.keys()].filter((key) => key.startsWith(`${step}\u0000`));
+  async settle(owner: TranscriptOwner | StepName, outcome: TranscriptRetentionOutcome): Promise<void> {
+    const normalized = normalizeOwner(owner);
+    const keys = [...this.pending.keys()].filter((key) => key.startsWith(`${transcriptOwnerKey(normalized)}\u0000`));
     await this.settleKeys(keys, outcome);
   }
 
   /** Settle exactly one provider capture dispatch without affecting a later retry. */
   async settleAttempt(
-    identity: Omit<TranscriptSettlementKey, 'attempt' | 'member'> & {
+    identity: Omit<TranscriptSettlementKey, 'attempt' | 'member' | 'owner'> & {
+      readonly owner?: TranscriptOwner;
+      readonly step?: StepName;
       readonly attempt: TranscriptCaptureDispatchIdentity;
       readonly member?: string;
     },
@@ -219,11 +222,12 @@ export class TranscriptRetention {
   }
 
   /** Settle all captured members of one terminal lifecycle step by their own identities. */
-  async settleStepRun(step: StepName, runId: string, outcome: TranscriptRetentionOutcome): Promise<void> {
+  async settleStepRun(owner: TranscriptOwner | StepName, runId: string, outcome: TranscriptRetentionOutcome): Promise<void> {
+    const normalized = normalizeOwner(owner);
     const identities = [...this.pending.values()].flatMap((captures) => captures)
-      .filter((capture) => capture.step === step && capture.runId === runId)
-      .map(({ step: captureStep, runId: captureRunId, attempt, member }) => ({
-        step: captureStep,
+      .filter((capture) => transcriptOwnerKey(capture.owner) === transcriptOwnerKey(normalized) && capture.runId === runId)
+      .map(({ owner: captureOwner, runId: captureRunId, attempt, member }) => ({
+        owner: captureOwner,
         runId: captureRunId,
         attempt: asTranscriptCaptureDispatchIdentity(attempt),
         ...(member.kind === 'present' ? { member: member.value } : {}),
@@ -243,20 +247,22 @@ export class TranscriptRetention {
    * those failed captures pending for a later success to prune.
    */
   async settleBeforeRetry(scope: {
-    readonly step: StepName;
+    readonly owner?: TranscriptOwner;
+    readonly step?: StepName;
     readonly runId?: string;
   }): Promise<void> {
+    const owner = ownerFromSource(scope);
     const identities = [...this.pending.entries()].flatMap(([key, captures]) => {
       const capture = captures[0];
       return capture !== undefined
-        && capture.step === scope.step
+        && transcriptOwnerKey(capture.owner) === transcriptOwnerKey(owner)
         && (scope.runId === undefined || capture.runId === scope.runId)
         ? [{ key, capture }]
         : [];
     });
     for (const { capture } of identities) {
       await this.settleAttempt({
-        step: capture.step,
+        owner: capture.owner,
         runId: capture.runId,
         attempt: asTranscriptCaptureDispatchIdentity(capture.attempt),
         ...(capture.member.kind === 'present' ? { member: capture.member.value } : {}),
@@ -427,17 +433,58 @@ async function directorySize(path: string): Promise<number> {
   return total;
 }
 
-function isTranscriptOwnerStep(value: unknown): value is TranscriptOwnerStep {
-  return value === 'unknown-step' || isStepName(value);
-}
-
 function captureKey(identity: TranscriptSettlementKey): string {
   return [
-    identity.step,
+    transcriptOwnerKey(identity.owner),
     identity.runId,
     identity.attempt,
     identity.member.kind === 'present' ? identity.member.value : '',
   ].join('\u0000');
+}
+
+function transcriptOwnerKey(owner: TranscriptOwner): string {
+  switch (owner.kind) {
+    case 'registered-step': return `step:${owner.step}`;
+    case 'configured-group-member': return `member:${owner.parentGroup}:${owner.member}`;
+    case 'legacy-unknown-step': return 'legacy:unknown-step';
+  }
+  return assertNever(owner);
+}
+
+function ownerFromSource(source: { readonly owner?: TranscriptOwner; readonly step?: StepName | 'unknown-step' }): TranscriptOwner {
+  if (source.owner !== undefined) return source.owner;
+  if (source.step === 'unknown-step' || source.step === undefined) return { kind: 'legacy-unknown-step' };
+  return { kind: 'registered-step', step: source.step };
+}
+
+function normalizeOwner(owner: TranscriptOwner | StepName): TranscriptOwner {
+  return typeof owner === 'string' ? { kind: 'registered-step', step: owner } : owner;
+}
+
+function transcriptOwnerStep(owner: TranscriptOwner): string {
+  switch (owner.kind) {
+    case 'registered-step': return owner.step;
+    case 'configured-group-member': return owner.member;
+    case 'legacy-unknown-step': return 'unknown-step';
+  }
+  return assertNever(owner);
+}
+
+function transcriptOwnerFromEvent(event: TranscriptEventRecord): TranscriptOwner | undefined {
+  if (typeof event.owner === 'object' && event.owner !== null) {
+    const owner = event.owner as Record<string, unknown>;
+    if (owner.kind === 'registered-step' && typeof owner.step === 'string' && isStepName(owner.step)) {
+      return { kind: 'registered-step', step: owner.step };
+    }
+    if (owner.kind === 'configured-group-member' && typeof owner.parentGroup === 'string' && isStepName(owner.parentGroup) && typeof owner.member === 'string') {
+      return { kind: 'configured-group-member', parentGroup: owner.parentGroup, member: owner.member };
+    }
+    if (owner.kind === 'legacy-unknown-step') return { kind: 'legacy-unknown-step' };
+    return undefined;
+  }
+  if (typeof event.step === 'string' && isStepName(event.step)) return { kind: 'registered-step', step: event.step };
+  if (event.step === 'unknown-step') return { kind: 'legacy-unknown-step' };
+  return undefined;
 }
 
 function assertNever(value: never): never {

@@ -4,6 +4,7 @@ import { findBuiltInProviderDescriptor } from '../execution/provider-catalog.js'
 import { resolveMainRepoRoot } from './park-marker.js';
 import { sanitizeTranscriptLine } from './self-host/transcript-sanitize.js';
 import { foldTranscriptLedger } from './self-host/transcript-retention.js';
+import type { TranscriptOwner } from '../types/events.js';
 
 export type TranscriptsDispatch =
   | { readonly kind: 'list'; readonly slug: string }
@@ -49,7 +50,7 @@ async function readRetainedCaptures(worktree: string): Promise<Capture[]> {
     try {
       await access(join(worktree, capture.path));
       result.push({
-        path: capture.path, step: capture.step, attempt: capture.attempt,
+        path: capture.path, step: transcriptOwnerStep(capture.owner), attempt: capture.attempt,
         ...(capture.member === undefined ? {} : { member: capture.member }),
         provider: capture.provider, interrupted: capture.interrupted,
         timestamp: capture.capturedAt ?? capture.order,
@@ -59,6 +60,20 @@ async function readRetainedCaptures(worktree: string): Promise<Capture[]> {
     }
   }
   return result.sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/** The CLI exposes the member step, rather than its parent group, for group-owned captures. */
+function transcriptOwnerStep(owner: TranscriptOwner): string {
+  switch (owner.kind) {
+    case 'registered-step': return owner.step;
+    case 'configured-group-member': return owner.member;
+    case 'legacy-unknown-step': return 'unknown-step';
+  }
+  return assertNever(owner);
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled transcript owner: ${JSON.stringify(value)}`);
 }
 
 function isCapturePath(path: string): boolean {

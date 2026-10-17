@@ -15,6 +15,7 @@ async function capture(
   lines: readonly string[],
   capturedAt: string,
   step = 'build',
+  owner?: { kind: 'configured-group-member'; parentGroup: 'explore'; member: string },
 ): Promise<string> {
   if (!repo) throw new Error('repo not initialized');
   const relative = `.pipeline/transcripts/${step}/${name}`;
@@ -25,7 +26,7 @@ async function capture(
   await mkdir(join(session, '..'), { recursive: true });
   await writeFile(session, lines.join('\n'));
   const events = [
-    { type: 'provider_transcripts_captured', ts: capturedAt, step, runId: name, attempt: 1, member: `${provider}-member`, provider, path: relative, files: 1, bytes: 1, interrupted: provider === 'pi', skipped: 0, omittedLines: 0 },
+    { type: 'provider_transcripts_captured', ts: capturedAt, ...(owner === undefined ? {} : { owner }), step, runId: name, attempt: 1, member: `${provider}-member`, provider, path: relative, files: 1, bytes: 1, interrupted: provider === 'pi', skipped: 0, omittedLines: 0 },
     { type: 'provider_transcripts_retained', ts: capturedAt, path: relative },
   ];
   await mkdir(join(repo, '.worktrees', slug, '.pipeline'), { recursive: true });
@@ -71,6 +72,18 @@ afterEach(async () => {
 });
 
 describe('ai-conductor transcripts', () => {
+  it('lists a retained configured group-member capture by its member step', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'transcripts-cli-'));
+    const path = await capture('member-capture', 'codex', [], '2026-10-14T00:00:10.000Z', 'explore', {
+      kind: 'configured-group-member', parentGroup: 'explore', member: 'custom-review',
+    });
+
+    expect(await run([])).toEqual({
+      code: 0,
+      output: [expect.stringContaining(`step=custom-review attempt=1 member=codex-member provider=codex interrupted=false path=${path}`)],
+    });
+  });
+
   it('lists retained captures newest first with their event-ledger identity', async () => {
     repo = await mkdtemp(join(tmpdir(), 'transcripts-cli-'));
     // Persist the newest capture first to prove ordering follows ISO capture time, not line order.
