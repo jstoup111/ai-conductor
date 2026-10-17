@@ -1521,6 +1521,38 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  it('keeps the regression halt when the resolved case was sourced only by a prior lap', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-prior-lap', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The test needs a focused assertion.', resolution: 'resolved',
+        sources: [{ sourceId: 'implementationQuality:sha256:prior-lap-finding', outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-prior-lap', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const repeated: RemediationCaseJudgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-prior-lap' }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => repeated),
+      emit: async (event) => { events.push(event); },
+    });
+
+    // The prior lap's source is never live now. Treating that as acceptance
+    // finalized the halt as an unexplained source-coverage gap.
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-prior-lap' });
+    expect(events.map((event) => event.type)).toEqual([
+      'remediation_adjudication_started',
+      'remediation_semantic_repeat_halt', 'remediation_adjudication_failed',
+    ]);
+  });
+
   it('halts a regression before reserving a sibling action effect it could never apply', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
