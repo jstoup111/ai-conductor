@@ -12,8 +12,8 @@ import {
 } from '../../../src/engine/routing/route-types.js';
 
 const compileTimeUnsettledReceipt: UnsettledRoundReceipt = {
+  // @ts-expect-error Unsettled receipts cannot acknowledge a host.
   acks: {
-    // @ts-expect-error Unsettled receipts cannot acknowledge a host.
     1: true,
   },
 };
