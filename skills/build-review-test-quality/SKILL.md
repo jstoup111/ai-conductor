@@ -40,13 +40,15 @@ facts from a maker transcript, task-status narrative, prior review, or state out
 and its referenced content.
 
 For every `testScope.evidence` region you inspect, re-read the file at the pinned ref for its
-`source` side (`mergeBase` for base regions, `headSha` for head regions) and verify `contentHash` as
-sha256 of the raw bytes from `byteRegion.start` (inclusive) to `byteRegion.end` (exclusive) of that
-output. `byteRegion` is in UTF-8 bytes; `region`, `startLine`, and `endLine` are character positions
-for identity and orientation only, and diverge from byte offsets once the file holds a non-ASCII
-character. A candidate's evidence record is the one whose `id` equals its `candidateId`. A
-hash-mismatched or unreadable region is not judged: return its fallback candidate as `indeterminate`
-with a non-empty `missingEvidenceReason`.
+`source` side (`mergeBase` for base regions, `headSha` for head regions). The region is the raw bytes
+from `byteRegion.start` (inclusive) to `byteRegion.end` (exclusive) of that output. `byteRegion` is in
+UTF-8 bytes; `region`, `startLine`, and `endLine` are character positions for identity and
+orientation only, and diverge from byte offsets once the file holds a non-ASCII character. The engine
+computed `contentHash` from that same immutable commit. Do not recompute it (a read-only review
+session has no hashing tool); copy it verbatim where the schema asks for it. A candidate's evidence
+record is the one whose `id` equals its `candidateId`. An unreadable region, one whose pinned read
+fails, is not judged: return its fallback candidate as `indeterminate` with a non-empty
+`missingEvidenceReason`.
 Your own read never becomes authoritative. The engine rejects a finding anchored to a `contentHash`
 that is absent from the projected evidence and candidates.
 

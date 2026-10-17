@@ -63,7 +63,6 @@ describe('build_review testQuality evidence re-read prompt', () => {
       && paragraph.includes('startLine')
       && paragraph.includes('endLine')
       && paragraph.includes('contentHash')
-      && paragraph.includes('hash-mismatched')
       && paragraph.includes('unreadable')
       && paragraph.includes('not judged')
       && paragraph.includes('indeterminate')
@@ -73,13 +72,16 @@ describe('build_review testQuality evidence re-read prompt', () => {
     expect(evidenceInstruction).toBeDefined();
   });
 
-  it('directs the provider to hash the byteRegion bytes and never to treat character offsets as bytes', async () => {
-    // Pinned evidence hashes the UTF-16 slice's UTF-8 bytes; a provider that
-    // hashes the byte span at the character offsets fails on any non-ASCII
-    // file and reports every candidate indeterminate (#2612).
+  it('leaves contentHash to the engine and never treats character offsets as bytes', async () => {
+    // The engine hashes each region from its immutable commit. A read-only
+    // review session has no hashing tool, so asking it to recompute the hash
+    // turned every inspected candidate indeterminate. Character offsets still
+    // diverge from byteRegion on non-ASCII files (#2612).
     const prompt = await captureRubricPrompt();
 
-    expect(prompt).toMatch(/sha256 of the raw bytes from `byteRegion\.start`/);
+    expect(prompt).toMatch(/do not recompute .?contentHash/i);
+    expect(prompt).not.toMatch(/verify `contentHash` as sha256/);
+    expect(prompt).not.toMatch(/hash-mismatched/);
     expect(prompt).toMatch(/must not be used as byte offsets/);
     expect(prompt).not.toMatch(/whitespace-normalized title/);
   });
