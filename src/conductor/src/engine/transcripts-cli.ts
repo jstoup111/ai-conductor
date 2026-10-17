@@ -130,11 +130,17 @@ export async function dispatchTranscripts(cmd: TranscriptsDispatch, cwd: string)
     }
     return 0;
   }
-  const capture = captures.find((candidate) => candidate.path === cmd.capture || candidate.path.endsWith(`/${cmd.capture}`));
-  if (!capture) {
+  const matches = captures.filter((candidate) => candidate.path === cmd.capture || candidate.path.endsWith(`/${cmd.capture}`));
+  if (matches.length === 0) {
     console.error(`no assistant message in ${cmd.capture}`);
     return 1;
   }
+  if (matches.length > 1) {
+    console.error(`ambiguous capture «${cmd.capture}»: ${matches.map((candidate) => candidate.path).join(', ')}`);
+    return 1;
+  }
+  const [capture] = matches;
+  if (!capture) throw new Error('capture match invariant violated');
   const provider = findBuiltInProviderDescriptor(capture.provider);
   if (!provider?.selfHostShape) {
     console.error(`no assistant message in ${cmd.capture}`);

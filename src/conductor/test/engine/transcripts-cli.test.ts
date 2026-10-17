@@ -14,9 +14,10 @@ async function capture(
   provider: 'claude' | 'codex' | 'pi',
   lines: readonly string[],
   capturedAt: string,
+  step = 'build',
 ): Promise<string> {
   if (!repo) throw new Error('repo not initialized');
-  const relative = `.pipeline/transcripts/build/${name}`;
+  const relative = `.pipeline/transcripts/${step}/${name}`;
   const root = join(repo, '.worktrees', slug, relative);
   const session = provider === 'claude'
     ? join(root, 'projects', 'project', 'session.jsonl')
@@ -24,7 +25,7 @@ async function capture(
   await mkdir(join(session, '..'), { recursive: true });
   await writeFile(session, lines.join('\n'));
   const events = [
-    { type: 'provider_transcripts_captured', ts: capturedAt, step: 'build', runId: name, attempt: 1, member: `${provider}-member`, provider, path: relative, files: 1, bytes: 1, interrupted: provider === 'pi', skipped: 0, omittedLines: 0 },
+    { type: 'provider_transcripts_captured', ts: capturedAt, step, runId: name, attempt: 1, member: `${provider}-member`, provider, path: relative, files: 1, bytes: 1, interrupted: provider === 'pi', skipped: 0, omittedLines: 0 },
     { type: 'provider_transcripts_retained', ts: capturedAt, path: relative },
   ];
   await mkdir(join(repo, '.worktrees', slug, '.pipeline'), { recursive: true });
@@ -100,6 +101,18 @@ describe('ai-conductor transcripts', () => {
     const result = await run(['--show', path]);
 
     expect(result).toEqual({ code: 0, output: [`${provider[0].toUpperCase()}${provider.slice(1)} final`] });
+  });
+
+  it('rejects ambiguous capture leaves and accepts a step-qualified capture', async () => {
+    repo = await mkdtemp(join(tmpdir(), 'transcripts-cli-'));
+    const build = await capture('shared-capture', 'codex', [JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Build final' }] } })], '2026-10-14T00:00:10.000Z');
+    const review = await capture('shared-capture', 'claude', [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Review final' }] } })], '2026-10-14T00:00:20.000Z', 'build_review');
+
+    expect(await run(['--show', 'shared-capture'])).toEqual({
+      code: 1,
+      output: [`ambiguous capture «shared-capture»: ${review}, ${build}`],
+    });
+    expect(await run(['--show', 'build/shared-capture'])).toEqual({ code: 0, output: ['Build final'] });
   });
 
   it('reports absent worktrees, empty retained lists, and unreadable assistant messages without writing', async () => {
