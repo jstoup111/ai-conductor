@@ -9,6 +9,7 @@ import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js'
 import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
+import { isUnreadableKickbackLedger, MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 const feature = { version: 'v1', repository: 'repo', feature: 'feature' } as const;
 let root = '';
@@ -476,9 +477,64 @@ describe('remediation case effects', () => {
       publishWorkOrder: vi.fn().mockResolvedValue({ ok: true, workOrder: {} }), chargeEffect,
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'build-review kickback budget exhausted (cumulative): blocked cases case-1 (effect effect-1); count 3, cumulative 6',
+    expect(result).toMatchObject({ ok: false });
+    expect(!result.ok && result.reason.split('\n')[0]).toBe(
+      'build-review kickback budget exhausted (cumulative): blocked cases case-1 (effect effect-1); count 3, cumulative 6',
+    );
+  });
+
+  it('records operator-recoverable cap evidence when the cumulative budget is exhausted', async () => {
+    // `kickback-budget raise --gate build_review` admits a halt only when the
+    // ledger's cap evidence names a generation that the HALT body repeats.
+    // Without both, the adjudication cap could never be raised.
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'source-1', outcome: 'acted', recordedAt: '2026-08-30T00:00:00.000Z' }],
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }] });
+    const chargeEffect = vi.fn().mockResolvedValue({
+      status: 'charged', exhausted: false, cumulativeExhausted: true,
+      entry: { count: 1, cumulative: 6, lastReason: '[implementationQuality] primitive-obsession', treeHash: null, priorVerdict: true, resolvedBefore: 0 },
     });
+
+    const result = await applyBuildReviewActionEffects({
+      projectRoot: root, feature, store, tasksByCaseId: new Map([['case-1', [{ title: 'Repair the regression' }]]]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-1' }, workOrderId: () => 'order-1',
+      publishWorkOrder: vi.fn().mockResolvedValue({ ok: true, workOrder: {} }), chargeEffect,
+    });
+
+    const ledger = await readKickbackLedger(root);
+    if (isUnreadableKickbackLedger(ledger)) throw new Error('kickback ledger must be readable');
+    const evidence = ledger.gates.build_review?.capEvidence;
+    expect(evidence).toMatchObject({
+      gate: 'build_review', consumed: 6, limit: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+      latestReason: '[implementationQuality] primitive-obsession',
+    });
+    expect(evidence?.haltGeneration).toMatch(/\S/);
+    expect(!result.ok && result.reason).toContain(`\nKickback halt generation: ${evidence?.haltGeneration}`);
+  });
+
+  it('records no cap evidence when only the per-gate budget is exhausted', async () => {
+    // A raise moves the cumulative limit only, so a per-gate stop must not
+    // advertise a recovery that cannot change its outcome.
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'source-1', outcome: 'acted', recordedAt: '2026-08-30T00:00:00.000Z' }],
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }] });
+    const chargeEffect = vi.fn().mockResolvedValue({
+      status: 'charged', exhausted: true, cumulativeExhausted: false, entry: { count: 3, cumulative: 3 },
+    });
+
+    const result = await applyBuildReviewActionEffects({
+      projectRoot: root, feature, store, tasksByCaseId: new Map([['case-1', [{ title: 'Repair the regression' }]]]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-1' }, workOrderId: () => 'order-1',
+      publishWorkOrder: vi.fn().mockResolvedValue({ ok: true, workOrder: {} }), chargeEffect,
+    });
+
+    const ledger = await readKickbackLedger(root);
+    if (isUnreadableKickbackLedger(ledger)) throw new Error('kickback ledger must be readable');
+    expect(ledger.gates.build_review?.capEvidence).toBeUndefined();
+    expect(!result.ok && result.reason).not.toContain('Kickback halt generation');
   });
 });
