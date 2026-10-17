@@ -679,7 +679,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         ? `semantic remediation case repeat ${record.id}`
         : `semantic remediation case regression ${record.id}`, {
           settleAbsentAttempted: false,
-          caseSourceIds: [new Set(record.sources.map((source) => source.sourceId))],
+          // A reused case's own sources belong to the lap that resolved it and
+          // are not live now, so only the reusing proposal's sources can show
+          // that an acceptance retired this failure.
+          caseSourceIds: [new Set([...record.sources, ...proposed.sources].map((source) => source.sourceId))],
         });
     }
   }
@@ -813,7 +816,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         ? `semantic remediation case repeat ${caseId}`
         : `semantic remediation case regression ${caseId}`, {
           settleAbsentAttempted: false,
-          caseSourceIds: [new Set(record.sources.map((source) => source.sourceId))],
+          // A reused case's own sources belong to the lap that resolved it and
+          // are not live now, so only the reusing proposal's sources can show
+          // that an acceptance retired this failure.
+          caseSourceIds: [new Set([...record.sources, ...proposed.sources].map((source) => source.sourceId))],
         });
     }
   }
