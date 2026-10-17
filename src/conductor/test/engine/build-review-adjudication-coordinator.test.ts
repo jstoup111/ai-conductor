@@ -2454,16 +2454,29 @@ describe('coordinateBuildReviewAdjudication', () => {
       }));
     });
 
-    it('keeps a failed case open while this lap still reports its finding', async () => {
+    it('builds a still-reported finding bound to a case whose action effect failed', async () => {
+      // daemon-reconciliation-delays-first-feature-dispatc: case 01dd292d was
+      // charged past the budget, the budget was reset, and the next lap
+      // re-raised the same source onto it. The failed effect can never apply,
+      // so the rebound case needs a fresh effect or every lap halts on it.
       const root = await projectRoot();
       const store = new RemediationCaseStore(root, feature);
       await seedCases(store, { version: 'v1', feature, cases: [failedCase(sourceId)] });
+      const rebound: RemediationCaseJudgement = {
+        ...actionJudgement(),
+        cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-failed' }],
+      };
 
-      await coordinateBuildReviewAdjudication(input(root, async () => actionJudgement()));
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => rebound), generateId: sequentialIds('rebound'),
+      });
 
+      expect(result).toMatchObject({ ok: true, route: 'build' });
       const after = await store.read();
       if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
-      expect(after.state.cases.find((record) => record.id === 'case-failed')).toMatchObject({ resolution: 'open' });
+      const retried = after.state.cases.find((record) => record.id === 'case-failed');
+      expect(retried).toMatchObject({ resolution: 'open', effect: { kind: 'action', status: 'applied' } });
+      expect(retried?.effect).not.toMatchObject({ id: 'effect-failed' });
     });
   });
 
