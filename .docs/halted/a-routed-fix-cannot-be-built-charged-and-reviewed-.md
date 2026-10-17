@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-17T14:28:06.377Z
+Status: halted
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-a-routed-fix-cannot-be-built-charged-and-reviewed-
-Head SHA: b4479fd9f27da3d77f327ed69cac605d8fea0fd9
-Halted at: 2026-10-17T14:12:41.670Z
+Head SHA: 8cb27031aad446d5b25f06c2ae93e9d92125d9a5
+Halted at: 2026-10-17T14:35:08.719Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
@@ -17,6 +15,7 @@ Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ```text
 build_review adjudication halted: remediation effect is not finalized
+scope-incomplete testQuality src/conductor/test/structural/routing-ref-writers.test.ts:29-29 (unsupported test declaration wrapper): Pinned region is an unsupported declaration-wrapper fragment, not a complete test declaration, so its assertion cannot be judged.
 route: halt
 ca6848c7-7ca0-46eb-a06b-91de54d92c78 [escalate/resolved] sources: eventSpine:sha256:d696acee9c920ae2bd6c639d28d00e0a5c45be66f8a9b9826f35d81f69ecf644; effect: none
 b83b17f2-b7a4-4e20-bd3e-b3807ab8cf28 [escalate/resolved] sources: eventSpine:sha256:f865a5c26853011e92850884d780c96ef5abcedc926b281ea1a982f39d6635c9; effect: none
@@ -42,4 +41,7 @@ c6cbfe95-66c4-4eab-8b36-fd25ba3dbe9d [defer/resolved] sources: implementationQua
 630266b7-b49a-4cb1-b8fa-a73913dcbf79 [act/open] sources: implementationQuality:sha256:e9164d449090fc338455c01db1500c8a869f4274cadafae0d66b0ac58f9068ac; effect: action:failed:93f8a053-8864-4fac-b00e-42844b13b4ff
 7cd2a552-7b1d-47ae-8993-007601fcbc81 [act/open] sources: implementationQuality:sha256:0dc6e71259e9b18d31c28416efd4330f27073baa80580d59d0d13b2869d62ef9; effect: action:applied:746e4740-5884-48da-b50e-ea294238de36
 914e25cb-f076-498d-bfed-26d98fd4329d [act/open] sources: implementationQuality:sha256:8173c3be5306a1f1324f92638020910e65bf11633ff4015267f0c9ffb18ef407; effect: action:applied:afac30f3-3671-46fd-afbd-4bef2aef9c5a
+1b04f386-9805-4ae6-8dd6-f8c4e40109a3 [act/open] sources: implementationQuality:sha256:366af8a44148d805f5e3ef774cab468c27bab70b246e49cf5ecd537647769f52; effect: action:applied:1c02cd33-2479-4cc3-897e-03c60dd26d34
+af474755-7e41-4fb4-ab9a-296f7abaffaf [act/open] sources: implementationQuality:sha256:8ae136968750ea5402160f8857272213b669df38c5be50d735b4d48ad2c9f378; effect: action:applied:bd780fa1-b34a-4a58-a9c8-00556bc5a253
+6235b71d-4778-4409-8f4a-2c16ad44bd49 [act/open] sources: implementationQuality:sha256:c7b9b20857076801532933658cbd629bb674576073b424c0fbb41f42430df04f; effect: action:applied:53abbb95-fa27-4986-b65f-8174e5aa0ab5
 ```
