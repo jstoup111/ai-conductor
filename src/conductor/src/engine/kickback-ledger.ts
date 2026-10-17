@@ -1001,6 +1001,14 @@ export async function readGrowthAccounting(
         ...routedPending,
       ]),
     );
+    // A shared repair may be admitted again against the rem task that an
+    // earlier round already appended and settled. Its task id is present in
+    // the new receipt, but excluding it would erase that settled growth from
+    // the comparison. Keep a view that excludes routed allocations only so
+    // either shape can prove the same sealed denominator.
+    const derivedWithFlatPending = pendingGrowth
+      ? await deriveGrowthFromActivePlan(projectRoot, routedPending)
+      : derived;
     const stored = ledger.growth;
     const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
 
@@ -1015,14 +1023,16 @@ export async function readGrowthAccounting(
       return { growth: withRemaining(derived.growth, cap), authoredSource };
     }
 
-    // Pending task ids are excluded from the derived plan count above, while
-    // `added` contains only earlier, settled appends. The remainder must
-    // therefore always equal the sealed baseline plus those settled appends.
-    // This holds whether the pending task bodies have reached the active plan
-    // yet: the exclusion removes them when present and changes nothing when
-    // they are not.
+    // A pending new task is excluded from `derived`, retaining every earlier
+    // settled append. If the receipt instead reuses an already-settled task,
+    // `derivedWithFlatPending` preserves that task in the count. Both forms
+    // must agree with the sealed baseline plus settled growth; no other
+    // denominator is accepted.
+    const expectedDerivedAuthored = stored.authored + stored.added;
     const matchesPlan = !derived.resolved ||
-      stored.authored + stored.added === derived.growth.authored;
+      expectedDerivedAuthored === derived.growth.authored ||
+      (derivedWithFlatPending.resolved &&
+        expectedDerivedAuthored === derivedWithFlatPending.growth.authored);
     if (growthTotalsAgree(stored) && matchesPlan) {
       return { growth: withRemaining(stored, cap), authoredSource };
     }
