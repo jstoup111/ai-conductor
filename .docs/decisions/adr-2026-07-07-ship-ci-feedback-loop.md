@@ -56,6 +56,8 @@ Constraints:
    checks FAILED → ensure a `ci-failed` label, emit a halt-monitor-visible `ci_failed` event,
    and collect the entry as a CI-fix candidate. A later sweep seeing the rollup green removes
    the `ci-failed` label.
+   > **Amended 2026-10-17 by #2945:** A watched PR whose feature has published stack members (a publication record that is not torn down) is never collected as a CI-fix candidate. Its red checks escalate as autoresolve's `published-stack` path does, and red CI on a stack is a human decision until #3268 and #3270 (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
+
 3. **Bounded dispatch.** A `CiFixDispatchOpts` seam with the same injected shape as
    `AutoresolveDispatchOpts` (`enabled`, `isEligible`, `dispatch`); at most one dispatch per
    tick, shared serial in-flight guard with conflict autoresolve. `ciFixAttempts` is bumped on

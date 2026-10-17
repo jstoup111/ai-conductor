@@ -1,0 +1,1133 @@
+# Implementation Plan: Publish, review and ship a stacked feature as a GitHub native stack
+
+**Date:** 2026-10-17
+**Design:** .docs/decisions/adr-2026-10-17-stacked-feature-publication-as-native-stack.md
+**Stories:** .docs/stories/stacked-features-cannot-be-published-reviewed-and-.md
+**Conflict check:** Clean as of 2026-10-17 (.docs/conflicts/stacked-features-cannot-be-published-reviewed-and-.md)
+
+## Summary
+
+This plan delivers the ship-path slice of #2945, using approach B, in 29 tasks:
+- FINISH publishes a stacked feature as a GitHub native stack, one draft PR per child, then
+  retargets the leaf and assembles the stack;
+- every member passes the required checks through existing contracts, plus a CI trigger and a
+  head-ref shipment guard;
+- only the leaf merging ships the feature, and child branches are torn down by name afterwards;
+- a published stack is frozen against engine rewrites, behind a tip guard and the
+  `stack-tip-diverged` halt;
+- non-stacked features are byte-identical to today.
+
+The operator chose one spec over a split, so the 29 tasks sit in the 21–29 warning band. The
+`stack-tip-diverged` runbook is #3273, a documentation hotfix.
+
+## Technical Approach
+
+Governing review: `.docs/decisions/architecture-review-2026-10-17-stacked-features-cannot-be-published-reviewed-and-.md`.
+Paths below are under `src/conductor/src/engine/` unless they say otherwise.
+
+- **Freeze N=1 first (Task 1).** Before any production change, the N=1 golden suite is extended to
+  freeze:
+  - the FINISH `finish_publication_*` event sequence;
+  - the recorded gh and git argv;
+  - the leaf PR body;
+  - `conduct-state.json`;
+  - the shipped record's Cost block, plus the Time block's structure.
+
+  Every later task must leave these goldens passing unchanged (ADR decision 1, umbrella decision 14).
+- **Durable state (Tasks 2–3).**
+  - `stack-publication-record.ts` owns `refs/conductor/<slug>/publication`, a compare-and-swap ref
+    blob `{version, retarget?, stack?, members[], tornDown?}`.
+  - Follow the route-record store's pattern (`routing/route-record-store.ts`):
+    - read the blob through `git cat-file`;
+    - write with `git hash-object -w` plus `update-ref <ref> <new> <old>`;
+    - give `create` a zero old value;
+    - parse once into a typed value with a version check;
+    - keep no in-memory cache.
+  - Allowed variation: there is no restack-journal fence.
+  - Search hints: `writeRouteRecord`, `routeRefFor`.
+  - Events are new members of the `ConductorEvent` union, each with an event-sinks row.
+    `stack_member_lifecycle` joins the persister's `eventId` de-duplication set.
+- **Observation and selection (Tasks 4–5).**
+  - **Observer.** `stack-publication.ts` exports `observeStackDimension`. It answers
+    `not-applicable` from local refs alone: no positions ref, one position, or a `tornDown` record.
+    Otherwise it reads GitHub.
+  - **Snapshot.** The `PublicationSnapshot` in `finish-publication.ts` gains `stack`.
+  - **Selection.** `nextFinishPublicationTransition` gains `establish_child_prs` (after
+    `establish_pr`) and `assemble_stack` (after `write_shipped_record`). `ready_pr` requires stack
+    `valid`, or `not-applicable`.
+  - **Allowance.** It becomes twice the number of transitions the feature can select.
+- **GitHub boundary (Tasks 6–7).** `github-operations.ts` registers `stack.read`, `stack.create`,
+  `stack.add` and `pull-request.retarget`, and the new `stack` resource kind.
+  - `ghArgsFor` in `tracker-client.ts` maps them to `gh api` REST calls. Precedent: the
+    `commit.status.create` and `issue.dependency.add` cases.
+  - `owner-gate/mutation-policy.ts` adds a `stack.create` repository-target exemption beside
+    `isInitialPullRequestCreation`.
+  - Payloads are validated against the record by `validateStackPayload` in `stack-publication.ts`
+    before the boundary is called, because authorization does not see payloads.
+  - `pull-request.edit` rejects a `base` field.
+- **Children (Tasks 8–10).**
+  - **Push.** `pushChildClosure` runs one `ls-remote`.
+    - On an absent ref, it plain-pushes the closure SHA from `refs/conductor/<slug>/closed/c<p>`
+      through `executeRemoteGit`.
+    - On a present ref that is recorded and equal, it does nothing.
+    - On anything else it returns `diverged`, and on a failed read `read-failed`.
+    - It introduces no new force or lease form.
+  - **Chain check.** `verifyChildChain` checks that each next position contains the closure.
+  - **Body.** `stack-member-body.ts` renders child bodies deterministically:
+    - the slice title;
+    - the child's stories and tasks, from the slice manifest and the sealed envelope;
+    - a diffstat against the base;
+    - the engine-owned `## Stack` section;
+    - template-default regions.
+
+    Plan paths are reduced to stems. `checkChildBodyPostconditions` enforces no plan path, no
+    closing keyword and default regions.
+  - **Transition.** The `establish_child_prs` effect in `finish-publication-production.ts`:
+    - iterates the sealed positions;
+    - re-drafts a ready leaf;
+    - finds PRs by head in any state;
+    - creates drafts with chained bases;
+    - CAS-writes members.
+- **Assembly and lookups (Tasks 11–14).**
+  - **Retarget.** `assemble_stack` journals the retarget as `intended`, then calls
+    `pull-request.retarget`, then records `observed`.
+  - **Stack.** It records the stack number on read or create, adds missing members, then verifies
+    order and head SHAs before recording `verified`.
+  - **Leaf body.** The leaf's `## Stack` re-render goes through the existing region re-insertion.
+  - **Lookups.** `conductor.ts` lookups accept exactly `retarget.from` or `retarget.to`. Shipped
+    readiness is untouched.
+- **Ready and wiring (Tasks 15–16).**
+  - **Flips.** `ready_pr` flips top-down: the leaf through today's `repairPresentation`, children
+    through postconditions plus `ensureShipReady`, re-reading the stack before each flip.
+  - **Wiring.** Task 16 wires the effects into the production FINISH composition root and owns the
+    entry-point integration proof, run through a conductor FINISH dispatch.
+- **Required checks (Tasks 17–19).**
+  - **CI trigger.** `.github/workflows/ci.yml` gains `feat/c*/**` in its branches filter.
+  - **Head-ref guard.** `classifyShipmentAssociation` (`shipment-association.ts`) classifies a
+    child head as `stack-child` before reading body declarations.
+  - **Adapters.** The CLI reader, the event decoder, the audit query and the reconcile adapter each
+    carry the head ref. Premerge fails when the head ref is missing, and reconcile and audit open
+    no repair.
+- **Freeze and guard (Tasks 20–24).**
+  - **Halt class.** `stack-tip-diverged` is added to `halt-marker.ts`, `halt-record.ts` and
+    `daemon-rekick.ts`.
+  - **Guard.** `stack-tip-guard.ts` runs inside `executeRemoteGit` after push-intent recovery. It
+    allows a fast-forward only, after an `ls-remote` shows every member tip matches.
+  - **Callers.** Each caller maps a refusal:
+    - FINISH halts;
+    - halt-record and post-finish pushes skip;
+    - agent pushes are refused.
+  - **Restack producers.** Each one refuses `published-stack`:
+    - base refreshes continue;
+    - local-work producers halt `needs-human`;
+    - route admission refuses.
+  - **ci-fix.** It is ineligible for a stacked feature's leaf.
+- **Sweep and teardown (Tasks 25–29).** `mergeable-sweep.ts` keeps one watch entry and the
+  unchanged ship gate.
+  - **After the gate passes:** it removes the worktree, checks member reachability, deletes child
+    branches under the stack-member proof (compare-and-swap with the merged `headRefOid`), then
+    deletes the refs. Any kept member marks the record `tornDown`.
+  - **While the leaf is open:** it reports member lifecycle.
+  - **Reclaim:** `reclaim-worktree` reuses the same deletion helper.
+
+## Prerequisites
+
+- None. #2940–#2944 and #3210 are on main. `stacked_prs` already parses `enabled`, `max_slices`
+  and `route_whole_feature_fixes`. No config key is added.
+
+## Task Dependency Graph
+
+```
+1 ─┐
+2 ─┼─▶ 5 ◀─ 4 ◀─ 3 ─┬─▶ 8 ─┐
+   │                ├─▶ 14 │
+6 ─┴─▶ 7 ◀──────────┘      │
+9 ───────────────────────┐ │
+20 ──────────────────────┼─┼─▶ 10 ─▶ 11 ─▶ 12 ─▶ 13 ─▶ 15 ─▶ 16
+5, 7 ────────────────────┘ │                          ▲
+                           └──────────────────────────┘ (14 ─▶ 16)
+17 (independent)
+18 ─▶ 19
+3, 20 ─▶ 21 ─▶ 22
+3 ─▶ 23 ; 3 ─▶ 24 ; 3 ─▶ 25 ─▶ 26 ─▶ 28 ─▶ 29 ; 2, 3 ─▶ 27
+```
+
+Each task's `**Dependencies:**` line is authoritative.
+
+## Integration Points
+
+- After Task 12: a stacked fixture can be published and assembled through the coordinator.
+- After Task 16: a conductor FINISH dispatch publishes the three-member stack end to end.
+- After Task 22: every engine push to a published member passes the tip guard.
+- After Task 28: a merged stack is torn down by explicit name.
+
+## Architecture Obligation Coverage
+
+| Decision | Disposition | Task(s) | Evidence |
+| --- | --- | --- | --- |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D1 | task | task-4, task-5, task-1 | adding no git or gh command to that observation's recorded argv |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D2 | task | task-3 | is a compare-and-swap: a write whose expected old value no longer matches is refused and the ref is unchanged |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D3 | task | task-5 | with stack `members-missing` after `establish_pr` it selects `establish_child_prs` |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D4 | task | task-10, task-8 | one `establish_child_prs` effect pushes `feat/c1/demo` then `feat/c3/demo` |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D5 | task | task-11, task-12, task-14 | CAS-writes `retarget {phase: intended}`, calls `pull-request.retarget` |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D6 | task | task-9, task-13 | returns a body titled by the slice name |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D7 | task | task-15 | records `pull-request.ready` for #500, then #c3, then #c1 |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D8 | task | task-17, task-18, task-19 | lists branches `main` and `feat/c*/**` |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D9 | task | task-25, task-26 | finds #c1, #c3 and #500 merged with their squash commits ancestors of `origin/main` |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D10 | task | task-27 | emits one `stack_member_lifecycle` with `child` 1 |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D11 | task | task-21, task-20, task-22, task-23, task-24 | a push whose source does not contain the recorded tip is refused |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D12 | task | task-28, task-29 | deletes `feat/c1/demo` and `feat/c3/demo` by name with those tips as compare-and-swap expected values |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D13 | task | task-7, task-6, task-22 | is refused `other-owner` and the runner is never called |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D14 | task | task-2 | has a registry row for each of the six events |
+| adr-2026-07-29-ship-start-draft-pr#D1 | task | task-10, task-15 | converts #500 to draft through `pull-request.draft` before the first child push |
+| adr-2026-07-29-ship-start-draft-pr#D2 | existing | none | `openShipDraftPr` in `ship-draft-pr.ts` still opens the leaf draft at SHIP entry behind the injected `GhRunner`/`GitRunner`; this spec adds no second draft-opening path for the leaf. |
+| adr-2026-07-29-ship-start-draft-pr#D3 | no-change | none | The ship-start push stays a plain push. Child pushes are separate plain pushes of closure SHAs (Task 8), so no force push is added at ship start. |
+| adr-2026-07-29-ship-start-draft-pr#D4 | existing | none | The lazy `rev-list --count <base>..HEAD` check in `openShipDraftPr` is unchanged and still gates the leaf draft. |
+| adr-2026-07-29-ship-start-draft-pr#D5 | existing | none | `openShipDraftPr` still logs one `[ship-draft-pr]` line per failure and returns an outcome; the new publication effects run at FINISH, not in this path. |
+| adr-2026-07-29-ship-start-draft-pr#D6 | existing | none | `findOrCreatePr` still returns an already-open leaf PR untouched under the per-run latch; child PR discovery is a separate FINISH effect. |
+| adr-2026-07-29-ship-start-draft-pr#D7 | task | task-15 | each child through `checkChildBodyPostconditions` and then `ensureShipReady` |
+| adr-2026-07-29-ship-start-draft-pr#D8 | existing | none | `shipDraftPrBody` still seeds the leaf placeholder with `PR_BODY_FLOOR_MARKER`; child bodies are rendered by `stack-member-body.ts`, not by this placeholder. |
+| adr-2026-07-29-ship-start-draft-pr#D9 | task | task-10 | creates draft PRs with bases `main` and `feat/c1/demo` in that order |
+| adr-2026-09-24-project-owned-pr-body-regions#D1 | existing | none | `.github/pull_request_template.md` stays the declaration surface, parsed by `pr-body-regions.ts`; no marker grammar changes. |
+| adr-2026-09-24-project-owned-pr-body-regions#D2 | existing | none | Config-load ownership validation of region keys is unchanged; no region owner is added. |
+| adr-2026-09-24-project-owned-pr-body-regions#D3 | existing | none | The leaf SHIP draft is still seeded from the template by the ship-start path; child bodies are rendered at FINISH and are not SHIP drafts. |
+| adr-2026-09-24-project-owned-pr-body-regions#D4 | task | task-9 | the release-disposition region with `Release-Disposition: no-note` and migration `none` byte-equal to the template default |
+| adr-2026-09-24-project-owned-pr-body-regions#D5 | task | task-13 | holds entries only for the leaf PR URL |
+| adr-2026-09-24-project-owned-pr-body-regions#D6 | task | task-13 | the leaf's captured project-owned regions are byte-identical before and after that re-render |
+| adr-2026-09-24-project-owned-pr-body-regions#D7 | task | task-15 | a child failing `checkChildBodyPostconditions` stays a draft, is never flipped ready |
+| adr-2026-09-24-project-owned-pr-body-regions#D8 | task | task-9 | a `## Stack` section listing #c1, #c3 and #500 in order with #c1 marked |
+| adr-2026-09-24-project-owned-pr-body-regions#D9 | existing | none | The `release-disposition` step still owns its region on the leaf only; children carry the template default and no owner runs for them. |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D1 | existing | none | The shared verifier and the single `.docs/shipped/<slug>.md` record are unchanged; only the leaf diff carries the record. |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D2 | existing | none | `finish-record` and the terminal fail-closed boundaries are unchanged; `finish-record` keeps refusing a child `worktree_branch`. |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D3 | task | task-18 | returns `not-applicable` classification `stack-child` before reading body declarations |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D4 | task | task-18 | the premerge check exits non-zero with an error naming the missing head ref |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D5 | task | task-19 | open no record-only repair PR, and write no `.docs/shipped/demo.md` |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D6 | no-change | none | The Actions permissions and repository settings are unchanged; no new workflow permission is needed. |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D7 | task | task-19 | the CLI metadata reader, the event decoder, the audit GraphQL query and the reconcile REST adapter each supply the head ref |
+| adr-2026-07-25-fail-closed-durable-shipment-evidence#D8 | existing | none | Records still land on the implementation (leaf) branch before human merge through the existing shipped-record sequence. |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D1 | existing | none | `daemon-runner.ts` still never reaps on `outcome.done`; the reap stays in the mergeable sweep. |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D2 | task | task-28, task-25 | the reap removes the worktree, deletes `feat/c1/demo` and `feat/c3/demo` by name |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D3 | task | task-25 | makes no teardown call, keeps the worktree and every branch, deletes no ref, retains the watch entry |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D4 | existing | none | `mergeable-sweep.ts` still separates MERGED from CLOSED-unmerged through `logDisposition` retention reasons. |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D5 | existing | none | Every reap branch still logs `retained`/`reaped` with its reason through `logDisposition`. |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D6 | task | task-29 | with #500 closed unmerged removes the worktree as today, keeps `feat/c1/demo` and `feat/c3/demo` |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D7 | task | task-28 | a failed delete of `feat/c1/demo` stops the remaining deletes and retains the watch entry |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D8 | task | task-29 | `reconcileMergedPark` on a merged stacked `demo` with kept children deletes neither `refs/conductor/demo/positions` nor `refs/conductor/demo/publication` |
+| adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main#D9 | existing | none | `worktree_reclaim_retained` and its siblings still report every unreclaimed candidate; no new reclaim reason is added. |
+| adr-2026-09-11-github-operation-ownership#D1 | task | task-6, task-7 | `GITHUB_OPERATION_REGISTRY` admits `stack.read`, `stack.create`, `stack.add` and `pull-request.retarget` |
+| adr-2026-09-11-github-operation-ownership#D2 | task | task-7, task-22 | a child PR create and a child push are each refused `invalid-target` |
+| adr-2026-09-11-github-operation-ownership#D3 | no-change | none | Pre-spec intake and creation policy is unchanged; no intake operation is added. |
+| adr-2026-09-11-github-operation-ownership#D4 | no-change | none | No shared-resource operation is added; every new operation targets a feature PR, the repository for one feature's stack, or that stack. |
+| adr-2026-09-11-github-operation-ownership#D5 | existing | none | `executeRemoteGit` already resolves the destination ref and applies ownership to child refs through `daemonOwnedSlugOfRef`; child pushes reuse it. |
+| adr-2026-09-11-github-operation-ownership#D6 | existing | none | The new refusals reuse the existing typed reasons `invalid-payload`, `invalid-target` and `other-owner`. |
+| adr-2026-09-11-github-operation-ownership#D7 | task | task-6 | the static GitHub-invocation audit passes with the four new operations registered |
+| adr-2026-09-11-github-operation-ownership#D8 | no-change | none | No gated-visibility write is introduced. |
+| adr-2026-09-11-github-operation-ownership#D9 | no-change | none | Write credentials remain a transport property; the new operations use the same runner transport. |
+| adr-2026-09-11-github-operation-ownership#D10 | no-change | none | Commit authorship and bot co-author crediting are unchanged. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D1 | existing | none | `feature-branch-identity.ts` stays the only branch-identity owner; this spec consumes `parseFeatureBranch`, `childBranchFor` and `leafBranchFor`. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D2 | task | task-28, task-29 | park reconciliation of a parked `demo` deletes no child branch, as today |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D3 | task | task-7 | with `feat/daemon-demo` absent locally and on `origin`, a child PR create and a child push are each refused `invalid-target` |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D4 | existing | none | The `feat/c<k>` namespace and its parser are unchanged. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D5 | existing | none | `ChildId` (1..9) and sealed positions in `child-context.ts` are unchanged; publication iterates the sealed positions. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D6 | existing | none | The leaf is still `feat/daemon-<slug>` at the highest position via `leafBranchFor`. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D7 | existing | none | Positions stay immutable once a child exists; publication only reads `refs/conductor/<slug>/positions`. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D8 | existing | none | Per-child stores under `.pipeline/children/<k>/` are unchanged; FINISH and the publication record stay whole-feature. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D9 | existing | none | Region caps per child are unchanged; publication runs after the region. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D10 | existing | none | The active-child contract implemented by #2942 is unchanged. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D11 | existing | none | The base-override contract implemented by #2942 is unchanged. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D12 | task | task-2 | `child` is set only on events naming one member |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D13 | existing | none | The recovery CLIs keep their `--child <k>` contract; no recovery CLI changes. |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D14 | task | task-1 | are byte-identical to their committed golden files |
+| adr-2026-10-03-stacked-child-plans-identity-and-state#D15 | existing | none | Whole-feature rubrics still run once at the leaf; publication happens after them. |
+| adr-2026-10-07-per-child-build-region#D1 | existing | none | The cursor and closure refs `refs/conductor/<slug>/closed/c<k>` are unchanged; Task 8 pushes the closure SHA they record. |
+| adr-2026-10-07-per-child-build-region#D2 | task | task-4 | returns `members-missing`, so the feature is published as a stack from its sealed positions alone |
+| adr-2026-10-07-per-child-build-region#D3 | existing | none | Child creation, switching and the leaf move are unchanged. |
+| adr-2026-10-07-per-child-build-region#D4 | existing | none | The region overlay and routed write port are unchanged. |
+| adr-2026-10-07-per-child-build-region#D5 | existing | none | Per-child acceptance specs are unchanged. |
+| adr-2026-10-07-per-child-build-region#D6 | existing | none | Per-child build, stall detection and the commit hook are unchanged. |
+| adr-2026-10-07-per-child-build-region#D7 | existing | none | Per-child `test_suite` with the aggregate at the leaf is unchanged; member CI now runs on each child PR (Task 17). |
+| adr-2026-10-07-per-child-build-region#D8 | existing | none | `resolveChildBase` remains the single base producer; the child diffstat uses the same base. |
+| adr-2026-10-07-per-child-build-region#D9 | existing | none | Child-local `build_review` and the leaf security rubric are unchanged. |
+| adr-2026-10-07-per-child-build-region#D10 | existing | none | Per-child caps are unchanged. |
+| adr-2026-10-07-per-child-build-region#D11 | task | task-8 | pushes the closure SHA with a plain push whose argv contains no `--force` |
+| adr-2026-10-07-per-child-build-region#D12 | existing | none | The rebase guard was lifted by #2943; this spec adds the published-stack refusal under the restack ADR instead. |
+| adr-2026-10-07-per-child-build-region#D13 | existing | none | `child_started`, `child_closed` and `child_switched` are unchanged. |
+| adr-2026-10-07-per-child-build-region#D14 | task | task-1 | are byte-identical to their committed golden files |
+| adr-2026-07-28-total-halt-classification-legacy-boundary#D1 | task | task-20 | `readHaltClass` accepts `stack-tip-diverged` |
+| adr-2026-07-28-total-halt-classification-legacy-boundary#D2 | existing | none | Read disposition already retains an unknown class; `stack-tip-diverged` is added to the explicit allowlist instead. |
+| adr-2026-07-28-total-halt-classification-legacy-boundary#D3 | no-change | none | The one-time legacy migration is unchanged and never stamps the new class. |
+| adr-2026-07-28-total-halt-classification-legacy-boundary#D4 | existing | none | Marker and sidecar lifecycle is unchanged. |
+| adr-2026-07-28-total-halt-classification-legacy-boundary#D5 | existing | none | `writeHaltMarker` still requires a class argument, so `haltStackTipDiverged` passes it explicitly. |
+| adr-2026-07-28-total-halt-classification-legacy-boundary#D6 | task | task-20 | `haltStackTipDiverged` writes a `stack-tip-diverged` HALT |
+| adr-2026-07-28-total-halt-classification-legacy-boundary#D7 | no-change | none | ADR-013's non-classification decisions are unchanged. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D1 | task | task-28 | with those tips as compare-and-swap expected values |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D2 | no-change | none | The stack-member proof is recorded in this ADR's decision 1 amendment before it ships, as decision 2 requires. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D3 | existing | none | Park refusal reasons are unchanged; park never deletes a child branch. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D4 | existing | none | Sweep refusal counts are unchanged. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D5 | no-change | none | Park deletion strength is unchanged; the new proof applies only to shipped-record teardown and reclaim. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D6 | existing | none | The park helper still enumerates the worktree listing. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D7 | existing | none | Park proofs are still keyed on the worktree's listed branch. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D8 | existing | none | The shipped-record precondition by branch kind is unchanged. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D9 | existing | none | Ancestry alone still never authorizes park deletion. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D10 | existing | none | A dirty worktree is still never removed by park. |
+| adr-2026-08-01-multi-proof-park-deletion-authority#D11 | existing | none | Park refusals are still reported through `worktree_reclaim_retained`. |
+| adr-2026-09-11-finish-mergeability-respects-active-review-inputs#D1 | existing | none | The finish versus re-kick distinction and the incomplete-rebase guard are unchanged. |
+| adr-2026-09-11-finish-mergeability-respects-active-review-inputs#D2 | existing | none | Mergeable-skip at normal finish is unchanged. |
+| adr-2026-09-11-finish-mergeability-respects-active-review-inputs#D3 | existing | none | Review-input invalidation is unchanged. |
+| adr-2026-09-11-finish-mergeability-respects-active-review-inputs#D4 | existing | none | Conflicting prospective merges still enter the bounded rebase flow, except when the stack is published (Task 23). |
+| adr-2026-09-11-finish-mergeability-respects-active-review-inputs#D5 | task | task-23 | re-kick retries its gate on the current base |
+| adr-2026-09-11-finish-mergeability-respects-active-review-inputs#D6 | task | task-23 | FINISH selects its next step |
+| adr-2026-09-11-finish-mergeability-respects-active-review-inputs#D7 | no-change | none | Coverage binding stays non-tree-attesting. |
+| adr-2026-07-07-ship-ci-feedback-loop#D1 | existing | none | `PrMergeState` check classification is unchanged. |
+| adr-2026-07-07-ship-ci-feedback-loop#D2 | task | task-24 | the sweep's ci-fix eligibility returns ineligible |
+| adr-2026-07-07-ship-ci-feedback-loop#D3 | existing | none | The bounded `CiFixDispatchOpts` dispatch seam is unchanged. |
+| adr-2026-07-07-ship-ci-feedback-loop#D4 | existing | none | The ci-fix remediation run is unchanged. |
+| adr-2026-07-07-ship-ci-feedback-loop#D5 | existing | none | ci-fix exhaustion handling is unchanged. |
+| adr-2026-07-07-ship-ci-feedback-loop#D6 | no-change | none | `ci_watch.enabled` keeps its default. |
+| adr-2026-07-07-ship-ci-feedback-loop#D7 | no-change | none | Fixture-portability guards are unchanged. |
+| adr-2026-10-09-shipped-pr-readiness-verdict#D1 | existing | none | The pure readiness classifier is unchanged. |
+| adr-2026-10-09-shipped-pr-readiness-verdict#D2 | task | task-14 | returns `ci-pending`, and the label plan adds nothing |
+| adr-2026-10-09-shipped-pr-readiness-verdict#D3 | task | task-24 | escalates through autoresolve's `published-stack` path, and no ci-fix dispatch is recorded |
+| adr-2026-10-09-shipped-pr-readiness-verdict#D4 | no-change | none | Readiness still adds no GitHub operation; the stack operations belong to publication, not readiness. |
+| adr-2026-10-09-shipped-pr-readiness-verdict#D5 | existing | none | `shipped_pr_readiness` events are unchanged. |
+| adr-2026-10-09-shipped-pr-readiness-verdict#D6 | existing | none | `daemon status` SHIPPED PRS is unchanged. |
+| adr-2026-10-09-shipped-pr-readiness-verdict#D7 | existing | none | Grace bookkeeping in the watch entry is unchanged. |
+| adr-2026-08-06-bounded-progress-allowance-for-finish-publication#D1 | task | task-5 | the progress allowance is 2 × 7 for an N=1 feature and 2 × 9 for the three-member stack |
+| adr-2026-08-06-bounded-progress-allowance-for-finish-publication#D2 | existing | none | The allowance counter is still scoped to one `finish` execution. |
+| adr-2026-08-06-bounded-progress-allowance-for-finish-publication#D3 | no-change | none | No per-transition stuck cap is added. |
+| adr-2026-08-06-bounded-progress-allowance-for-finish-publication#D4 | existing | none | Allowance exhaustion still halts `needs-human`. |
+| adr-2026-08-23-committed-halt-record#D1 | existing | none | `.docs/halted/<slug>.md` is unchanged and is written on the leaf. |
+| adr-2026-08-23-committed-halt-record#D2 | existing | none | The record is still produced at the single `writeHaltMarker` seam. |
+| adr-2026-08-23-committed-halt-record#D3 | task | task-20 | `isRecordableHaltClass('stack-tip-diverged')` is true |
+| adr-2026-08-23-committed-halt-record#D4 | existing | none | Record content is unchanged; a `stack-tip-diverged` record names the mismatched members in its body. |
+| adr-2026-08-23-committed-halt-record#D5 | task | task-22 | `halt_record_push_failed` is emitted with reason `stack-tip-mismatch` |
+| adr-2026-08-23-committed-halt-record#D6 | existing | none | Nothing in the record path throws; the guard refusal is mapped to a skip. |
+| adr-2026-08-23-committed-halt-record#D7 | existing | none | Resume supersedes the record in place, unchanged. |
+| adr-2026-08-23-committed-halt-record#D8 | no-change | none | The record stays durable state, not a channel. |
+
+## Tasks
+
+### Task 1: Freeze the N=1 FINISH goldens before any change
+**Story:** 1
+**Type:** infrastructure
+
+**Steps:**
+1. Write tests in `src/conductor/test/engine/n1-golden-renderings.test.ts` for an N=1 FINISH run through `advanceFinishPublication`, with the existing fake `gh` and a `PATH`-shimmed `git`. They record the `finish_publication_*` event sequence, the gh and git argv, the leaf PR body, `conduct-state.json` and the shipped record. Commit the goldens under `src/conductor/test/fixtures/n1-golden/finish/`.
+2. Add a resumed-run case: the run is interrupted after `author_pr_prose` and re-entered.
+3. These freeze today's behavior, so they pass on the current engine. Every later task must leave them passing.
+4. Commit.
+
+**Done when:**
+- [test] `n1-golden-renderings.test.ts` asserts, for an N=1 FINISH run, that the leaf PR body, `conduct-state.json`, the recorded gh and git argv list and the `finish_publication_*` event sequence are byte-identical to their committed golden files.
+- [test] the same test asserts the shipped record's Cost block is byte-identical to its golden and its Time block has the golden's section and field structure, with timing values normalized.
+- [test] an N=1 FINISH run interrupted after `author_pr_prose` and resumed records the same transition sequence as its resume golden, and its git argv names no `refs/conductor/<slug>/publication` ref.
+
+**Files likely touched:**
+- `src/conductor/test/engine/n1-golden-renderings.test.ts` — FINISH goldens
+- `src/conductor/test/fixtures/n1-golden/finish/` — golden files
+
+**Dependencies:** none
+
+### Task 2: Stack events on the existing spine
+**Story:** 9
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests:
+   - `src/conductor/test/types/stack-events.test.ts`: shapes;
+   - `src/conductor/test/engine/event-sinks.test.ts`: registry completeness;
+   - `src/conductor/test/engine/event-persister.test.ts`: `eventId` de-duplication of `stack_member_lifecycle`;
+   - `src/conductor/test/engine/finish-publication-dimensions.test.ts`: dimension map.
+2. Verify RED.
+3. Implement. In `src/conductor/src/types/events.ts`:
+   - add `stack_member_published`, `stack_member_redrafted`, `stack_assembled`, `stack_member_lifecycle` (`state: merged|closed|reverted`, `eventId`), `stack_members_unreachable` and `stack_tip_diverged`;
+   - each carries `pr` numbers, with `child` only where it names one member;
+   - extend `FinishPublicationTransition` with `establish_child_prs` and `assemble_stack`.
+
+   In `event-sinks.ts`, add one row per event. In `event-persister.ts`, add `stack_member_lifecycle` to the replay-deduplicated set. In `finish-publication.ts`, map both transitions to a new `stack` dimension.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `types/events.ts` declares `stack_member_published`, `stack_member_redrafted`, `stack_assembled`, `stack_member_lifecycle`, `stack_members_unreachable` and `stack_tip_diverged`, and `stack-events.test.ts` asserts each carries a PR number and that `child` is set only on events naming one member.
+- [test] `event-sinks.ts` has a registry row for each of the six events, asserted by the event-sinks registry completeness test.
+- [test] `EventPersister` de-duplicates `stack_member_lifecycle` by `eventId`: persisting the same event twice leaves one ledger line.
+- [test] `FinishPublicationTransition` includes `establish_child_prs` and `assemble_stack`, and `PUBLICATION_TRANSITION_DIMENSIONS` maps both to the `stack` dimension.
+
+**Files likely touched:**
+- `src/conductor/src/types/events.ts` — event members and transition union
+- `src/conductor/src/engine/event-sinks.ts` — registry rows
+- `src/conductor/src/engine/event-persister.ts` — de-duplication set
+- `src/conductor/src/engine/finish-publication.ts` — dimension map
+- `src/conductor/test/types/stack-events.test.ts`, `src/conductor/test/engine/event-sinks.test.ts`, `src/conductor/test/engine/event-persister.test.ts`, `src/conductor/test/engine/finish-publication-dimensions.test.ts` — tests
+
+**Dependencies:** none
+
+### Task 3: Ref-backed publication record
+**Story:** 2
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-publication-record.test.ts` over a real-git fixture.
+2. Verify RED.
+3. Implement `stack-publication-record.ts`:
+   - `publicationRefFor(slug)`;
+   - `readPublicationRecord`, which parses once with a version check;
+   - `writePublicationRecord(expectedOld, next)`, which uses `hash-object -w` and `update-ref <ref> <new> <old>`, with a zero old value for create;
+   - `activePublicationRecord`, which returns `undefined` for a `tornDown` record.
+
+   Follow `routing/route-record-store.ts` (`writeRouteRecord`): explicit old values, no cache, CAS refusal returned as a value.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `readPublicationRecord` and `writePublicationRecord` round-trip `{version: 1, retarget, stack, members}` through `refs/conductor/demo/publication` in a real-git fixture, with `members` ordered by sealed position.
+- [test] `writePublicationRecord` is a compare-and-swap: a write whose expected old value no longer matches is refused and the ref is unchanged.
+- [test] `activePublicationRecord` returns `undefined` for a record marked `tornDown`, and a create for the same slug replaces the torn-down record.
+- [test] a record with an unknown `version`, or a member without a PR number, fails to parse with a named diagnostic.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-publication-record.ts` — new store
+- `src/conductor/test/engine/stack-publication-record.test.ts` — tests
+
+**Dependencies:** none
+
+### Task 4: Stack observer decides stacked publication from sealed positions
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-publication-observe.test.ts`, with an argv-recording fake `gh` and `git`, over these fixtures:
+   - N=1;
+   - one position;
+   - three positions with the flag off;
+   - no record;
+   - members without a verified stack;
+   - a verified stack;
+   - a closed member;
+   - a stack read timeout;
+   - a `tornDown` record.
+2. Verify RED.
+3. Implement `observeStackDimension(root, slug, cursor, deps)` in `stack-publication.ts`. It takes the cursor that the same observation already resolved for `observeImplementationEvidence` (`resolveActiveChild`, one call per observation, shared through a per-observation memo), and returns `not-applicable` for `no-child` without any further git or GitHub command. Only with durable child state does it read the positions ref (`child-lifecycle.ts`) and `activePublicationRecord`, and return `not-applicable` for fewer than two positions. The `stacked_prs.enabled` value is never consulted, because durable child state is authoritative (build-region decision 2).
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `observeStackDimension` returns `not-applicable` for an N=1 feature from the observation's already-resolved `no-child` cursor, adding no git or gh command to that observation's recorded argv, and for a positions ref with one position with no gh command and no `ls-remote`, and in both cases no `refs/conductor/<slug>/publication` ref written.
+- [test] for the three-member fixture with `stacked_prs.enabled: false`, `observeStackDimension` returns `members-missing`, so the feature is published as a stack from its sealed positions alone.
+- [test] the observer returns `members-missing`, `unassembled`, `valid`, `diverged` and `indeterminate` for the no-record, unverified, verified, closed-member and read-timeout fixtures respectively.
+- [test] with a `tornDown` record for `demo`, a new feature reusing slug `demo` observes `members-missing`, and its first record write replaces the old record.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-publication.ts` — observer
+- `src/conductor/test/engine/stack-publication-observe.test.ts` — tests
+
+**Dependencies:** Task 3
+
+### Task 5: Transition selection and the per-feature allowance
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/finish-publication.test.ts`:
+   - snapshot sequences for N=1 and stacked features;
+   - the allowance;
+   - the movement guard.
+
+   Update `src/conductor/test/engine/finish-pr-prose-authoring.test.ts`'s allowance pin to the per-feature form.
+2. Verify RED.
+3. Implement in `finish-publication.ts`:
+   - `PublicationSnapshot.stack`;
+   - `nextFinishPublicationTransition`, which returns `establish_child_prs` after `establish_pr` when the stack is `members-missing`, and `assemble_stack` after `write_shipped_record` when the stack is `unassembled`, and never returns `ready_pr` unless the stack is `valid` or `not-applicable`;
+   - `publicationProgressAllowance(snapshot)`, which is 2 × the selectable transition count: 7 when `not-applicable`, else 9.
+
+   The observer from Task 4 feeds `stack`.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with stack `not-applicable`, `nextFinishPublicationTransition` selects today's seven transitions in today's order for the N=1 snapshot sequence, and the run emits no `stack_*` event and `finish_publication_transition` events naming only those seven.
+- [test] with stack `members-missing` after `establish_pr` it selects `establish_child_prs`, with stack `unassembled` after `write_shipped_record` it selects `assemble_stack`, and it never selects `ready_pr` unless the stack dimension is `valid` or `not-applicable`.
+- [test] the progress allowance is 2 × 7 for an N=1 feature and 2 × 9 for the three-member stack.
+- [test] a successful `establish_child_prs` that moves the stack dimension from `members-missing` to `unassembled` counts as an advance, not `publication_transition_unmoved`.
+
+**Files likely touched:**
+- `src/conductor/src/engine/finish-publication.ts` — snapshot, selection, allowance
+- `src/conductor/test/engine/finish-publication.test.ts`, `src/conductor/test/engine/finish-pr-prose-authoring.test.ts` — tests
+
+**Dependencies:** Task 2, Task 4
+
+### Task 6: Guarded stack and retarget operations
+**Story:** 12
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests:
+   - `src/conductor/test/engine/github-operations-stack.test.ts`: registry, decoder, argv;
+   - `src/conductor/test/engine/github-invocation-audit.test.ts`: the static audit.
+2. Verify RED.
+3. Implement:
+   - in `github-operations.ts`, registry entries for `stack.read`, `stack.create`, `stack.add` and `pull-request.retarget`, the `stack` resource kind (`{repository, number}`), payload kinds, and decoders;
+   - in `tracker-client.ts` `ghArgsFor`:
+     - `gh api --method POST repos/<r>/stacks -F pull_requests[]=…`;
+     - `POST repos/<r>/stacks/<n>/add`;
+     - `GET repos/<r>/stacks?pull_request=<n>` or `repos/<r>/stacks/<n>`;
+     - `gh pr edit <n> -R <r> --base <base>` for retarget.
+   - the `pull-request.edit` decoder rejects a `base` field.
+
+   Precedent: the `commit.status.create` and `issue.dependency.add` cases.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `GITHUB_OPERATION_REGISTRY` admits `stack.read`, `stack.create`, `stack.add` and `pull-request.retarget`, and `ghArgsFor` maps `stack.create` to `gh api --method POST repos/jstoup111/ai-conductor/stacks` with the PR numbers bottom to top.
+- [test] `ghArgsFor` maps `stack.add` to `POST repos/<repo>/stacks/<n>/add`, `stack.read` to `GET repos/<repo>/stacks?pull_request=<n>` or `repos/<repo>/stacks/<n>`, and `pull-request.retarget` to a `gh pr edit` argv whose only edited field is `--base`.
+- [test] decoding a `pull-request.edit` payload that carries `base` is refused with `invalid-payload`, so no `pull-request.edit` argv can contain `--base`.
+- [test] the static GitHub-invocation audit passes with the four new operations registered.
+
+**Files likely touched:**
+- `src/conductor/src/engine/github-operations.ts` — registry, kinds, decoders
+- `src/conductor/src/engine/tracker-client.ts` — argv
+- `src/conductor/src/engine/github-invocation-audit.ts` — audit registration
+- `src/conductor/test/engine/github-operations-stack.test.ts`, `src/conductor/test/engine/github-invocation-audit.test.ts` — tests
+
+**Dependencies:** none
+
+### Task 7: Stack writes are bound to committed ownership and the record
+**Story:** 12
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/owner-gate/mutation-policy-stack.test.ts` and `src/conductor/test/engine/stack-publication-payload.test.ts`. Mock the runner boundary and assert that refused calls never reach it.
+2. Verify RED.
+3. Implement:
+   - in `owner-gate/mutation-policy.ts`, an `isInitialStackCreation` exemption beside `isInitialPullRequestCreation`, bound to the leaf's committed ownership, and the `stack` target match;
+   - in `stack-publication.ts`, `validateStackPayload(record, request)`. It refuses a stack PR set that is not exactly the record's members, a retarget base that is not a member branch, and a `stack.add` number that differs from `record.stack.number`.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with the operator as committed owner and `feat/daemon-demo` present, `stack.create` for the record's members #c1, #c3 and #500, `stack.add` and `stack.read` with the record's stack number, and `pull-request.retarget` of #500 to `feat/c3/demo` are each authorized and reach the mocked runner.
+- [test] `validateStackPayload` refuses with `invalid-payload`, before any runner call, a `stack.create` that names a PR not recorded for `demo` and a `pull-request.retarget` whose base is not one of `demo`'s member branches.
+- [test] with another operator as committed owner, each of `stack.read`, `stack.create`, `stack.add` and `pull-request.retarget` is refused `other-owner` and the runner is never called.
+- [test] with `feat/daemon-demo` absent locally and on `origin`, a child PR create and a child push are each refused `invalid-target`.
+- [test] a `stack.add` for a stack number other than the record's `stack.number` is refused `invalid-target`.
+
+**Files likely touched:**
+- `src/conductor/src/engine/owner-gate/mutation-policy.ts` — exemption and target match
+- `src/conductor/src/engine/stack-publication.ts` — payload validation
+- `src/conductor/test/engine/owner-gate/mutation-policy-stack.test.ts`, `src/conductor/test/engine/stack-publication-payload.test.ts` — tests
+
+**Dependencies:** Task 3, Task 6
+
+### Task 8: Push a child's closure with a plain push after one ls-remote
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-child-push.test.ts` with a real-git bare `origin`. Each outcome is asserted on the recorded git argv.
+2. Verify RED.
+3. Implement in `stack-publication.ts`:
+   - `verifyChildChain(positions)`: each next position's branch contains the previous closure;
+   - `pushChildClosure(slug, position)`: one `ls-remote --heads origin refs/heads/feat/c<p>/<slug>`, then:
+     - absent: a plain push of `refs/conductor/<slug>/closed/c<p>`'s SHA to `refs/heads/feat/c<p>/<slug>` through `executeRemoteGit`, which records the pushed tip;
+     - present and equal to both the recorded tip and the closure: `unchanged`;
+     - otherwise: `diverged`;
+     - a failed read: `read-failed`.
+
+   It introduces no force or lease form.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] for each of `feat/c1/demo` and `feat/c3/demo`, `pushChildClosure` runs one `ls-remote`, finds the branch absent, pushes the closure SHA with a plain push whose argv contains no `--force`, and records the pushed tip for that branch.
+- [test] when `ls-remote` shows `feat/c3/demo` present at a SHA the engine never recorded pushing, `pushChildClosure` makes no push, the remote branch is unchanged, and it returns `diverged` naming position 3.
+- [test] when `feat/c1/demo` carries a halt-record-only commit past its closure, the pushed SHA is the closure SHA, the halt-record commit is not on `origin`, the result is `pushed`, and `establish_child_prs` on that fixture completes with no HALT written.
+- [test] a failing `ls-remote` returns `read-failed`, which `establish_child_prs` reports as a retryable publication failure with no HALT written, and no push argv is recorded.
+- [test] `verifyChildChain` returns `broken` naming position 1 when `feat/c3/demo` does not contain child 1's closure.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-publication.ts` — `pushChildClosure`, `verifyChildChain`
+- `src/conductor/src/engine/remote-git-operations.ts` — named-ref source for a plain push
+- `src/conductor/test/engine/stack-child-push.test.ts` — tests
+
+**Dependencies:** Task 3
+
+### Task 9: Engine-rendered child bodies and their postconditions
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-member-body.test.ts`. The fixtures are the slice manifest, the sealed envelope `taskSlices`, the repository PR template, and a no-template project.
+2. Verify RED.
+3. Implement `stack-member-body.ts`:
+   - `renderChildBody(input)` composes:
+     - the title from the slice name;
+     - a summary of the child's stories (title and id) and tasks;
+     - a diffstat of the child branch against its base;
+     - `renderStackNavigation(members, current)`;
+     - every `<!-- ai-conductor:step -->` region from the template at its default.
+
+     Plan paths found by the `extractPlanStems` regex are rewritten to their stem.
+   - `checkChildBodyPostconditions(body, template)` refuses a body with a plan path, an issue-closing keyword, or non-default regions, naming the member.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `renderChildBody` for child 1 returns a body titled by the slice name, listing stories `S-A` and `S-B` with their ids and task `T1`, a diffstat of `feat/c1/demo` against `main`, a `## Stack` section listing #c1, #c3 and #500 in order with #c1 marked, and the release-disposition region with `Release-Disposition: no-note` and migration `none` byte-equal to the template default.
+- [test] a story title containing the plan path `.docs/plans/<stem>.md` is rendered as the plan stem only, and the rendered body matches no `.docs/plans/<stem>.md` string under the reconcile `extractPlanStems` regex.
+- [test] with no PR template, `renderChildBody` returns the title, summary, diffstat and `## Stack` section, and no project-owned region: no `<!-- ai-conductor:step` marker and no `Release-Disposition` line.
+- [test] `checkChildBodyPostconditions` refuses, naming the member, a body containing `Closes jstoup111/ai-conductor#2945` and a body whose release-disposition region differs from the template default.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-member-body.ts` — renderer and postconditions
+- `src/conductor/test/engine/stack-member-body.test.ts` — tests
+
+**Dependencies:** none
+
+### Task 10: establish_child_prs publishes every child as a chained draft in one effect
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/finish-publication-establish-children.test.ts`, using the three-member fixture (positions 1, 3, 5) with a real-git `origin` and an argv-recording fake `gh`. Add crash-injection at each record write and each GitHub write.
+2. Verify RED.
+3. Implement the `establishChildPrs` effect in `finish-publication-production.ts`, backed by `stack-publication.ts`:
+   1. If the leaf PR is ready, convert it to draft through `pull-request.draft` and emit `stack_member_redrafted`.
+   2. Run every check before the first push: `verifyChildChain`, the record, a PR list for every child head in every state, one `ls-remote` per child, and rendering every child body with `checkChildBodyPostconditions`. Return `diverged`, `broken` or a postcondition halt from this phase without pushing anything.
+   3. For each sealed child position in order:
+      - run `pushChildClosure`;
+      - list PRs for the head in every state;
+      - adopt the open draft with the expected base, or create a draft from the already-checked Task 9 body with base `«default»` for the first position, otherwise the previous position's branch;
+      - CAS-write the member and emit `stack_member_published`.
+   Record the leaf as the last member (its position, `feat/daemon-<slug>` and the retained draft's PR number).
+   4. After an ambiguous create error, re-list before any retry.
+   5. Return `diverged` for a closed or merged member, a ready child, a wrong base, or a `diverged` push. Return `broken` for a broken chain. Return a retryable failure for `read-failed`.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] on the three-member fixture, one `establish_child_prs` effect pushes `feat/c1/demo` then `feat/c3/demo` and creates draft PRs with bases `main` and `feat/c1/demo` in that order, and the interleaved git and gh argv shows push `feat/c1/demo`, then create its draft, then push `feat/c3/demo`, then create its draft.
+- [test] after the effect the record lists positions 1, 3 and 5 in order, each with its branch and PR number, position 5 being `feat/daemon-demo` with #500, and one `stack_member_published` event carrying `child` and the PR number was emitted per child.
+- [test] with leaf #500 ready before FINISH, the effect converts #500 to draft through `pull-request.draft` before the first child push and emits `stack_member_redrafted`.
+- [test] after a crash between child 1's PR create and the record write, the resumed effect finds that PR by head in any state and records it, with exactly one PR create for `feat/c1/demo` in the argv; after an ambiguous create error for child 3, the retry lists PRs for `feat/c3/demo` in every state before any create, creates no PR when that list finds one, and creates exactly one when it is empty.
+- [test] a recorded child PR that is closed or merged, an open `feat/c3/demo` PR with a base other than `feat/c1/demo`, or a `diverged` push sets the stack dimension `diverged` and halts `stack-tip-diverged` naming that position, a `broken` chain halts `needs-human` naming position 1, a recorded child PR already ready for review before assembly sets `diverged` and halts `stack-tip-diverged` naming it, a child whose rendered body fails `checkChildBodyPostconditions` gets no `pull-request.create` and halts `needs-human` naming it, and in each case the effect's recorded git argv contains no push at all.
+
+**Files likely touched:**
+- `src/conductor/src/engine/finish-publication-production.ts` — `establishChildPrs` effect
+- `src/conductor/src/engine/stack-publication.ts` — member discovery and creation
+- `src/conductor/test/engine/finish-publication-establish-children.test.ts` — tests
+
+**Dependencies:** Task 5, Task 7, Task 8, Task 9, Task 20
+
+### Task 11: The leaf retarget is journaled and applied exactly once
+**Story:** 4
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/finish-publication-assemble-stack.test.ts` for the retarget, with crash-injection before and after the `pull-request.retarget` call.
+2. Verify RED.
+3. Implement the first half of the `assembleStack` effect:
+   1. If #500's base is `«default»`, CAS-write `retarget {from, to, phase: 'intended'}`.
+   2. Call `pull-request.retarget`.
+   3. Re-read the PR and CAS-write `phase: 'observed'`.
+
+   On resume, read the PR first. When its base already equals `retarget.to`, skip the call.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `assemble_stack` CAS-writes `retarget {phase: intended}`, calls `pull-request.retarget` setting #500's base to `feat/c3/demo`, then CAS-writes `phase: observed`, in that argv order.
+- [test] after a crash between the intended write and the call, the resume finds #500 under base `main`, issues exactly one `pull-request.retarget`, and the record reaches `observed`.
+- [test] after a crash between the call and the observed write, the resume finds #500 under base `feat/c3/demo`, issues no `pull-request.retarget`, and the record reaches `observed`.
+
+**Files likely touched:**
+- `src/conductor/src/engine/finish-publication-production.ts` — `assembleStack` retarget phase
+- `src/conductor/src/engine/stack-publication.ts` — retarget journal
+- `src/conductor/test/engine/finish-publication-assemble-stack.test.ts` — tests
+
+**Dependencies:** Task 10
+
+### Task 12: The stack is created or extended, then verified before it is trusted
+**Story:** 4
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/finish-publication-assemble-stack.test.ts`. The fixtures are: no stack, a one-member prefix, a foreign stack, a wrong order, a head SHA mismatch, and a read timeout.
+2. Verify RED.
+3. Implement the second half of `assembleStack`:
+   1. Run `stack.read` by member 1's PR number.
+   2. With no stack, run `stack.create` bottom up. With a prefix in the correct order, record the number, then `stack.add` the missing members.
+   3. Record `stack: {number, verified: false}` as soon as the number is known.
+   4. Re-read and compare the order with `members`, and each head SHA with `refs/conductor/<slug>/pushed/<branch>`.
+   5. CAS-write `verified: true` and emit `stack_assembled`.
+
+   Any other shape is `diverged`. A read timeout is `indeterminate`.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with no existing stack, `assemble_stack` calls `stack.create` with #c1, #c3 and #500 bottom to top, records the stack number, re-reads the stack, finds member order equal to the record and each head SHA equal to its recorded pushed tip, then marks the record's stack verified and emits `stack_assembled`.
+- [test] with a stack holding #c1 alone, `assemble_stack` records that stack's number before calling `stack.add` once with #c3 and #500, and the argv contains no `stack.create`.
+- [test] with #c3 in a different stack, the stack's order differing from the record, or a stack holding #c1 and #500 only (a missing middle), the stack dimension is `diverged`, the feature halts `stack-tip-diverged`, and the argv contains no `stack.create` or `stack.add`.
+- [test] with a member's head SHA differing from its recorded pushed tip after assembly, the record's stack is not marked verified, the feature halts `stack-tip-diverged` naming that member, and `ready_pr` is never selected.
+- [test] a timed-out `stack.read` makes the stack dimension `indeterminate`, it is retried through today's indeterminate routing, and no `pull-request.ready` call is recorded.
+
+**Files likely touched:**
+- `src/conductor/src/engine/finish-publication-production.ts` — `assembleStack` stack phase
+- `src/conductor/src/engine/stack-publication.ts` — stack read, create, add and verify
+- `src/conductor/test/engine/finish-publication-assemble-stack.test.ts` — tests
+
+**Dependencies:** Task 11
+
+### Task 13: The leaf carries the feature's content and its regions survive the stack re-render
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-leaf-body.test.ts`, with a captured `release-disposition` region on the leaf and a membership change during publication.
+2. Verify RED.
+3. Implement:
+   - `assembleStack` re-renders `## Stack` on every member through `renderStackNavigation`;
+   - for the leaf, it goes through the existing FINISH body rewrite path, which re-inserts captured regions (`pr-body-regions.ts` `restoreRegion`);
+   - `pr-body-region-store.ts` captures are keyed only by the leaf PR URL.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] in a fixture where a member's PR was created after the other members' `## Stack` sections were first rendered, after `assemble_stack` every member's `## Stack` section lists the final ordered membership, and the leaf's captured project-owned regions are byte-identical before and after that re-render.
+- [test] the leaf body after FINISH keeps today's authored prose, release note, `Plan:` declaration, `Closes` reference, build-review blocks and migration section, gains a `## Stack` section with #500 marked, and across all member bodies the release note, `Plan:`, `Closes` and migration each appear exactly once.
+- [test] the `## Stack` re-render of a child runs `checkChildBodyPostconditions` before its `pull-request.edit`, and a failing body makes no edit and halts `needs-human` naming the member.
+- [test] after publication `.pipeline/pr-body-region-captures.json` holds entries only for the leaf PR URL, a spy on the capture store records no read for any child PR URL while child bodies are rendered, and the leaf's captured region is unchanged.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-publication.ts` — `## Stack` re-render
+- `src/conductor/src/engine/pr-body-regions.ts` — leaf re-insertion path
+- `src/conductor/test/engine/stack-leaf-body.test.ts` — tests
+
+**Dependencies:** Task 9, Task 12
+
+### Task 14: Leaf lookups accept exactly the two journaled bases
+**Story:** 5
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/conductor-retained-draft-retarget.test.ts`, with the record `observed`, the record absent (N=1), a third-base PR and a closed #500. Add a readiness case to `src/conductor/test/engine/shipped-readiness.test.ts`.
+2. Verify RED.
+3. Implement in `conductor.ts`. `resolveRetainedShipDraftPrUrl`, `readShipDraftReleaseMetadata`, region prepare and capture, and `clearRetainedHaltStateForDispatch` first issue today's exact query (head, base `«default»`, open). Only when it finds no PR, and only when `listExistingChildren` (`child-context.ts`, a filesystem read of `.pipeline/children/`, no git command) reports a child, do they read `activePublicationRecord` and repeat the query with base `retarget.to`. They never accept any other base. `shipped-readiness.ts` is unchanged.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with #500 retargeted to `feat/c3/demo` and the record `observed`, `resolveRetainedShipDraftPrUrl` and `readShipDraftReleaseMetadata` resolve #500 and read its release-disposition region.
+- [test] region prepare, region capture and `clearRetainedHaltStateForDispatch` each resolve #500 with the retargeted base.
+- [test] an open PR with head `feat/daemon-demo` and base `release-x` is not adopted and the lookup reports the draft unavailable, and a closed or merged #500 is not adopted.
+- [test] for an N=1 feature, both when today's query finds the draft and when it finds none, the lookup's gh argv is exactly today's `pr list --head <leaf> --base main --state open` and its git argv contains no command at all, so no read of `refs/conductor/<slug>/publication` appears.
+- [test] `classifyShippedReadiness` for the retargeted leaf with zero checks past the grace period returns `ci-pending`, and the label plan adds nothing.
+
+**Files likely touched:**
+- `src/conductor/src/engine/conductor.ts` — two-base lookups
+- `src/conductor/test/engine/conductor-retained-draft-retarget.test.ts`, `src/conductor/test/engine/shipped-readiness.test.ts` — tests
+
+**Dependencies:** Task 3
+
+### Task 15: ready_pr flips top-down, by a child-only path for children
+**Story:** 6
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/finish-publication-ready-stack.test.ts`. Record every GitHub write per member, and add crash-injection between flips.
+2. Verify RED.
+3. Implement in `finish-publication-production.ts`. `readyPr` for a `valid` stack:
+   - flips the leaf through `repairPresentation`;
+   - then, for each child from the highest position to the lowest, re-reads the stack, checks `checkChildBodyPostconditions`, and calls `ensureShipReady`;
+   - skips members already ready;
+   - returns `diverged` on a membership or head change;
+   - halts naming a child whose postconditions fail.
+
+   The snapshot's `pr.ready` requires every member to be ready.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `ready_pr` on a verified stack records `pull-request.ready` for #500, then #c3, then #c1, with #500 going through `repairPresentation` and each child through `checkChildBodyPostconditions` and then `ensureShipReady`.
+- [test] #c3's ready flip and #c1's ready flip each issue no comment, edit, label or `Closes` write and no title floor, body floor, `Plan:` or accepted-risk projection: for each child, its only GitHub write is `pull-request.ready`.
+- [test] interrupted after #500 and #c3 were flipped, the resumed `ready_pr` accepts both as progress, flips only #c1, and does not halt.
+- [test] a head SHA or membership change seen by the stack re-read before a flip stops that flip and halts `stack-tip-diverged` naming the member, and a child failing `checkChildBodyPostconditions` stays a draft, is never flipped ready, and the feature halts `needs-human` naming it.
+- [test] when every member is ready the snapshot reports `pr.ready` true, and publication proceeds to `record_outcome` with `conduct-state.json` `pr_url` equal to #500.
+
+**Files likely touched:**
+- `src/conductor/src/engine/finish-publication-production.ts` — stacked `readyPr`
+- `src/conductor/src/engine/finish-publication.ts` — `pr.ready` over members
+- `src/conductor/test/engine/finish-publication-ready-stack.test.ts` — tests
+
+**Dependencies:** Task 12, Task 13
+
+### Task 16: Wire stacked publication into the production FINISH dispatch
+**Story:** 2
+**Type:** happy-path
+
+**Steps:**
+1. Write a failing integration test in `src/conductor/test/engine/conductor-finish-stacked.test.ts`. It runs a conductor FINISH dispatch on the three-member real-git fixture, with a fake `gh` and a bare `origin`, through `advanceFinishPublication`.
+2. Verify RED.
+3. Implement the composition-root wiring in `finish-publication-production.ts` and `conductor.ts`:
+   - inject `observeStackDimension` into the observation ports;
+   - inject `establishChildPrs`, `assembleStack` and the stacked `readyPr` into the effects;
+   - use the per-feature allowance.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] a conductor FINISH dispatch on the three-member fixture runs from `establish_pr` to `record_outcome` through `advanceFinishPublication`, recording the two child pushes and draft PR creates in order, one `pull-request.retarget`, one `stack.create` whose payload is #c1, #c3 and #500 bottom to top, and the top-down ready flips.
+- [test] the same run's recorded gh argv contains no `merge`, `merge-async`, auto-merge or ruleset call, nor does the N=1 FINISH golden run's recorded gh argv, and no recorded git argv contains `--force` without an explicit expected SHA.
+- [test] the same dispatch with `stacked_prs.enabled: false` and three sealed positions still selects both `establish_child_prs` and `assemble_stack`.
+- [test] a dispatch where `establish_pr` succeeds and the first child push then fails reports publication not complete, with `pr.ready` false and the stack dimension not `valid`.
+
+**Files likely touched:**
+- `src/conductor/src/engine/finish-publication-production.ts` — composition root
+- `src/conductor/src/engine/conductor.ts` — FINISH wiring
+- `src/conductor/test/engine/conductor-finish-stacked.test.ts` — integration test
+
+**Dependencies:** Task 10, Task 11, Task 12, Task 13, Task 14, Task 15
+
+### Task 17: Every member runs CI, and a child's default disposition passes release metadata
+**Story:** 7
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/structural/stacked-ci-trigger.test.ts`, which parses the workflow YAML, and in `src/conductor/test/engine/release-metadata-check-action.test.ts`.
+2. Verify RED.
+3. Implement: in `.github/workflows/ci.yml`, `on.pull_request.branches: [main, 'feat/c*/**']`. Release metadata needs no change. The test locks the existing behavior.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] the structural test asserts `.github/workflows/ci.yml`'s `pull_request` trigger lists branches `main` and `feat/c*/**`, so a PR whose base is `feat/c1/demo` triggers the `ci` workflow and its `ci-gate` job.
+- [test] the structural test asserts `release-metadata.yml` and `shipped-record.yml` have no branch filter, and `release-metadata` still skips drafts and runs on `ready_for_review`, so a child is validated at its ready flip.
+- [test] `runReleaseMetadataCheckAction` on a child body carrying the template-default `Release-Disposition: no-note` succeeds and applies no `semver:` label.
+
+**Files likely touched:**
+- `.github/workflows/ci.yml` — branches filter
+- `src/conductor/test/structural/stacked-ci-trigger.test.ts`, `src/conductor/test/engine/release-metadata-check-action.test.ts` — tests
+
+**Dependencies:** none
+
+### Task 18: A child head is never an implementation PR at premerge
+**Story:** 7
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/shipment-association.test.ts` and `src/conductor/test/engine/shipment-evidence-cli.test.ts`, using child, leaf, `feature/x` and missing-head event payloads.
+2. Verify RED.
+3. Implement:
+   - `classifyShipmentAssociation` takes `pr.headRef`, and returns `not-applicable` classification `stack-child` when `parseFeatureBranch(headRef).kind === 'child'`, before path or declaration checks;
+   - `readPullRequestEventMetadata` decodes `pull_request.head.ref`;
+   - a missing head ref throws a named error, so the check exits non-zero.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `classifyShipmentAssociation` with head ref `feat/c3/demo` returns `not-applicable` classification `stack-child` before reading body declarations, including for a body carrying `Plan: .docs/plans/demo.md`.
+- [test] `shipment-evidence` in premerge mode on a child event reports `shipped-record: not applicable (stack-child)` and exits 0, including when the child body carries `Plan: .docs/plans/demo.md`, and on the leaf event it classifies by the `Plan:` declaration and requires the shipped record as today.
+- [test] when the event payload lacks `pull_request.head.ref`, the premerge check exits non-zero with an error naming the missing head ref.
+- [test] a PR whose head is `feature/x` is classified exactly as today's shipment-association fixtures expect.
+
+**Files likely touched:**
+- `src/conductor/src/engine/shipment-association.ts` — `stack-child` rule
+- `src/conductor/src/engine/shipment-evidence-cli.ts` — event decoder head ref
+- `src/conductor/test/engine/shipment-association.test.ts`, `src/conductor/test/engine/shipment-evidence-cli.test.ts` — tests
+
+**Dependencies:** none
+
+### Task 19: Reconcile and audit carry the head ref and never repair a child
+**Story:** 7
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/shipment-reconcile-action.test.ts`, `src/conductor/test/engine/shipment-audit.test.ts` and `src/conductor/test/engine/shipment-evidence-cli.test.ts`.
+2. Verify RED.
+3. Implement:
+   - `readPullRequestEvidenceMetadata` requests `headRefName`;
+   - the audit GraphQL selects `headRefName`;
+   - the reconcile REST adapter keeps `head.ref`;
+   - each passes `headRef` to `classifyShipmentAssociation`;
+   - a missing head ref yields `unclassified` and no `publishRecordOnlyRepair`.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] the CLI metadata reader, the event decoder, the audit GraphQL query and the reconcile REST adapter each supply the head ref to `classifyShipmentAssociation`, asserted per adapter.
+- [test] reconcile and audit on a merged child whose body carries `Plan: .docs/plans/demo.md`, or mentions that path in prose, classify it `stack-child`, open no record-only repair PR, and write no `.docs/shipped/demo.md`.
+- [test] reconcile or audit without a readable head ref opens no repair and reports the PR as unclassified.
+
+**Files likely touched:**
+- `src/conductor/src/engine/shipment-evidence-cli.ts` — metadata reader
+- `src/conductor/src/engine/shipment-audit.ts` — audit query
+- `src/conductor/src/engine/shipment-reconcile-action.ts` — reconcile adapter
+- `src/conductor/test/engine/shipment-reconcile-action.test.ts`, `src/conductor/test/engine/shipment-audit.test.ts`, `src/conductor/test/engine/shipment-evidence-cli.test.ts` — tests
+
+**Dependencies:** Task 18
+
+### Task 20: The stack-tip-diverged halt class is recorded and never re-kicked
+**Story:** 10
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/halt-marker.test.ts`, `src/conductor/test/engine/halt-record.test.ts` and `src/conductor/test/engine/daemon-rekick.test.ts`.
+2. Verify RED.
+3. Implement:
+   - add `stack-tip-diverged` to the `HaltClass` union, the `readHaltClass` allowlist and the operator-action set in `halt-marker.ts`;
+   - add it to `isRecordableHaltClass` in `halt-record.ts` and to `RETAINED_HALT_CLASSES` in `daemon-rekick.ts`;
+   - add `haltStackTipDiverged(members)` in `stack-publication.ts`, which writes the HALT and emits `stack_tip_diverged`.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `readHaltClass` accepts `stack-tip-diverged`, `isRecordableHaltClass('stack-tip-diverged')` is true, and the class is in the operator-action set.
+- [test] `RETAINED_HALT_CLASSES` contains `stack-tip-diverged`, and a re-kick sweep over a feature halted with it skips the feature and does not re-dispatch it.
+- [test] `haltStackTipDiverged` writes a `stack-tip-diverged` HALT whose record names every mismatched member, and emits one `stack_tip_diverged` event naming them.
+
+**Files likely touched:**
+- `src/conductor/src/engine/halt-marker.ts` — class union and allowlist
+- `src/conductor/src/engine/halt-record.ts` — recordable set
+- `src/conductor/src/engine/daemon-rekick.ts` — retained set
+- `src/conductor/src/engine/stack-publication.ts` — `haltStackTipDiverged`
+- `src/conductor/test/engine/halt-marker.test.ts`, `src/conductor/test/engine/halt-record.test.ts`, `src/conductor/test/engine/daemon-rekick.test.ts` — tests
+
+**Dependencies:** none
+
+### Task 21: The tip guard at executeRemoteGit allows only a verified fast-forward
+**Story:** 10
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-tip-guard.test.ts`, which go through `executeRemoteGit`, with a real-git bare `origin` and server-side rewrites simulated by direct `update-ref` on `origin`. Mock nothing below `executeRemoteGit`'s git runner, and assert the argv.
+2. Verify RED.
+3. Implement `stack-tip-guard.ts` `guardPublishedStackWrite(slug, destination, source)`. It is called from `executeRemoteGit` for any destination that is a member branch of a slug with an active record, and from the `pull-request.retarget` path:
+   1. Recover push intents as `push-lease.ts` does.
+   2. Run one `ls-remote` over every member.
+   3. Compare each tip with its pushed tip.
+   4. Require `merge-base --is-ancestor <recorded> <source>`.
+
+   It returns `allow` or `refuse{members}`. A `tornDown` record is ignored.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with every member's remote tip equal to its recorded pushed tip, a push to `feat/daemon-demo` that fast-forwards the recorded tip proceeds through `executeRemoteGit` with an explicit expected-SHA lease and records the new tip.
+- [test] with a push intent outstanding for `feat/c1/demo` whose new SHA equals the remote, the guard adopts the intent first, then compares the tips, and does not refuse.
+- [test] with every tip matching, a push whose source does not contain the recorded tip is refused and the remote branch is unchanged.
+- [test] with #c3 and #500 rewritten on `origin`, a FINISH publication push or `pull-request.retarget` is refused, the feature halts `stack-tip-diverged` naming positions 3 and 5, and `stack_tip_diverged` is emitted.
+- [test] the guard runs only on writes: a sweep read of the stack after the operator merges the remaining members writes no HALT, and a `tornDown` record never causes a refusal.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-tip-guard.ts` — new guard
+- `src/conductor/src/engine/remote-git-operations.ts` — guard call
+- `src/conductor/test/engine/stack-tip-guard.test.ts` — tests
+
+**Dependencies:** Task 3, Task 20
+
+### Task 22: Each caller maps a guard refusal, and agents cannot publish children
+**Story:** 10
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests:
+   - `src/conductor/test/engine/halt-record.test.ts`: the push skip;
+   - `src/conductor/test/engine/post-finish-shipped-record.test.ts`;
+   - `src/conductor/test/engine/github-operations-cli.test.ts`: the mismatch refusal, and the refusal of an unrecorded child push or bind.
+
+   Mock the gh runner boundary and assert refused calls never reach it.
+2. Verify RED.
+3. Implement:
+   - `halt-record.ts` maps a guard refusal to `halt_record_push_failed` with reason `stack-tip-mismatch`, keeping the ahead-of-remote note;
+   - `post-finish-shipped-record.ts` logs a skip;
+   - `github-operations-cli.ts` refuses a mismatch with a stack-tip reason, and refuses a push of, or a PR bind to, a `feat/c<p>/<slug>` the record does not list.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with the tips mismatched, the halt-record push is skipped, `halt_record_push_failed` is emitted with reason `stack-tip-mismatch`, the record keeps its may-be-ahead-of-the-remote note, and no further HALT is written.
+- [test] with the tips mismatched, `refreshPostFinishShippedRecord` skips its push, logs the skip, and keeps the local commit.
+- [test] with the tips mismatched, an agent push to `feat/daemon-demo` through `conduct github-operation` is refused with a reason naming the stack tip mismatch.
+- [test] with the record not listing position 3, `conduct github-operation` refuses a push of `feat/c3/demo` and a PR bind to it, and the gh runner is never called.
+
+**Files likely touched:**
+- `src/conductor/src/engine/halt-record.ts` — refusal mapping
+- `src/conductor/src/engine/post-finish-shipped-record.ts` — skip
+- `src/conductor/src/engine/github-operations-cli.ts` — refusals
+- `src/conductor/test/engine/halt-record.test.ts`, `src/conductor/test/engine/post-finish-shipped-record.test.ts`, `src/conductor/test/engine/github-operations-cli.test.ts` — tests
+
+**Dependencies:** Task 21
+
+### Task 23: Every restack producer and route admission refuses a published stack
+**Story:** 10
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests:
+   - `src/conductor/test/engine/conductor-finish-rebase-published.test.ts`;
+   - `src/conductor/test/engine/daemon-rekick-published.test.ts`;
+   - `src/conductor/test/engine/restack/stack-preflight-published.test.ts`;
+   - `src/conductor/test/engine/routing/round-admission-published.test.ts`.
+2. Verify RED.
+3. Implement `publishedStackRefusal(slug)` in `stack-publication.ts`, which uses `activePublicationRecord`. Call it:
+   - in the FINISH `rebase` step and the re-kick base refresh: emit `restack_refused` `published-stack`, move nothing, and continue;
+   - in the stack preflight's `feature-repair` restack and the routed-exit restack: refuse and halt `needs-human` naming the child;
+   - in route admission: refuse before any `routes/` ref is written.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with the record holding members, the FINISH `rebase` step and the re-kick base refresh each emit `restack_refused` reason `published-stack`, move no ref, and continue: FINISH selects its next step and re-kick retries its gate on the current base.
+- [test] with a commit past child 1's closure, the stack preflight's `feature-repair` restack and the routed-exit restack refuse with `published-stack`, move no ref, and the feature halts `needs-human` naming position 1.
+- [test] with the record holding members, route admission refuses a new round naming `published-stack` and creates no `refs/conductor/demo/routes/` ref.
+- [test] with a `tornDown` record, none of these refusals fires, and the restack and route admission run as today.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-publication.ts` — `publishedStackRefusal`
+- `src/conductor/src/engine/conductor.ts` — FINISH rebase
+- `src/conductor/src/engine/daemon-rekick.ts` — base refresh
+- `src/conductor/src/engine/restack/stack-preflight.ts` — repair restack
+- `src/conductor/src/engine/routing/round-admission.ts` — admission
+- `src/conductor/test/engine/conductor-finish-rebase-published.test.ts`, `src/conductor/test/engine/daemon-rekick-published.test.ts`, `src/conductor/test/engine/restack/stack-preflight-published.test.ts`, `src/conductor/test/engine/routing/round-admission-published.test.ts` — tests
+
+**Dependencies:** Task 3
+
+### Task 24: ci-fix is ineligible for a stacked feature's leaf
+**Story:** 10
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/ci-fix-published-stack.test.ts`.
+2. Verify RED.
+3. Implement: the ci-fix candidate check in `ci-fix.ts` (and its sweep caller in `mergeable-sweep.ts`) consults `activePublicationRecord`. When the record has members, the entry escalates through the same `published-stack` path autoresolve uses (`autoresolve.ts`), and nothing is dispatched.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with the record holding members and #500's checks failed, the sweep's ci-fix eligibility returns ineligible and escalates through autoresolve's `published-stack` path, and no ci-fix dispatch is recorded.
+- [test] an N=1 PR with failed checks is still collected as a ci-fix candidate exactly as today's ci-fix fixtures expect.
+
+**Files likely touched:**
+- `src/conductor/src/engine/ci-fix.ts` — eligibility
+- `src/conductor/src/engine/mergeable-sweep.ts` — candidate collection
+- `src/conductor/test/engine/ci-fix-published-stack.test.ts` — tests
+
+**Dependencies:** Task 3
+
+### Task 25: Only the leaf merging ships, and every member is proven on main
+**Story:** 8
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/mergeable-sweep-stack-ship.test.ts`, with a real-git `origin`, squash commits per member, and a fake `gh`. Add a backlog dedup case to `src/conductor/test/engine/daemon-backlog.test.ts`.
+2. Verify RED.
+3. Implement in `mergeable-sweep.ts`. After the unchanged shipped-record gate passes for a stacked entry:
+   1. remove the worktree;
+   2. run `verifyMemberReachability(record)`: each member is merged, and its `merge_commit_sha` passes `merge-base --is-ancestor <sha> origin/main`.
+
+   A lower-prefix merge never passes the gate.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with the stack merged in one go, the sweep sees #500 merged and `.docs/shipped/demo.md` on `origin/main`, `verifyMemberReachability` finds #c1, #c3 and #500 merged with their squash commits ancestors of `origin/main`, and exactly one shipped record exists for `demo`.
+- [test] after the leaf merged, `daemon-backlog` dedups `demo` as shipped and never re-dispatches it.
+- [test] with only #c1 merged, the sweep finds no shipped record on `main`, makes no teardown call, keeps the worktree and every branch, deletes no ref, retains the watch entry, and records no intake close call.
+
+**Files likely touched:**
+- `src/conductor/src/engine/mergeable-sweep.ts` — stacked reap path
+- `src/conductor/src/engine/stack-publication.ts` — `verifyMemberReachability`
+- `src/conductor/test/engine/mergeable-sweep-stack-ship.test.ts`, `src/conductor/test/engine/daemon-backlog.test.ts` — tests
+
+**Dependencies:** Task 3
+
+### Task 26: Unreachable, unreadable and dissolved stacks are reported and kept
+**Story:** 8
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/mergeable-sweep-stack-ship.test.ts`. The fixtures are an unreachable member, a failing member read, and a leaf merged into a child branch.
+2. Verify RED.
+3. Implement:
+   - emit `stack_members_unreachable` once, then CAS-write `unreachableReported` and `tornDown`, and keep that member's branch;
+   - on an indeterminate read, retain the entry and delete nothing;
+   - for a dissolved stack, the leaf merged into a child branch never satisfies the gate.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with #c3's squash commit not an ancestor of `origin/main`, `stack_members_unreachable` names #c3 exactly once across two sweeps, the record is marked `unreachableReported` and `tornDown`, and `feat/c3/demo` survives.
+- [test] a failing member-state read during reachability removes the worktree in that pass, retains the watch entry, and deletes no child branch or conductor ref.
+- [test] with #500 merged into `feat/c3/demo` after the stack was dissolved, no shipped record exists on `origin/main`, and no teardown call is made.
+
+**Files likely touched:**
+- `src/conductor/src/engine/mergeable-sweep.ts` — retention paths
+- `src/conductor/src/engine/stack-publication.ts` — report receipt
+- `src/conductor/test/engine/mergeable-sweep-stack-ship.test.ts` — tests
+
+**Dependencies:** Task 2, Task 25
+
+### Task 27: Non-leaf member lifecycle is reported at least once and changes nothing
+**Story:** 9
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/mergeable-sweep-stack-lifecycle.test.ts`. The fixtures are a merged #c1, a closed #c3, a revert PR, a crash between emit and CAS, an unchanged state, and an N=1 entry.
+2. Verify RED.
+3. Implement in `mergeable-sweep.ts`. For a stacked entry whose leaf is open:
+   1. run one `stack.read`, then each member's state;
+   2. for merged members, search for a merged PR carrying `Reverts <repo>#<n>`;
+   3. on a new state, emit `stack_member_lifecycle` with a deterministic `eventId` (`<slug>:<position>:<state>`), then CAS-write `lastSeen`.
+
+   An N=1 entry makes no stack read.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with #500 open and #c1 merged, a sweep emits one `stack_member_lifecycle` with `child` 1, PR #c1, state `merged` and a deterministic `eventId`, then CAS-writes `lastSeen` `merged` for position 1.
+- [test] #c3 closed unmerged yields one event with state `closed` for position 3, and #c1 merged with a later merged PR on `main` carrying `Reverts jstoup111/ai-conductor#c1` yields one event with state `reverted` for position 1.
+- [test] a crash after emitting the `merged` event and before the `lastSeen` write re-emits it with the same `eventId` on the next sweep and the persisted ledger holds it once, and a member whose state is unchanged emits nothing.
+- [test] after any lifecycle event the feature's shipped record, intake issue state, worktree, child branches, conductor refs and the record's `tornDown` mark are unchanged, and an N=1 entry's sweep records no stack read and no `stack_*` event.
+
+**Files likely touched:**
+- `src/conductor/src/engine/mergeable-sweep.ts` — lifecycle observation
+- `src/conductor/test/engine/mergeable-sweep-stack-lifecycle.test.ts` — tests
+
+**Dependencies:** Task 2, Task 3
+
+### Task 28: Teardown deletes child branches by name under the stack-member proof
+**Story:** 11
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/stack-teardown.test.ts` and `src/conductor/test/engine/restack/restack-refs-cleanup.test.ts`, with a real-git fixture. Record the deletion argv, and inject a delete failure.
+2. Verify RED.
+3. Implement `stack-teardown.ts` `deleteStackChildren(slug, record)`:
+   1. take the sealed child positions from the positions ref;
+   2. for each, check the member is reachable and the local tip equals its merged `headRefOid`;
+   3. `update-ref -d refs/heads/feat/c<p>/<slug> <tip>`;
+   4. stop at the first failure.
+
+   Wire it into the sweep reap after Task 26's reachability check. When every child is deleted, delete `refs/conductor/<slug>/positions` and `refs/conductor/<slug>/publication` by explicit name, last, in this path only. They stay out of the shared `featureConductorRefNames` list that park reconciliation uses. Any kept member marks the record `tornDown`.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] with #500 merged, the record on `main`, every member reachable and each local child tip equal to its merged PR's `headRefOid`, the reap removes the worktree, deletes `feat/c1/demo` and `feat/c3/demo` by name with those tips as compare-and-swap expected values, then deletes the conductor refs, including `positions` and `publication`, in that order.
+- [test] a local `feat/c1/demo` with a commit past #c1's merged head is kept and the record is kept marked `tornDown`, and an unreachable #c3 keeps `feat/c3/demo` and marks the record `tornDown` while `feat/c1/demo` is deleted.
+- [test] a failed delete of `feat/c1/demo` stops the remaining deletes and retains the watch entry so the next sweep retries, and `feat/c7/demo`, which is not a sealed position, is never deleted.
+- [test] `deleteStackChildren`'s all-deleted path deletes `refs/conductor/demo/positions` and `refs/conductor/demo/publication` by name, and `featureConductorRefNames('demo')` includes neither.
+
+**Files likely touched:**
+- `src/conductor/src/engine/stack-teardown.ts` — child deletion
+- `src/conductor/src/engine/mergeable-sweep.ts` — reap wiring
+- `src/conductor/src/engine/restack/restack-refs-cleanup.ts` — unchanged shared list, asserted
+- `src/conductor/test/engine/stack-teardown.test.ts`, `src/conductor/test/engine/restack/restack-refs-cleanup.test.ts` — tests
+
+**Dependencies:** Task 26
+
+### Task 29: Reclaim deletes children only after the leaf ships, and park never does
+**Story:** 11
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/daemon-park-cli-reclaim-stack.test.ts` and `src/conductor/test/engine/park-reconciliation.test.ts`.
+2. Verify RED.
+3. Implement: `reclaim-worktree` in `daemon-park-cli.ts` calls `deleteStackChildren` only when `shippedRecordOnMain` is `present` and reachability passes. Otherwise it removes the worktree as today and CAS-marks the record `tornDown`. Park reconciliation (`reconcileMergedPark` in `park-reconciliation.ts`) still deletes no child branch. It now CAS-marks any active record `tornDown` when it reclaims a stacked slug.
+4. Verify GREEN, commit.
+
+**Done when:**
+- [test] `reclaim-worktree demo` with the shipped-record gate and reachability passing deletes `feat/c1/demo`, `feat/c3/demo` and the conductor refs by name, exactly as the sweep reap does.
+- [test] `reclaim-worktree demo` with #500 closed unmerged removes the worktree as today, keeps `feat/c1/demo` and `feat/c3/demo`, and marks the record `tornDown`.
+- [test] park reconciliation of a parked `demo` deletes no child branch, as today, and `reconcileMergedPark` on a merged stacked `demo` with kept children deletes neither `refs/conductor/demo/positions` nor `refs/conductor/demo/publication` and marks the record `tornDown`.
+
+**Files likely touched:**
+- `src/conductor/src/engine/daemon-park-cli.ts` — reclaim
+- `src/conductor/src/engine/park-reconciliation.ts` — mark the record torn down
+- `src/conductor/test/engine/daemon-park-cli-reclaim-stack.test.ts`, `src/conductor/test/engine/park-reconciliation.test.ts` — tests
+
+**Dependencies:** Task 28
+
+## Verification
+
+- [ ] All happy path criteria covered by at least one task
+- [ ] All negative path criteria covered by at least one task
+- [ ] No task exceeds 5 minutes of work
+- [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
+- [ ] Dependencies are explicit and acyclic
+- [ ] Tasks do not invalidate each other's fixtures or assertions

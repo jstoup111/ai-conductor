@@ -65,6 +65,8 @@ template entirely (`ship-draft-pr.ts` hard-codes a `/pr` shape).
    dispatches, the engine idempotently inserts the template's region into the retained draft when
    the markers are absent (a reused halt PR, a pull request opened before seeding). The step fills
    content between existing markers and never authors markers.
+   > **Amended 2026-10-17 by #2945:** In a stacked feature only the leaf's retained draft is a region target. A child PR's body is rendered by the engine, not seeded as a SHIP draft. It carries every project-owned region at its template default, and no owning step runs for it (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 6).
+
 5. **Capture happens when the owning step succeeds.** When an owning step reports `done`, the engine
    reads the retained draft body and captures the region's exact bytes, persisted under `.pipeline/`
    keyed by pull request URL and step key with the guarded-write discipline of
@@ -77,6 +79,8 @@ template entirely (`ship-draft-pr.ts` hard-codes a `/pr` shape).
    > Config load rejects a region whose owning step inherits a phase earlier than SHIP from its
    > `after:` target, naming the step and the rule. Opening the draft earlier was considered and
    > rejected.
+   > **Amended 2026-10-17 by #2945:** No capture is ever taken from a child PR; captures stay keyed to the leaf's PR URL (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 6).
+
 6. **Every FINISH body rewrite re-inserts every captured region byte-for-byte.** The prose authoring
    effect and the judge's repair effect re-insert regions before their revision is observed, so the
    judged revision already carries them; the body floor, halt-PR rehabilitation, and the finish
@@ -84,15 +88,21 @@ template entirely (`ship-draft-pr.ts` hard-codes a `/pr` shape).
    go through the guarded GitHub operation boundary of `adr-2026-09-11-github-operation-ownership`.
    No new publication transition is added, so `adr-2026-08-13-a-publication-transition-advances-only-when-it-moves-the-dimension-it-owns`
    holds unchanged.
+   > **Amended 2026-10-17 by #2945:** `assemble_stack`'s re-render of the leaf's `## Stack` section is a FINISH body rewrite, and it re-inserts every captured region byte for byte (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 6).
+
 7. **Regions are verified before the ready flip.** Immediately before any ready-for-review flip, the
    engine re-reads the body and compares every captured region; a mismatch it cannot repair halts
    the run naming the step, and the pull request stays draft.
    > **Amended 2026-09-24 by #2616:** D7 governs FINISH's ready-for-review flips — the production
    > `ready_pr` presentation repair and the finish completion repair. The daemon's clear-on-success
    > un-draft runs only after FINISH has already verified every region and is not a verification point.
+   > **Amended 2026-10-17 by #2945:** In a stacked feature this verification runs before each member's flip. A child is verified against its template-default regions and its engine-authored postconditions, and its flip runs only `ensureShipReady`, never the leaf's presentation repair (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decisions 6, 7).
+
 8. **Engine-owned sections stay engine-owned.** Reduced build-review coverage, accepted risk, the
    plan declaration line, and the closing reference keep their existing upsert paths and can never
    be claimed by a template region.
+   > **Amended 2026-10-17 by #2945:** `## Stack`, the ordered member navigation the engine renders on every member of a stacked feature, is an engine-owned section (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 6).
+
 9. **The `Release-*` snapshot is retired.** This repository's `release-disposition` step declares its
    region in `.github/pull_request_template.md` and becomes an ordinary region owner; the self-host
    snapshot/restore and `.pipeline/release-metadata-snapshot.json` are deleted, leaving no engine code

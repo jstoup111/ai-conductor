@@ -61,6 +61,8 @@ to be a separate artifact.
 
 > **Amended 2026-10-10 by #2943:** An expected-SHA lease refusal, or a failed single-branch fetch or remote read before the push, is one more push failure: the commit is kept, `halt_record_push_failed` (and `push_lease_refused` on refusal) is emitted, and nothing throws (decision 11) (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
+   > **Amended 2026-10-17 by #2945:** For a feature with published stack members, the push also passes the stack tip guard. On a mismatch the push is skipped, `halt_record_push_failed` is emitted with reason `stack-tip-mismatch`, and the record keeps its "may be ahead of the remote" note. A halt record is still never pushed to a child branch (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
+
 6. **Nothing in this path may throw.** The seam's existing contract ("a failed write must not
    crash the finish flow") extends unchanged over the record. Every arm returns a result;
    failures are reported as events, never propagated.

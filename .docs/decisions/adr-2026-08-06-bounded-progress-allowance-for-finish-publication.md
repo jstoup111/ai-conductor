@@ -47,6 +47,9 @@ The HALT class stays `needs-human`, matching the existing publication-exhaustion
 > no change of substance. Each id names a decision exactly as already stated above.
 >
 > **D1** — Bound the non-charging re-entry with a single engine-level total progress allowance: a counter of publication advances that bypassed the retry budget, checked against a fixed ceiling of twice the number of publication transitions, which also records the last transition seen so the HALT reason names where the run stopped (above: "Bound the non-charging re-entry with a single engine-level limit")
+>
+> > **Amended 2026-10-17 by #2945:** "The number of publication transitions" is the number the feature's publication can select: seven for a non-stacked feature, and nine for a stacked one (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 1).
+>
 > **D2** — The counter is scoped to a single `finish` step execution and resets when the step is re-entered from outside, exactly as `progressAttempts` does (above: "The counter is scoped to a single `finish` step execution")
 > **D3** — A per-transition stuck cap is deliberately NOT part of this decision; it is recorded as an available follow-up (above: "**A per-transition stuck cap is deliberately NOT part of this decision.**")
 > **D4** — The HALT class stays `needs-human`, matching the existing publication-exhaustion HALT (above: "The HALT class stays `needs-human`")
