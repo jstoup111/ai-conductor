@@ -14,20 +14,26 @@ import { validatedReroute, type RouteRecord, type RoundId } from './route-types.
  * intentionally closed: a provider cannot smuggle an unrecognised outcome
  * into the movement path.
  */
+const PREREQUISITE_CLAIM_CONTRACT = {
+  completed: 'completed',
+  blocked: 'blocked-by-prerequisite',
+  optionalFields: ['paths', 'symbols'] as const,
+} as const;
+
 export const PREREQUISITE_CLAIM_SCHEMA = {
   oneOf: [
     {
       type: 'object',
       additionalProperties: false,
       required: ['outcome'],
-      properties: { outcome: { const: 'completed' } },
+      properties: { outcome: { const: PREREQUISITE_CLAIM_CONTRACT.completed } },
     },
     {
       type: 'object',
       additionalProperties: false,
       required: ['outcome', 'child'],
       properties: {
-        outcome: { const: 'blocked-by-prerequisite' },
+        outcome: { const: PREREQUISITE_CLAIM_CONTRACT.blocked },
         child: { type: 'integer', minimum: 1 },
         paths: { type: 'array', items: { type: 'string', minLength: 1 } },
         symbols: { type: 'array', items: { type: 'string', minLength: 1 } },
@@ -58,10 +64,10 @@ export function parseBuilderClaim(result: unknown): ParsedBuilderClaim {
   if (result === undefined || result === null) return { kind: 'none' };
   if (typeof result !== 'object' || Array.isArray(result)) return { kind: 'malformed' };
   const value = result as Record<string, unknown>;
-  if (value.outcome === 'completed' && Object.keys(value).length === 1) return { kind: 'none' };
-  if (value.outcome !== 'blocked-by-prerequisite') return { kind: 'malformed' };
-  if (!Object.keys(value).every((key) => key === 'outcome' || key === 'child' || key === 'paths' || key === 'symbols')) return { kind: 'malformed' };
-  const child = (typeof value.child === 'string' || typeof value.child === 'number')
+  if (value.outcome === PREREQUISITE_CLAIM_CONTRACT.completed && Object.keys(value).length === 1) return { kind: 'none' };
+  if (value.outcome !== PREREQUISITE_CLAIM_CONTRACT.blocked) return { kind: 'malformed' };
+  if (!Object.keys(value).every((key) => key === 'outcome' || key === 'child' || PREREQUISITE_CLAIM_CONTRACT.optionalFields.includes(key as 'paths' | 'symbols'))) return { kind: 'malformed' };
+  const child = typeof value.child === 'number' && Number.isInteger(value.child)
     ? parseChildId(value.child)
     : undefined;
   if (!child) return { kind: 'malformed' };

@@ -1,5 +1,5 @@
-import { readFile, readdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { parseChildId, type ChildId } from '../child-context.js';
 import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
 import { parsePlanTaskBodies } from '../plan-task-parse.js';
@@ -44,29 +44,19 @@ function parseCachedRemediationChild(value: unknown): ChildId | undefined {
 }
 
 /**
- * Reads the active plan without relying on the volatile engine-state cache.
- * The recorded active plan is authoritative when present; a recreated
- * worktree may instead have one unambiguous plan on disk.
+ * Reads this feature's committed plan without relying on a disposable cache.
+ * A repository may hold many plans, so recovery must never infer membership
+ * from an unscoped directory listing.
  */
 async function readCommittedPlanText(projectRoot: string): Promise<string | undefined> {
   try {
     const state = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8')) as Record<string, unknown>;
-    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
-      const planPath = isAbsolute(state.activePlanPath)
-        ? state.activePlanPath
-        : join(projectRoot, state.activePlanPath);
-      return await readFile(planPath, 'utf8');
-    }
+    const slug = state.feature_desc;
+    if (typeof slug !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) return undefined;
+    return await readFile(join(projectRoot, '.docs', 'plans', `${slug}.md`), 'utf8');
   } catch {
-    // Recreated worktrees legitimately have no engine state.
-  }
-
-  try {
-    const plansDir = join(projectRoot, '.docs', 'plans');
-    const candidates = (await readdir(plansDir)).filter((name) => name.endsWith('.md'));
-    if (candidates.length !== 1) return undefined;
-    return await readFile(join(plansDir, candidates[0]!), 'utf8');
-  } catch {
+    // A lost engine-state/plan pair is unreadable; guessing from another
+    // feature's plan would assign a remediation task to the wrong child.
     return undefined;
   }
 }
@@ -103,13 +93,6 @@ export async function readCommittedRemediationTaskChildren(
       return child === undefined ? [] : [[taskId, child]];
     }),
   );
-}
-
-/** Lists every rem task declared in the committed plan, including malformed or absent Child lines. */
-export async function readCommittedRemediationTaskIds(projectRoot: string): Promise<string[]> {
-  const planText = await readCommittedPlanText(projectRoot);
-  if (planText === undefined) return [];
-  return [...parsePlanTaskBodies(planText).keys()].filter(isEngineAppendedRemediationTaskId);
 }
 
 /**

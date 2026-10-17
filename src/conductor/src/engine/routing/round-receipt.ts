@@ -16,7 +16,7 @@ import {
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseChildId } from '../child-context.js';
 import { readRouteRecord, writeRouteRecord } from './route-record-store.js';
-import { parseRoundId, routingEligible, type RoundId, type RouteRecord } from './route-types.js';
+import { parseRoundId, routingEligible, WHOLE_FEATURE_BUDGET_GATES, type ReceiptLapCharges, type RoundId, type RouteRecord, type TasklessReceiptGate } from './route-types.js';
 
 /** The caller-established routing context required before receipt refs are read. */
 export interface ReceiptRoutingScope {
@@ -153,14 +153,10 @@ function defaultGateEntry() {
   return { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, adjustmentsKnown: true };
 }
 
-function receiptCharges(record: RouteRecord): { laps: Record<string, number>; growth: number } {
-  // New route writers persist gate laps in the receipt at admission.  Keep a
-  // conservative fallback for records created by the initial dark launch:
-  // those were prd-audit remediation records and must not become free work.
-  const laps = { ...(record.receipt.laps ?? {}) };
-  if (Object.keys(laps).length === 0 && Object.values(record.allocation).some((allocation) => allocation.remTaskIds.length > 0)) {
-    laps.prd_audit = 1;
-  }
+function receiptCharges(record: RouteRecord): { laps: ReceiptLapCharges; growth: number } {
+  // A route records its originating charges at admission. An empty receipt is
+  // an existing-task/no-allocation round, never an implicit prd_audit charge.
+  const laps = record.receipt.laps ?? {};
   const allocated = Object.values(record.allocation).reduce((count, allocation) => count + allocation.remTaskIds.length, 0);
   // The record parser normalizes an empty receipt to `growth: 0`; that is a
   // legacy placeholder, not an authorization to make frozen rem blocks free.
@@ -177,7 +173,9 @@ function applySettledReceiptToLedger(ledger: KickbackLedger, record: RouteRecord
   if (!settlementId) return ledger;
   const charges = receiptCharges(record);
   const gates = { ...ledger.gates };
-  for (const [gate, laps] of Object.entries(charges.laps)) {
+  for (const gate of WHOLE_FEATURE_BUDGET_GATES) {
+    const laps = charges.laps[gate];
+    if (laps === undefined) continue;
     const entry = gates[gate] ?? defaultGateEntry();
     gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
   }
@@ -208,8 +206,10 @@ function nextLedgerForReceipt(
   if (!baseGrowth) return { ledger, exhausted: { gate: 'prd_audit', allowance: 'growth' } };
   const growth: PlanGrowthRecord = { authored: baseGrowth.authored, added: baseGrowth.added, byGate: { ...baseGrowth.byGate } };
   let growthCap = budgets[0]?.growthCap;
-  for (const [gate, laps] of Object.entries(charges.laps)) {
-    const budget = budgetByGate.get(gate as PendingRepairSettlementBudget['gate']);
+  for (const gate of WHOLE_FEATURE_BUDGET_GATES) {
+    const laps = charges.laps[gate];
+    if (laps === undefined) continue;
+    const budget = budgetByGate.get(gate);
     if (!budget) return { ledger, exhausted: { gate, allowance: 'laps' } };
     const entry = gates[gate] ?? defaultGateEntry();
     const lapCap = entry.effectiveLapCap ?? budget.lapCap;
@@ -313,7 +313,7 @@ export async function chargeTasklessAtAdmission(input: {
   readonly projectRoot: string;
   readonly slug: string;
   readonly roundId: RoundId;
-  readonly gate: string;
+  readonly gate: TasklessReceiptGate;
   readonly routing: ReceiptRoutingScope;
   readonly git?: GitRunner;
 }): Promise<{ readonly kind: 'charged'; readonly count: number } | { readonly kind: 'exhausted'; readonly count: number } | { readonly kind: 'halted'; readonly reason: string }> {

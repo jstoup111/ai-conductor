@@ -97,6 +97,8 @@ describe('routed repair durable record parsers', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { laps: 'x' } }))).toBeUndefined();
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, lapz: {} } }))).toBeUndefined();
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, extra: true } }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, laps: { build_review: 1 } } }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, taskless: { build_review: 1 } } }))).toBeUndefined();
 
     const existingWithoutTaskIds = structuredClone(routeRecord);
     const existing = existingWithoutTaskIds.items[0]! as Record<string, unknown>;

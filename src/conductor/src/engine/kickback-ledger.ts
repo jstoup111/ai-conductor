@@ -1019,20 +1019,11 @@ export async function readGrowthAccounting(
       return { growth: withRemaining(stored, cap), authoredSource };
     }
 
-    // A plan can contain an old unrecorded foreign append from before append
-    // authorization was centralized. Preserve every recorded addition rather
-    // than reclassifying it as authored and refunding its allowance.
+    // The sealed authored denominator is immutable. Re-deriving it from a
+    // leaf plan can silently refund routed growth, so disagreement fails
+    // closed instead of rewriting the denominator.
     if (growthTotalsAgree(stored) && derived.resolved) {
-      const reconciled = {
-        authored: Math.max(0, derived.growth.authored - stored.added),
-        added: stored.added,
-        byGate: { ...stored.byGate },
-      };
-      console.warn('[kickback-ledger] plan count diverged; preserving recorded growth allowance');
-      if (options.persist) {
-        await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
-      }
-      return { growth: withRemaining(reconciled, cap), authoredSource };
+      throw new Error(`stored authored denominator ${stored.authored} disagrees with sealed plan denominator ${derived.growth.authored}`);
     }
 
     console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
