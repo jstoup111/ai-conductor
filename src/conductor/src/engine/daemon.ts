@@ -1293,7 +1293,10 @@ export async function runDaemon(
       }
       await timeMaintenancePhase({ phase: 'parked-reconcile' }, async () => {
         const result = await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight: (slug) => inFlight.has(slug) });
-        return result === undefined ? undefined : { outcome: result.outcome, summary: result.counts };
+        return {
+          outcome: result?.outcome ?? 'completed',
+          summary: result?.counts,
+        };
       }, { now, emit: deps.emitMaintenancePhase });
     }],
     ['sweepProviderScratch', async () => runPhase({ phase: 'provider-scratch' }, async () => { await deps.sweepProviderScratch?.(); })],

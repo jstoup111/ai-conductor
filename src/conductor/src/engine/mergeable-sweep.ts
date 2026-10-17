@@ -345,7 +345,12 @@ function mergeSweepEntry(
     if (key in after) merged[key] = after[key as keyof WatchEntry];
     else delete merged[key];
   }
-  return merged as WatchEntry;
+  return {
+    ...merged,
+    prUrl: fresh.prUrl,
+    slug: fresh.slug,
+    repoCwd: fresh.repoCwd,
+  };
 }
 
 // ── Sweep ─────────────────────────────────────────────────────────────────────

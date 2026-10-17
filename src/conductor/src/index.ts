@@ -1922,6 +1922,16 @@ async function dispatchCliCommand(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Declared pre-dispatch help is read-only and must remain available even to
+  // a daemon-managed session. Handle it before the session guard, so neither
+  // command parsing nor a command handler can touch state just to show help.
+  const subcommandHelp = routeSubcommandHelp(process.argv);
+  if (subcommandHelp !== null) {
+    process.stdout.write(subcommandHelp);
+    process.exitCode = 0;
+    return;
+  }
+
   const outcome = await dispatchCliEntry({
     argv: process.argv,
     environment: process.env,
