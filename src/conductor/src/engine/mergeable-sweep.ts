@@ -332,6 +332,22 @@ export async function updateWatch(
   }
 }
 
+/** Apply only the fields the sweep changed, preserving concurrent updates. */
+function mergeSweepEntry(
+  before: WatchEntry,
+  after: WatchEntry,
+  fresh: WatchEntry,
+): WatchEntry {
+  const merged: Record<string, unknown> = { ...fresh };
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (Object.is(before[key as keyof WatchEntry], after[key as keyof WatchEntry])) continue;
+    if (key in after) merged[key] = after[key as keyof WatchEntry];
+    else delete merged[key];
+  }
+  return merged as WatchEntry;
+}
+
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -1021,19 +1037,37 @@ export async function sweepMergeableLabels({
       }
     }
 
-    // Task 1: cap the persisted registry so it cannot grow without bound.
-    // survivors is append-ordered oldest-first, so trim from the front.
-    const trimmed =
-      survivors.length > MAX_WATCH_ENTRIES ? survivors.slice(-MAX_WATCH_ENTRIES) : survivors;
-    if (trimmed !== survivors) {
-      const dropped = survivors.slice(0, survivors.length - MAX_WATCH_ENTRIES);
-      for (const entry of dropped) {
-        log?.(
-          `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
-        );
+    // Reconcile the sweep result against the lock-protected, current registry.
+    // A concurrent update can land while the asynchronous GitHub work above is
+    // in progress; retain its fields unless this sweep changed that same field.
+    const identity = (entry: WatchEntry): string => `${entry.repoCwd}\0${entry.prUrl}\0${entry.slug}`;
+    const before = new Map(entries.map((entry) => [identity(entry), entry]));
+    const after = new Map(survivors.map((entry) => [identity(entry), entry]));
+    await updateWatch(projectRoot, (freshEntries) => {
+      const currentSurvivors = freshEntries.flatMap((fresh) => {
+        const key = identity(fresh);
+        const original = before.get(key);
+        const updated = after.get(key);
+        // Entries enrolled after the sweep began were never observed by it, so
+        // they survive unchanged. Entries that were observed and omitted were
+        // deliberately pruned by this sweep.
+        if (!original) return [fresh];
+        if (!updated) return [];
+        return [mergeSweepEntry(original, updated, fresh)];
+      });
+      // Task 1: cap the fresh survivor set while holding the same update lock.
+      const trimmed = currentSurvivors.length > MAX_WATCH_ENTRIES
+        ? currentSurvivors.slice(-MAX_WATCH_ENTRIES)
+        : currentSurvivors;
+      if (trimmed.length !== currentSurvivors.length) {
+        for (const entry of currentSurvivors.slice(0, currentSurvivors.length - MAX_WATCH_ENTRIES)) {
+          log?.(
+            `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
+          );
+        }
       }
-    }
-    await updateWatch(projectRoot, () => trimmed);
+      return trimmed;
+    });
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted (FR-15).
     log?.(`[mergeable-sweep] sweep error: ${err}`);
