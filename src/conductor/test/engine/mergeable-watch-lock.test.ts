@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { updateWatch } from '../../src/engine/mergeable-sweep.js';
+import { sweepMergeableLabels, updateWatch } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 
 describe('updateWatch', () => {
@@ -84,5 +84,43 @@ describe('updateWatch', () => {
       entry.slug === 'a' ? { ...entry, ciFixAttempts: 1 } : entry,
     ));
     expect(await readFile(watchPath(), 'utf8')).not.toBe(before);
+  });
+
+  it('preserves an update that lands after sweep observation and before its rewrite', async () => {
+    let releaseStateRead!: () => void;
+    const stateReadMayFinish = new Promise<void>((resolve) => { releaseStateRead = resolve; });
+    let stateReadStarted!: () => void;
+    const stateReadHasStarted = new Promise<void>((resolve) => { stateReadStarted = resolve; });
+
+    const sweep = sweepMergeableLabels({
+      projectRoot,
+      tracker: {
+        readPullRequestMergeState: async () => {
+          stateReadStarted();
+          await stateReadMayFinish;
+          return {
+            state: 'OPEN' as const,
+            mergeable: 'MERGEABLE' as const,
+            checksOutcome: 'green' as const,
+            labels: [],
+            isDraft: false,
+            hasHaltBodyMarker: false,
+          };
+        },
+      },
+    });
+    await stateReadHasStarted;
+
+    await updateWatch(projectRoot, (watch) => watch.map((entry) =>
+      entry.slug === 'a' ? { ...entry, ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1 } : entry,
+    ));
+    releaseStateRead();
+    await sweep;
+
+    const persisted = (await readFile(watchPath(), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as WatchEntry);
+    expect(persisted.find((entry) => entry.slug === 'a')?.ciFixAttempts).toBe(1);
   });
 });

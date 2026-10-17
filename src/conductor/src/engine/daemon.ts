@@ -1056,6 +1056,19 @@ export async function runDaemon(
     observeWorkerSet();
     return true;
   } : undefined;
+  /** Select, claim, and start one repair for a free pool slot. */
+  const startNextRepair = deps.repairs && startRepair ? async (): Promise<RepairRequest | undefined> => {
+    const repair = deps.repairs!.queue.list().slice().sort((a, b) => {
+      const [aRank, aCreated] = repairBand(a);
+      const [bRank, bCreated] = repairBand(b);
+      return aRank - bRank || aCreated.localeCompare(bCreated);
+    })[0];
+    if (!repair || !deps.repairs!.queue.takeByUrl(repair.prUrl)) return undefined;
+    if (await startRepair(repair)) return repair;
+    // A duplicate claim is still live; leave the request available for a later pass.
+    deps.repairs!.queue.enqueue(repair);
+    return undefined;
+  } : undefined;
 
   // Task 1 (#651): park check immediately before every build-start, closing
   // the selection→dispatch race — pickEligible's selection-time check
@@ -1278,17 +1291,10 @@ export async function runDaemon(
         await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight: (slug) => inFlight.has(slug) });
         return;
       }
-      const startedAt = now();
-      try {
+      await timeMaintenancePhase({ phase: 'parked-reconcile' }, async () => {
         const result = await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight: (slug) => inFlight.has(slug) });
-        await deps.emitMaintenancePhase({
-          type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: now() - startedAt,
-          outcome: result?.outcome ?? 'completed', ...(result ? { summary: result.counts } : {}),
-        });
-      } catch (error) {
-        await deps.emitMaintenancePhase({ type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: now() - startedAt, outcome: 'failed' });
-        throw error;
-      }
+        return result === undefined ? undefined : { outcome: result.outcome, summary: result.counts };
+      }, { now, emit: deps.emitMaintenancePhase });
     }],
     ['sweepProviderScratch', async () => runPhase({ phase: 'provider-scratch' }, async () => { await deps.sweepProviderScratch?.(); })],
     ['sweepMergeableLabels', async () => runPhase({ phase: 'mergeable-sweep' }, async () => {
@@ -1598,23 +1604,10 @@ export async function runDaemon(
         // Repairs always receive an available pool slot before a new feature.
         // Sorting is stable by priority band, then oldest PR, independent of
         // enqueue timing; removal happens only after a successful claim.
-        if (deps.repairs && startRepair) {
-          const repairs = deps.repairs.queue.list().slice().sort((a, b) => {
-            const [aRank, aCreated] = repairBand(a);
-            const [bRank, bCreated] = repairBand(b);
-            return aRank - bRank || aCreated.localeCompare(bCreated);
-          });
-          const repair = repairs[0];
-          if (repair && deps.repairs.queue.takeByUrl(repair.prUrl)) {
-            if (await startRepair(repair)) {
-              triggerStartupMaintenance();
-              idlePolls = 0;
-              continue;
-            }
-            // A duplicate claim is still live; leave the request available for
-            // a later pass instead of silently losing it.
-            deps.repairs.queue.enqueue(repair);
-          }
+        if (await startNextRepair?.()) {
+          triggerStartupMaintenance();
+          idlePolls = 0;
+          continue;
         }
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.

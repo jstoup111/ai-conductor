@@ -62,4 +62,23 @@ describe('timeMaintenancePhase', () => {
       outcome: 'skipped-unchanged',
     });
   });
+
+  it('carries a resolved parked-reconcile summary onto the event', async () => {
+    const emit = vi.fn();
+    const summary = { reconciled: 1, deferred: 2, orphaned: 3, parked: 4, refused: 5, skipped: 6 };
+
+    await timeMaintenancePhase(
+      { phase: 'parked-reconcile' },
+      async () => ({ outcome: 'skipped-unchanged' as const, summary }),
+      { now: () => 1, emit },
+    );
+
+    expect(emit).toHaveBeenCalledExactlyOnceWith({
+      type: 'daemon_maintenance_phase',
+      phase: 'parked-reconcile',
+      durationMs: 0,
+      outcome: 'skipped-unchanged',
+      summary,
+    });
+  });
 });
