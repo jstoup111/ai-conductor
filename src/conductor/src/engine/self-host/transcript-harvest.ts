@@ -55,16 +55,9 @@ export type ProviderTranscriptCaptureSource = TranscriptCaptureSource & {
 
 /** Build the one source identity shared by capture naming and retention. */
 export function transcriptCaptureSource(
-  input: TranscriptCaptureSourceFields & { readonly step: StepName | 'unknown-step' },
+  input: TranscriptCaptureSource,
 ): TranscriptCaptureSource {
-  return {
-    runId: input.runId,
-    attempt: input.attempt,
-    ...(input.member === undefined ? {} : { member: input.member }),
-    owner: input.step === 'unknown-step'
-      ? { kind: 'legacy-unknown-step' }
-      : { kind: 'registered-step', step: input.step },
-  };
+  return input;
 }
 
 /** The one naming scheme used by every self-host transcript producer. */

@@ -15,7 +15,8 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import type { StepRunner } from '../../src/engine/step-runner-types.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
-import { transcriptSettlementKey } from '../../src/engine/self-host/transcript-retention.js';
+import { transcriptOwnerDirectory } from '../../src/engine/self-host/transcript-harvest.js';
+import { transcriptOwnerStep, transcriptSettlementKey } from '../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // @ts-expect-error A rubric is a member identity, never a lifecycle StepName.
@@ -559,14 +560,17 @@ describe('conductor transcript retention wiring', () => {
         provider: 'codex', homeDir: root, childEnv: () => ({}), childArgs: () => [],
         teardown: async () => {
           const identity = options.captureIdentity!;
-          const path = join('.pipeline', 'transcripts', identity.step, `${identity.runId}-a${identity.attempt}-codex`);
+          if (!('owner' in identity) || identity.owner === undefined) {
+            throw new Error('expected current transcript owner identity');
+          }
+          const path = join('.pipeline', 'transcripts', transcriptOwnerDirectory(identity.owner), `${identity.runId}-a${identity.attempt}-codex`);
           const content = identity.attempt === 1
             ? firstCapture
             : `{"attempt":${identity.attempt},"message":"dispatch ${identity.attempt}"}\n`;
           await mkdir(join(root, path), { recursive: true });
           await writeFile(join(root, path, 'session.jsonl'), content);
           transcriptWrites.push({ path, content });
-          await events.emit({ type: 'provider_transcripts_captured', step: 'build',
+          await events.emit({ type: 'provider_transcripts_captured', owner: identity.owner, step: transcriptOwnerStep(identity.owner),
             runId: identity.runId, attempt: identity.attempt, provider: 'codex', path,
             files: 1, bytes: 3, interrupted: false, skipped: 0, omittedLines: 0 });
         },

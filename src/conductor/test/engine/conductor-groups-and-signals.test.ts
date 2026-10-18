@@ -4795,7 +4795,7 @@ describe('engine/conductor', () => {
         featureSlug: 'self-host-identity',
         captureIdentity: expect.objectContaining({
           owner: { kind: 'registered-step', step: 'build' },
-          step: 'build', runId: 'held-conductor-run', attempt: 0,
+          runId: 'held-conductor-run', attempt: 0,
         }),
       }),
       claude: expect.objectContaining({
@@ -4805,7 +4805,7 @@ describe('engine/conductor', () => {
         featureSlug: 'self-host-identity',
         captureIdentity: expect.objectContaining({
           owner: { kind: 'registered-step', step: 'build' },
-          step: 'build', runId: 'held-conductor-run', attempt: 1,
+          runId: 'held-conductor-run', attempt: 1,
         }),
       }),
     });

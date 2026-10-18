@@ -616,8 +616,8 @@ describe('executeProviderCandidates', () => {
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
       {
-        owner: { kind: 'registered-step', step: 'build_review' },
-        step: 'build_review', runId: 'R', attempt: 1,
+        owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' },
+        runId: 'R', attempt: 1,
         member: 'security',
       },
     );
@@ -625,7 +625,7 @@ describe('executeProviderCandidates', () => {
 
   // Covers: task:rem-as-built-rem-ab-capture-dispatch-seq
   it('uses a capture-only sequence for auxiliary retries without changing their escalation attempts', async () => {
-    const prepared: Array<{ step: string; runId: string; attempt: number; member: string }> = [];
+    const prepared: Array<{ owner: unknown; runId: string; attempt: number; member: string }> = [];
     await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: 'security', runId: 'R',
       policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: true, min_confidence: 0 },
@@ -635,8 +635,9 @@ describe('executeProviderCandidates', () => {
       nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
       prepareCandidateSelfHost: async (_candidate, _runtime, identity) => {
         if (identity?.member !== 'security') throw new Error('expected auxiliary capture identity');
+        if (!('owner' in identity) || identity.owner === undefined) throw new Error('expected current transcript owner identity');
         prepared.push({
-          step: identity.step,
+          owner: identity.owner,
           runId: identity.runId,
           attempt: identity.attempt,
           member: identity.member,
@@ -646,8 +647,8 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(prepared).toEqual([
-      { step: 'build_review', runId: 'R', attempt: 1, member: 'security' },
-      { step: 'build_review', runId: 'R', attempt: 2, member: 'security' },
+      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 1, member: 'security' },
+      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 2, member: 'security' },
     ]);
   });
 

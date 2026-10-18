@@ -910,9 +910,11 @@ export async function executeProviderCandidates({
   const selfHostCaptureIdentity = runId === undefined
     ? undefined
     : transcriptCaptureSource({
-      step,
       runId,
       attempt: captureAttempt ?? attempt,
+      owner: auxiliaryMember === undefined
+        ? { kind: 'registered-step', step }
+        : { kind: 'configured-group-member', parentGroup: step, member: auxiliaryMember },
       ...(auxiliaryMember === undefined ? {} : { member: auxiliaryMember }),
     });
 
