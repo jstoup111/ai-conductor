@@ -301,10 +301,20 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
  * Mutator failures deliberately propagate before `rewriteWatch`, preserving
  * the existing bytes while still releasing the per-project mutex.
  */
-export async function updateWatch(
+export type WatchUpdate<T> = {
+  entries: WatchEntry[];
+  result: T;
+  /** A read-only outcome must not normalize or rewrite the registry. */
+  write?: boolean;
+};
+
+export async function updateWatch<T = undefined>(
   projectRoot: string,
-  mutate: (entries: WatchEntry[]) => WatchEntry[] | Promise<WatchEntry[]>,
-): Promise<void> {
+  mutate: (entries: WatchEntry[]) =>
+    | WatchEntry[]
+    | WatchUpdate<T>
+    | Promise<WatchEntry[] | WatchUpdate<T>>,
+): Promise<T | undefined> {
   const previous = watchUpdateLocks.get(projectRoot) ?? Promise.resolve();
   let release!: () => void;
   const done = new Promise<void>((resolve) => {
@@ -315,7 +325,13 @@ export async function updateWatch(
 
   await previous;
   try {
-    await rewriteWatch(projectRoot, await mutate(await readWatch(projectRoot)));
+    const mutation = await mutate(await readWatch(projectRoot));
+    if (Array.isArray(mutation)) {
+      await rewriteWatch(projectRoot, mutation);
+      return undefined;
+    }
+    if (mutation.write !== false) await rewriteWatch(projectRoot, mutation.entries);
+    return mutation.result;
   } finally {
     release();
     if (watchUpdateLocks.get(projectRoot) === tail) watchUpdateLocks.delete(projectRoot);
@@ -499,9 +515,19 @@ async function rewritePooledRepairWatchEntry(
   projectRoot: string,
   prUrl: string,
   mutate: (entry: WatchEntry) => WatchEntry,
-): Promise<void> {
-  await updateWatch(projectRoot, (entries) => entries.map((entry) =>
-    entry.prUrl === prUrl ? mutate(entry) : entry));
+  log?: (message: string) => void,
+): Promise<boolean> {
+  const outcome = await updateWatch(projectRoot, (entries): WatchUpdate<boolean> => {
+    if (!entries.some((entry) => entry.prUrl === prUrl)) {
+      return { entries, result: false, write: false };
+    }
+    return {
+      entries: entries.map((entry) => entry.prUrl === prUrl ? mutate(entry) : entry),
+      result: true,
+    };
+  });
+  if (!outcome) log?.(`[mergeable-sweep] dropping repair outcome for ${prUrl}: watch entry missing`);
+  return outcome ?? false;
 }
 
 /** Mark a repair paused before provider work and leave a durable recovery comment. */
@@ -536,16 +562,16 @@ async function applyAutoresolveRepairOutcome(options: Extract<PooledRepairOutcom
 
   switch (outcome.kind) {
     case 'refreshed':
-      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: 0 }));
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: 0 }), log);
       return;
     case 'escalated':
-      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, escalationCause: 'conflict-resolution' }));
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, escalationCause: 'conflict-resolution' }), log);
       return;
     case 'published-stack':
-      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }), log);
       return;
     case 'setup-stop':
-      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+      if (!await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }), log)) return;
       await markPooledSetupRecovery({ entryRunner, previous,
         marker: '<!-- conductor:rebase-setup -->',
         body: '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
@@ -566,11 +592,11 @@ async function applyCiFixRepairOutcome(options: Extract<PooledRepairOutcomeOptio
   const entryRunner = runnerForEntry(runGh, previous, operations);
   switch (outcome.kind) {
     case 'needs-human':
-      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
+      if (!await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
         ...entry,
         ciFixAttempts: previous.ciFixAttempts,
         ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
-      }));
+      }), log)) return;
       await markPooledSetupRecovery({ entryRunner, previous,
         marker: '<!-- conductor:ci-fix-setup -->',
         body: '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
@@ -583,7 +609,7 @@ async function applyCiFixRepairOutcome(options: Extract<PooledRepairOutcomeOptio
         ...entry,
         ciFixAttempts: previous.ciFixAttempts,
         ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
-      }));
+      }), log);
       return;
     case 'noop':
     case 'failed':

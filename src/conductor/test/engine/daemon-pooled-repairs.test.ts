@@ -1,10 +1,14 @@
 // Covers: task:14, task:15, task:16, task:19
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createClaimTimeRepairRunner } from '../../src/daemon-cli.js';
 import { runDaemon, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
 import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import { RepairQueue, type RepairRequest } from '../../src/engine/repair-queue.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
+import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import { PASSING_SUITE, buildPrFixture, skipReplay } from './autoresolve-pr-fixture.js';
 
 const done = (slug: string): FeatureOutcome => ({ slug, status: 'done' });
@@ -64,6 +68,61 @@ describe('daemon pooled repairs', () => {
     }, { concurrency: 1, once: true });
     expect(runRepair).not.toHaveBeenCalled();
     expect(queue.list()).toHaveLength(1);
+  });
+
+  it('drops claimed repairs whose watch entries were removed without recreating them', async () => {
+    const root = await mkdtemp('/tmp/daemon-pooled-repairs-');
+    const watchPath = join(root, '.daemon', 'mergeable-watch.jsonl');
+    const ciUrl = 'https://example.test/ci';
+    const autoresolveUrl = 'https://example.test/autoresolve';
+    const preserved = `${JSON.stringify({ prUrl: 'https://example.test/other', slug: 'other', repoCwd: root, ciFixAttempts: 2 })}\n`;
+    await mkdir(join(root, '.daemon'), { recursive: true });
+    await writeFile(watchPath, preserved);
+
+    const ciAdapter = vi.fn(async () => ({ kind: 'failed' as const, stage: 'worktree' as const }));
+    const autoresolveAdapter = vi.fn(async () => ({ kind: 'escalated' as const }));
+    const logs: string[] = [];
+    const states: Record<string, PrMergeState> = {
+      [ciUrl]: {
+        state: 'OPEN', mergeable: 'MERGEABLE', checksOutcome: 'failed', hasFailingOrPendingChecks: true,
+        statusCheckRollup: [], labels: [],
+      },
+      [autoresolveUrl]: {
+        state: 'OPEN', mergeable: 'CONFLICTING', checksOutcome: 'none', hasFailingOrPendingChecks: false,
+        statusCheckRollup: [], labels: [],
+      },
+    };
+    const runner = createClaimTimeRepairRunner({
+      projectRoot: root,
+      tracker: { readPullRequestMergeState: async (prUrl) => states[prUrl]! },
+      log: (message) => { logs.push(message); },
+      isWorkClaimActive: () => false,
+    });
+    const queue = new RepairQueue();
+    queue.enqueue({ kind: 'ci-fix', prUrl: ciUrl, slug: 'ci', prCreatedAt: '', queuedAt: '', run: ciAdapter });
+    queue.enqueue({ kind: 'autoresolve', prUrl: autoresolveUrl, slug: 'autoresolve', prCreatedAt: '', queuedAt: '', run: autoresolveAdapter });
+    const claims = new InMemoryWorkClaims();
+
+    try {
+      await runDaemon({
+        claims,
+        repairs: { queue, run: runner },
+        discoverBacklog: async () => [],
+        runFeature: async (item) => done(item.slug),
+      }, { concurrency: 1, once: true });
+
+      expect(ciAdapter).not.toHaveBeenCalled();
+      expect(autoresolveAdapter).not.toHaveBeenCalled();
+      await expect(readFile(watchPath, 'utf8')).resolves.toBe(preserved);
+      expect(logs).toEqual([
+        `[daemon] dropping repair ${ciUrl}: watch entry missing`,
+        `[daemon] dropping repair ${autoresolveUrl}: watch entry missing`,
+      ]);
+      expect(claims.list()).not.toContain(`repair:${ciUrl}`);
+      expect(claims.list()).not.toContain(`repair:${autoresolveUrl}`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('runs a pooled autoresolve through the sweep call-site with the sweep-only test judgement', async () => {

@@ -1208,18 +1208,22 @@ export function createClaimTimeRepairRunner(options: {
     // Claim time, rather than sweep time, owns attempt accounting. A restart
     // after this serialized write intentionally consumes an attempt; a
     // queued/held/stale request does not.
-    let previous: WatchEntry | undefined;
-    let claimed: WatchEntry | undefined;
-    await updateWatch(projectRoot, (entries) => entries.map((entry) => {
-      if (entry.prUrl !== request.prUrl) return entry;
-      previous = entry;
-      claimed = request.kind === 'ci-fix'
-        ? { ...entry, ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1, lastCiFixAt: now().toISOString() }
-        : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1, lastResolveAt: now().toISOString() };
-      return claimed;
-    }));
-    const claimedEntry = claimed ?? previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot };
-    const previousEntry = previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot };
+    const claim = await updateWatch(projectRoot, (entries) => {
+      const previous = entries.find((entry) => entry.prUrl === request.prUrl);
+      if (!previous) return { entries, result: { kind: 'missing' as const }, write: false };
+      const entry = request.kind === 'ci-fix'
+        ? { ...previous, ciFixAttempts: (previous.ciFixAttempts ?? 0) + 1, lastCiFixAt: now().toISOString() }
+        : { ...previous, resolveAttempts: (previous.resolveAttempts ?? 0) + 1, lastResolveAt: now().toISOString() };
+      return {
+        entries: entries.map((candidate) => candidate.prUrl === request.prUrl ? entry : candidate),
+        result: { kind: 'claimed' as const, entry, previous },
+      };
+    });
+    if (!claim || claim.kind === 'missing') {
+      log(`[daemon] dropping repair ${request.prUrl}: watch entry missing`);
+      return;
+    }
+    const { entry: claimedEntry, previous: previousEntry } = claim;
     if (request.kind === 'autoresolve') {
       await applyOutcome({ request, outcome: await request.run(claimedEntry) }, previousEntry);
       return;
