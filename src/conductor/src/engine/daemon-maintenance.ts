@@ -67,6 +67,11 @@ export class MaintenanceJob {
     if (this.lifecycle.kind === 'running') this.lifecycle.rerunPending = false;
   }
 
+  /** Whether closing would need to settle an active maintenance pass. */
+  isRunning(): boolean {
+    return this.lifecycle.kind === 'running';
+  }
+
   private start(): void {
     const running: Extract<typeof this.lifecycle, { kind: 'running' }> = {
       kind: 'running', current: Promise.resolve(), rerunPending: false,

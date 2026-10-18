@@ -235,4 +235,31 @@ describe('daemon maintenance job wiring', () => {
       'dispatch:one', 'dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable',
     ]);
   });
+
+  // Covers: task:rem-prd-audit-R1, task:rem-prd-audit-R1-2.
+  it('starts a single-flight root refresh on a width-one busy poll without changing the running feature order', async () => {
+    const calls: string[] = [];
+    const feature = deferred<FeatureOutcome>();
+    const poll = deferred<void>();
+    let refreshes = 0;
+    let polls = 0;
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'one', baseSha: 'pinned-base' }], {
+      discoverBacklog: async ({ refresh }) => {
+        if (refresh) refreshes += 1;
+        return [{ slug: 'one', baseSha: 'pinned-base' }];
+      },
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}:${item.baseSha}`);
+        return feature.promise;
+      },
+      sleep: async () => ++polls === 1 ? poll.promise : new Promise<void>(() => {}),
+    }), { concurrency: 1, once: true, maxItems: 1, idlePollMs: 1 });
+
+    await vi.waitFor(() => expect(calls).toContain('dispatch:one:pinned-base'));
+    poll.resolve();
+    await vi.waitFor(() => expect(refreshes).toBe(2));
+    expect(calls).toContain('dispatch:one:pinned-base');
+    feature.resolve(done('one'));
+    await daemon;
+  });
 });

@@ -216,6 +216,8 @@ export interface DaemonDeps {
   };
   /** Resolves a repair slug into the existing feature priority band. */
   repairPriority?: (slug: string | undefined) => string | undefined;
+  /** Seed the self-host source-refresh throttle after the startup refresh. */
+  recordEngineSourceRefresh?: () => void;
   /** Optional event-spine projection for maintenance timing. */
   emitMaintenancePhase?: (event: Extract<import('../types/events.js').ConductorEvent, { type: 'daemon_maintenance_phase' }>) => void | Promise<void>;
   /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
@@ -1075,7 +1077,12 @@ export async function runDaemon(
       const [bRank, bCreated] = repairBand(b);
       return aRank - bRank || aCreated.localeCompare(bCreated);
     })[0];
-    if (!repair || !deps.repairs!.queue.takeByUrl(repair.prUrl)) return undefined;
+    if (!repair) return undefined;
+    // A feature owns its slug for the entire build. Keep the repair queued
+    // until that claim is released; do not create a repair claim or read PR
+    // state while the feature can still mutate the same branch/worktree.
+    if (repair.slug && isFeatureInFlight(repair.slug)) return undefined;
+    if (!deps.repairs!.queue.takeByUrl(repair.prUrl)) return undefined;
     if (await startRepair(repair)) return repair;
     // A duplicate claim is still live; leave the request available for a later pass.
     deps.repairs!.queue.enqueue(repair);
@@ -1373,6 +1380,7 @@ export async function runDaemon(
         startupBacklog = await deps.discoverBacklog({ refresh: true });
       }
       maintenance.recordRefresh(now());
+      deps.recordEngineSourceRefresh?.();
     } catch (err) {
       log(`[daemon] startup origin refresh failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1410,6 +1418,7 @@ export async function runDaemon(
       // starting another pass while workers finish; the already-running pass
       // is deliberately allowed to settle before that boundary acts.
       maintenanceJob.close();
+      await maintenanceJob.settled();
       if (drain.reason === 'restart-pending' && deps.recordRestartPendingDrain) {
         try {
           await deps.recordRestartPendingDrain(drain.slugs);
@@ -1481,6 +1490,15 @@ export async function runDaemon(
       return false;
     }
     if (inFlight.size !== 0) return false;
+
+    // Root mutations and the maintenance job must never overlap: a queued
+    // reconciliation pass can otherwise observe or mutate a half-refreshed
+    // checkout. Closing is idempotent, so all restart/rebuild entrances share
+    // this boundary.
+    if (maintenanceJob.isRunning()) {
+      maintenanceJob.close();
+      await maintenanceJob.settled();
+    }
 
     // Task 7: fast-forward the engine source before rebuilding, so the
     // rebuild reflects a merge that landed on origin since the last refresh.
@@ -1560,6 +1578,7 @@ export async function runDaemon(
   while (true) {
     if (deps.shouldStop?.()) {
       log('[daemon] teardown requested — draining in-flight, no new dispatch');
+      maintenanceJob.close();
       stopReason = 'signal_teardown';
       break;
     }
@@ -1636,7 +1655,13 @@ export async function runDaemon(
       // The first selection intentionally observes any inherited live HALT
       // before resume authorizations are consumed by background maintenance.
       // Subsequent fill passes retain the established authorization behavior.
-      if (!firstFillPass) await consumeResumeAuthorizations();
+      if (!firstFillPass) {
+        // Authorization consumption is best-effort background maintenance.
+        // A slow (or failed) durable cursor must never hold an available slot.
+        void consumeResumeAuthorizations().catch((error) => {
+          log(`[daemon] resume-authorizations error: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
       const dispatchBlocked = paused || episodeActive || buildAuthMissing || ghVersionBlocked;
       if (dispatchBlocked && deps.repairs?.queue.list().length && deps.emitMaintenancePhase) {
         const reason = paused ? 'paused' : episodeActive ? 'episode' : buildAuthMissing ? 'build-auth' : 'gh-version';
@@ -1754,6 +1779,8 @@ export async function runDaemon(
                 // T28 path: supervisor mode — fire respawn trigger
                 if (deps.triggerSelfRestart) {
                   log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                  maintenanceJob.close();
+                  await maintenanceJob.settled();
                   let refreshFailed = false;
                   if (deps.refreshEngineSource) {
                     try {
@@ -1805,6 +1832,8 @@ export async function runDaemon(
                 // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
                 else if (deps.consumeRestartPending) {
                   log('[daemon] restart-pending honored (bare-run, no supervisor available)');
+                  maintenanceJob.close();
+                  await maintenanceJob.settled();
                   try {
                     await deps.consumeRestartPending();
                     log('[daemon] restart marker consumed; exiting cleanly');
@@ -2025,6 +2054,7 @@ export async function runDaemon(
     if (!completedWorker) {
       // A busy poll is a job trigger at every width. In particular, width 1
       // may refresh root while its single pinned-base worker is in flight.
+      void startRefresh();
       maintenanceJob.trigger();
       continue;
     }
