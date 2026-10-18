@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-18T11:44:10.409Z
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
 Halting step: prd_audit
