@@ -150,4 +150,28 @@ describe('routed repair obligations', () => {
       kind: 'incompatible',
     });
   });
+
+  it('accepts a persisted routed obligation with a check-ref-format branch', async () => {
+    const { projectRoot } = await createProject();
+    const statePath = join(projectRoot, '.pipeline/engine-state.json');
+    await writeFile(statePath, JSON.stringify({
+      repairObligations: {
+        version: 1,
+        records: {
+          routed: {
+            id: 'routed', planIdentity: '.docs/plans/active.md', taskIds: ['T1'],
+            source: { findingId: 'finding-1', authority: 'routed_repair', instruction: 'Repair the finding.' },
+            baseline: { branch: 'feat/c1/demo', head: 'host-head', tree: 'host-tree', resolvedTaskIds: [] },
+            settlement: 'unsettled', tasks: { T1: { status: 'open' } },
+          },
+        },
+        currentByPlan: { '.docs/plans/active.md': { T1: 'routed' }, }, admissionsByPlan: {},
+      },
+    }));
+
+    await expect(createRepairObligationStore(projectRoot, statePath).read()).resolves.toMatchObject({
+      ok: true,
+      value: { records: { routed: { baseline: { branch: 'feat/c1/demo' } } } },
+    });
+  });
 });

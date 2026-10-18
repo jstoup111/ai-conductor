@@ -36,9 +36,10 @@ export const PREREQUISITE_CLAIM_SCHEMA = {
       properties: {
         outcome: { const: PREREQUISITE_CLAIM_CONTRACT.blocked },
         child: { type: 'integer', minimum: 1 },
-        paths: { type: 'array', items: { type: 'string', minLength: 1 } },
-        symbols: { type: 'array', items: { type: 'string', minLength: 1 } },
+        paths: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
+        symbols: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
       },
+      anyOf: [{ required: ['paths'] }, { required: ['symbols'] }],
     },
   ],
 } as const;
@@ -75,6 +76,7 @@ export function parseBuilderClaim(result: unknown): ParsedBuilderClaim {
   const paths = value.paths === undefined ? undefined : stringList(value.paths);
   const symbols = value.symbols === undefined ? undefined : stringList(value.symbols);
   if ((value.paths !== undefined && paths === undefined) || (value.symbols !== undefined && symbols === undefined)) return { kind: 'malformed' };
+  if ((paths?.length ?? 0) === 0 && (symbols?.length ?? 0) === 0) return { kind: 'malformed' };
   return { kind: 'claim', claim: { outcome: 'blocked-by-prerequisite', child, ...(paths === undefined ? {} : { paths }), ...(symbols === undefined ? {} : { symbols }) } };
 }
 
@@ -143,6 +145,9 @@ function prerequisiteDestination(slug: string, child: ChildId, leaf?: ChildId): 
  * Only the sealed leaf uses its mutable leaf branch; no ref is moved by verification.
  */
 export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInput): Promise<VerifyPrerequisiteClaimResult> {
+  if ((input.claim.paths?.length ?? 0) === 0 && (input.claim.symbols?.length ?? 0) === 0) {
+    return { kind: 'unverified', detail: 'claim has no prerequisite paths or symbols' };
+  }
   if (input.claim.child <= input.host) {
     return { kind: 'refused-not-above', detail: `claimed child ${input.claim.child} is not above host ${input.host}` };
   }

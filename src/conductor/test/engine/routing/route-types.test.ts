@@ -173,6 +173,10 @@ describe('routed repair durable record parsers', () => {
     const invalidBranch = structuredClone(routeRecord);
     (invalidBranch.items[0]!.obligation as Record<string, unknown>).branch = 'feat/../x';
     expect(parseRouteRecord(JSON.stringify(invalidBranch))).toBeUndefined();
+
+    const lockBranch = structuredClone(routeRecord);
+    (lockBranch.items[0]!.obligation as Record<string, unknown>).branch = 'feat/c1.lock/demo';
+    expect(parseRouteRecord(JSON.stringify(lockBranch))).toBeUndefined();
   });
 
   it('round-trips routed rationale, restage state, and host retry hints', () => {

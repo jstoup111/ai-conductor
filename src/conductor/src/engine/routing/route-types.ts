@@ -1,4 +1,5 @@
 import { parseChildId, type ChildId } from '../child-context.js';
+import { isValidGitBranchName } from '../git-branch-name.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import type { StackedPrsConfig } from '../../types/config.js';
 
@@ -444,15 +445,6 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
     : parsed as unknown as SettledRoundReceipt;
 }
 
-/** Mirrors the reject conditions of `git check-ref-format --branch` without a subprocess. */
-function validBranchName(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value !== '@' && !value.startsWith('-')
-    && !value.startsWith('/') && !value.endsWith('/') && !value.endsWith('.')
-    && !value.includes('..') && !value.includes('@{') && !value.includes('//')
-    && !/[\x00-\x20\x7f ~^:?*[\\]/.test(value)
-    && value.split('/').every((component) => component.length > 0 && !component.startsWith('.'));
-}
-
 function parseHostEntry(value: unknown): HostEntry | undefined {
   if (!isRecord(value)) return undefined;
   const host = parseChild(value.host);
@@ -462,14 +454,14 @@ function parseHostEntry(value: unknown): HostEntry | undefined {
 }
 
 function parseRoutedObligation(value: unknown): RoutedObligation | undefined {
-  if (!isRecord(value) || !validBranchName(value.branch)) return undefined;
+  if (!isRecord(value) || !isValidGitBranchName(value.branch)) return undefined;
   const head = typeof value.head === 'string' ? parseCommitSha(value.head) : undefined;
   const tree = typeof value.tree === 'string' ? parseCommitSha(value.tree) : undefined;
   return head && tree ? { branch: value.branch, head, tree } : undefined;
 }
 
 function parseRouteFallback(value: unknown): RouteFallback | undefined {
-  if (!isRecord(value) || !validBranchName(value.branch)) return undefined;
+  if (!isRecord(value) || !isValidGitBranchName(value.branch)) return undefined;
   const from = parseChild(value.from);
   const to = parseChild(value.to);
   const evidence = parseStringArray(value.evidence);
@@ -478,7 +470,7 @@ function parseRouteFallback(value: unknown): RouteFallback | undefined {
 }
 
 function parseReroutePhase(value: unknown): ReroutePhase | undefined {
-  if (!isRecord(value) || !validBranchName(value.sourceBranch)) return undefined;
+  if (!isRecord(value) || !isValidGitBranchName(value.sourceBranch)) return undefined;
   const rejectedTip = typeof value.rejectedTip === 'string' ? parseCommitSha(value.rejectedTip) : undefined;
   const resetTip = typeof value.resetTip === 'string' ? parseCommitSha(value.resetTip) : undefined;
   const destination = parseChild(value.destination);

@@ -142,4 +142,27 @@ describe('builder prerequisite claim verification (real local Git)', () => {
       expect((await subject.git(['rev-parse', '-q', '--verify', repairMarkerRefFor('demo')])).exitCode).toBe(1);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
+
+  it('rejects evidence-free claims before verification or rerouting', async () => {
+    const subject = await fixture();
+    try {
+      const before = await routingRefs(subject.git);
+      const calls: string[] = [];
+      const git: GitRunner = async (args, options) => {
+        calls.push(args[0] ?? '');
+        if (args[0] === 'update-ref') throw new Error('evidence-free claims must not reroute');
+        return subject.git(args, options);
+      };
+
+      await expect(verifyPrerequisiteClaim({
+        claim: { outcome: 'blocked-by-prerequisite', child: c2 }, host: c1, slug: 'demo', git,
+      })).resolves.toEqual({ kind: 'unverified', detail: 'claim has no prerequisite paths or symbols' });
+      await expect(settleRoutedBuildClaim({
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2 }, worktree: subject.repo, slug: 'demo', roundId, host: c1, git,
+      })).resolves.toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed' });
+
+      expect(calls).not.toContain('update-ref');
+      expect(await routingRefs(subject.git)).toBe(before);
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
 });
