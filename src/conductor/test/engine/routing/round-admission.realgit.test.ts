@@ -90,7 +90,7 @@ describe('routed-round admission (real local Git)', () => {
   });
 
   // Covers: task:rem-as-built-W11
-  it('refuses an illegal host or round phase pre-state without writing an admission ref', async () => {
+  it('refuses an illegal host or round phase lifecycle update without writing a route ref', async () => {
     for (const preState of [
       { name: 'host state', apply: (record: RouteRecord): RouteRecord => ({ ...record, hosts: { ...record.hosts, [c1]: 'built' } }) },
       { name: 'round phase', apply: (record: RouteRecord): RouteRecord => ({ ...record, phase: 'closed' }) },
@@ -101,21 +101,17 @@ describe('routed-round admission (real local Git)', () => {
         if (created.kind !== 'created') throw new Error(created.kind);
         const stored = await readRouteRecord(subject.repo, 'demo', roundId);
         if (stored.kind !== 'record') throw new Error('record unavailable');
-        const illegal = preState.apply(stored.record);
-        expect(await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: illegal }])).toEqual({ kind: 'updated' });
-
         const calls: { args: readonly string[]; input?: string }[] = [];
         const git: GitRunner = async (args, options) => {
           calls.push({ args, input: options?.input });
           return subject.git(args, options);
         };
-        expect(await admitRound(subject.repo, 'demo', created.record, c1, { git })).toEqual({
-          kind: 'refused',
-          detail: 'routing round r1 is not prepared for host 1',
-        });
+        const illegal = preState.apply(stored.record);
+        expect(await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: illegal }], { git }))
+          .toEqual({ kind: 'unavailable' });
         expect(calls.filter((call) => call.args[0] === 'update-ref')).toHaveLength(0);
         expect(await readRepairMarker(subject.repo, 'demo')).toEqual({ kind: 'absent' });
-        expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: illegal });
+        expect(await readRouteRecord(subject.repo, 'demo', roundId)).toEqual(stored);
       } finally { await rm(subject.repo, { recursive: true, force: true }); }
     }
   });
@@ -149,7 +145,7 @@ describe('routed-round admission (real local Git)', () => {
         }
         return subject.git(args, options);
       };
-      const next: RouteRecord = { ...stored.record, phase: 'closed' };
+      const next: RouteRecord = { ...stored.record, phase: 'open' };
       expect(await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: next }], { git: raced }))
         .toEqual({ kind: 'cas-failed' });
       expect(await readRouteRecord(subject.repo, 'demo', roundId)).toEqual(stored);
