@@ -621,14 +621,14 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### simplify
 
-> Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, and over-engineering; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code.
+> Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, over-engineering, and domain-modelling defects; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: false`, `requires: []`,
   `model: sonnet`.
 - **Engine step** — none. It runs inside `pipeline`'s post-batch checks and from `tdd`'s batch-boundary
   refactor rule.
 - **Inputs** — the batch diff by name; the batch-start commit; existing tests at the same production
-  seam; ADRs that justify an abstraction; linter output.
+  seam; ADRs that justify an abstraction; linter output; earlier batches' simplification records.
 - **Outputs** — `.pipeline/audit-trail/batch-N-simplification.md`.
 - **Gate role** — blocking within the batch. `CLEAN` proceeds; `SIMPLIFY_REQUIRED` must be fixed before
   the next batch and counts against pipeline's three-cycle rework budget.
@@ -636,6 +636,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   pair alone is not flagged as an extract-with-parameters finding. Undeclared duplication, and
   similarity outside the declared target set, is still flagged, and the skill retains authority to
   propose extraction on a declared pair when rationale beyond the replication itself merits it.
+- **Domain-modelling pre-check** — applies the five non-duplication, non-complexity kinds of the
+  `build_review` `implementationQuality` vocabulary (representable invalid state, non-exhaustive
+  domain match, primitive obsession, obscured intent, non-semantic name) to batch-changed code. It is
+  the build's good-faith first pass, not the authority: `build_review` still enforces the rubric over
+  the whole feature diff. Findings an earlier batch fixed or recorded as advisory are not re-raised
+  unless their code changed again.
 
 ### debugging
 
