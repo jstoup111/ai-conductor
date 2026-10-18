@@ -109,6 +109,24 @@ describe('builder prerequisite claim verification (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
+  it('does not treat an intermediate child with no closure as the sealed leaf', async () => {
+    const subject = await fixture();
+    try {
+      await subject.git(['update-ref', '-d', closureRefFor('demo', c2)]);
+      const before = await routingRefs(subject.git);
+      const leafRef = `refs/heads/${leafBranchFor('demo')}`;
+      const git: GitRunner = async (args, options) => {
+        if (args.includes(leafRef)) throw new Error('intermediate destination must not read the leaf tip');
+        return subject.git(args, options);
+      };
+      await expect(verifyPrerequisiteClaim({
+        claim: { outcome: 'blocked-by-prerequisite', child: c2, symbols: ['parseB'] },
+        host: c1, slug: 'demo', leaf: c3, git,
+      })).resolves.toMatchObject({ kind: 'unverified' });
+      expect(await routingRefs(subject.git)).toBe(before);
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
   it('turns malformed claims into a failed attempt boundary and leaves absent results unchanged for normal BUILD handling', async () => {
     const subject = await fixture();
     try {

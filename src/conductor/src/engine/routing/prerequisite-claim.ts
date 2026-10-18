@@ -130,9 +130,17 @@ async function hasAnyClaimInput(git: GitRunner, ref: string, paths: readonly str
   return false;
 }
 
+function prerequisiteDestination(slug: string, child: ChildId, leaf?: ChildId): { readonly ref: string; readonly branchRef?: string } {
+  if (child === leaf) {
+    const branchRef = `refs/heads/${leafBranchFor(slug)}`;
+    return { ref: branchRef, branchRef };
+  }
+  return { ref: closureRefFor(slug, child), branchRef: branchRef(slug, child) };
+}
+
 /**
  * Validate a requested upward destination against the immutable closed tree.
- * A missing closed ref denotes the leaf branch; no ref is moved by verification.
+ * Only the sealed leaf uses its mutable leaf branch; no ref is moved by verification.
  */
 export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInput): Promise<VerifyPrerequisiteClaimResult> {
   if (input.claim.child <= input.host) {
@@ -151,19 +159,11 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
   if (await hasAnyClaimInput(git, source, claimedPaths, input.claim.symbols ?? [])) {
     return { kind: 'unverified', detail: `claimed prerequisite is already present at host ${input.host}` };
   }
-  const closed = `refs/conductor/${input.slug}/closed/c${input.claim.child}`;
-  // The leaf has no immutable closure ref.  When its identity is supplied by
-  // the sealed stack topology, do not probe a made-up closed/c<leaf> ref: a
-  // missing closure is not the evidence that this particular child is leaf.
-  const ref = input.claim.child === input.leaf
-    ? `refs/heads/${leafBranchFor(input.slug)}`
-    : await existingRef(git, closed)
-      ? closed
-      : `refs/heads/${leafBranchFor(input.slug)}`;
-  if (!await existingRef(git, ref)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} is unavailable` };
-  if (!await hasPaths(git, ref, destinationPaths)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite paths` };
-  if (!await hasSymbols(git, ref, input.claim.symbols ?? [])) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite symbols` };
-  return { kind: 'verified', destination: input.claim.child, ref };
+  const destination = prerequisiteDestination(input.slug, input.claim.child, input.leaf);
+  if (!await existingRef(git, destination.ref)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} is unavailable` };
+  if (!await hasPaths(git, destination.ref, destinationPaths)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite paths` };
+  if (!await hasSymbols(git, destination.ref, input.claim.symbols ?? [])) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite symbols` };
+  return { kind: 'verified', destination: input.claim.child, ref: destination.ref };
 }
 
 export type RerouteRoundResult =
@@ -176,6 +176,8 @@ export interface RerouteRoundInput extends RouteRecordStoreDependencies {
   readonly roundId: RoundId;
   readonly from: ChildId;
   readonly to: ChildId;
+  /** The sealed terminal child, used to distinguish its leaf branch from closed children. */
+  readonly leaf?: ChildId;
   /** The verifier's concrete missing-symbol/path evidence. */
   readonly evidence: readonly string[];
 }
@@ -245,25 +247,24 @@ export async function rerouteRound(input: RerouteRoundInput): Promise<RerouteRou
   const descendants = await hasOnlyRoundOrHaltCommits(git, resetTip, rejectedTip, input.roundId, input.slug);
   if (!descendants.ok) return { kind: 'refused', detail: `routing round ${input.roundId} refuses non-round commit${descendants.commit ? ` ${descendants.commit}` : ''}` };
 
-  const destinationClosure = await shaAt(git, closureRefFor(input.slug, input.to));
-  const destinationBranchRef = destinationClosure === undefined
-    ? `refs/heads/${leafBranchFor(input.slug)}`
-    : branchRef(input.slug, input.to);
+  const leaf = input.leaf ?? await resolveSealedLeaf(input.worktree);
+  const destination = prerequisiteDestination(input.slug, input.to, leaf);
+  const destinationBranchRef = destination.branchRef;
   if (!destinationBranchRef) return { kind: 'refused', detail: `routing round ${input.roundId} destination branch is unavailable` };
-  const destinationHead = destinationClosure ?? await shaAt(git, destinationBranchRef);
+  const destinationHead = await shaAt(git, destination.ref);
   if (!destinationHead) return { kind: 'refused', detail: `routing round ${input.roundId} destination closure is unavailable` };
   const destinationTree = await shaAt(git, `${destinationHead}^{tree}`);
   if (!destinationTree) return { kind: 'refused', detail: `routing round ${input.roundId} destination tree is unavailable` };
   const moved = stored.record.allocation[input.from];
   if (!moved) return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.from} has no allocation` };
-  const destination = stored.record.allocation[input.to] ?? { remTaskIds: [], blockBodies: [] };
+  const destinationAllocation = stored.record.allocation[input.to] ?? { remTaskIds: [], blockBodies: [] };
   const nextAllocation = {
     ...stored.record.allocation,
     [input.from]: { ...moved, remTaskIds: [], blockBodies: [] },
     [input.to]: {
-      ...destination,
-      remTaskIds: [...destination.remTaskIds, ...moved.remTaskIds],
-      blockBodies: [...destination.blockBodies, ...moved.blockBodies.map((body) => rerenderForChild(body, input.to))],
+      ...destinationAllocation,
+      remTaskIds: [...destinationAllocation.remTaskIds, ...moved.remTaskIds],
+      blockBodies: [...destinationAllocation.blockBodies, ...moved.blockBodies.map((body) => rerenderForChild(body, input.to))],
     },
   };
   const transitioned = transitionHost(stored, input.from, 'reroute-moved', { credit: false });
@@ -377,7 +378,7 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
   if (verified.kind !== 'verified') return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
   const moved = await rerouteRound({
     worktree: input.worktree, slug: input.slug, roundId: input.roundId,
-    from: input.host, to: verified.destination,
+    from: input.host, to: verified.destination, leaf,
     evidence: [...(parsed.claim.paths ?? []), ...(parsed.claim.symbols ?? [])],
     git,
   });
