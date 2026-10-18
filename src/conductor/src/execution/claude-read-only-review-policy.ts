@@ -45,7 +45,7 @@ export function claudeReadOnlyReviewPolicyArgs(): readonly string[] {
 
 /** Flags that carry no tool, permission, settings, or MCP authority. */
 const INERT_VALUE_FLAGS = new Set([
-  '--session-id', '--name', '--append-system-prompt', '--model', '--output-format', '--json-schema',
+  '--session-id', '--name', '--append-system-prompt-file', '--model', '--output-format', '--json-schema',
 ]);
 const INERT_BARE_FLAGS = new Set(['--print', '--verbose']);
 const READ_ONLY_TOOLS = new Set(['Read', 'Grep', 'Glob']);

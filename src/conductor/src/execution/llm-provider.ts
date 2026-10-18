@@ -77,7 +77,7 @@ export type CodexProbeParserRejection =
  * paths, credential material, hashes, and arbitrary error messages.
  */
 export interface ProviderExitFacts {
-  processErrorCode?: 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
+  processErrorCode?: 'E2BIG' | 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
   exitCode?: number;
   signal?: 'SIGABRT' | 'SIGALRM' | 'SIGHUP' | 'SIGINT' | 'SIGKILL' | 'SIGPIPE' | 'SIGQUIT' | 'SIGTERM' | 'UNKNOWN';
   stdoutBytes?: number;
