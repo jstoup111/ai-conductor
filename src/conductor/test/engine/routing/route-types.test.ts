@@ -113,6 +113,16 @@ describe('routed repair durable record parsers', () => {
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(tasklessAndEchoUnsettled));
   });
 
+  it('rejects settled receipts without a host acknowledgement or with an unknown acknowledging host', () => {
+    const withoutAcknowledgements = structuredClone(routeRecord);
+    withoutAcknowledgements.receipt.acks = {};
+    expect(parseRouteRecord(JSON.stringify(withoutAcknowledgements))).toBeUndefined();
+
+    const unknownAcknowledgement = structuredClone(routeRecord);
+    unknownAcknowledgement.receipt.acks = { 4: true };
+    expect(parseRouteRecord(JSON.stringify(unknownAcknowledgement))).toBeUndefined();
+  });
+
   it('fails closed on malformed receipts, existing-task bindings without ids, and invalid obligation branches', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { laps: 'x' } }))).toBeUndefined();
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, receipt: { ...routeRecord.receipt, lapz: {} } }))).toBeUndefined();

@@ -957,6 +957,14 @@ function growthTotalsAgree(growth: PlanGrowthRecord): boolean {
   return Object.values(growth.byGate).reduce((total, count) => total + count, 0) === growth.added;
 }
 
+const AUTHORED_TASK_HEADING = /^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim;
+
+/** Count plan-authored task headings, excluding remediation tasks and pending work. */
+export function countAuthoredTaskHeadings(plan: string, pendingTaskIds: ReadonlySet<string> = new Set()): number {
+  return [...plan.matchAll(AUTHORED_TASK_HEADING)]
+    .filter((match) => !match[1]!.startsWith('rem-') && !pendingTaskIds.has(match[1]!)).length;
+}
+
 async function deriveGrowthFromActivePlan(
   projectRoot: string,
   pendingTaskIds: ReadonlySet<string> = new Set(),
@@ -970,8 +978,7 @@ async function deriveGrowthFromActivePlan(
 
   try {
     const plan = await readFile(selection.path, 'utf-8');
-    const authored = [...plan.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
-      .filter((match) => !pendingTaskIds.has(match[1]!)).length;
+    const authored = countAuthoredTaskHeadings(plan, pendingTaskIds);
     return { growth: { authored, added: 0, byGate: {} }, resolved: true };
   } catch (error) {
     console.warn(
@@ -984,8 +991,8 @@ async function deriveGrowthFromActivePlan(
 
 /**
  * Read growth accounting, deriving its initial authored denominator only from
- * the feature's resolved plan. Existing rem-* headers are intentionally
- * included in that denominator: they predate this feature's growth record.
+ * the feature's resolved plan. Remediation headers are never authored-plan
+ * work, even when they predate this feature's growth record.
  */
 export async function readGrowthAccounting(
   projectRoot: string,

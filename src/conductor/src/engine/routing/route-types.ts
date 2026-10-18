@@ -582,6 +582,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const currentHostIndex = value.currentHostIndex;
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
+    || (receipt.settlementId !== undefined && (Object.keys(receipt.acks).length === 0 || Object.keys(receipt.acks).some((ack) => hosts[Number(ack) as ChildId] === undefined)))
     || (value.entry !== undefined && (!entry || hosts[entry.host] === undefined)) || (fallback?.some((item) => item === undefined) ?? false)
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
     || (value.sealedAuthored !== undefined && sealedAuthored === undefined)

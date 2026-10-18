@@ -346,6 +346,7 @@ import {
   settlePendingRepair,
   updateKickbackLedger,
   recordKickbackCapEvidence,
+  countAuthoredTaskHeadings,
   type KickbackGateEntry,
   type chargeBuildReviewEffectInLedger,
   type PlanGrowth,
@@ -4725,8 +4726,7 @@ export class Conductor {
               taskless: {}, echo: {}, acks: {},
             };
             const priorSealed = await routedSealedAuthored(this.projectRoot, this.featureSlug, { cursor, config: this.config });
-            const sealedAuthored = priorSealed ?? [...planText.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
-              .filter((match) => !match[1]!.startsWith('rem-')).length;
+            const sealedAuthored = priorSealed ?? countAuthoredTaskHeadings(planText);
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
               roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
               pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
@@ -15010,8 +15010,7 @@ export class Conductor {
         const planPath = await resolveFeaturePlanPath(this.projectRoot, slug);
         if (planPath !== undefined) {
           const plan = await readFile(planPath, 'utf8');
-          sealedAuthored = [...plan.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
-            .filter((match) => !match[1]!.startsWith('rem-')).length;
+          sealedAuthored = countAuthoredTaskHeadings(plan);
         }
       } catch { /* unavailable sealed plan is refused below */ }
     }

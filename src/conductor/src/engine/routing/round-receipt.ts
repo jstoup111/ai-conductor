@@ -12,7 +12,6 @@ import {
   writeKickbackLedgerUnlocked,
   type KickbackLedger,
   type PendingRepairSettlementBudget,
-  type PlanGrowthRecord,
 } from '../kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseChildId } from '../child-context.js';
@@ -225,31 +224,21 @@ function nextLedgerForReceipt(
 ): { readonly ledger: KickbackLedger; readonly exhausted?: { gate: string; allowance: 'laps' | 'growth' } } {
   const charges = receiptCharges(record);
   const budgetByGate = new Map(budgets.map((budget) => [budget.gate, budget]));
-  const gates = { ...ledger.gates };
-  const baseGrowth = ledger.growth ?? budgets[0]?.growth;
-  if (!baseGrowth) return { ledger, exhausted: { gate: 'prd_audit', allowance: 'growth' } };
-  const growth: PlanGrowthRecord = { authored: baseGrowth.authored, added: baseGrowth.added, byGate: { ...baseGrowth.byGate } };
-  let growthCap = budgets[0]?.growthCap;
+  const next = applySettledReceiptToLedger(ledger, record);
   for (const gate of WHOLE_FEATURE_BUDGET_GATES) {
     const laps = charges.laps[gate];
     if (laps === undefined) continue;
     const budget = budgetByGate.get(gate);
     if (!budget) return { ledger, exhausted: { gate, allowance: 'laps' } };
-    const entry = gates[gate] ?? defaultGateEntry();
+    const entry = next.gates[gate] ?? defaultGateEntry();
     const lapCap = entry.effectiveLapCap ?? budget.lapCap;
-    if ((entry.laps ?? 0) + laps > lapCap) return { ledger, exhausted: { gate, allowance: 'laps' } };
-    gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
-    growthCap = ledger.effectiveGrowthCap ?? budget.growthCap;
+    if ((entry.laps ?? 0) > lapCap) return { ledger, exhausted: { gate, allowance: 'laps' } };
   }
-  if (growth.added + charges.growth > (growthCap ?? 0)) return { ledger, exhausted: { gate: Object.keys(charges.laps)[0] ?? 'prd_audit', allowance: 'growth' } };
-  if (charges.growth > 0) {
-    growth.added += charges.growth;
-    const owner = Object.keys(charges.laps)[0] ?? 'prd_audit';
-    growth.byGate[owner] = (growth.byGate[owner] ?? 0) + charges.growth;
+  const growthCap = next.effectiveGrowthCap ?? budgets[0]?.growthCap;
+  if ((next.growth?.added ?? 0) > (growthCap ?? 0)) {
+    return { ledger, exhausted: { gate: Object.keys(charges.laps)[0] ?? 'prd_audit', allowance: 'growth' } };
   }
-  return {
-    ledger: applySettledReceiptToLedger(ledger, record),
-  };
+  return { ledger: next };
 }
 
 /**

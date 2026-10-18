@@ -59,6 +59,24 @@ export type VerifyGreenAcceptanceResult =
 
 const VERIFY_GREEN_RECORD = 'acceptance-verify-green.json';
 
+async function redMarkerDigestRefusal(
+  marker: string | undefined,
+  ref: string,
+  refExitCode: number,
+  refSha: string,
+  git: GitRunner,
+  host: ChildId,
+): Promise<string | undefined> {
+  if (marker === undefined || refExitCode === 1) return undefined;
+  const parsed = JSON.parse(marker) as Record<string, unknown>;
+  if (!Array.isArray(parsed.failingTests) || typeof parsed.intentRationale !== 'string') return undefined;
+  const blob = await git(['cat-file', '-p', refSha.trim()]);
+  const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
+  return blob.exitCode === 0 && blob.stdout.trim() === digest
+    ? undefined
+    : `child ${host} RED marker digest differs from ${ref}`;
+}
+
 /**
  * Re-runs an already-closed routed child's recorded acceptance contract.  It
  * intentionally does not create or heal RED evidence: a routed repair proves
@@ -112,24 +130,8 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
     if (refResult.exitCode !== 0 && refResult.exitCode !== 1) {
       return { kind: 'refused', reason: `cannot resolve ${ref}` };
     }
-    if (marker === undefined) {
-      // The marker was introduced after the close-time ref.  A routed pass
-      // may therefore encounter an old close which has a ref but no marker;
-      // it still proves its current contract and must not invoke RED healing.
-    } else {
-      const parsed = JSON.parse(marker) as Record<string, unknown>;
-    // Older markers did not contain the provenance needed to identify a RED
-    // proof.  They remain compatible evidence, not a routing refusal.
-    if (Array.isArray(parsed.failingTests) && typeof parsed.intentRationale === 'string') {
-      if (refResult.exitCode === 0) {
-        const blob = await git(['cat-file', '-p', refResult.stdout.trim()]);
-        const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
-        if (blob.exitCode !== 0 || blob.stdout.trim() !== digest) {
-          return { kind: 'refused', reason: `child ${input.host} RED marker digest differs from ${ref}` };
-        }
-      }
-      }
-    }
+    const refusal = await redMarkerDigestRefusal(marker, ref, refResult.exitCode, refResult.stdout, git, input.host);
+    if (refusal !== undefined) return { kind: 'refused', reason: refusal };
   } catch {
     return { kind: 'refused', reason: `child ${input.host} RED marker or ref is invalid` };
   }
