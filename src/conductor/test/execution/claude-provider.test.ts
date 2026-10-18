@@ -1,6 +1,7 @@
 // Covers: task:2
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { access, readFile } from 'node:fs/promises';
 
 const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions, mockEnsureGitGuardForDispatch } = vi.hoisted(() => ({
   mockExeca: vi.fn(),
@@ -375,6 +376,26 @@ describe('ClaudeProvider', () => {
         });
         expect(result.finalStructuredResult).toBeUndefined();
       });
+    });
+
+    it('delivers an over-argv-limit system prompt through a temp file it removes after exit', async () => {
+      const systemPrompt = `RETRY: ${'x'.repeat(200 * 1024)}`;
+      let delivered: string | undefined;
+      let promptPath: string | undefined;
+      mockExeca.mockImplementation(async (_file: string, args: string[]) => {
+        const flag = args.indexOf('--append-system-prompt-file');
+        promptPath = args[flag + 1];
+        delivered = await readFile(promptPath!, 'utf8');
+        return { stdout: '', stderr: '', exitCode: 0, failed: false } as any;
+      });
+
+      await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
+
+      const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(args).not.toContain('--append-system-prompt');
+      expect(args.every((arg) => Buffer.byteLength(arg) < 128 * 1024)).toBe(true);
+      expect(delivered).toBe(systemPrompt);
+      await expect(access(promptPath!)).rejects.toThrow();
     });
 
     it('selects the stream-json envelope for a non-REPL dispatch', async () => {

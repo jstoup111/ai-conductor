@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
 import type {
   LLMProvider,
@@ -708,7 +711,8 @@ export class ClaudeProvider implements LLMProvider {
       };
     }
     const hasMachineEnvelope = !options.interactive;
-    const args = this.buildArgs(options);
+    const systemPromptFile = options.systemPrompt ? await writeSystemPromptFile(options.systemPrompt) : undefined;
+    const args = this.buildArgs(options, systemPromptFile?.path);
 
     const promptOnStdin =
       typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
@@ -766,6 +770,8 @@ export class ClaudeProvider implements LLMProvider {
         };
       }
       throw error;
+    } finally {
+      await systemPromptFile?.dispose();
     }
   }
 
@@ -934,7 +940,7 @@ export class ClaudeProvider implements LLMProvider {
     }
   }
 
-  private buildArgs(options: InvokeOptions): string[] {
+  private buildArgs(options: InvokeOptions, systemPromptFile = SYSTEM_PROMPT_FILE_PLACEHOLDER): string[] {
     const args: string[] = [];
 
     if (options.selfHost?.args) args.push(...options.selfHost.args);
@@ -953,8 +959,11 @@ export class ClaudeProvider implements LLMProvider {
       args.push('--name', options.sessionName);
     }
 
+    // The system prompt travels in a file: a single argv string is capped at
+    // 128 KiB (MAX_ARG_STRLEN), and a larger one fails the spawn with E2BIG
+    // before Claude starts.
     if (options.systemPrompt) {
-      args.push('--append-system-prompt', options.systemPrompt);
+      args.push('--append-system-prompt-file', systemPromptFile);
     }
 
     if (options.model) {
@@ -1007,4 +1016,15 @@ export class ClaudeProvider implements LLMProvider {
       ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
       : environment);
   }
+}
+
+/** Stands in for the per-invocation file when argv is only inspected, never launched. */
+const SYSTEM_PROMPT_FILE_PLACEHOLDER = '<system-prompt-file>';
+
+/** Write one invocation's system prompt to a private temp file Claude reads at startup. */
+async function writeSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), 'ai-conductor-claude-system-prompt-'));
+  const path = join(dir, 'system-prompt.md');
+  await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  return { path, dispose: () => rm(dir, { recursive: true, force: true }) };
 }

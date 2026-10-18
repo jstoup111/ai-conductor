@@ -36,7 +36,7 @@ export function deriveProviderExitFacts(value: unknown): ProviderExitFacts {
 
   const record = value as Record<string, unknown>;
   const code = record.code;
-  if (code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
+  if (code === 'E2BIG' || code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
     facts.processErrorCode = code;
   } else if (code !== undefined) {
     facts.processErrorCode = 'UNKNOWN';

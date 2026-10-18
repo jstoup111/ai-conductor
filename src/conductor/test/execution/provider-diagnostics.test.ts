@@ -36,6 +36,10 @@ describe('provider exit facts', () => {
     });
   });
 
+  it('names an oversized-argument spawn failure instead of normalizing it to UNKNOWN', () => {
+    expect(deriveProviderExitFacts({ code: 'E2BIG' })).toEqual({ processErrorCode: 'E2BIG' });
+  });
+
   it.each([-1, 1.5, '1'])('omits invalid exit code %j', (exitCode) => {
     expect(deriveProviderExitFacts({ exitCode })).toEqual({});
   });
