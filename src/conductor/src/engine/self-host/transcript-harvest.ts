@@ -3,6 +3,7 @@ import { matchesGlob, join, relative, sep } from 'node:path';
 
 import { sanitizeTranscriptLine } from './transcript-sanitize.js';
 import { sanitizeProviderMember } from './provider-member.js';
+import { isStepName } from '../execution-identity.js';
 import type { ConductorEvent, TranscriptOwner } from '../../types/events.js';
 import type { StepName } from '../../types/steps.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
@@ -36,23 +37,34 @@ export interface FailedTranscriptHarvest {
 export type TranscriptHarvestResult = CapturedTranscriptHarvest | FailedTranscriptHarvest;
 
 /** Identifies where a harvested transcript came from and where it is stored. */
-export interface TranscriptCaptureSource {
-  /** New captures always provide this closed identity. */
-  readonly owner?: TranscriptOwner;
-  /** Compatibility input for pre-owner callers and old scratch leases. */
-  readonly step: StepName | 'unknown-step';
+type TranscriptCaptureSourceFields = {
   readonly runId: string;
   readonly attempt: number;
   readonly member?: string;
-}
+};
+
+/** New captures have one closed owner identity; old leases remain step-only. */
+export type TranscriptCaptureSource = TranscriptCaptureSourceFields & (
+  | { readonly owner: TranscriptOwner; readonly step?: never }
+  | { readonly owner?: never; readonly step: StepName | 'unknown-step' }
+);
 
 export type ProviderTranscriptCaptureSource = TranscriptCaptureSource & {
   readonly provider: string;
 };
 
 /** Build the one source identity shared by capture naming and retention. */
-export function transcriptCaptureSource(input: TranscriptCaptureSource): TranscriptCaptureSource {
-  return { ...input, owner: transcriptOwner(input) };
+export function transcriptCaptureSource(
+  input: TranscriptCaptureSourceFields & { readonly step: StepName | 'unknown-step' },
+): TranscriptCaptureSource {
+  return {
+    runId: input.runId,
+    attempt: input.attempt,
+    ...(input.member === undefined ? {} : { member: input.member }),
+    owner: input.step === 'unknown-step'
+      ? { kind: 'legacy-unknown-step' }
+      : { kind: 'registered-step', step: input.step },
+  };
 }
 
 /** The one naming scheme used by every self-host transcript producer. */
@@ -69,10 +81,23 @@ export function transcriptCapture(source: ProviderTranscriptCaptureSource & { re
 export function transcriptOwnerDirectory(owner: TranscriptOwner): string {
   switch (owner.kind) {
     case 'registered-step': return owner.step;
-    case 'configured-group-member': return owner.member;
+    case 'configured-group-member': return sanitizeProviderMember(owner.member);
     case 'legacy-unknown-step': return 'unknown-step';
   }
   return assertNever(owner);
+}
+
+/** Recover the registered lifecycle step needed by scratch-home leases. */
+export function transcriptCaptureLeaseStep(source: TranscriptCaptureSource): StepName | undefined {
+  if ('owner' in source && source.owner !== undefined) {
+    switch (source.owner.kind) {
+      case 'registered-step': return source.owner.step;
+      case 'configured-group-member': return isStepName(source.owner.parentGroup) ? source.owner.parentGroup : undefined;
+      case 'legacy-unknown-step': return undefined;
+    }
+    return assertNever(source.owner);
+  }
+  return source.step === 'unknown-step' ? undefined : source.step;
 }
 
 function assertNever(value: never): never {
@@ -85,21 +110,31 @@ export async function emitTranscriptHarvest(
   source: ProviderTranscriptCaptureSource & { readonly path: string; readonly interrupted: boolean },
   result: TranscriptHarvestResult,
 ): Promise<void> {
-  const { interrupted, owner: _owner, ...identityFields } = source;
+  const { interrupted, ...identityFields } = source;
   const owner = transcriptOwner(source);
+  const step = transcriptOwnerStep(owner);
   const event: ConductorEvent = result.kind === 'captured'
     ? {
-        type: 'provider_transcripts_captured', ...identityFields, owner, interrupted,
+        type: 'provider_transcripts_captured', ...identityFields, owner, step, interrupted,
         files: result.files, bytes: result.bytes, skipped: result.skipped.length, omittedLines: result.omittedLines,
       }
-    : { type: 'provider_transcripts_harvest_failed', ...identityFields, owner, error: result.error };
+    : { type: 'provider_transcripts_harvest_failed', ...identityFields, owner, step, error: result.error };
   try { await events?.emit(event); } catch { /* teardown telemetry is best-effort */ }
 }
 
 function transcriptOwner(source: TranscriptCaptureSource): TranscriptOwner {
-  if (source.owner !== undefined) return source.owner;
+  if ('owner' in source && source.owner !== undefined) return source.owner;
   if (source.step === 'unknown-step') return { kind: 'legacy-unknown-step' };
   return { kind: 'registered-step', step: source.step };
+}
+
+function transcriptOwnerStep(owner: TranscriptOwner): string {
+  switch (owner.kind) {
+    case 'registered-step': return owner.step;
+    case 'configured-group-member': return owner.member;
+    case 'legacy-unknown-step': return 'unknown-step';
+  }
+  return assertNever(owner);
 }
 
 function relativePosix(home: string, path: string): string {

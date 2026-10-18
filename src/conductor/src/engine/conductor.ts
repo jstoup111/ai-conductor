@@ -5940,7 +5940,7 @@ export class Conductor {
         featureSlug,
         // Capture identity, not retry state: captures must never collide when
         // a legacy runner dispatches more than once in the same lifecycle.
-        captureIdentity: { owner: transcriptOwner, step: name, runId, attempt: captureAttempt },
+        captureIdentity: { owner: transcriptOwner, runId, attempt: captureAttempt },
         events: this.events,
         injectedToken: daemonToken,
       });
@@ -6120,7 +6120,6 @@ export class Conductor {
               featureSlug,
               captureIdentity: {
                 owner: transcriptOwner,
-                step: name,
                 runId: identity.runId,
                 attempt: identity.attempt,
                 ...(identity.member === undefined ? {} : { member: identity.member }),
@@ -6137,7 +6136,6 @@ export class Conductor {
             featureSlug,
             captureIdentity: {
               owner: transcriptOwner,
-              step: name,
               runId: identity.runId,
               attempt: identity.attempt,
               ...(identity.member === undefined ? {} : { member: identity.member }),

@@ -44,10 +44,9 @@ import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/p
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { resolveSkillName } from '../skill-names.js';
-import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
+import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, transcriptCaptureLeaseStep, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
 import { collectKnownSecrets } from './transcript-sanitize.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
-import type { StepName } from '../../types/steps.js';
 export {
   provisionProviderHome,
   type ProviderHome,
@@ -136,7 +135,7 @@ interface ProvisionOptionsBase {
   injectedToken?: string;
 }
 
-export type SandboxCaptureIdentity = TranscriptCaptureSource & { readonly step: StepName };
+export type SandboxCaptureIdentity = TranscriptCaptureSource;
 
 type SandboxScratchLeaseIdentity = {
   readonly repository: string;
@@ -224,8 +223,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     result: TranscriptHarvestResult,
   ): Promise<void> {
     await emitTranscriptHarvest(capture.events, {
-      ...(capture.owner === undefined ? {} : { owner: capture.owner }),
-      step: capture.step, runId: capture.runId, attempt: capture.attempt,
+      ...capture,
       ...(capture.member === undefined ? {} : { member: capture.member }),
       provider: sandboxProvider().id, path, interrupted: false,
     }, result);
@@ -250,7 +248,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     featureSlug: opts.featureSlug,
     runId: opts.captureIdentity!.runId,
     attempt: opts.captureIdentity!.attempt,
-    step: opts.captureIdentity!.step,
+    step: transcriptCaptureLeaseStep(opts.captureIdentity!),
     member: opts.captureIdentity!.member,
     provider: provider.id,
   });

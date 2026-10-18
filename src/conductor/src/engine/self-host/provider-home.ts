@@ -17,8 +17,7 @@ import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { resolveSkillName } from '../skill-names.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { collectKnownSecrets } from './transcript-sanitize.js';
-import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
-import type { StepName } from '../../types/steps.js';
+import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, transcriptCaptureLeaseStep, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 
 export type SelfHostProvider = ProviderWith<'selfHost'>;
@@ -93,7 +92,7 @@ interface ProvisionProviderHomeBaseOptions {
   events?: ConductorEventEmitter;
 }
 
-export type ProviderHomeCaptureIdentity = TranscriptCaptureSource & { readonly step: StepName };
+export type ProviderHomeCaptureIdentity = TranscriptCaptureSource;
 
 type ScratchLeaseIdentity = {
   readonly repository: string;
@@ -218,7 +217,7 @@ export async function provisionProviderHome(
     featureSlug: options.featureSlug,
     runId: captureIdentity!.runId,
     attempt: captureIdentity!.attempt,
-    step: captureIdentity!.step,
+    step: transcriptCaptureLeaseStep(captureIdentity!),
     member: captureIdentity!.member,
     provider: provider.id,
   });

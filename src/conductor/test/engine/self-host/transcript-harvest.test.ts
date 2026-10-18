@@ -1,12 +1,35 @@
 // Covers: task:4, task:5, task:6
 import { access, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { harvestThenRemove, harvestTranscripts, transcriptCapture } from '../../../src/engine/self-host/transcript-harvest.js';
 
 describe('transcriptCapture', () => {
+  it.each([
+    ['a/b', 'a%002Fb'],
+    ['..', '%002E%002E'],
+  ])('encodes configured owner member %s as one transcript directory', (member, encoded) => {
+    const root = '/worktree';
+    const capture = transcriptCapture({
+      worktreeRoot: root,
+      owner: { kind: 'configured-group-member', parentGroup: 'build_review', member },
+      runId: 'run', attempt: 1, provider: 'codex',
+    });
+    const transcripts = resolve(root, '.pipeline', 'transcripts');
+
+    expect(relative(transcripts, dirname(resolve(capture.destination))).split(sep)).toStrictEqual([encoded]);
+  });
+
+  it('keeps path-safe configured owner member directories unchanged', () => {
+    expect(transcriptCapture({
+      worktreeRoot: '/worktree',
+      owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'rubric-a' },
+      runId: 'run', attempt: 1, provider: 'codex',
+    }).path).toBe(join('.pipeline', 'transcripts', 'rubric-a', 'run-a1-codex'));
+  });
+
   it.each(['../../escape', 'a/b', 'a/../../escape'])('keeps a member capture beneath its step directory', (member) => {
     const root = '/worktree';
     const capture = transcriptCapture({

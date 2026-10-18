@@ -1157,12 +1157,9 @@ type ConductorEventBody =
       path: string;
       reason: string;
     }
-  | {
+  | ({
       /** Allowlisted provider transcripts were captured before a scratch home was retired. */
       type: 'provider_transcripts_captured';
-      /** Closed owner for new captures; old ledgers retain `step`. */
-      owner?: TranscriptOwner;
-      step?: StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
       runId: string;
       attempt: number;
       member?: string;
@@ -1173,19 +1170,27 @@ type ConductorEventBody =
       interrupted: boolean;
       skipped: number;
       omittedLines: number;
-    }
-  | {
+    } & (
+      /** Current captures retain their owner and project its display step. */
+      | { readonly owner: TranscriptOwner; readonly step: string }
+      /** Rows persisted before owner identities were introduced. */
+      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+    ))
+  | ({
       /** Provider transcript capture failed, but scratch-home retirement continued. */
       type: 'provider_transcripts_harvest_failed';
-      owner?: TranscriptOwner;
-      step?: StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
       runId: string;
       attempt: number;
       member?: string;
       provider: string;
       path: string;
       error: string;
-    }
+    } & (
+      /** Current captures retain their owner and project its display step. */
+      | { readonly owner: TranscriptOwner; readonly step: string }
+      /** Rows persisted before owner identities were introduced. */
+      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+    ))
   | {
       /** A captured provider transcript was retained after its step verdict settled. */
       type: 'provider_transcripts_retained';

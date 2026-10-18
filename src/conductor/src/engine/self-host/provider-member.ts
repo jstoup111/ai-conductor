@@ -1,5 +1,8 @@
 /** Make an auxiliary member safe for use as one filesystem path component. */
 export function sanitizeProviderMember(member: string): string {
+  // Dot components escape a parent directory even though each character is
+  // otherwise path-safe. Encode them before the ordinary component encoding.
+  if (member === '.' || member === '..') return member.replaceAll('.', '%002E');
   let encoded = '';
   for (const unit of member) {
     if (/^[A-Za-z0-9._-]$/.test(unit)) {
