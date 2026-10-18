@@ -47,8 +47,9 @@ describe('daemon pooled repairs', () => {
     const claims = new InMemoryWorkClaims();
     const repairs: string[] = [];
     const features: string[] = [];
+    const terminalEffects = vi.fn();
 
-    await runDaemon({
+    const result = await runDaemon({
       claims,
       repairPriority: (slug) => slug === 'p0' ? 'P0' : 'P2',
       repairs: { queue,
@@ -58,11 +59,14 @@ describe('daemon pooled repairs', () => {
       } },
       discoverBacklog: async () => [{ slug: 'feature' }],
       runFeature: async (item) => { features.push(item.slug); return done(item.slug); },
+      onFeatureTerminalEffects: terminalEffects,
     }, { concurrency: 1, once: true, maxItems: 1 });
 
     expect(repairs).toEqual(['https://example.test/0', 'https://example.test/2']);
     expect(features).toEqual(['feature']);
     expect(claims.list()).toEqual([]);
+    expect(terminalEffects).toHaveBeenCalledExactlyOnceWith(done('feature'));
+    expect(result.processed).toEqual([done('feature')]);
   });
 
   it('does not claim queued repairs while paused or rate limited', async () => {
