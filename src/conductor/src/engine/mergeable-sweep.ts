@@ -449,6 +449,8 @@ export interface SweepOpts {
   };
   /** True while a pooled repair has already claimed this PR. */
   isRepairRunning?: (prUrl: string) => boolean;
+  /** True while the feature worker owns this slug; repairs must remain queued. */
+  isFeatureInFlight?: (slug: string) => boolean;
   /**
    * Optional worktree teardown seam for the shipped-record gate.
    * MERGED and CLOSED may use this dependency; NOTFOUND never does.
@@ -636,6 +638,7 @@ export async function sweepMergeableLabels({
   ciFix,
   repairs,
   isRepairRunning,
+  isFeatureInFlight,
   teardownWorktree,
   shippedRecordProbe,
   canRemoveWorktree,
@@ -1074,6 +1077,10 @@ export async function sweepMergeableLabels({
 
     const enqueue = (request: RepairRequest): void => {
       if (!repairs) return;
+      if (request.slug && isFeatureInFlight?.(request.slug)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (feature in flight)`);
+        return;
+      }
       if (isRepairRunning?.(request.prUrl)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
         return;

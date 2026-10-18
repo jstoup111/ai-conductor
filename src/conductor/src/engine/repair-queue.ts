@@ -81,19 +81,8 @@ export class RepairQueue {
     return true;
   }
 
-  has(prUrl: string): boolean {
-    return this.requests.has(prUrl);
-  }
-
   list(): RepairRequest[] {
     return [...this.requests.values()];
-  }
-
-  take(): RepairRequest | undefined {
-    const first = this.requests.entries().next().value as [string, RepairRequest] | undefined;
-    if (!first) return undefined;
-    this.requests.delete(first[0]);
-    return first[1];
   }
 
   /** Remove this exact request after the dispatcher has selected it. */

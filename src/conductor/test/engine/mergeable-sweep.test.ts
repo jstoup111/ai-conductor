@@ -2627,6 +2627,30 @@ describe('sweepMergeableLabels — Task 13 repair queue', () => {
     }
   });
 
+  // Covers: task:rem-prd-audit-R2 — a feature claim owns its repair candidates.
+  it('leaves both CI-fix and autoresolve requests unqueued while their feature is in flight', async () => {
+    const conflicting = 'https://github.com/foo/bar/pull/in-flight-conflict';
+    const failing = 'https://github.com/foo/bar/pull/in-flight-failing';
+    const { gh } = makeFakeGh({
+      [conflicting]: prViewJson('OPEN', 'CONFLICTING'),
+      [failing]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }]),
+    });
+    const queue = new RepairQueue();
+    const teardownWorktree = vi.fn(async () => undefined);
+    await enrollWatch(tmpDir, { ...entry(conflicting), slug: 'in-flight' });
+    await enrollWatch(tmpDir, { ...entry(failing), slug: 'in-flight' });
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir, runGh: gh, repairs: { queue },
+      isFeatureInFlight: (slug) => slug === 'in-flight', teardownWorktree,
+      ciFix: { enabled: true, isEligible: async () => ({ eligible: true }), dispatch: async () => undefined },
+      autoresolve: { enabled: true, isEligible: async () => ({ eligible: true }), dispatch: async () => undefined },
+    });
+
+    expect(queue.list()).toEqual([]);
+    expect(teardownWorktree).not.toHaveBeenCalled();
+  });
+
   // Covers: task:13
   it('deduplicates queued and running repairs, preserves cap escalation, and admits no CI repair without preflight', async () => {
     const queued = PR_URL;

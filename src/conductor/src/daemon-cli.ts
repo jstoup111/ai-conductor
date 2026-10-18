@@ -1204,8 +1204,12 @@ export function createClaimTimeRepairRunner(options: {
   requeue?: (request: RepairRequest) => void;
   applyOutcome?: (completion: RepairCompletion, previous: WatchEntry) => Promise<void>;
   now?: () => Date;
+  /** Injectable only for the fail-closed claim-persistence boundary. */
+  updateWatch?: (projectRoot: string, mutate: (entries: WatchEntry[]) => unknown) => Promise<unknown>;
 }): (request: RepairRequest) => Promise<void> {
   const { projectRoot, tracker, log, isWorkClaimActive, requeue, applyOutcome = async () => {}, now = () => new Date() } = options;
+  const persistWatch = options.updateWatch ?? ((root: string, mutate: (entries: WatchEntry[]) => unknown) =>
+    updateWatch(root, mutate as never) as Promise<unknown>);
   return async (request) => {
     let state: PrMergeState;
     try {
@@ -1227,7 +1231,7 @@ export function createClaimTimeRepairRunner(options: {
     // Claim time, rather than sweep time, owns attempt accounting. A restart
     // after this serialized write intentionally consumes an attempt; a
     // queued/held/stale request does not.
-    const claim = await updateWatch(projectRoot, (entries) => {
+    const claim = await persistWatch(projectRoot, (entries) => {
       const previous = entries.find((entry) => entry.prUrl === request.prUrl);
       if (!previous) return { entries, result: { kind: 'missing' as const }, write: false };
       const entry = request.kind === 'ci-fix'
@@ -1237,7 +1241,7 @@ export function createClaimTimeRepairRunner(options: {
         entries: entries.map((candidate) => candidate.prUrl === request.prUrl ? entry : candidate),
         result: { kind: 'claimed' as const, entry, previous },
       };
-    });
+    }) as { kind: 'missing' } | { kind: 'claimed'; entry: WatchEntry; previous: WatchEntry } | undefined;
     if (!claim || claim.kind === 'missing') {
       log(`[daemon] dropping repair ${request.prUrl}: watch entry missing`);
       return;
@@ -2582,9 +2586,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Maintenance discovers repairs; the dispatcher owns their pool claims and
   // invokes these captured sanctioned call-sites at claim time.
   const repairQueue = new RepairQueue();
+  let recordEngineSourceRefresh: (() => void) | undefined;
   const result = await runDaemon(
     {
       claims: workClaims,
+      repairPriority: (slug) => priorityResolver.bandForSlug?.(slug),
       repairs: { queue: repairQueue, run: createClaimTimeRepairRunner({
         projectRoot,
         tracker,
@@ -2779,6 +2785,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             const minIntervalMs =
               (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
             const throttle = createRefreshThrottle(minIntervalMs, Date.now);
+            recordEngineSourceRefresh = () => throttle.markRan();
             const warner = createStalenessWarner(log);
             return async (refreshOpts?: { force?: boolean }) => {
               if (!refreshOpts?.force && !throttle.shouldRun()) return;
@@ -2800,6 +2807,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             };
           })()
         : undefined,
+      recordEngineSourceRefresh: () => recordEngineSourceRefresh?.(),
       // Task 9 (TI-4 HP3/NP3/NP4): advisory-only staleness probe, wired
       // UNCONDITIONALLY — it only ever fires at the quiescent boundary where
       // the armed self-heal gate (staleGatesArmed) declines, i.e. self-host
@@ -2939,7 +2947,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
-      sweepMergeableLabels: async () => {
+      sweepMergeableLabels: async ({ isFeatureInFlight }) => {
         await sweepMergeableLabels(createDaemonSweepBinding({
           projectRoot,
           log,
@@ -2950,6 +2958,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             queue: repairQueue,
           },
           isRepairRunning: (prUrl) => workClaims.list().includes(encodeClaimKey({ kind: 'repair', prUrl })),
+          isFeatureInFlight,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).

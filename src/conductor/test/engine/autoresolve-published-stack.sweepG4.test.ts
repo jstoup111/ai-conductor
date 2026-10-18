@@ -109,7 +109,8 @@ describe('published stacked leaf PR reached by the mergeable sweep (sweep G4)', 
         },
         repairs: { queue: repairs },
       });
-      const request = repairs.take();
+      const [queued] = repairs.list();
+      const request = queued && repairs.takeByUrl(queued.prUrl);
       expect(request).toBeDefined();
       await request!.run(entry);
     } finally {

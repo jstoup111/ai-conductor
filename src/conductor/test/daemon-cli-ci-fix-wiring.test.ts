@@ -145,6 +145,22 @@ describe('daemon CI-fix production dispatch callback', () => {
     expect(adapter).toHaveBeenCalledOnce();
   });
 
+  it.each(['ci-fix', 'autoresolve'] as const)('fails closed when %s claim persistence rejects', async (kind) => {
+    const adapter = vi.fn(async () => kind === 'ci-fix'
+      ? { kind: 'failed' as const, stage: 'worktree' as const }
+      : { kind: 'escalated' as const });
+    const runner = createClaimTimeRepairRunner({
+      projectRoot: '/unused', tracker: { readPullRequestMergeState: async () => kind === 'ci-fix'
+        ? selected : { ...selected, mergeable: 'CONFLICTING', checksOutcome: 'none' } },
+      log: vi.fn(), isWorkClaimActive: () => false,
+      updateWatch: async () => { throw new Error('disk full'); },
+    });
+
+    await expect(runner({ kind, prUrl: 'https://example.test/7', slug: 'widget', prCreatedAt: '', queuedAt: '', run: adapter } as any))
+      .rejects.toThrow('disk full');
+    expect(adapter).not.toHaveBeenCalled();
+  });
+
   it('keeps the request-owned adapter with a repair deferred for an in-flight feature', async () => {
     const root = await mkdtemp('/tmp/daemon-claim-repair-');
     roots.push(root);
@@ -163,7 +179,7 @@ describe('daemon CI-fix production dispatch callback', () => {
     await runner(request);
 
     expect(adapter).not.toHaveBeenCalled();
-    expect(queue.take()).toBe(request);
+    expect(queue.takeByUrl(prUrl)).toBe(request);
   });
 
   it('stamps a claimed autoresolve before its adapter and makes the next sweep observe cooldown', async () => {

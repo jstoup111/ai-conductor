@@ -299,6 +299,9 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       mode: 'banded',
       bands: new Map([['PROJ-123', 'unlabeled'], ['owner/repo#1', 'high']]),
     });
+    expect(resolver.bandForSlug('github')).toBe('P1');
+    expect(resolver.bandForSlug('jira')).toBe('P4');
+    expect(resolver.bandForSlug('missing')).toBeUndefined();
     await resolver.resolve([
       { slug: 'jira', sourceRef: 'PROJ-123' },
       { slug: 'github', sourceRef: 'owner/repo#1' },
