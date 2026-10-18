@@ -1054,7 +1054,7 @@ export interface StartupDashboardBindingOptions {
 export interface ParkedCandidateEnrichmentOptions {
   projectRoot: string;
   slug: string;
-  annotation: string | undefined;
+  annotation: ParkedEntry['annotation'];
   log: (message: string) => void;
   isOperatorParked: StartupDashboardBindingOptions['isOperatorParked'];
   getProvenanceType: StartupDashboardBindingOptions['getProvenanceType'];
