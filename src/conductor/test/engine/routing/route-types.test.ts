@@ -67,6 +67,12 @@ describe('routed repair durable record parsers', () => {
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(routeRecord));
   });
 
+  it('accepts an existing-task item only when its durable task binding is present', () => {
+    const existingTaskRecord = structuredClone(routeRecord);
+    existingTaskRecord.items[0]!.existingTask = true;
+    expect(parseRouteRecord(JSON.stringify(existingTaskRecord))).toEqual(existingTaskRecord);
+  });
+
   it('rejects an entry whose host is absent, so one host cannot consume another host\'s pin', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, entry: { ...routeRecord.entry, host: 4 } }))).toBeUndefined();
   });
