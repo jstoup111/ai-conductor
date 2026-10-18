@@ -63,6 +63,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   daemon_memory_sample: 'not-audited-by-design',
   daemon_heap_dump_written: 'not-audited-by-design',
   daemon_exited: 'not-audited-by-design',
+  daemon_maintenance_phase: 'not-audited-by-design',
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
@@ -302,6 +303,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   daemon_exited: {
     type: 'daemon_exited', pid: 1, code: 0, signal: null, at: '2026-09-23T00:00:00.000Z',
+  },
+  daemon_maintenance_phase: {
+    type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed',
   },
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },

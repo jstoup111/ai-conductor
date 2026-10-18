@@ -132,7 +132,7 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
   it('isEligibleForResolve: logs nothing when eligible', async () => {
     const logs: string[] = [];
     const entry: WatchEntry = { ...baseEntry, resolveAttempts: 0, lastResolveAt: undefined };
-    const prState: PrMergeState = { state: 'CONFLICTING', mergeable: 'CONFLICTING', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none' };
+    const prState: PrMergeState = { state: 'OPEN', mergeable: 'CONFLICTING', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none' };
     const cfg: HarnessConfig | undefined = { mergeable_autoresolve: { enabled: true } } as any;
     const isFeatureInFlight = async (): Promise<boolean> => false;
 

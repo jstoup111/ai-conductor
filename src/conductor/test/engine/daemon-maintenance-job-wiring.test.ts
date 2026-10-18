@@ -201,7 +201,7 @@ describe('daemon maintenance job wiring', () => {
         return dashboard.promise;
       },
       staleEngineChecker: {
-        check: () => (++checks === 1 ? 'fresh' : 'stale'),
+        check: () => (++checks === 1 ? 'current' : 'stale'),
         targetIdentity: () => 'target',
         capturedIdentity: () => 'captured',
       },

@@ -116,6 +116,7 @@ describe('updateWatch', () => {
             state: 'OPEN' as const,
             mergeable: 'MERGEABLE' as const,
             checksOutcome: 'green' as const,
+            hasFailingOrPendingChecks: false,
             labels: [],
             isDraft: false,
             hasHaltBodyMarker: false,
