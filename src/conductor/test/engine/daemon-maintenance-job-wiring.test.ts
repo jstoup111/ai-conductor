@@ -72,6 +72,18 @@ describe('daemon maintenance job wiring', () => {
     await daemon;
   });
 
+  // Covers: task:rem-as-built-R8 — durable authorization maintenance is best-effort.
+  it('does not reject the dispatcher when background resume authorization consumption fails', async () => {
+    const calls: string[] = [];
+    await expect(runDaemon(depsFor(calls, [{ slug: 'one' }], {
+      consumeResumeAuthorizations: async () => { throw new Error('cursor unavailable'); },
+      log: (message) => calls.push(message),
+    }), { concurrency: 1, once: true, maxItems: 1 })).resolves.toMatchObject({
+      processed: [{ slug: 'one', status: 'done' }],
+    });
+    expect(calls).toContain('[daemon] resume-authorizations error: cursor unavailable');
+  });
+
   it('runs the dashboard only in the first ordered pass and starts a second pass on terminal collection', async () => {
     const calls: string[] = [];
 
