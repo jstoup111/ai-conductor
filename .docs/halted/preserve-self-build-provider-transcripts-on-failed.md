@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-18T11:45:04.816Z
+Status: halted
 Slug: preserve-self-build-provider-transcripts-on-failed
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-preserve-self-build-provider-transcripts-on-failed
-Head SHA: 0faaf19584c465eeeb71580ace1ef7bb1e05dd23
-Halted at: 2026-10-18T11:41:52.697Z
+Head SHA: dda847c7635ffa09de12fdea2e4ad772e3aea7cd
+Halted at: 2026-10-18T11:48:52.519Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-step 'build_review' cannot make progress: its inputs cannot change on a re-dispatch. Re-run 'test_suite' before retrying 'build_review'.
+build_review adjudication halted: semantic remediation case repeat ac4880a0-02bc-48d3-8880-fc2bc0cc06af
 ```
