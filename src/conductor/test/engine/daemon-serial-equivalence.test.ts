@@ -33,28 +33,27 @@ import { formatDaemonStartupLog } from '../../src/engine/daemon-command.js';
  */
 const RECORDED_N1_TRACE = {
   timeline: [
-    'maintenance:rekick:begin',
     'gate:pause',
-    'base:refresh',
-    'maintenance:rekick:end',
-    'maintenance:sweep:begin',
-    'sweep',
-    'maintenance:sweep:end',
-    'gate:pause',
+    'discover:refresh',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
-    'discover:local',
     'engine-source-refresh',
     'engine-rebuild',
     'stale',
     'log:▶ start alpha',
     'dispatch:alpha',
     'sleep',
+    'gate:pause',
+    'sweep',
     'log:■ done alpha: done',
     'gate:pause',
+    'gate:pause',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
     'discover:local',
+    'sweep',
     'engine-source-refresh',
     'engine-rebuild',
     'stale',
@@ -77,13 +76,6 @@ const RECORDED_N1_TRACE = {
     'gate:build-auth',
     'gate:episode',
     'discover:local',
-    'maintenance:refresh:begin',
-    'discover:refresh',
-    'maintenance:refresh:end',
-    'maintenance:rekick:begin',
-    'gate:pause',
-    'base:local',
-    'maintenance:rekick:end',
     'gate:episode',
     'maintenance:restart-pending:begin',
     'restart-pending',
@@ -93,7 +85,6 @@ const RECORDED_N1_TRACE = {
     'maintenance:stale-engine:end',
     'sleep',
     'maintenance:sweep:begin',
-    'sweep',
     'maintenance:sweep:end',
     'gate:episode',
     'gate:pause',
@@ -196,11 +187,6 @@ describe('daemon serial equivalence (Task 25)', () => {
       { slug: 'gamma', status: 'done' },
     ]);
     expect(actual.stoppedReason).toBe('idle_timeout');
-    expect(actual.timeline.indexOf('dispatch:alpha')).toBeGreaterThan(
-      actual.timeline.indexOf('discover:refresh'),
-    );
-    expect(actual.timeline.indexOf('sweep')).toBeGreaterThan(
-      actual.timeline.indexOf('dispatch:alpha'),
-    );
+    expect(actual.timeline).toEqual(RECORDED_N1_TRACE.timeline);
   });
 });
