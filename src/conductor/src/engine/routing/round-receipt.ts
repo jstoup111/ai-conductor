@@ -471,11 +471,16 @@ export async function pendingAsBuiltFindingsFromRoutes(
   const findings = new Map<string, NonNullable<RouteRecord['pendingAsBuiltFindings']>[number]>();
   for (const item of records) {
     if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
-    // Settlement charges a round; it does not resolve its as-built finding.
-    // Keep findings while their host remains admitted/repairing as well as
-    // while the receipt is unsettled.
-    if (!Object.values(item.record.hosts).some((state) => state === 'admitted' || state === 'repairing')) continue;
-    for (const finding of item.record.pendingAsBuiltFindings ?? []) findings.set(finding.finding, finding);
+    // Settlement and host movement do not resolve an as-built finding. Its
+    // route lifecycle is the sole authority: it remains pending until close.
+    switch (item.record.phase) {
+      case 'prepared':
+      case 'open':
+        for (const finding of item.record.pendingAsBuiltFindings ?? []) findings.set(finding.finding, finding);
+        break;
+      case 'closed':
+        break;
+    }
   }
   return [...findings.values()];
 }
