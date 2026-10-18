@@ -102,11 +102,10 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
     if (refResult.exitCode !== 0 && refResult.exitCode !== 1) {
       return { kind: 'refused', reason: `cannot resolve ${ref}` };
     }
-    if (refResult.exitCode === 0 && marker === undefined) {
-      return { kind: 'refused', reason: `child ${input.host} RED marker is missing for ${ref}` };
-    }
     if (marker === undefined) {
-      // No close-time ref means there is no retained digest to compare.
+      // The marker was introduced after the close-time ref.  A routed pass
+      // may therefore encounter an old close which has a ref but no marker;
+      // it still proves its current contract and must not invoke RED healing.
     } else {
       const parsed = JSON.parse(marker) as Record<string, unknown>;
     // Older markers did not contain the provenance needed to identify a RED

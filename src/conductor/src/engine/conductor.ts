@@ -10205,7 +10205,7 @@ export class Conductor {
             if (verified.kind === 'verified') {
               await emitAcceptanceRed({
                 type: 'acceptance_red', state: 'satisfied', step: step.name,
-                mode: 'verify-green', viaException: false,
+                mode: 'verify-green',
               });
               succeeded = true;
               successOutput = undefined;
