@@ -27,9 +27,10 @@ import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 import { formatDaemonStartupLog } from '../../src/engine/daemon-command.js';
 
 /**
- * Recorded serial baseline for the full dispatch loop before the pool became
- * concurrent. It deliberately runs continuously (not `once`) so the trace
- * includes the scheduler-owned idle path as well as three serial dispatches.
+ * Recorded width-one baseline for the dispatch loop. It deliberately runs
+ * continuously (not `once`) so the trace includes the background-maintenance
+ * triggers permitted by the dispatch-first ADR alongside three serial feature
+ * dispatches.
  */
 const RECORDED_N1_TRACE = {
   timeline: [
@@ -62,9 +63,12 @@ const RECORDED_N1_TRACE = {
     'sleep',
     'log:■ done beta: done',
     'gate:pause',
+    'gate:pause',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
     'discover:local',
+    'sweep',
     'engine-source-refresh',
     'engine-rebuild',
     'stale',
@@ -73,6 +77,8 @@ const RECORDED_N1_TRACE = {
     'sleep',
     'log:■ done gamma: done',
     'gate:pause',
+    'gate:pause',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
     'discover:local',
@@ -83,10 +89,13 @@ const RECORDED_N1_TRACE = {
     'maintenance:stale-engine:begin',
     'stale',
     'maintenance:stale-engine:end',
+    'sweep',
     'sleep',
     'maintenance:sweep:begin',
     'maintenance:sweep:end',
+    'gate:pause',
     'gate:episode',
+    'base:local',
     'gate:pause',
     'gate:build-auth',
     'gate:episode',
@@ -97,6 +106,7 @@ const RECORDED_N1_TRACE = {
     'maintenance:restart-pending:end',
     'maintenance:stale-engine:begin',
     'stale',
+    'sweep',
     'maintenance:stale-engine:end',
   ],
 } as const;
