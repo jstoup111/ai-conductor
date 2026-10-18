@@ -203,7 +203,10 @@ function applySettledReceiptToLedger(ledger: KickbackLedger, record: RouteRecord
     gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
   }
   const prior = ledger.growth ?? { authored: record.sealedAuthored ?? 0, added: 0, byGate: {} };
-  const owner = Object.keys(charges.laps)[0] ?? 'prd_audit';
+  // A joined round charges its single growth value once. The owner is the first
+  // charged gate in budget-gate order (prd_audit before as-built), never the
+  // receipt's key order, so the ledger attribution is deterministic.
+  const owner = WHOLE_FEATURE_BUDGET_GATES.find((gate) => charges.laps[gate] !== undefined) ?? 'prd_audit';
   const growth = {
     authored: prior.authored,
     added: prior.added + charges.growth,

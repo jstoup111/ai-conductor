@@ -124,6 +124,15 @@ describe('round receipt settlement', () => {
     } finally { await rm(subject.root, { recursive: true, force: true }); }
   });
 
+  it('attributes a joined round\'s single growth charge to prd_audit whatever the receipt key order', async () => {
+    const subject = await fixture({ laps: { architecture_review_as_built: 1, prd_audit: 1 } });
+    try {
+      await expect(settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: host, budgets: budgets(['prd_audit', 'architecture_review_as_built']), routing, git: subject.git })).resolves.toMatchObject({ kind: 'settled' });
+      const ledger = await readKickbackLedger(subject.root);
+      expect(ledger.growth?.byGate).toEqual({ prd_audit: 2 });
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
   it('persists the receipt CAS before the flat-ledger write that makes provider dispatch eligible', async () => {
     const subject = await fixture();
     try {

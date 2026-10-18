@@ -478,6 +478,8 @@ routed-resume-fixtures-must-commit-config).
 - [test] the ordered spy log shows the receipt CAS before the flat ledger write, and the ledger write before the provider dispatch.
 - [test] in the conductor-level trace of a routed round from admission to settlement, for host 1 and for a leaf-only round, `bumpKickbackGateInLedger` records no `prd_audit` call, the ledger has no `pendingRepair` field, and the receipt settlement is the only change to the `prd_audit` lap count.
 
+> **Amended 2026-10-18 by #3211:** Operator DECIDE on the joined-round growth-ownership escalation (build_review lap-76692f06, case `c-joined-round-growth-ownership`). A routed round's growth stays one value charged once, as above; it is not split per gate. In the ledger's per-gate growth attribution, a joined round's growth belongs to the first charged gate in `WHOLE_FEATURE_BUDGET_GATES` order (`prd_audit` before `architecture_review_as_built`), never to the receipt's key order. This matches Task 64, which raises growth through `--gate prd_audit`. Added check: a joined round whose receipt lists `architecture_review_as_built` first still attributes its whole growth to `prd_audit`.
+
 **Files likely touched:**
 - `src/conductor/src/engine/routing/round-receipt.ts` — new: settlement and acknowledgement
 - `src/conductor/src/engine/conductor.ts` — route the BUILD settlement closure for routed passes
