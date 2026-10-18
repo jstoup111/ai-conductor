@@ -654,3 +654,115 @@ Tasks 7, 16 ─▶ Task 19
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-R1: daemon.ts: make the busy-poll maintenance path start the single-flight origin refresh (startRefresh, subject to refreshStartable) at width 1; add a daemon-maintenance-job-wiring test where, with one feature in flight, the busy poll triggers the job, the fastForwardRoot fake is called, and the in-flight work order keeps its pinned base SHA
+**Gate:** prd-audit
+**Rationale:** Task 7 Step 3 already requires that a width-1 busy-poll trigger may run an origin refresh while a feature is in flight. The code fires the trigger, but no job step starts a refresh: rekick uses refresh:false, and startRefresh is reachable only from the free-slot branch. This is implementation drift within an approved task plus a missing done-when test. No architectural decision is needed.
+**Criterion:** S3.3
+**Parent task:** 7
+**Done when:**
+- [test] S3.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-2: daemon.ts: make the busy-poll maintenance path start the single-flight origin refresh at width 1, with a test asserting fastForwardRoot is called while the in-flight work order keeps its pinned base SHA
+**Gate:** prd-audit
+**Rationale:** This is the same defect as S3.3: the width-1 busy refresh is not connected. Task 7 admits the fix and R1 covers it. No new decision is needed.
+**Parent task:** 7
+**Governing clause:** Task 7
+**Done when:**
+- Task 7 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2: mergeable-sweep.ts / daemon-cli.ts: skip enqueue for any request whose slug the live isFeatureInFlight / isWorkClaimActive predicate reports in flight, covering both ci-fix and autoresolve; add a test that an in-flight slug with a failing-check PR leaves RepairQueue empty and calls no worktree teardown
+**Gate:** prd-audit
+**Rationale:** Task 11 Step 3 requires that sweepMergeableLabels queue no repair for an in-flight slug. The CI-fix eligibility binding in daemon-cli.ts takes no in-flight predicate, so a CI-fix request is queued for an in-flight slug. Only autoresolve receives isWorkClaimActive. This is a conforming implementation fix plus the missing done-when test.
+**Criterion:** S4.5
+**Parent task:** 11
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3: daemon-cli.ts: supply repairPriority to runDaemon, bound to the existing priorityResolver band lookup for the request slug; add a daemon-cli wiring test proving production deps pass a resolver that ranks a P0 slug's repair before a P2 slug's repair
+**Gate:** prd-audit
+**Rationale:** Task 14 Step 3 requires repairs to be ordered by the existing priorityResolver band. The engine consumes the optional repairPriority dep, but runDaemonMode never supplies it. Wiring the existing resolver in daemon-cli.ts is conforming production wiring that a test must pin.
+**Criterion:** S5.3
+**Parent task:** 14
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3-2: daemon-cli.ts: wire repairPriority to the existing priorityResolver, with a production-wiring test
+**Gate:** prd-audit
+**Rationale:** This is the same unwired repairPriority defect as S5.3, and ADR decision 5 already mandates band ordering. Task 14 admits the fix and R3 covers it.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 5
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 5 is satisfied by this task.
+- The repair for task rem-prd-audit-R3-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R4: daemon.ts startNextRepair: skip, and leave queued, any request whose slug is claimed as a feature build before takeByUrl/startRepair, so no repair:<url> claim, worker, merge-state read or phase event occurs; add a multi-pass test at width 2 asserting the runner is called zero times across three fill passes while the feature runs, and that the repair starts after the feature finishes
+**Gate:** prd-audit
+**Rationale:** Task 15 requires that a repair whose feature slug is in flight is not started and stays queued. Today the check runs inside the worker after the pool claim. A claim/requeue loop then repeats every fill pass with a GitHub read and a completed phase event each time. Moving the exclusion before takeByUrl/startRepair is within Task 15's contract.
+**Criterion:** S5.7
+**Parent task:** 15
+**Done when:**
+- [test] S5.7 is satisfied by this task.
+- The repair for task rem-prd-audit-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-R5: mergeable-sweep.ts / daemon-cli.ts: make the claim-time attempt persistence for both ci-fix and autoresolve fail closed (propagate the updateWatch/rewriteWatch failure and do not call the adapter); add tests where an injected persistence failure results in zero adapter calls for each repair kind
+**Gate:** as-built
+**Rationale:** Task 15 Step 3 orders the attempt bump through updateWatch before the adapter call. The autoresolve claim path uses rewriteWatch, which swallows persistence failures, so an adapter can run with no durable attempt count. This is a conforming fix within Task 15.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 5
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R6: daemon-width-one-parity.test.ts / daemon-serial-equivalence.test.ts: restore exact toEqual comparison of the width-1 run against the recorded pre-change fixture (RECORDED_N1_TRACE), including the claimed-slug sequence and the pause, build-auth and gh-version gate log lines; fix any ordering or log drift in daemon.ts the comparison exposes
+**Gate:** prd-audit
+**Rationale:** Task 19's done-when requires comparison with a recorded pre-change fixture covering the claimed-slug sequence and the pause, build-auth and gh-version gate log lines. The tests were weakened to ordering checks. Restoring the fixture comparison is test work within Task 19 and preserves its coverage.
+**Criterion:** S9.1
+**Parent task:** 19
+**Done when:**
+- [test] S9.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R6 is committed and its targeted tests pass.
+
+### Task rem-as-built-R7: daemon.ts / daemon-cli.ts: make the startup refresh (recordRefresh) also seed the refreshEngineSource fresh throttle so the first stale-engine check does not fetch again; extend the Task 5 counting-fastForwardRoot test to the armed self-host path, asserting exactly 1 call at first dispatch
+**Gate:** as-built
+**Rationale:** ADR decision 2 and Task 5 require one startup fetch, with recordRefresh seeding the refresh throttle. refreshEngineSource keeps its own independent throttle, so armed self-host startup calls fastForwardRoot twice. Making the startup refresh seed that throttle conforms to the approved design.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 2
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 2 is satisfied by this task.
+- The repair for task rem-as-built-R7 is committed and its targeted tests pass.
+
+### Task rem-as-built-R8: daemon.ts: decouple the per-fill-pass consumeResumeAuthorizations from the job's in-flight promise (no awaiting the job's shared promise; errors caught and logged); add a test where a never-resolving job consume step does not block a later fill pass from dispatching, and a rejecting step does not reject runDaemon
+**Gate:** as-built
+**Rationale:** ADR decision 3 and Tasks 7 and 9 require that the loop never await the background job. The per-pass consumeResumeAuthorizations returns the job's shared pending promise. A slow step therefore blocks dispatch and collection, and a rejection can escape runDaemon. This is a conforming implementation fix.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 3
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R8 is committed and its targeted tests pass.
+
+### Task rem-as-built-R9: daemon.ts: route every restart/rebuild/relink/engine-refresh boundary (predispatch stale-engine refresh/rebuild/restart, queued refresh, relink, restart, bare restart consumption, stale restart) through MaintenanceJob.close() + await settled() before acting; add tests asserting each restart callback runs strictly after a pending job's settled() resolves
+**Gate:** as-built
+**Rationale:** ADR decision 3 and Task 9 require that restart actions run only after the job is closed and settled. Several restart and refresh boundaries skip that settlement: the predispatch stale-engine path, the queued refresh/relink/restart paths, bare restart consumption and stale restart. Applying the existing close+settled step at those boundaries conforms to the design.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 3
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R9 is committed and its targeted tests pass.
+
+### Task rem-as-built-R10: daemon.ts: call MaintenanceJob.close() as soon as the loop exits on shouldStop, before draining workers via collectOne, then await settled(); add a test where a worker completing during shutdown triggers no new job run
+**Gate:** as-built
+**Rationale:** Task 9 requires that the stop path close the job, and that no job step runs after shouldStop. The job is closed only after draining workers, and collectOne completion paths can trigger new maintenance runs before that. Moving close() before shutdown collection is within Task 9.
+**Parent task:** 9
+**Governing clause:** Task 9
+**Done when:**
+- Task 9 is satisfied by this task.
+- The repair for task rem-as-built-R10 is committed and its targeted tests pass.
+
+### Task rem-as-built-R11: repair-queue.ts: remove the unused RepairQueue.has and RepairQueue.take methods, and migrate the tests that use them to list()/takeByUrl() so the dedup and queue-content assertions are kept
+**Gate:** as-built
+**Rationale:** Task 13 defines RepairQueue with enqueue, dedup, list and take. Production uses takeByUrl and list, so has() and the unordered take() are dead public surface. Removing them, and moving tests onto the production methods, keeps Task 13's coverage of dedup and queue contents.
+**Parent task:** 13
+**Governing clause:** Task 13
+**Done when:**
+- Task 13 is satisfied by this task.
+- The repair for task rem-as-built-R11 is committed and its targeted tests pass.
