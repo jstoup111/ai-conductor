@@ -16,7 +16,9 @@ import { isAsBuiltGoverningReference, type AsBuiltGoverningReference } from './a
 import { selectFeaturePlan } from './artifacts.js';
 import { listExistingChildren, pipelinePathFor, type ChildId } from './child-context.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
 import { loadConfig } from './config.js';
+import { makeGitRunner } from './rebase.js';
 import { routingEligible } from './routing/route-types.js';
 import { readState } from './state.js';
 
@@ -789,7 +791,15 @@ export async function readPendingAsBuiltRemediationFindings(
   // intentionally read through the routing parser so a damaged ref is never
   // silently projected as an empty prior-findings set.
   const state = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
-  const slug = state.ok ? state.value.feature_desc : undefined;
+  // The branch identity survives a recreated worktree; conduct-state does
+  // not.  Prefer it when the flat state file was lost.
+  let slug = state.ok ? state.value.feature_desc : undefined;
+  if (!slug) {
+    try {
+      const branch = await makeGitRunner(projectRoot)(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+      if (branch.exitCode === 0) slug = featureSlugOf(parseFeatureBranch(branch.stdout.trim()));
+    } catch { /* no branch identity means no routed projection */ }
+  }
   if (slug) {
     try {
       const config = await loadConfig(projectRoot);

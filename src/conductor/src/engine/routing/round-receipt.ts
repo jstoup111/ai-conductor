@@ -6,6 +6,7 @@ import type { StackedPrsConfig } from '../../types/config.js';
 import type { ChildId } from '../child-context.js';
 import {
   readKickbackLedger,
+  MAX_KICKBACKS_PER_GATE,
   updateKickbackLedger,
   withKickbackLedgerLease,
   writeKickbackLedgerUnlocked,
@@ -107,9 +108,8 @@ export async function grantRoutedRepairCredit(
       // into a new admission refusal or mint another allowance.
       return { result: { kind: 'already-granted' } };
     }
-    if (existing !== undefined && existing.consumed !== true) {
-      return { result: { kind: 'refused', detail: `routed repair credit for ${existing.roundId} is still unused` } };
-    }
+    // Credits are scoped by round.  An unspent prior round must never deny a
+    // later admitted repair its own allowance.
     return {
       ledger: { ...ledger, routedRepairCredit: { roundId: input.roundId } },
       result: { kind: 'granted' },
@@ -394,7 +394,7 @@ export async function tasklessAdmissionCapacity(input: {
   }
   // Keep this numeric literal local to routing so taskless admission doesn't
   // import the legacy self-heal machinery and accidentally bump its ledger.
-  return count >= 2 ? { kind: 'exhausted', count } : { kind: 'available', count };
+  return count >= MAX_KICKBACKS_PER_GATE ? { kind: 'exhausted', count } : { kind: 'available', count };
 }
 
 /** Recreate only receipt-derived accounting after a disposable worktree loss. */
@@ -430,6 +430,10 @@ export async function rebuildLedgerFromReceipts(
       if (!receipt.settlementId) continue;
       ledger = applySettledReceiptToLedger(ledger, item.record);
     }
+    // A receipt reconstruction without the sealed denominator would turn a
+    // lost worktree into free growth.  Refuse rather than persist a zero
+    // placeholder that later readers could mistake for authority.
+    if (sealedAuthored === undefined) return { kind: 'unreadable' } as const;
     await writeKickbackLedgerUnlocked(projectRoot, ledger);
     return { kind: 'rebuilt' } as const;
   });
@@ -463,7 +467,10 @@ export async function pendingAsBuiltFindingsFromRoutes(
   const findings = new Map<string, NonNullable<RouteRecord['pendingAsBuiltFindings']>[number]>();
   for (const item of records) {
     if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
-    if (item.record.receipt.settlementId !== undefined) continue;
+    // Settlement charges a round; it does not resolve its as-built finding.
+    // Keep findings while their host remains admitted/repairing as well as
+    // while the receipt is unsettled.
+    if (!Object.values(item.record.hosts).some((state) => state === 'admitted' || state === 'repairing')) continue;
     for (const finding of item.record.pendingAsBuiltFindings ?? []) findings.set(finding.finding, finding);
   }
   return [...findings.values()];

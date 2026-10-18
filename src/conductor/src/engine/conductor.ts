@@ -190,7 +190,7 @@ import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } 
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
-import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope } from './routing/round-receipt.js';
+import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
@@ -4724,7 +4724,9 @@ export class Conductor {
               growth: Object.values(routed.allocation).reduce((total, allocation) => total + allocation.remTaskIds.length, 0),
               taskless: {}, echo: {}, acks: {},
             };
-            const sealedAuthored = [...planText.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)].length;
+            const priorSealed = await routedSealedAuthored(this.projectRoot, this.featureSlug, { cursor, config: this.config });
+            const sealedAuthored = priorSealed ?? [...planText.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
+              .filter((match) => !match[1]!.startsWith('rem-')).length;
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
               roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
               pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
@@ -6747,6 +6749,27 @@ export class Conductor {
     // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
     // eventually halts for a human instead of ping-ponging.
     let manualTestSelfHeals = 0;
+    // Route receipts are the authority after a disposable worktree loss.  Do
+    // this once before any FAIL is handled so the flat N=1 path remains
+    // untouched while routed resumes retain their exhausted counter.
+    {
+      const receiptSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+      if (receiptSlug && this.config.stacked_prs?.route_whole_feature_fixes === true && await hasDurableChildState(this.projectRoot, receiptSlug)) {
+        try {
+          const receiptCursor = await this.resolveActiveChild(this.projectRoot, receiptSlug);
+          if (routingEligible(receiptCursor, this.config)) {
+            const recovered = await tasklessAdmissionCapacity({
+              projectRoot: this.projectRoot, slug: receiptSlug, gate: 'manual_test',
+              routing: { cursor: receiptCursor, config: this.config },
+            });
+            if (recovered.kind === 'available' || recovered.kind === 'exhausted') manualTestSelfHeals = recovered.count;
+          }
+        } catch {
+          // The resume ledger reconstruction below owns malformed receipt
+          // halts.  Do not make an N=1 or non-routed execution depend on it.
+        }
+      }
+    }
     // How many times a PUBLICATION defect at the finish gate (the recorded PR's
     // own body/title/draft state) has re-dispatched `finish` for a body
     // rewrite. Capped at one: the finish gate's own durable one-shot record
@@ -7023,6 +7046,14 @@ export class Conductor {
             `commits, and manual-test re-runs after this build.`,
         );
 
+        // The event is the admission boundary: counter, one receipt event,
+        // then the cap/record work.  In particular no event can be emitted
+        // after a routed admission has returned.
+        await this.events.emit(this.stampGateTier({
+          type: 'kickback', from: 'manual_test', to: 'build', evidence,
+          count: manualTestSelfHeals,
+        }));
+
         // A taskless manual-test failure still belongs to the routed round
         // protocol on stacked features.  It carries no rem block, but the
         // retry hint and its one admission charge are durable on the record.
@@ -7044,14 +7075,6 @@ export class Conductor {
           default:
             return assertNever(routedAdmission);
         }
-
-        await this.events.emit(this.stampGateTier({
-          type: 'kickback',
-          from: 'manual_test',
-          to: 'build',
-          evidence,
-          count: manualTestSelfHeals,
-        }));
 
         // Task 7: Merged-PR guard on manual_test kickback (TS-1).
         // Before committing the rewind, check if the recorded PR has been
@@ -14978,11 +15001,26 @@ export class Conductor {
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
 
     const host = execution.target.child;
+    let sealedAuthored: number | undefined;
+    try {
+      sealedAuthored = await routedSealedAuthored(this.projectRoot, slug, { cursor, config: this.config });
+    } catch { /* first taskless route has no prior receipt authority */ }
+    if (sealedAuthored === undefined) {
+      try {
+        const planPath = await resolveFeaturePlanPath(this.projectRoot, slug);
+        if (planPath !== undefined) {
+          const plan = await readFile(planPath, 'utf8');
+          sealedAuthored = [...plan.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)]
+            .filter((match) => !match[1]!.startsWith('rem-')).length;
+        }
+      } catch { /* unavailable sealed plan is refused below */ }
+    }
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
       kind: 'audit',
       items: [{ findingId: input.findingId(host), kind: 'audit', owner: host, host, reason: input.reason, fallback: [] }],
       allocation: { [host]: { remTaskIds: [], blockBodies: [], ...(input.retryHint === undefined ? {} : { retryHint: input.retryHint }) } },
+      ...(sealedAuthored === undefined ? {} : { sealedAuthored }),
     });
     if (created.kind !== 'created') return { kind: 'halted', reason: `routing round ${roundId} record creation failed: ${created.kind}` };
 
@@ -15134,11 +15172,17 @@ export class Conductor {
           await this.emitLoopHalt(reason, prUrl);
           return 'halt';
         }
-        // Only config-defined post-region checks carry an echo receipt. Built-in
-        // gates retain their existing ledger and remediation paths; routing one
-        // here would turn ordinary gate verdicts into taskless audit rounds.
-        if (!ALL_STEPS.some((definition) => definition.name === target)) {
-          const routedAdmission = await this.admitRoutedCustomStepKickback(state, target, count);
+        // The originating custom step owns the taskless identity even when it
+        // re-opens a built-in gate such as build.  Ledger charging remains on
+        // the re-opened target above.
+        const routedFromCustomStep = !ALL_STEPS.some((definition) => definition.name === stepName);
+        if (routedFromCustomStep) {
+          await this.events.emit(this.stampGateTier({
+            type: 'kickback', from: stepName, to: target,
+            evidence: v.kickback?.evidence, count,
+            ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
+          }));
+          const routedAdmission = await this.admitRoutedCustomStepKickback(state, stepName, count);
           switch (routedAdmission.kind) {
             case 'admitted':
               break;
@@ -15154,12 +15198,9 @@ export class Conductor {
               return assertNever(routedAdmission);
           }
         }
-        await this.events.emit(this.stampGateTier({
-          type: 'kickback',
-          from: stepName,
-          to: target,
-          evidence: v.kickback?.evidence,
-          count,
+        if (!routedFromCustomStep) await this.events.emit(this.stampGateTier({
+          type: 'kickback', from: stepName, to: target,
+          evidence: v.kickback?.evidence, count,
           ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
         }));
         const hasContract = hasCompletionContract(target, this.config);

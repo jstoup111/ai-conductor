@@ -73,7 +73,17 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   try {
     contract = JSON.parse(await readFile(join(childDir, 'acceptance-specs-run.json'), 'utf8')) as { command?: unknown; cwd?: unknown };
   } catch {
-    return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing or invalid` };
+    // The worktree overlay is disposable.  A recreated checkout can recover
+    // the child contract from the committed host branch instead of treating a
+    // successful routed repair as an invitation to regenerate RED evidence.
+    try {
+      const path = `.pipeline/children/${input.host}/acceptance-specs-run.json`;
+      const committed = await git(['show', `HEAD:${path}`]);
+      if (committed.exitCode !== 0) return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing or invalid` };
+      contract = JSON.parse(committed.stdout) as { command?: unknown; cwd?: unknown };
+    } catch {
+      return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing or invalid` };
+    }
   }
   if (typeof contract.command !== 'string' || contract.command === '' || typeof contract.cwd !== 'string' || contract.cwd === '') {
     return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing command or cwd` };

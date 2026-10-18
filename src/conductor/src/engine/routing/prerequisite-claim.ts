@@ -143,8 +143,12 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
   if (!await existingRef(git, source)) {
     return { kind: 'unverified', detail: `claiming host ${input.host} closure is unavailable` };
   }
-  const paths = [...(input.claim.paths ?? []), ...(input.prerequisitePaths ?? [])];
-  if (await hasAnyClaimInput(git, source, paths, input.claim.symbols ?? [])) {
+  // A builder may only claim that the paths it explicitly names are missing
+  // from its host.  The admitted work-order inputs are a destination
+  // obligation: they need not be missing at the source (and commonly are).
+  const claimedPaths = input.claim.paths ?? [];
+  const destinationPaths = [...new Set([...claimedPaths, ...(input.prerequisitePaths ?? [])])];
+  if (await hasAnyClaimInput(git, source, claimedPaths, input.claim.symbols ?? [])) {
     return { kind: 'unverified', detail: `claimed prerequisite is already present at host ${input.host}` };
   }
   const closed = `refs/conductor/${input.slug}/closed/c${input.claim.child}`;
@@ -157,7 +161,7 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
       ? closed
       : `refs/heads/${leafBranchFor(input.slug)}`;
   if (!await existingRef(git, ref)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} is unavailable` };
-  if (!await hasPaths(git, ref, paths)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite paths` };
+  if (!await hasPaths(git, ref, destinationPaths)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite paths` };
   if (!await hasSymbols(git, ref, input.claim.symbols ?? [])) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite symbols` };
   return { kind: 'verified', destination: input.claim.child, ref };
 }
