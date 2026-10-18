@@ -698,18 +698,21 @@ routed-resume-fixtures-must-commit-config).
 **Steps:**
 1. Write failing tests: `src/conductor/test/engine/routing/host-region-entry.obligation.test.ts` — an `existing-task` repair of `T1` hosted by child 1 with no FAIL rows; a mixed round's `existing-task` item on `T2` with `restage: false`; a restage failure; a recreated worktree with host 1 `repairing`; a build with no commit and an unchanged tree.
 2. Verify RED
-3. Implement: in `enterHostRegion`, after the frozen-block write, for each `existing-task` item call `admitRoutedObligation` with `{branch: feat/c<h>/<slug>, head: tip at entry, tree: entry.tree}`, and restage its `taskIds` through `restageExistingRemediationTaskStatuses` unless `restage` is `false`; a restage failure halts. Record each binding on the item in the `repairing` transaction (Task 49). The `repairing` resume arm rebuilds missing engine-state obligations from the record's bindings by admission key. Remove nothing from the N=1 path. Expose `hostNoOpEvidence(record, host, git)` returning whether the host branch moved and its tree differs from `entry.tree`, for #3212's exit.
+3. Implement: in `enterHostRegion`, after the frozen-block write, for each `existing-task` item call `admitRoutedObligation` with `{branch: feat/c<h>/<slug>, head: tip at entry, tree: entry.tree}`, and restage its `taskIds` through `restageExistingRemediationTaskStatuses` unless `restage` is `false`; a restage failure halts. Record each binding on the item in the `repairing` transaction (Task 49). The `repairing` resume arm rebuilds missing engine-state obligations from the record's bindings by admission key. Remove nothing from the N=1 path.
 4. Verify GREEN, commit.
+
+> **Amended 2026-10-18 by #3211:** Operator DECIDE on as-built finding `as-built:e24e3c51-779a-4d28-8b0b-3e6da0ab7519:2` defers the `hostNoOpEvidence` primitive to #3212, which owns its only consumer (the host-region exit). `entry.tree` stays recorded as the baseline that primitive will compare against. The superseded Step 3 sentence was: Expose `hostNoOpEvidence(record, host, git)` returning whether the host branch moved and its tree differs from `entry.tree`, for #3212's exit.
 
 **Done when:**
 - [test] region entry for an `existing-task` repair of `T1` hosted by child 1 writes an obligation with branch `feat/c1/demo`, head the tip at entry and the entry tree hash, and restages `T1` before the BUILD dispatch spy is called.
 - [test] for the mixed round's `existing-task` item on `T2` with `restage: false`, the obligation is admitted and the restage spy records no call for `T2`.
 - [test] a restage failure halts the feature, host 1 stays `admitted`, and the provider dispatch spy is never called.
 - [test] in a recreated worktree with no `engine-state.json` and host 1 `repairing`, resume rebuilds the obligation from `routes/r1` with the same branch, boundary and admission key.
-- [test] after a build with no commit, `hostNoOpEvidence` reports no head move and a tree equal to `entry.tree` for host 1.
+
+> **Amended 2026-10-18 by #3211:** The fifth `Done when` check is withdrawn with the deferred primitive and moves to #3212. The superseded check was: after a build with no commit, `hostNoOpEvidence` reports no head move and a tree equal to `entry.tree` for host 1.
 
 **Files likely touched:**
-- `src/conductor/src/engine/routing/host-region-entry.ts` — bindings, restage, rebuild, no-op evidence
+- `src/conductor/src/engine/routing/host-region-entry.ts` — bindings, restage, rebuild
 - `src/conductor/src/engine/routing/round-admission.ts` — `repairing` resume rebuild
 - `src/conductor/test/engine/routing/host-region-entry.obligation.test.ts` — obligation tests
 

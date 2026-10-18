@@ -290,22 +290,6 @@ async function reconcileHostObligations(
   return { kind: 'reconciled' };
 }
 
-/** The routed host's checked-out tip and tree compared with its entry baseline. */
-export async function hostNoOpEvidence(
-  record: RouteRecord,
-  host: ChildId,
-  git: GitRunner,
-): Promise<{ readonly headMoved: boolean; readonly treeChanged: boolean }> {
-  if (record.hosts[host] === undefined || record.entry?.host !== host) {
-    throw new Error(`routing host ${host} has no entry baseline`);
-  }
-  const [head, tree] = await Promise.all([gitSha(git, 'HEAD'), gitSha(git, 'HEAD^{tree}')]);
-  return {
-    headMoved: head !== record.entry.pinnedBase,
-    treeChanged: tree !== record.entry.tree,
-  };
-}
-
 /**
  * Pins and enters the selected routed host exactly once before its BUILD
  * region can run.  Frozen blocks are committed before the host becomes

@@ -8,7 +8,7 @@ import { parseChildId } from '../../../src/engine/child-context.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { createRepairObligationStore } from '../../../src/engine/repair-obligations.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { enterHostRegion, hostNoOpEvidence } from '../../../src/engine/routing/host-region-entry.js';
+import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
@@ -131,18 +131,6 @@ describe('routed host region obligation entry', () => {
     expect(Object.values(obligations.value.records)).toEqual([
       expect.objectContaining({ baseline: expect.objectContaining({ branch: 'feat/c1/demo', head: subject.closure }) }),
     ]);
-  });
-
-  it('reports no host move or tree change when the routed build made no commit', async () => {
-    const subject = await fixture({ taskId: 'T1' });
-    await expect(enter(subject)).resolves.toMatchObject({ kind: 'entered' });
-    const record = await readRouteRecord(subject.repo, 'demo', roundId);
-    if (record.kind !== 'record') throw new Error('route record missing');
-
-    await expect(hostNoOpEvidence(record.record, child, subject.git)).resolves.toEqual({
-      headMoved: false,
-      treeChanged: false,
-    });
   });
 
 });
