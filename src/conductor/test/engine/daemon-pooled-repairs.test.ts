@@ -105,6 +105,43 @@ describe('daemon pooled repairs', () => {
     await daemon;
   });
 
+  // Covers: task:rem-prd-audit-rem-r4b-skip-inflight-repair.
+  it('leaves an in-flight feature repair queued across fill passes, then starts it after collection', async () => {
+    const queue = new RepairQueue();
+    const featureA = deferred<FeatureOutcome>();
+    const repair = vi.fn(async () => {});
+    let discoveries = 0;
+    let stop = false;
+    const daemon = runDaemon({
+      repairs: { queue, run: repair },
+      discoverBacklog: async () => {
+        discoveries++;
+        return [{ slug: 'a' }];
+      },
+      runFeature: async (item) => {
+        if (item.slug === 'a') {
+          queue.enqueue({
+            kind: 'ci-fix', prUrl: 'https://example.test/a', slug: 'a',
+            prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '',
+            run: async () => ({ kind: 'failed', stage: 'worktree' }),
+          });
+          return featureA.promise;
+        }
+        return done(item.slug);
+      },
+      shouldStop: () => stop,
+    }, { concurrency: 2, once: false, idlePollMs: 0 });
+
+    await vi.waitFor(() => expect(discoveries).toBeGreaterThanOrEqual(3));
+    expect(repair).not.toHaveBeenCalled();
+    expect(queue.list()).toHaveLength(1);
+
+    featureA.resolve(done('a'));
+    await vi.waitFor(() => expect(repair).toHaveBeenCalledOnce());
+    stop = true;
+    await daemon;
+  });
+
   it('drops claimed repairs whose watch entries were removed without recreating them', async () => {
     const root = await mkdtemp('/tmp/daemon-pooled-repairs-');
     const watchPath = join(root, '.daemon', 'mergeable-watch.jsonl');
