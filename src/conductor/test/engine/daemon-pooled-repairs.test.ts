@@ -1,4 +1,4 @@
-// Covers: task:14, task:15, task:16, task:19
+// Covers: task:14, task:15, task:16, task:19, task:rem-prd-audit-R3, task:rem-prd-audit-R3-2, task:rem-prd-audit-R4
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

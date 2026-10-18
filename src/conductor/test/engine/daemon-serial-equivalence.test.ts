@@ -1,4 +1,4 @@
-// Covers: task:25
+// Covers: task:25, task:rem-prd-audit-R6
 import { describe, expect, it, vi } from 'vitest';
 import type { DaemonMaintenanceOperation } from '../../src/engine/daemon-maintenance.js';
 

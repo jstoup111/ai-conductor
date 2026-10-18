@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-R2, task:rem-as-built-R11
 /**
  * Tests for mergeable-sweep.ts (Tasks 12–14: watch registry + sweep decision tree).
  *
