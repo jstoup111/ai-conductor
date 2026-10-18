@@ -618,14 +618,14 @@ describe('executeProviderCandidates', () => {
       {
         owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' },
         runId: 'R', attempt: 1,
-        member: 'security',
+        auxiliaryMember: 'security',
       },
     );
   });
 
   // Covers: task:rem-as-built-rem-ab-capture-dispatch-seq
   it('uses a capture-only sequence for auxiliary retries without changing their escalation attempts', async () => {
-    const prepared: Array<{ owner: unknown; runId: string; attempt: number; member: string }> = [];
+    const prepared: Array<{ owner: unknown; runId: string; attempt: number; auxiliaryMember: string }> = [];
     await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: 'security', runId: 'R',
       policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: true, min_confidence: 0 },
@@ -634,21 +634,21 @@ describe('executeProviderCandidates', () => {
       options: { prompt: 'review', cwd: '/workspace' },
       nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
       prepareCandidateSelfHost: async (_candidate, _runtime, identity) => {
-        if (identity?.member !== 'security') throw new Error('expected auxiliary capture identity');
+        if (identity?.auxiliaryMember !== 'security') throw new Error('expected auxiliary capture identity');
         if (!('owner' in identity) || identity.owner === undefined) throw new Error('expected current transcript owner identity');
         prepared.push({
           owner: identity.owner,
           runId: identity.runId,
           attempt: identity.attempt,
-          member: identity.member,
+          auxiliaryMember: identity.auxiliaryMember,
         });
         return { executable: '/resolved/codex', env: {}, args: [], teardown: async () => {} };
       },
     });
 
     expect(prepared).toEqual([
-      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 1, member: 'security' },
-      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 2, member: 'security' },
+      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 1, auxiliaryMember: 'security' },
+      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 2, auxiliaryMember: 'security' },
     ]);
   });
 

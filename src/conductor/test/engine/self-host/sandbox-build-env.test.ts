@@ -372,7 +372,7 @@ describe('minimal Claude self-host sandbox', () => {
     events.on('provider_transcripts_harvest_failed', (event) => { failed.push(event); });
     const owner = { kind: 'configured-group-member', parentGroup: 'explore', member: 'rubric-a' } as const;
     const sandbox = await provisionSandboxBuildEnv(options({
-      captureIdentity: { owner, runId: 'r1', attempt: 1, member: 'rubric-a' }, events,
+      captureIdentity: { owner, runId: 'r1', attempt: 1, auxiliaryMember: 'rubric-a' }, events,
     }));
     await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
     await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), '{"type":"assistant"}\n');

@@ -509,7 +509,7 @@ async function harvestInterruptedHome(options: {
   if (provider === undefined) return [];
   const descriptor = providerDescriptor(provider);
   const step: TranscriptOwnerStep = options.lease.step ?? LEGACY_TRANSCRIPT_OWNER_STEP;
-  const capture = transcriptCapture({ worktreeRoot: options.worktreeRoot, step, runId: options.lease.runId, attempt: options.lease.attempt, ...(options.lease.member === undefined ? {} : { member: options.lease.member }), provider });
+  const capture = transcriptCapture({ worktreeRoot: options.worktreeRoot, step, runId: options.lease.runId, attempt: options.lease.attempt, ...(options.lease.member === undefined ? {} : { auxiliaryMember: options.lease.member }), provider });
   const childPrefixes = descriptor.selfHostShape.isolation === 'claude-config-sandbox'
     ? ['harness-selfbuild-', `self-host-${provider}-`]
     : [`self-host-${provider}-`];
@@ -584,7 +584,7 @@ async function emitTranscriptHarvest(
 ): Promise<void> {
   await emitTranscriptHarvestEvent(events, {
     step: harvest.step, runId: harvest.runId, attempt: harvest.attempt,
-    ...(harvest.member === undefined ? {} : { member: harvest.member }),
+    ...(harvest.member === undefined ? {} : { auxiliaryMember: harvest.member }),
     provider: harvest.provider, path: harvest.path, interrupted: true,
   }, harvest.result);
 }

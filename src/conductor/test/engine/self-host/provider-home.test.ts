@@ -141,7 +141,7 @@ describe('provider-aware self-host homes', () => {
       await mkdir(join(worktree, 'skills'), { recursive: true });
       const provision = (attempt: number, member?: string) => provisionProviderHome({
         provider: { id: provider }, worktreeRoot: worktree, baseDir: root,
-        captureIdentity: { step: 'build', runId: 'run-9', attempt, ...(member === undefined ? {} : { member }) },
+        captureIdentity: { step: 'build', runId: 'run-9', attempt, ...(member === undefined ? {} : { auxiliaryMember: member }) },
       });
       try {
         const [a, b] = await Promise.all([provision(1, 'rubric-a'), provision(1, 'rubric-b')]);

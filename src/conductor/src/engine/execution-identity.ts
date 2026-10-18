@@ -106,7 +106,7 @@ function isExecutionSubject(value: unknown): value is ExecutionSubject {
   if (!isRecord(value) || typeof value.kind !== 'string') return false;
   if (value.kind === 'lifecycle-step') return isStepName(value.step);
   return value.kind === 'configured-member'
-    && isStepName(value.parentGroup)
+    && isNonEmptyString(value.parentGroup)
     && isNonEmptyString(value.member);
 }
 
