@@ -41,6 +41,7 @@ describe('daemon width-one parity', () => {
   it('fills the released width-one slot with a queued repair before the next feature', async () => {
     const queue = new RepairQueue();
     const events: string[] = [];
+    const terminalEffects = vi.fn();
     let peak = 0;
     let claims: SamplingClaims;
     const sampleInFlight = (): void => {
@@ -64,6 +65,7 @@ describe('daemon width-one parity', () => {
     const daemon = runDaemon({
       claims,
       repairs: { queue, run: runRepair },
+      onFeatureTerminalEffects: terminalEffects,
       discoverBacklog: async () => ['first', 'second', 'third'].map((slug) => ({ slug })),
       runFeature: async (item): Promise<FeatureOutcome> => {
         events.push(`feature:start:${item.slug}`);
@@ -89,10 +91,13 @@ describe('daemon width-one parity', () => {
     await repairStarted;
     sampleInFlight();
     resolveRepair();
-    await daemon;
+    const result = await daemon;
 
     expect(peak).toBe(1);
     expect(runRepair).toHaveBeenCalledOnce();
+    expect(terminalEffects).toHaveBeenCalledTimes(3);
+    expect(terminalEffects).not.toHaveBeenCalledWith({ slug: 'repair:https://example.test/repair', status: 'done' });
+    expect(result.processed).not.toContainEqual({ slug: 'repair:https://example.test/repair', status: 'done' });
     expect(events.indexOf('repair:start')).toBeGreaterThan(events.indexOf('feature:finish:first'));
     expect(events.indexOf('repair:start')).toBeLessThan(events.indexOf('feature:start:second'));
     expect(events).toEqual([
