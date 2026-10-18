@@ -75,6 +75,31 @@ describe('MaintenanceJob', () => {
     expect(step).toHaveBeenCalledTimes(2);
   });
 
+  it('honors one trigger that lands during a rerun pass', async () => {
+    const firstPass = deferred<void>();
+    const rerunPass = deferred<void>();
+    const rerunStarted = deferred<void>();
+    const step = vi.fn(async () => {
+      if (step.mock.calls.length === 1) await firstPass.promise;
+      if (step.mock.calls.length === 2) {
+        rerunStarted.resolve();
+        await rerunPass.promise;
+      }
+    });
+    const job = new MaintenanceJob([['sweep', step]]);
+
+    job.trigger();
+    job.trigger();
+    firstPass.resolve();
+    await rerunStarted.promise;
+
+    job.trigger();
+    rerunPass.resolve();
+
+    await job.settled();
+    expect(step).toHaveBeenCalledTimes(3);
+  });
+
   it('logs a step error, continues the ordered run, and settles without rejection', async () => {
     const calls: string[] = [];
     const log = vi.fn();

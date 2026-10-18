@@ -72,19 +72,12 @@ export class MaintenanceJob {
       kind: 'running', current: Promise.resolve(), rerunPending: false,
     };
     this.lifecycle = running;
-    running.current = this.runPass().finally(() => {
-      // This transition has no idle gap: a trigger either sets rerunPending
-      // before it, or starts a fresh pass after it.
-      if (!this.closed && running.rerunPending) {
-        running.rerunPending = false;
-        running.current = this.runPass().finally(() => this.finish(running));
-      } else {
-        this.lifecycle = { kind: 'idle' };
-      }
-    });
+    running.current = this.runPass().finally(() => this.finish(running));
   }
 
   private finish(running: Extract<typeof this.lifecycle, { kind: 'running' }>): void {
+    // This transition has no idle gap: a trigger either sets rerunPending
+    // before it, or starts a fresh pass after it.
     if (!this.closed && running.rerunPending) {
       running.rerunPending = false;
       running.current = this.runPass().finally(() => this.finish(running));
