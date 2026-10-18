@@ -52,6 +52,15 @@ vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal)
   };
 });
 
+vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/round-receipt.js')>();
+  return {
+    ...actual,
+    // These cases exercise failures after the durable denominator is available.
+    routedSealedAuthored: vi.fn(async () => 1),
+  };
+});
+
 import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
