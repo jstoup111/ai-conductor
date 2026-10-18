@@ -17,8 +17,8 @@ const compileTimeUnsettledReceipt: UnsettledRoundReceipt = {
   growth: 0,
   taskless: {},
   echo: {},
-  // @ts-expect-error Unsettled receipts cannot acknowledge a host.
   acks: {
+    // @ts-expect-error Unsettled receipts cannot acknowledge a host.
     1: true,
   },
 };
@@ -69,7 +69,7 @@ describe('routed repair durable record parsers', () => {
 
   it('accepts an existing-task item only when its durable task binding is present', () => {
     const existingTaskRecord = structuredClone(routeRecord);
-    existingTaskRecord.items[0]!.existingTask = true;
+    (existingTaskRecord.items[0]! as { existingTask?: boolean }).existingTask = true;
     expect(parseRouteRecord(JSON.stringify(existingTaskRecord))).toEqual(existingTaskRecord);
   });
 

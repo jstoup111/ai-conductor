@@ -190,7 +190,7 @@ import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } 
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
-import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch, type ReceiptRoutingScope } from './routing/round-receipt.js';
+import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
@@ -14940,6 +14940,9 @@ export class Conductor {
       readonly findingId: (host: ChildId) => string;
       readonly reason: string;
       readonly retryHint?: string;
+      readonly preflightReceipt?: (input: { readonly slug: string; readonly routing: ReceiptRoutingScope }) => Promise<
+        { readonly kind: 'available' } | { readonly kind: 'exhausted'; readonly reason: string } | { readonly kind: 'halted'; readonly reason: string }
+      >;
       readonly mutateReceipt: (input: { readonly slug: string; readonly roundId: RoundId; readonly routing: ReceiptRoutingScope }) => Promise<
         { readonly kind: 'charged' } | { readonly kind: 'exhausted'; readonly reason: string } | { readonly kind: 'halted'; readonly reason: string }
       >;
@@ -14954,12 +14957,22 @@ export class Conductor {
     // caller still emits and navigates through the legacy kickback flow.
     if (!slug) return { kind: 'admitted' };
 
+    // A configured one-slice feature has no child boundary to route across.
+    // Keep its established self-heal path entirely flat, including avoiding
+    // a route-ref probe merely to discover there is nowhere to send it.
+    if (this.config.stacked_prs?.max_slices === 1) return { kind: 'admitted' };
+
     const cursor = await this.resolveActiveChild(this.projectRoot, slug);
     if (!routingEligible(cursor, this.config)) return { kind: 'admitted' };
     if (!await hasDurableChildState(this.projectRoot, slug)) return { kind: 'admitted' };
 
     const execution = resolveExecutionChild(cursor, slug);
     if (execution.source !== 'cursor' && execution.source !== 'routed-host') return { kind: 'admitted' };
+
+    if (input.preflightReceipt !== undefined) {
+      const preflight = await input.preflightReceipt({ slug, routing: { cursor, config: this.config } });
+      if (preflight.kind !== 'available') return preflight;
+    }
 
     const roundId = await nextRoundId(this.projectRoot, slug);
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
@@ -15017,6 +15030,14 @@ export class Conductor {
       findingId: () => 'manual-test-fail',
       reason: 'manual-test',
       retryHint: evidence,
+      preflightReceipt: async ({ slug, routing }) => {
+        const capacity = await tasklessAdmissionCapacity({ projectRoot: this.projectRoot, slug, gate: 'manual_test', routing });
+        return capacity.kind === 'available'
+          ? capacity
+          : capacity.kind === 'exhausted'
+            ? { kind: 'exhausted', reason: `manual_test admission is exhausted at ${capacity.count}` }
+            : capacity;
+      },
       mutateReceipt: async ({ slug, roundId, routing }) => {
         const charged = await chargeTasklessAtAdmission({ projectRoot: this.projectRoot, slug, roundId, gate: 'manual_test', routing });
         return charged.kind === 'charged'
@@ -15113,23 +15134,25 @@ export class Conductor {
           await this.emitLoopHalt(reason, prUrl);
           return 'halt';
         }
-        // A configured post-region step keeps its established flat ledger
-        // bump, then records that bumped count on a taskless routed receipt.
-        // No plan task is appended for this shape.
-        const routedAdmission = await this.admitRoutedCustomStepKickback(state, target, count);
-        switch (routedAdmission.kind) {
-          case 'admitted':
-            break;
-          case 'exhausted':
-          case 'halted': {
-            const reason = routedAdmission.reason;
-            await this.writeHaltMarker(reason + '\n', 'needs-human');
-            const prUrl = await this.surfaceRemediationPr(reason);
-            await this.emitLoopHalt(reason, prUrl);
-            return 'halt';
+        // Only config-defined post-region checks carry an echo receipt. Built-in
+        // gates retain their existing ledger and remediation paths; routing one
+        // here would turn ordinary gate verdicts into taskless audit rounds.
+        if (!ALL_STEPS.some((definition) => definition.name === target)) {
+          const routedAdmission = await this.admitRoutedCustomStepKickback(state, target, count);
+          switch (routedAdmission.kind) {
+            case 'admitted':
+              break;
+            case 'exhausted':
+            case 'halted': {
+              const reason = routedAdmission.reason;
+              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await this.emitLoopHalt(reason, prUrl);
+              return 'halt';
+            }
+            default:
+              return assertNever(routedAdmission);
           }
-          default:
-            return assertNever(routedAdmission);
         }
         await this.events.emit(this.stampGateTier({
           type: 'kickback',

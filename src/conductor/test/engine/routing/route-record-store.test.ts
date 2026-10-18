@@ -13,7 +13,7 @@ import {
   writeRouteRecord,
 } from '../../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 
@@ -30,7 +30,7 @@ const routeRecord: RouteRecord = {
   allocation: { [c1]: { remTaskIds: ['rem-4'], blockBodies: ['### Task rem-4\n'] } },
   hosts: { [c1]: 'repairing' },
   currentHostIndex: 0,
-  receipt: {},
+  receipt: emptyUnsettledReceipt(),
   outbox: [],
 };
 

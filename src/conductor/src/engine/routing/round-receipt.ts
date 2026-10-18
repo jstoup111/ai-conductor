@@ -289,7 +289,11 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await withKickbackLedgerLease(input.projectRoot, async () => {
       const stored = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
-      if (stored.kind !== 'record') return { kind: 'halted', reason: `routing round ${input.roundId} is unreadable` } as const;
+      // A malformed route receipt is a budget-boundary refusal.  Returning an
+      // exhausted result lets the conductor persist the normal, flat cap
+      // evidence and halt before a provider receives BUILD; a generic error
+      // would otherwise bypass that evidence path.
+      if (stored.kind !== 'record') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       if (currentHost(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
       const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
       if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
@@ -352,15 +356,9 @@ export async function chargeTasklessAtAdmission(input: {
   readonly git?: GitRunner;
 }): Promise<{ readonly kind: 'charged'; readonly count: number } | { readonly kind: 'exhausted'; readonly count: number } | { readonly kind: 'halted'; readonly reason: string }> {
   const git = input.git ?? makeGitRunner(input.projectRoot);
-  const records = await enumerateRouteReceiptRecords({ ...input, git });
-  let count = 0;
-  for (const item of records) {
-    if (item.kind !== 'ok') return { kind: 'halted', reason: `route receipt is ${item.kind}` };
-    count += item.record.receipt.taskless[input.gate] ?? 0;
-  }
-  // Keep this numeric literal local to routing so taskless admission doesn't
-  // import the legacy self-heal machinery and accidentally bump its ledger.
-  if (count >= 2) return { kind: 'exhausted', count };
+  const capacity = await tasklessAdmissionCapacity({ ...input, git });
+  if (capacity.kind !== 'available') return capacity;
+  const count = capacity.count;
   const current = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
   if (current.kind !== 'record') return { kind: 'halted', reason: `route receipt ${input.roundId} is unreadable` };
   const present = current.record.receipt.taskless[input.gate] ?? 0;
@@ -373,6 +371,30 @@ export async function chargeTasklessAtAdmission(input: {
   return wrote.kind === 'updated'
     ? { kind: 'charged', count: count + 1 }
     : { kind: 'halted', reason: `taskless receipt write refused: ${wrote.kind}` };
+}
+
+/**
+ * Read the taskless budget before a caller creates its route record.  This
+ * makes an exhausted admission side-effect free: no prepared route ref is
+ * left behind merely to discover that the legacy self-heal allowance is gone.
+ */
+export async function tasklessAdmissionCapacity(input: {
+  readonly projectRoot: string;
+  readonly slug: string;
+  readonly gate: TasklessReceiptGate;
+  readonly routing: ReceiptRoutingScope;
+  readonly git?: GitRunner;
+}): Promise<{ readonly kind: 'available'; readonly count: number } | { readonly kind: 'exhausted'; readonly count: number } | { readonly kind: 'halted'; readonly reason: string }> {
+  const git = input.git ?? makeGitRunner(input.projectRoot);
+  const records = await enumerateRouteReceiptRecords({ ...input, git });
+  let count = 0;
+  for (const item of records) {
+    if (item.kind !== 'ok') return { kind: 'halted', reason: `route receipt is ${item.kind}` };
+    count += item.record.receipt.taskless[input.gate] ?? 0;
+  }
+  // Keep this numeric literal local to routing so taskless admission doesn't
+  // import the legacy self-heal machinery and accidentally bump its ledger.
+  return count >= 2 ? { kind: 'exhausted', count } : { kind: 'available', count };
 }
 
 /** Recreate only receipt-derived accounting after a disposable worktree loss. */

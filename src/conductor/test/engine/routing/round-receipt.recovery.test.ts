@@ -22,7 +22,7 @@ vi.mock('../../../src/engine/kickback-ledger.js', async (importOriginal) => {
 });
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
+import { readKickbackLedger, type PendingRepairSettlementBudget } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { createRouteRecord, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { reconcileReceiptLedger, settleRoundAtDispatch } from '../../../src/engine/routing/round-receipt.js';
@@ -32,7 +32,7 @@ import { emptyUnsettledReceipt, parseRoundId } from '../../../src/engine/routing
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
 const routing = { cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } } } as const;
-const budgets = [{
+const budgets: readonly PendingRepairSettlementBudget[] = [{
   gate: 'prd_audit', lapCap: 2, growthCap: 4,
   growth: { authored: 4, added: 0, byGate: {}, remaining: 4 },
   authoredSource: 'plan' as const,
