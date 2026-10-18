@@ -1076,7 +1076,7 @@ export async function runDaemon(
       const [aRank, aCreated] = repairBand(a);
       const [bRank, bCreated] = repairBand(b);
       return aRank - bRank || aCreated.localeCompare(bCreated);
-    })[0];
+    }).find((candidate) => !candidate.slug || !isFeatureInFlight(candidate.slug));
     if (!repair) return undefined;
     // A feature owns its slug for the entire build. Keep the repair queued
     // until that claim is released; do not create a repair claim or read PR
@@ -1286,7 +1286,13 @@ export async function runDaemon(
     // re-kick before consuming the backlog so a freshly-cleared marker is
     // un-parked in THIS pass (its dispatch still flows through the existing
     // un-park path, FR-8 — the sweep issues none).
-    await maintenance.run('rekick', () => maybeRekick(false));
+    // Re-kick remains serialized with background reconciliation by its shared
+    // tail, but a slow background pass must not occupy this dispatch slot.
+    // `maybeRekick` catches the tail for later callers; catch this caller's
+    // promise too so a failed durable write is never an unhandled rejection.
+    void maintenance.run('rekick', () => maybeRekick(false)).catch((error) => {
+      log(`base-SHA reconciliation failed (${error instanceof Error ? error.message : String(error)}); continuing`);
+    });
     const parkedBeforeRefresh = new Set(claims.listParked());
     const picked = await pickEligible({ items: refreshed }, pickCtx);
     for (const slug of claims.listParked()) {
@@ -1428,7 +1434,6 @@ export async function runDaemon(
       // starting another pass while workers finish; the already-running pass
       // is deliberately allowed to settle before that boundary acts.
       maintenanceJob.close();
-      await maintenanceJob.settled();
       if (drain.reason === 'restart-pending' && deps.recordRestartPendingDrain) {
         try {
           await deps.recordRestartPendingDrain(drain.slugs);
@@ -1501,12 +1506,10 @@ export async function runDaemon(
     }
     if (inFlight.size !== 0) return false;
 
-    // Root mutations and the maintenance job must never overlap: a queued
-    // reconciliation pass can otherwise observe or mutate a half-refreshed
-    // checkout. Closing is idempotent, so all restart/rebuild entrances share
-    // this boundary.
+    // Root mutations and the maintenance job must never overlap: let a current
+    // pass settle before refresh/rebuild, without permanently disabling future
+    // maintenance when this preflight decides not to restart.
     if (maintenanceJob.isRunning()) {
-      maintenanceJob.close();
       await maintenanceJob.settled();
     }
 
@@ -1553,6 +1556,8 @@ export async function runDaemon(
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
     if (!deps.requestRestart) return false;
     log(`[daemon] engine stale after rebuild — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
+    maintenanceJob.close();
+    await maintenanceJob.settled();
     const result = await deps.requestRestart({ fromIdentity, targetIdentity });
     return result.fired;
   };
@@ -1930,6 +1935,8 @@ export async function runDaemon(
                   log(`[daemon] stale engine detected — captured: ${fromIdentity}, target: ${targetIdentity}`);
 
                   if (deps.requestRestart) {
+                    maintenanceJob.close();
+                    await maintenanceJob.settled();
                     const result = await deps.requestRestart({
                       fromIdentity,
                       targetIdentity,

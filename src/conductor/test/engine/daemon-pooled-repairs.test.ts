@@ -13,6 +13,12 @@ import { PASSING_SUITE, buildPrFixture, skipReplay } from './autoresolve-pr-fixt
 
 const done = (slug: string): FeatureOutcome => ({ slug, status: 'done' });
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((onResolve) => { resolve = onResolve; });
+  return { promise, resolve };
+}
+
 const repairCapabilityContract = {
   // @ts-expect-error a queue cannot be injected without its claim-time runner.
   repairs: { queue: new RepairQueue() },
@@ -69,6 +75,34 @@ describe('daemon pooled repairs', () => {
     }, { concurrency: 1, once: true });
     expect(runRepair).not.toHaveBeenCalled();
     expect(queue.list()).toHaveLength(1);
+  });
+
+  it('skips an in-flight feature repair and starts the next eligible repair before a new feature', async () => {
+    const queue = new RepairQueue();
+    const featureA = deferred<FeatureOutcome>();
+    const events: string[] = [];
+    const daemon = runDaemon({
+      repairPriority: (slug) => slug === 'a' ? 'P0' : 'P2',
+      repairs: {
+        queue,
+        run: async (request) => { events.push(`repair:${request.slug}`); },
+      },
+      discoverBacklog: async () => [{ slug: 'a' }, { slug: 'new-feature' }],
+      runFeature: async (item) => {
+        events.push(`feature:${item.slug}`);
+        if (item.slug === 'a') {
+          queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/a', slug: 'a', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '', run: async () => ({ kind: 'failed', stage: 'worktree' }) });
+          queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/b', slug: 'b', prCreatedAt: '2026-01-02T00:00:00Z', queuedAt: '', run: async () => ({ kind: 'failed', stage: 'worktree' }) });
+          return featureA.promise;
+        }
+        return done(item.slug);
+      },
+    }, { concurrency: 2, once: true, maxItems: 2, idlePollMs: 0 });
+
+    await vi.waitFor(() => expect(events).toContain('repair:b'));
+    expect(events.indexOf('repair:b')).toBeLessThan(events.indexOf('feature:new-feature'));
+    featureA.resolve(done('a'));
+    await daemon;
   });
 
   it('drops claimed repairs whose watch entries were removed without recreating them', async () => {

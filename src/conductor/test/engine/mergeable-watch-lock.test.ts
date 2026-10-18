@@ -1,7 +1,7 @@
 // Covers: task:12
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -84,6 +84,20 @@ describe('updateWatch', () => {
       entry.slug === 'a' ? { ...entry, ciFixAttempts: 1 } : entry,
     ));
     expect(await readFile(watchPath(), 'utf8')).not.toBe(before);
+  });
+
+  it('propagates a strict durable-write failure while ordinary rewrites remain best effort', async () => {
+    const lockedRoot = await mkdtemp(join(tmpdir(), 'mergeable-watch-readonly-'));
+    const lockedDaemon = join(lockedRoot, '.daemon');
+    await mkdir(lockedDaemon);
+    await chmod(lockedDaemon, 0o500);
+    try {
+      await expect(updateWatch(lockedRoot, (watch) => watch, { strictWrite: true })).rejects.toThrow();
+      await expect(updateWatch(lockedRoot, (watch) => watch)).resolves.toBeUndefined();
+    } finally {
+      await chmod(lockedDaemon, 0o700);
+      await rm(lockedRoot, { recursive: true, force: true });
+    }
   });
 
   it('preserves an update that lands after sweep observation and before its rewrite', async () => {

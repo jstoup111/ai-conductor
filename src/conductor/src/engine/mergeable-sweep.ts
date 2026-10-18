@@ -296,6 +296,13 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
   }
 }
 
+/** Overwrite the registry and surface a persistence failure to a durable caller. */
+async function rewriteWatchStrict(projectRoot: string, entries: WatchEntry[]): Promise<void> {
+  await mkdir(join(projectRoot, '.daemon'), { recursive: true });
+  const content = entries.length > 0 ? entries.map((e) => JSON.stringify(e)).join('\n') + '\n' : '';
+  await writeFile(join(projectRoot, WATCH_FILE), content);
+}
+
 /**
  * Apply a watch-registry mutation as one serialized read-modify-write update.
  * Mutator failures deliberately propagate before `rewriteWatch`, preserving
@@ -314,6 +321,7 @@ export async function updateWatch<T = undefined>(
     | WatchEntry[]
     | WatchUpdate<T>
     | Promise<WatchEntry[] | WatchUpdate<T>>,
+  options: { strictWrite?: boolean } = {},
 ): Promise<T | undefined> {
   const previous = watchUpdateLocks.get(projectRoot) ?? Promise.resolve();
   let release!: () => void;
@@ -327,10 +335,12 @@ export async function updateWatch<T = undefined>(
   try {
     const mutation = await mutate(await readWatch(projectRoot));
     if (Array.isArray(mutation)) {
-      await rewriteWatch(projectRoot, mutation);
+      await (options.strictWrite ? rewriteWatchStrict(projectRoot, mutation) : rewriteWatch(projectRoot, mutation));
       return undefined;
     }
-    if (mutation.write !== false) await rewriteWatch(projectRoot, mutation.entries);
+    if (mutation.write !== false) {
+      await (options.strictWrite ? rewriteWatchStrict(projectRoot, mutation.entries) : rewriteWatch(projectRoot, mutation.entries));
+    }
     return mutation.result;
   } finally {
     release();

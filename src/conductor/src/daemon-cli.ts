@@ -1205,11 +1205,11 @@ export function createClaimTimeRepairRunner(options: {
   applyOutcome?: (completion: RepairCompletion, previous: WatchEntry) => Promise<void>;
   now?: () => Date;
   /** Injectable only for the fail-closed claim-persistence boundary. */
-  updateWatch?: (projectRoot: string, mutate: (entries: WatchEntry[]) => unknown) => Promise<unknown>;
+  updateWatch?: (projectRoot: string, mutate: (entries: WatchEntry[]) => unknown, options?: { strictWrite?: boolean }) => Promise<unknown>;
 }): (request: RepairRequest) => Promise<void> {
   const { projectRoot, tracker, log, isWorkClaimActive, requeue, applyOutcome = async () => {}, now = () => new Date() } = options;
   const persistWatch = options.updateWatch ?? ((root: string, mutate: (entries: WatchEntry[]) => unknown) =>
-    updateWatch(root, mutate as never) as Promise<unknown>);
+    updateWatch(root, mutate as never, { strictWrite: true }) as Promise<unknown>);
   return async (request) => {
     let state: PrMergeState;
     try {
