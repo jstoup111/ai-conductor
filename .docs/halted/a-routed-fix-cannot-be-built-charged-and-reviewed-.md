@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-18T22:52:06.922Z
+Status: halted
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-a-routed-fix-cannot-be-built-charged-and-reviewed-
-Head SHA: 254ebb52b12668d38b9faf38a7d1eef8fcc322b3
-Halted at: 2026-10-18T22:34:21.333Z
+Head SHA: e05e80b6ed1ec0773b1766980ebf6066f3a973a0
+Halted at: 2026-10-18T23:01:40.488Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case regression 6235b71d-4778-4409-8f4a-2c16ad44bd49
+Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: as-built:e48fdaae-ea55-4117-adf8-09363dfdf8fa:6.
 ```
