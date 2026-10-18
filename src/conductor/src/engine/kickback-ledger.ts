@@ -778,17 +778,33 @@ export async function readPendingAsBuiltRemediationFindings(
   projectRoot: string,
 ): Promise<PendingAsBuiltRemediationFindingsReadResult> {
   const result = await readKickbackLedgerResult(projectRoot);
-  if (result.kind === 'absent') return { kind: 'ok', findings: [] };
   if (result.kind === 'unreadable') {
     return {
       kind: 'unreadable',
       reason: `${result.reason} at ${join(projectRoot, KICKBACK_LEDGER_PATH)}`,
     };
   }
-  return {
-    kind: 'ok',
-    findings: result.ledger.pendingAsBuiltRemediationFindings ?? [],
-  };
+  const findings = [...(result.kind === 'ok' ? (result.ledger.pendingAsBuiltRemediationFindings ?? []) : [])];
+  // Open route records are durable pending-remediation state too.  They are
+  // intentionally read through the routing parser so a damaged ref is never
+  // silently projected as an empty prior-findings set.
+  const state = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
+  const slug = state.ok ? state.value.feature_desc : undefined;
+  if (slug) {
+    try {
+      const config = await loadConfig(projectRoot);
+      const cursor = config.ok ? await resolveActiveChild(projectRoot, slug) : undefined;
+      if (config.ok && cursor && routingEligible(cursor, config.config)) {
+        const { pendingAsBuiltFindingsFromRoutes } = await import('./routing/round-receipt.js');
+        for (const finding of await pendingAsBuiltFindingsFromRoutes(projectRoot, slug, { cursor, config: config.config })) {
+          if (!findings.some((existing) => existing.finding === finding.finding && existing.summary === finding.summary)) findings.push(finding);
+        }
+      }
+    } catch (error) {
+      return { kind: 'unreadable', reason: `routed pending findings are unreadable: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+  return { kind: 'ok', findings };
 }
 
 /** Read durable state while retaining valid sibling gates for diagnostics. */
@@ -972,6 +988,7 @@ export async function readGrowthAccounting(
     requireReadableGrowth(ledger);
     const pendingGrowth = Object.values(ledger.pendingRepair?.charges ?? {})
       .some((charge) => charge.growth > 0);
+    const stored = ledger.growth;
     // Routed rounds deliberately keep their frozen rem blocks off the active
     // leaf plan until their host enters.  Their allocation, not the current
     // checkout's plan text, is the authority for excluding uncharged work.
@@ -994,6 +1011,27 @@ export async function readGrowthAccounting(
         return { growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap), authoredSource: 'unresolved' };
       }
     }
+    let sealedRoutedAuthored: number | undefined;
+    if (slug && hasChildState) {
+      try {
+        const config = await loadConfig(projectRoot);
+        const cursor = config.ok ? await resolveActiveChild(projectRoot, slug) : undefined;
+        if (config.ok && cursor && routingEligible(cursor, config.config)) {
+          const { routedSealedAuthored } = await import('./routing/round-receipt.js');
+          sealedRoutedAuthored = await routedSealedAuthored(projectRoot, slug, { cursor, config: config.config });
+        }
+      } catch (error) {
+        throw new Error(`routed sealed growth denominator is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (sealedRoutedAuthored !== undefined) {
+      if (stored && (!growthTotalsAgree(stored) || stored.authored !== sealedRoutedAuthored)) {
+        throw new Error(`stored authored denominator ${stored.authored} disagrees with routed sealed denominator ${sealedRoutedAuthored}`);
+      }
+      const growth = stored ?? { authored: sealedRoutedAuthored, added: 0, byGate: {} };
+      if (!stored && options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth });
+      return { growth: withRemaining(growth, cap), authoredSource: stored ? 'ledger' : 'plan' };
+    }
     const derived = await deriveGrowthFromActivePlan(
       projectRoot,
       new Set([
@@ -1009,7 +1047,6 @@ export async function readGrowthAccounting(
     const derivedWithFlatPending = pendingGrowth
       ? await deriveGrowthFromActivePlan(projectRoot, routedPending)
       : derived;
-    const stored = ledger.growth;
     const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
 
     if (!stored) {

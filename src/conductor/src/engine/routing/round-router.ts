@@ -120,9 +120,10 @@ function hintFor(gap: CriterionBoundRemediationGap): string {
   return [gap.rationale, gap.criterion].filter((value): value is string => typeof value === 'string' && value !== '').join('\n');
 }
 
-function existingTaskFields(source: AdmittedRoutingItem, mixedRound: boolean): Pick<RoutedItem, 'taskIds' | 'restage'> {
+function existingTaskFields(source: AdmittedRoutingItem, mixedRound: boolean): Pick<RoutedItem, 'existingTask' | 'taskIds' | 'restage'> {
   if (!source.existingTask) return {};
   return {
+    existingTask: true,
     taskIds: [...source.ownerTaskIds!].sort(),
     ...(mixedRound ? { restage: false } : {}),
   };

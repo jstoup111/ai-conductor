@@ -1413,8 +1413,25 @@ export class Conductor {
       })({ prUrl, state, mode: opts.mode });
     };
 
+    const routedVerifyGreen = await (async () => {
+      try {
+        const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+        if (!slug) return undefined;
+        const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+        const execution = resolveExecutionChild(cursor, slug);
+        if (execution?.source !== 'routed-host' || execution.roundId === undefined) return undefined;
+        const headSha = await currentCommitSha(this.projectRoot);
+        if (!headSha) return undefined;
+        const raw = JSON.parse(await readFile(pipelinePathFor(this.projectRoot, 'acceptance-verify-green.json', execution.target.child), 'utf8')) as Record<string, unknown>;
+        return raw.roundId === execution.roundId && raw.host === execution.target.child && raw.headSha === headSha && raw.done === true
+          ? { roundId: execution.roundId, host: execution.target.child, headSha }
+          : undefined;
+      } catch { return undefined; }
+    })();
+
     return {
       ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
+      ...(routedVerifyGreen === undefined ? {} : { routedVerifyGreen }),
       sessionStartedAt: state.session_started_at,
       attemptStartedAt: this.currentAttemptStartedAt,
       attemptRunId: this.currentRunId,
@@ -4707,7 +4724,11 @@ export class Conductor {
               growth: Object.values(routed.allocation).reduce((total, allocation) => total + allocation.remTaskIds.length, 0),
               taskless: {}, echo: {}, acks: {},
             };
-            const created = await createRouteRecord(this.projectRoot, this.featureSlug, { roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt });
+            const sealedAuthored = [...planText.matchAll(/^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim)].length;
+            const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
+              roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
+              pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+            });
             if (created.kind !== 'created') return { kind: 'halt', haltClass: 'needs-human', detail: `routing record creation failed: ${created.kind}` };
             const firstHost = routed.hosts[0];
             if (firstHost === undefined) return { kind: 'halt', haltClass: 'needs-human', detail: 'routing produced no host' };
@@ -9762,11 +9783,13 @@ export class Conductor {
             ) {
               throw new Error('kickback ledger is unreadable');
             }
-            // Budget derivation is a charging precondition, not a required
-            // BUILD preflight.  A normal BUILD with no admitted repair must
-            // not synthesize a zero growth baseline or refuse dispatch merely
-            // because no feature plan has been selected yet.
-            if (settlementLedger.pendingRepair === undefined) return false;
+            const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+            const cursor = slug ? await this.resolveActiveChild(this.projectRoot, slug) : undefined;
+            const execution = cursor && slug ? resolveExecutionChild(cursor, slug) : undefined;
+            // A routed round owns a receipt instead of a flat pendingRepair.
+            // Either durable admission shape needs its budget settled before
+            // the provider can receive BUILD.
+            if (settlementLedger.pendingRepair === undefined && execution?.source !== 'routed-host') return false;
             const budgets = await pendingRepairSettlementBudgets(
               this.projectRoot,
               this.config,
@@ -9775,9 +9798,6 @@ export class Conductor {
             growthCap = budgets[0]?.growthCap;
             settlementGrowth = budgets[0]?.growth;
             settlementAuthoredSource = budgets[0]?.authoredSource;
-            const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
-            const cursor = slug ? await this.resolveActiveChild(this.projectRoot, slug) : undefined;
-            const execution = cursor && slug ? resolveExecutionChild(cursor, slug) : undefined;
             if (slug && cursor !== undefined && execution?.source === 'routed-host' && execution.roundId !== undefined) {
               const routed = await settleRoundAtDispatch({
                 projectRoot: this.projectRoot,
@@ -10767,6 +10787,14 @@ export class Conductor {
               // admitted destination and never settles this reroute.
               i = indexOf('acceptance_specs') - 1;
               continue stepLoop;
+            }
+            if (settled.kind === 'needs-human') {
+              await this.writeHaltMarker(`${settled.detail}\n`, 'needs-human');
+              await this.persistPendingStateChanges(state, 'persist routed prerequisite halt');
+              await this.emitLoopHalt(settled.detail);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
             }
             if (settled.kind === 'failed') result = { ...result, success: false, output: settled.detail };
           }

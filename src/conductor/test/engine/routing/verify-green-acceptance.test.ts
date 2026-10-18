@@ -45,6 +45,19 @@ describe('routed acceptance verify-green', () => {
     })).resolves.toEqual({ done: true, viaException: false });
   });
 
+  it('checks the close-time RED ref even when the child marker is absent', async () => {
+    const subject = await fixture();
+    const git: GitRunner = vi.fn(async (args) => {
+      if (args[0] === 'rev-parse' && args.at(-1) === 'HEAD') return { exitCode: 0, stdout: 'a'.repeat(40), stderr: '' };
+      if (args[0] === 'rev-parse' && args.at(-1) === 'refs/conductor/demo/red/c1') return { exitCode: 0, stdout: 'b'.repeat(40), stderr: '' };
+      return { exitCode: 1, stdout: '', stderr: '' };
+    });
+
+    await expect(verifyGreenAcceptance({ worktree: subject.root, slug: 'demo', roundId, host: child, git, exec: async () => ({ executed: 1, passed: 1, failed: 0, skipped: 0, errors: 0 }) }))
+      .resolves.toMatchObject({ kind: 'refused', reason: expect.stringContaining('RED marker is missing') });
+    expect(git).toHaveBeenCalledWith(['rev-parse', '-q', '--verify', 'refs/conductor/demo/red/c1']);
+  });
+
   it.each([
     ['a failing spec', { executed: 1, passed: 0, failed: 1, skipped: 0, errors: 0 }],
     ['a skipped spec', { executed: 1, passed: 1, failed: 0, skipped: 1, errors: 0 }],

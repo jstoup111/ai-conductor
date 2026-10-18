@@ -231,6 +231,19 @@ export function createRepairObligationStore(
             result = failure('Repair admission key points to a missing obligation') as RepairAdmissionResult;
             return current as EngineState;
           }
+          // A routed reroute deliberately keeps the admission key but changes
+          // its host boundary.  Preserve one obligation per key while making
+          // that durable engine-state projection follow the route record.
+          if (replay.source.authority === 'routed_repair') {
+            replay.baseline = {
+              ...replay.baseline,
+              branch: admission.baseline.branch,
+              head: admission.baseline.head,
+              tree: admission.baseline.tree,
+            };
+            result = { ok: true, obligation: clone(replay), replayed: true };
+            return { ...current, repairObligations: section };
+          }
           result = { ok: true, obligation: clone(replay), replayed: true };
           return current as EngineState;
         }

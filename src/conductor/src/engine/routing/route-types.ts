@@ -156,6 +156,7 @@ export interface RoutedItem {
   /** The placement judgement is durable context for the host. */
   readonly rationale?: string;
   /** Existing-task work is represented, but must not be re-staged. */
+  readonly existingTask?: true;
   readonly restage?: boolean;
   /** Authored task bindings for an existing-task repair. */
   readonly taskIds?: readonly string[];
@@ -271,6 +272,10 @@ export interface RouteRecord {
   readonly hosts: Readonly<Record<ChildId, HostState>>;
   readonly currentHostIndex: number;
   readonly receipt: RoundReceipt;
+  /** Immutable authored-task denominator captured when the route was admitted. */
+  readonly sealedAuthored?: number;
+  /** As-built findings that remain pending while this route is open. */
+  readonly pendingAsBuiltFindings?: readonly PendingAsBuiltRouteFinding[];
   /** The current host's pre-mutation review and no-op baseline. */
   readonly entry?: HostEntry;
   /** Verified upward movements, in the order they happened. */
@@ -278,6 +283,15 @@ export interface RouteRecord {
   /** Present only while a rerouted worktree still needs tree synchronization. */
   readonly reroute?: ReroutePhase;
   readonly outbox: readonly OutboxEntry[];
+}
+
+export interface PendingAsBuiltRouteFinding {
+  readonly gate: 'architecture_review_as_built';
+  readonly finding: string;
+  readonly class: 'REMEDIABLE';
+  readonly governingClause: string;
+  readonly summary: string;
+  readonly outcome: 'remediated';
 }
 
 /**
@@ -482,18 +496,34 @@ function parseRoutedItem(value: unknown): RoutedItem | undefined {
   const fallback = value.fallback.map(parseChild);
   if (fallback.some((child) => child === undefined)) return undefined;
   if (value.rationale !== undefined && typeof value.rationale !== 'string') return undefined;
+  if (value.existingTask !== undefined && value.existingTask !== true) return undefined;
   if (value.restage !== undefined && typeof value.restage !== 'boolean') return undefined;
   const taskIds = value.taskIds === undefined ? undefined : parseStringArray(value.taskIds);
   const obligation = value.obligation === undefined ? undefined : parseRoutedObligation(value.obligation);
-  if ((value.taskIds !== undefined && (!taskIds || taskIds.length === 0)) || (value.obligation !== undefined && !obligation)
+  if ((value.taskIds !== undefined && (!taskIds || taskIds.length === 0)) || (value.existingTask === true && taskIds === undefined) || (value.obligation !== undefined && !obligation)
     || (value.restage === false && taskIds === undefined) || (obligation !== undefined && taskIds === undefined)) return undefined;
   return {
     findingId, kind, owner, host, reason, fallback: fallback as ChildId[],
     ...(value.rationale === undefined ? {} : { rationale: value.rationale }),
+    ...(value.existingTask === true ? { existingTask: true as const } : {}),
     ...(value.restage === undefined ? {} : { restage: value.restage }),
     ...(taskIds === undefined ? {} : { taskIds }),
     ...(obligation === undefined ? {} : { obligation }),
   };
+}
+
+function parsePendingAsBuiltRouteFindings(value: unknown): readonly PendingAsBuiltRouteFinding[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const findings: PendingAsBuiltRouteFinding[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || item.gate !== 'architecture_review_as_built' || item.class !== 'REMEDIABLE' || item.outcome !== 'remediated') return undefined;
+    const finding = nonEmptyString(item.finding);
+    const governingClause = nonEmptyString(item.governingClause);
+    const summary = nonEmptyString(item.summary);
+    if (!finding || !governingClause || !summary) return undefined;
+    findings.push({ gate: 'architecture_review_as_built', finding, class: 'REMEDIABLE', governingClause, summary, outcome: 'remediated' });
+  }
+  return findings;
 }
 
 function parseAllocation(value: unknown): FrozenAllocation | undefined {
@@ -542,6 +572,10 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const hosts = parseHosts(value.hosts);
   const outbox = parseOutbox(value.outbox);
   const receipt = parseReceipt(value.receipt);
+  const sealedAuthored = value.sealedAuthored === undefined ? undefined : nonNegativeInteger(value.sealedAuthored);
+  const pendingAsBuiltFindings = value.pendingAsBuiltFindings === undefined
+    ? undefined
+    : parsePendingAsBuiltRouteFindings(value.pendingAsBuiltFindings);
   const entry = value.entry === undefined ? undefined : parseHostEntry(value.entry);
   const fallback = value.fallback === undefined ? undefined : Array.isArray(value.fallback) ? value.fallback.map(parseRouteFallback) : undefined;
   const reroute = value.reroute === undefined ? undefined : parseReroutePhase(value.reroute);
@@ -549,7 +583,9 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
     || (value.entry !== undefined && (!entry || hosts[entry.host] === undefined)) || (fallback?.some((item) => item === undefined) ?? false)
-    || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)) return undefined;
+    || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
+    || (value.sealedAuthored !== undefined && sealedAuthored === undefined)
+    || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)) return undefined;
   const items = value.items.map(parseRoutedItem);
   if (items.some((item) => item === undefined)) return undefined;
   const record: RouteRecord = {
@@ -561,6 +597,8 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     hosts,
     currentHostIndex,
     receipt,
+    ...(sealedAuthored === undefined ? {} : { sealedAuthored }),
+    ...(pendingAsBuiltFindings === undefined ? {} : { pendingAsBuiltFindings }),
     ...(entry === undefined ? {} : { entry }),
     ...(fallback === undefined ? {} : { fallback: fallback as RouteFallback[] }),
     ...(reroute === undefined ? {} : { reroute }),

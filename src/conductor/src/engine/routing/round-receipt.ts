@@ -103,7 +103,9 @@ export async function grantRoutedRepairCredit(
   return updateKickbackLedger<GrantRoutedRepairCreditResult>(input.projectRoot, (ledger) => {
     const existing = ledger.routedRepairCredit;
     if (existing?.roundId === input.roundId) {
-      return { result: existing.consumed ? { kind: 'refused', detail: `routed repair credit for ${input.roundId} is already consumed` } : { kind: 'already-granted' } };
+      // Resume observes a prior spend; it must not turn a converged round
+      // into a new admission refusal or mint another allowance.
+      return { result: { kind: 'already-granted' } };
     }
     if (existing !== undefined && existing.consumed !== true) {
       return { result: { kind: 'refused', detail: `routed repair credit for ${existing.roundId} is still unused` } };
@@ -201,7 +203,7 @@ function applySettledReceiptToLedger(ledger: KickbackLedger, record: RouteRecord
     const entry = gates[gate] ?? defaultGateEntry();
     gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
   }
-  const prior = ledger.growth ?? { authored: 0, added: 0, byGate: {} };
+  const prior = ledger.growth ?? { authored: record.sealedAuthored ?? 0, added: 0, byGate: {} };
   const owner = Object.keys(charges.laps)[0] ?? 'prd_audit';
   const growth = {
     authored: prior.authored,
@@ -263,14 +265,16 @@ export async function reconcileReceiptLedgerUnlocked(
 ): Promise<{ readonly kind: 'reconciled' | 'malformed' | 'unreadable' }> {
   const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
   let ledger = await readKickbackLedger(projectRoot);
+  let changed = false;
   for (const item of records) {
     if (item.kind !== 'ok') return { kind: item.kind };
     if (item.record.receipt.settlementId === undefined || ledger.settlementReceipts?.[item.record.receipt.settlementId]) continue;
     // Reconciliation deliberately uses the receipt's durable numbers rather
     // than current caps: the admission was already settled by the ref CAS.
     ledger = applySettledReceiptToLedger(ledger, item.record);
+    changed = true;
   }
-  await writeKickbackLedgerUnlocked(projectRoot, ledger);
+  if (changed) await writeKickbackLedgerUnlocked(projectRoot, ledger);
   return { kind: 'reconciled' };
 }
 
@@ -284,11 +288,11 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
   const git = input.git ?? makeGitRunner(input.projectRoot);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const result = await withKickbackLedgerLease(input.projectRoot, async () => {
-      const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
-      if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       const stored = await readRouteRecord(input.projectRoot, input.slug, input.roundId, { git });
       if (stored.kind !== 'record') return { kind: 'halted', reason: `routing round ${input.roundId} is unreadable` } as const;
       if (currentHost(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
+      const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
+      if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       const receipt = stored.record.receipt;
       if (receipt.settlementId !== undefined) {
         if (receipt.acks[input.dispatchingChild]) return { kind: 'acknowledged', settlementId: receipt.settlementId } as const;
@@ -382,6 +386,7 @@ export async function rebuildLedgerFromReceipts(
   if (exists) return { kind: 'present' };
   return withKickbackLedgerLease(projectRoot, async () => {
     const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
+    let sealedAuthored: number | undefined;
     let ledger: KickbackLedger = {
       version: 1,
       gates: {},
@@ -390,6 +395,11 @@ export async function rebuildLedgerFromReceipts(
     };
     for (const item of records) {
       if (item.kind !== 'ok') return { kind: 'unreadable' } as const;
+      if (item.record.sealedAuthored !== undefined) {
+        if (sealedAuthored !== undefined && sealedAuthored !== item.record.sealedAuthored) return { kind: 'unreadable' } as const;
+        sealedAuthored = item.record.sealedAuthored;
+        if (ledger.growth?.authored === 0) ledger = { ...ledger, growth: { ...ledger.growth!, authored: sealedAuthored } };
+      }
       const receipt = item.record.receipt;
       for (const [gate, amount] of Object.entries(receipt.taskless ?? {})) {
         const entry = ledger.gates[gate] ?? defaultGateEntry();
@@ -401,4 +411,38 @@ export async function rebuildLedgerFromReceipts(
     await writeKickbackLedgerUnlocked(projectRoot, ledger);
     return { kind: 'rebuilt' } as const;
   });
+}
+
+/** The sealed authored denominator is route state, never a checkout projection. */
+export async function routedSealedAuthored(
+  projectRoot: string,
+  slug: string,
+  routing: ReceiptRoutingScope,
+  git: GitRunner = makeGitRunner(projectRoot),
+): Promise<number | undefined> {
+  const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
+  let sealed: number | undefined;
+  for (const item of records) {
+    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
+    if (item.record.sealedAuthored === undefined) continue;
+    if (sealed !== undefined && sealed !== item.record.sealedAuthored) throw new Error('route receipts disagree on sealed authored denominator');
+    sealed = item.record.sealedAuthored;
+  }
+  return sealed;
+}
+
+export async function pendingAsBuiltFindingsFromRoutes(
+  projectRoot: string,
+  slug: string,
+  routing: ReceiptRoutingScope,
+  git: GitRunner = makeGitRunner(projectRoot),
+): Promise<NonNullable<RouteRecord['pendingAsBuiltFindings']>> {
+  const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
+  const findings = new Map<string, NonNullable<RouteRecord['pendingAsBuiltFindings']>[number]>();
+  for (const item of records) {
+    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
+    if (item.record.receipt.settlementId !== undefined) continue;
+    for (const finding of item.record.pendingAsBuiltFindings ?? []) findings.set(finding.finding, finding);
+  }
+  return [...findings.values()];
 }

@@ -94,14 +94,24 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
     failed === 0 && skipped === 0 && errors === 0)) {
     return { kind: 'refused', reason: `child ${input.host} verify-green requires every spec to pass (executed >= 1, failed/skipped/errors == 0)` };
   }
+  let marker: string | undefined;
+  try { marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8'); } catch { /* legacy marker is optional */ }
   try {
-    const marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8');
-    const parsed = JSON.parse(marker) as Record<string, unknown>;
+    const ref = redRefFor(input.slug, input.host);
+    const refResult = await git(['rev-parse', '-q', '--verify', ref]);
+    if (refResult.exitCode !== 0 && refResult.exitCode !== 1) {
+      return { kind: 'refused', reason: `cannot resolve ${ref}` };
+    }
+    if (refResult.exitCode === 0 && marker === undefined) {
+      return { kind: 'refused', reason: `child ${input.host} RED marker is missing for ${ref}` };
+    }
+    if (marker === undefined) {
+      // No close-time ref means there is no retained digest to compare.
+    } else {
+      const parsed = JSON.parse(marker) as Record<string, unknown>;
     // Older markers did not contain the provenance needed to identify a RED
     // proof.  They remain compatible evidence, not a routing refusal.
     if (Array.isArray(parsed.failingTests) && typeof parsed.intentRationale === 'string') {
-      const ref = redRefFor(input.slug, input.host);
-      const refResult = await git(['rev-parse', '-q', '--verify', ref]);
       if (refResult.exitCode === 0) {
         const blob = await git(['cat-file', '-p', refResult.stdout.trim()]);
         const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
@@ -109,10 +119,10 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
           return { kind: 'refused', reason: `child ${input.host} RED marker digest differs from ${ref}` };
         }
       }
+      }
     }
   } catch {
-    // Missing, malformed, and legacy no-provenance markers do not prevent a
-    // routed verify-green run.  The current contract result is authoritative.
+    return { kind: 'refused', reason: `child ${input.host} RED marker or ref is invalid` };
   }
   const head = await gitSha(git, 'HEAD');
   if (!head) return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
@@ -279,22 +289,6 @@ async function reconcileHostObligations(
     if (admitted.kind === 'failed') return { kind: 'refused', detail: admitted.detail };
   }
   return { kind: 'reconciled' };
-}
-
-/** The routed host's checked-out tip and tree compared with its entry baseline. */
-export async function hostNoOpEvidence(
-  record: RouteRecord,
-  host: ChildId,
-  git: GitRunner,
-): Promise<{ readonly headMoved: boolean; readonly treeChanged: boolean }> {
-  if (record.hosts[host] === undefined || record.entry === undefined || record.entry.host !== host) {
-    throw new Error(`routing host ${host} has no entry baseline`);
-  }
-  const [head, tree] = await Promise.all([gitSha(git, 'HEAD'), gitSha(git, 'HEAD^{tree}')]);
-  return {
-    headMoved: head !== record.entry.pinnedBase,
-    treeChanged: tree !== record.entry.tree,
-  };
 }
 
 /**

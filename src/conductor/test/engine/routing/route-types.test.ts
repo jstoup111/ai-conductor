@@ -120,6 +120,13 @@ describe('routed repair durable record parsers', () => {
     existing.restage = false;
     expect(parseRouteRecord(JSON.stringify(existingWithoutTaskIds))).toBeUndefined();
 
+    const unmixedExistingWithoutTaskIds = structuredClone(routeRecord);
+    const unmixedExisting = unmixedExistingWithoutTaskIds.items[0]! as Record<string, unknown>;
+    unmixedExisting.existingTask = true;
+    delete unmixedExisting.taskIds;
+    delete unmixedExisting.restage;
+    expect(parseRouteRecord(JSON.stringify(unmixedExistingWithoutTaskIds))).toBeUndefined();
+
     const invalidBranch = structuredClone(routeRecord);
     (invalidBranch.items[0]!.obligation as Record<string, unknown>).branch = 'feat/../x';
     expect(parseRouteRecord(JSON.stringify(invalidBranch))).toBeUndefined();
