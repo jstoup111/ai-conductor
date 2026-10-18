@@ -72,7 +72,8 @@ describe('daemon maintenance job wiring', () => {
     await daemon;
   });
 
-  // Covers: task:rem-as-built-R8 — durable authorization maintenance is best-effort.
+  // Durable authorization maintenance is best-effort.
+  // Covers: task:rem-as-built-R8
   it('does not reject the dispatcher when background resume authorization consumption fails', async () => {
     const calls: string[] = [];
     await expect(runDaemon(depsFor(calls, [{ slug: 'one' }], {

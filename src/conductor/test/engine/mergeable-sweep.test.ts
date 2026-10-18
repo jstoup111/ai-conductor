@@ -2628,7 +2628,8 @@ describe('sweepMergeableLabels — Task 13 repair queue', () => {
     }
   });
 
-  // Covers: task:rem-prd-audit-R2 — a feature claim owns its repair candidates.
+  // A feature claim owns its repair candidates.
+  // Covers: task:rem-prd-audit-R2
   it('leaves both CI-fix and autoresolve requests unqueued while their feature is in flight', async () => {
     const conflicting = 'https://github.com/foo/bar/pull/in-flight-conflict';
     const failing = 'https://github.com/foo/bar/pull/in-flight-failing';
