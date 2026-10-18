@@ -1,4 +1,5 @@
 import { parseChildId, type ChildId } from '../child-context.js';
+import { resolveSealedLeaf } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
@@ -86,6 +87,11 @@ export interface VerifyPrerequisiteClaimInput {
   readonly claim: PrerequisiteClaim;
   readonly host: ChildId;
   readonly slug: string;
+  /**
+   * The sealed terminal child, when the caller has stack topology available.
+   * Its destination is the leaf branch rather than a synthetic closed ref.
+   */
+  readonly leaf?: ChildId;
   readonly git?: GitRunner;
   readonly worktree?: string;
   /** Inputs from the admitted work order that must exist at the destination. */
@@ -142,7 +148,14 @@ export async function verifyPrerequisiteClaim(input: VerifyPrerequisiteClaimInpu
     return { kind: 'unverified', detail: `claimed prerequisite is already present at host ${input.host}` };
   }
   const closed = `refs/conductor/${input.slug}/closed/c${input.claim.child}`;
-  const ref = await existingRef(git, closed) ? closed : `refs/heads/${leafBranchFor(input.slug)}`;
+  // The leaf has no immutable closure ref.  When its identity is supplied by
+  // the sealed stack topology, do not probe a made-up closed/c<leaf> ref: a
+  // missing closure is not the evidence that this particular child is leaf.
+  const ref = input.claim.child === input.leaf
+    ? `refs/heads/${leafBranchFor(input.slug)}`
+    : await existingRef(git, closed)
+      ? closed
+      : `refs/heads/${leafBranchFor(input.slug)}`;
   if (!await existingRef(git, ref)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} is unavailable` };
   if (!await hasPaths(git, ref, paths)) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite paths` };
   if (!await hasSymbols(git, ref, input.claim.symbols ?? [])) return { kind: 'unverified', detail: `claimed destination ${input.claim.child} lacks prerequisite symbols` };
@@ -334,6 +347,8 @@ export interface SettleRoutedBuildClaimInput {
   readonly slug: string;
   readonly roundId: RoundId;
   readonly host: ChildId;
+  /** Optional topology snapshot for callers that already resolved the leaf. */
+  readonly leaf?: ChildId;
   readonly git?: GitRunner;
 }
 
@@ -348,7 +363,8 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
   if (parsed.kind === 'none') return { kind: 'none' };
   if (parsed.kind === 'malformed') return { kind: 'failed', detail: 'routed prerequisite claim is malformed' };
   const git = input.git ?? makeGitRunner(input.worktree);
-  const verified = await verifyPrerequisiteClaim({ claim: parsed.claim, host: input.host, slug: input.slug, git });
+  const leaf = input.leaf ?? await resolveSealedLeaf(input.worktree);
+  const verified = await verifyPrerequisiteClaim({ claim: parsed.claim, host: input.host, slug: input.slug, leaf, git });
   if (verified.kind !== 'verified') return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
   const moved = await rerouteRound({
     worktree: input.worktree, slug: input.slug, roundId: input.roundId,
