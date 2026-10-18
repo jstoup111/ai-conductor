@@ -1017,6 +1017,20 @@ parsed line's `type` is not on the admitted list, or `poll-failed` when a backgr
 includes the relative source-ledger `path` and, for a skipped line, its byte `byteOffset`. The event is rendered and persisted, but is not audited or sent to OTel.
 It never includes the corrupt line's contents or an exception message.
 
+#### `daemon_maintenance_phase`
+
+Persisted to `.daemon/events.jsonl` only; not rendered, audited, or exported to OpenTelemetry. One
+event per occurrence of a [daemon maintenance](../guides/running-the-daemon.md#dispatch-first-maintenance)
+phase.
+
+| Field | Value |
+|---|---|
+| `phase` | `startup-refresh`, `first-claim`, `rekick`, `startup-dashboard`, `halt-pr-reconcile`, `parked-reconcile`, `provider-scratch`, `mergeable-sweep`, or `repair` |
+| `durationMs` | Wall-clock duration of the phase |
+| `outcome` | `completed`, `skipped-unchanged`, `failed`, or `deferred` |
+| `prUrl`, `slug` | `repair` only; `prUrl` is required and `slug` is optional |
+| `summary` | `parked-reconcile` only, optional: `reconciled`, `deferred`, `orphaned`, `parked`, `refused`, `skipped` counts |
+
 ### `.pipeline/pipeline-events.jsonl`
 
 A sibling ledger for events written outside the engine process. One JSON `ConductorEvent` per

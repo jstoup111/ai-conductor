@@ -335,8 +335,8 @@ reports errors for some repos still exits after attempting all of them.
    ```bash
    ls .daemon/RESTART-PENDING 2>/dev/null || echo "none queued"
    ```
-4. **The daemon is making progress, not looping.** The log advances past the startup dashboard
-   into dispatch lines, and no single slug repeats the same failure:
+4. **The daemon is making progress, not looping.** The log shows dispatch lines (the first claim
+   precedes the startup dashboard), and no single slug repeats the same failure:
    ```bash
    ai-conductor daemon logs --lines 60
    ```
