@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-18T12:23:03.340Z
+Status: halted
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-a-routed-fix-cannot-be-built-charged-and-reviewed-
-Head SHA: 39de7975f1bce4a1a6c5f1a778d30d9f178a8f7e
-Halted at: 2026-10-18T12:22:33.710Z
+Head SHA: 6b987b86ce0d4434878a26954ee6131595bd62aa
+Halted at: 2026-10-18T12:26:17.902Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
