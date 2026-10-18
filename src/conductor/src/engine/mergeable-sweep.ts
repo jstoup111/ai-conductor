@@ -36,7 +36,6 @@ import type { GithubOperationRunner } from './github-operations.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
-import type { CiFixOutcome } from './ci-fix.js';
 import { makeGitRunner } from './rebase.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
 import {
@@ -44,7 +43,14 @@ import {
   routeShippedReadiness,
   type ShippedReadinessVerdict,
 } from './shipped-readiness.js';
-import { type RepairQueue, type RepairRequest } from './repair-queue.js';
+import {
+  type RepairQueue,
+  type RepairRequest,
+  type WatchEntry,
+  type PooledRepairOutcome,
+} from './repair-queue.js';
+import type { CiFixOutcome } from './ci-fix.js';
+export type { WatchEntry } from './repair-queue.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -75,24 +81,6 @@ function buildExhaustionComment(entry: WatchEntry, state: PrMergeState): string 
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
 
-export interface WatchEntry {
-  prUrl: string;
-  slug: string;
-  repoCwd: string;
-  resolveAttempts?: number;
-  lastResolveAt?: string;
-  ciFixAttempts?: number;
-  lastCiFixAt?: string;
-  ciFailureDetected?: boolean;
-  headSha?: string;
-  headFirstSeenAt?: string;
-  readinessEmitted?: {
-    verdict: ShippedReadinessVerdict;
-    headSha: string;
-  };
-  escalationCause?: 'conflict-resolution' | 'shipped-readiness';
-  labelClearAttempts?: number;
-}
 
 /**
  * Retire a conflict-resolution remediation label only after GitHub reports a
@@ -369,10 +357,6 @@ export type AutoresolveDispatchOutcome = {
 };
 
 /** The dispatcher result retained by a queued repair until its claim completes. */
-export type PooledRepairOutcome = AutoresolveDispatchOutcome | CiFixOutcome;
-
-export type PooledRepairAdapter = (entry: WatchEntry) => Promise<PooledRepairOutcome>;
-
 export interface AutoresolveDispatchOpts {
   /** Config gate — when false, the sweep runs exactly as before (no new work). */
   enabled: boolean;
@@ -519,8 +503,7 @@ export async function applyPooledRepairOutcome(options: {
   };
 
   if (request.kind === 'autoresolve') {
-    const autoresolveOutcome = outcome as AutoresolveDispatchOutcome;
-    switch (autoresolveOutcome.kind) {
+    switch (outcome.kind) {
       case 'refreshed':
         await rewrite((entry) => ({ ...entry, resolveAttempts: 0 }));
         return;
@@ -539,12 +522,11 @@ export async function applyPooledRepairOutcome(options: {
         );
         return;
       default:
-        return assertPooledRepairOutcomeNever(autoresolveOutcome as never);
+        return assertPooledRepairOutcomeNever(outcome);
     }
   }
 
-  const ciFixOutcome = outcome as CiFixOutcome;
-  switch (ciFixOutcome.kind) {
+  switch (outcome.kind) {
     case 'needs-human':
       await rewrite((entry) => ({
         ...entry,
@@ -570,7 +552,7 @@ export async function applyPooledRepairOutcome(options: {
     case 'published':
       return;
     default:
-      return assertPooledRepairOutcomeNever(ciFixOutcome as never);
+      return assertPooledRepairOutcomeNever(outcome);
   }
 }
 

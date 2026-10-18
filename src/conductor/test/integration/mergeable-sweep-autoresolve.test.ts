@@ -50,7 +50,10 @@ function makeGh(prStates: Record<string, string>): GhRunner {
   };
 }
 
-describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
+// Superseded by the pooled claim-path coverage in daemon-pooled-repairs.test.ts
+// and daemon-cli-ci-fix-wiring.test.ts. These assertions exercise the removed
+// inline sweep dispatcher, not a production path.
+describe.skip('retired inline mergeable-sweep autoresolve dispatch (Task 17)', () => {
   let projectRoot: string;
 
   beforeEach(async () => {

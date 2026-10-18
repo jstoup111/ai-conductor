@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { enrollWatch, readWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
+import { RepairQueue } from '../../src/engine/repair-queue.js';
 import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { buildPrFixture, PASSING_SUITE, type PrFixture } from './autoresolve-pr-fixture.js';
@@ -73,6 +74,7 @@ describe('published stacked leaf PR reached by the mergeable sweep (sweep G4)', 
     const gitArgv = await installRecordingGit(watchRoot);
 
     try {
+      const repairs = new RepairQueue();
       await sweepMergeableLabels({
         projectRoot: watchRoot,
         runGh: fixture.gh,
@@ -105,7 +107,11 @@ describe('published stacked leaf PR reached by the mergeable sweep (sweep G4)', 
             },
           ),
         },
+        repairs: { queue: repairs },
       });
+      const request = repairs.take();
+      expect(request).toBeDefined();
+      await request!.run(entry);
     } finally {
       persister.stop();
     }

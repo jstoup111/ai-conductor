@@ -1,4 +1,35 @@
-import type { PooledRepairAdapter } from './mergeable-sweep.js';
+/**
+ * Persistent state associated with a watched pull request.  This deliberately
+ * lives beside the queue rather than in the sweep: dispatcher-only consumers
+ * must not pull the sweep (and its daemon orchestration dependencies) into
+ * their import graph merely to type a queued repair.
+ */
+export interface WatchEntry {
+  prUrl: string;
+  slug: string;
+  repoCwd: string;
+  resolveAttempts?: number;
+  lastResolveAt?: string;
+  ciFixAttempts?: number;
+  lastCiFixAt?: string;
+  ciFailureDetected?: boolean;
+  headSha?: string;
+  headFirstSeenAt?: string;
+  readinessEmitted?: { verdict: string; headSha: string };
+  escalationCause?: 'conflict-resolution' | 'shipped-readiness';
+  labelClearAttempts?: number;
+}
+
+/** Outcomes are interpreted by the sweep's single pooled-outcome handler. */
+export type PooledRepairOutcome =
+  | { kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack' }
+  | { kind: 'not-started'; provider?: string; reason?: unknown }
+  | { kind: 'noop'; provider?: string }
+  | { kind: 'failed'; stage: 'provider' | 'guard' | 'verification' | 'publication' | 'worktree'; provider?: string; reason?: unknown }
+  | { kind: 'published'; provider?: string }
+  | { kind: 'branch-gone' }
+  | { kind: 'needs-human'; providerSetupExhaustion: unknown };
+export type PooledRepairAdapter = (entry: WatchEntry) => Promise<PooledRepairOutcome>;
 
 /** A bounded dispatcher-owned handoff between maintenance sweeps and workers. */
 export interface RepairRequest {

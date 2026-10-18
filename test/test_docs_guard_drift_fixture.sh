@@ -11,7 +11,14 @@ HARNESS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CHECKER="${SCRIPT_DIR}/check_docs_guard_drift_fixture.sh"
 HOOK="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
 BASH_BIN="${BASH:-$(command -v bash)}"
-fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-docs-guard-drift-fixture-XXXXXX") || exit 1
+if [ -z "${TMPDIR:-}" ] && [ -n "${AI_CONDUCTOR_TEST_TMP_ROOT:-}" ]; then
+  export TMPDIR="$AI_CONDUCTOR_TEST_TMP_ROOT"
+fi
+if [ -n "${TMPDIR:-}" ]; then
+  fixture_dir=$(mktemp -d "$TMPDIR/test-docs-guard-drift-fixture-XXXXXX")
+else
+  fixture_dir=$(mktemp -d -t test-docs-guard-drift-fixture-XXXXXX)
+fi || exit 1
 cleanup() { rm -rf "$fixture_dir"; }
 trap cleanup EXIT
 
