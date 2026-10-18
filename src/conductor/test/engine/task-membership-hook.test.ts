@@ -88,7 +88,7 @@ describe('task-membership-check hook command', () => {
     }));
     const record = {
       roundId: 'r1', kind: 'audit', phase: 'open',
-      items: [{ findingId: 'finding', kind: 'audit', owner: 1, host: 2, reason: 'routed', fallback: [], taskIds: ['T1'] }],
+      items: [{ findingId: 'finding', kind: 'audit', owner: 1, host: 2, reason: 'routed', fallback: [], existingTask: true, taskIds: ['T1'] }],
       allocation: { 2: { remTaskIds: ['rem-r1-1'], blockBodies: ['### Task rem-r1-1\n'] } },
       hosts: { 2: 'repairing' }, currentHostIndex: 0, receipt: {}, outbox: [],
     };
