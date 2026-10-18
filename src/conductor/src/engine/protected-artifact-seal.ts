@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
-import { load as loadYaml } from 'js-yaml';
+import { loadConfig } from './config.js';
 import { readGitBlobs, type GitBlobBatchRunner } from './git-blob-batch.js';
 import { resolveDocsAllowlist } from './phase-marker.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
@@ -728,12 +728,7 @@ async function readFrozenAllocationRemediationTaskIds(projectRoot: string, git: 
   const identity = parseFeatureBranch(head.stdout.trim());
   if (identity.kind !== 'child' && identity.kind !== 'leaf') return [];
 
-  let config: Parameters<typeof routingEligible>[1];
-  try {
-    config = loadYaml(await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8')) as typeof config;
-  } catch {
-    return [];
-  }
+  const config = await loadConfig(projectRoot);
   // The sealed-artifact path has no conductor instance. Its lightweight
   // eligibility seam admits only a daemon-owned stacked branch with another
   // child branch for the same feature; N=1 never reaches routing refs.
@@ -742,7 +737,7 @@ async function readFrozenAllocationRemediationTaskIds(projectRoot: string, git: 
     const candidate = parseFeatureBranch(branch);
     return candidate.kind === 'child' && candidate.slug === identity.slug;
   });
-  if (!hasChild || !routingEligible({ kind: 'active' }, config)) return [];
+  if (!hasChild || !config.ok || !routingEligible({ kind: 'active' }, config.config)) return [];
   const slug = identity.slug;
 
   const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);

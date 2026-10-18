@@ -44,7 +44,7 @@ function seal(baselineCommit: string): ProtectedArtifactSeal {
   };
 }
 
-async function routedFixture(blockId = 'rem-prd-audit-T2') {
+async function routedFixture(blockId = 'rem-prd-audit-T2', legacyConfig = false) {
   const repo = await mkdtemp(join(tmpdir(), 'protected-artifact-seal-routing-'));
   roots.push(repo);
   const git = makeGitRunner(repo);
@@ -53,8 +53,9 @@ async function routedFixture(blockId = 'rem-prd-audit-T2') {
   await mustSucceed(git, ['config', 'user.name', 'Seal routing']);
   await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+  if (legacyConfig) await mkdir(join(repo, '.harness'), { recursive: true });
   await writeFile(join(repo, planPath), 'approved plan\n');
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), [
+  await writeFile(join(repo, legacyConfig ? '.harness' : '.ai-conductor', 'config.yml'), [
     'stacked_prs:', '  enabled: true', '  max_slices: 3', '  route_whole_feature_fixes: true', '',
   ].join('\n'));
   await mustSucceed(git, ['add', '.']);
@@ -91,6 +92,17 @@ async function routedFixture(blockId = 'rem-prd-audit-T2') {
 describe('protected artifact seal rotation for routed remediation (real local Git)', () => {
   it('accepts frozen-allocation ids after a recreated routed worktree loses its appended-id cache', async () => {
     const subject = await routedFixture();
+
+    await expect(evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: subject.repo,
+      seal: seal(subject.baselineCommit),
+      headCommit: await mustSucceed(subject.git, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    })).resolves.toEqual({ permitted: true, paths: [planPath], includedEngineAppendedPaths: [planPath] });
+  });
+
+  it('uses loadConfig compatibility semantics before reading routing refs', async () => {
+    const subject = await routedFixture('rem-prd-audit-T2', true);
 
     await expect(evaluateProtectedArtifactSealRotationInRepository({
       projectRoot: subject.repo,
