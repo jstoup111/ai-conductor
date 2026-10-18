@@ -29,6 +29,14 @@ describe('routed build prerequisite claim schema', () => {
     expect(parseBuilderClaim(undefined)).toEqual({ kind: 'none' });
   });
 
+  it('rejects every list the schema rejects, even beside a valid sibling list', () => {
+    // The provider schema requires minItems 1 on each present list, so an
+    // empty list next to a non-empty one is outside the closed contract.
+    expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, paths: [], symbols: ['parseB'] })).toEqual({ kind: 'malformed' });
+    expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, paths: ['a.ts'], symbols: [] })).toEqual({ kind: 'malformed' });
+    expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, paths: [''] })).toEqual({ kind: 'malformed' });
+  });
+
   it('treats a completed or absent result as no claim and rejects partial claims', () => {
     expect(parseBuilderClaim(undefined)).toEqual({ kind: 'none' });
     expect(parseBuilderClaim({ outcome: 'completed' })).toEqual({ kind: 'none' });

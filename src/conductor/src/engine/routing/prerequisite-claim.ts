@@ -21,6 +21,13 @@ const PREREQUISITE_CLAIM_CONTRACT = {
   optionalFields: ['paths', 'symbols'] as const,
 } as const;
 
+/**
+ * Field rules shared by the provider schema and `parseBuilderClaim`, so the
+ * two cannot disagree about what a valid claim is.
+ */
+const CLAIM_CHILD_FIELD = { type: 'integer', minimum: 1 } as const;
+const CLAIM_LIST_FIELD = { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } } as const;
+
 export const PREREQUISITE_CLAIM_SCHEMA = {
   oneOf: [
     {
@@ -35,9 +42,9 @@ export const PREREQUISITE_CLAIM_SCHEMA = {
       required: ['outcome', 'child'],
       properties: {
         outcome: { const: PREREQUISITE_CLAIM_CONTRACT.blocked },
-        child: { type: 'integer', minimum: 1 },
-        paths: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
-        symbols: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
+        child: CLAIM_CHILD_FIELD,
+        paths: CLAIM_LIST_FIELD,
+        symbols: CLAIM_LIST_FIELD,
       },
       anyOf: [{ required: ['paths'] }, { required: ['symbols'] }],
     },
@@ -57,7 +64,8 @@ export type ParsedBuilderClaim =
   | { readonly kind: 'malformed' };
 
 function stringList(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || entry.length === 0)) return undefined;
+  if (!Array.isArray(value) || value.length < CLAIM_LIST_FIELD.minItems) return undefined;
+  if (value.some((entry) => typeof entry !== 'string' || entry.length < CLAIM_LIST_FIELD.items.minLength)) return undefined;
   return value;
 }
 
@@ -69,14 +77,15 @@ export function parseBuilderClaim(result: unknown): ParsedBuilderClaim {
   if (value.outcome === PREREQUISITE_CLAIM_CONTRACT.completed && Object.keys(value).length === 1) return { kind: 'none' };
   if (value.outcome !== PREREQUISITE_CLAIM_CONTRACT.blocked) return { kind: 'malformed' };
   if (!Object.keys(value).every((key) => key === 'outcome' || key === 'child' || PREREQUISITE_CLAIM_CONTRACT.optionalFields.includes(key as 'paths' | 'symbols'))) return { kind: 'malformed' };
-  const child = typeof value.child === 'number' && Number.isInteger(value.child)
+  const child = typeof value.child === 'number' && Number.isInteger(value.child) && value.child >= CLAIM_CHILD_FIELD.minimum
     ? parseChildId(value.child)
     : undefined;
   if (!child) return { kind: 'malformed' };
   const paths = value.paths === undefined ? undefined : stringList(value.paths);
   const symbols = value.symbols === undefined ? undefined : stringList(value.symbols);
   if ((value.paths !== undefined && paths === undefined) || (value.symbols !== undefined && symbols === undefined)) return { kind: 'malformed' };
-  if ((paths?.length ?? 0) === 0 && (symbols?.length ?? 0) === 0) return { kind: 'malformed' };
+  // Schema `anyOf`: at least one of paths or symbols is present.
+  if (paths === undefined && symbols === undefined) return { kind: 'malformed' };
   return { kind: 'claim', claim: { outcome: 'blocked-by-prerequisite', child, ...(paths === undefined ? {} : { paths }), ...(symbols === undefined ? {} : { symbols }) } };
 }
 
