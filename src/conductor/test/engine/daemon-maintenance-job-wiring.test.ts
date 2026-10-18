@@ -43,8 +43,7 @@ describe('daemon maintenance job wiring', () => {
     const firstFeature = deferred<FeatureOutcome>();
     const consume = deferred<void>();
     let halted = true;
-    let consumersInFlight = 0;
-    let maxConsumersInFlight = 0;
+    let underlyingConsumeCalls = 0;
 
     const daemon = runDaemon(depsFor(calls, [{ slug: 'first' }, { slug: 'resumed' }], {
       discoverBacklog: async () => [{ slug: 'first' }, { slug: 'resumed' }],
@@ -54,17 +53,18 @@ describe('daemon maintenance job wiring', () => {
         return item.slug === 'first' ? firstFeature.promise : done(item.slug);
       },
       consumeResumeAuthorizations: async () => {
-        consumersInFlight++;
-        maxConsumersInFlight = Math.max(maxConsumersInFlight, consumersInFlight);
+        underlyingConsumeCalls++;
         await consume.promise;
         halted = false;
-        consumersInFlight--;
       },
     }), { concurrency: 2, once: true, maxItems: 2, idlePollMs: 0 });
 
-    await vi.waitFor(() => expect(consumersInFlight).toBe(1));
+    await vi.waitFor(() => expect(underlyingConsumeCalls).toBe(1));
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(maxConsumersInFlight).toBe(1);
+    // The width-2 fill pass joins this still-pending call rather than claiming
+    // the resumed feature or starting another authorization consumer.
+    expect(underlyingConsumeCalls).toBe(1);
+    expect(calls).not.toContain('dispatch:resumed');
 
     consume.resolve();
     await vi.waitFor(() => expect(calls).toContain('dispatch:resumed'));

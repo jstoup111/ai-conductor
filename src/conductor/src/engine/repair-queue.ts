@@ -1,3 +1,5 @@
+import type { ShippedReadinessVerdict } from './shipped-readiness.js';
+
 /**
  * Persistent state associated with a watched pull request.  This deliberately
  * lives beside the queue rather than in the sweep: dispatcher-only consumers
@@ -15,13 +17,13 @@ export interface WatchEntry {
   ciFailureDetected?: boolean;
   headSha?: string;
   headFirstSeenAt?: string;
-  readinessEmitted?: { verdict: string; headSha: string };
+  readinessEmitted?: { verdict: ShippedReadinessVerdict; headSha: string };
   escalationCause?: 'conflict-resolution' | 'shipped-readiness';
   labelClearAttempts?: number;
 }
 
 /** Outcomes emitted only by the autoresolve adapter. */
-export type AutoresolveRepairOutcome =
+export type AutoresolveOutcome =
   | { kind: 'refreshed' }
   | { kind: 'escalated' }
   | { kind: 'setup-stop' }
@@ -36,7 +38,7 @@ export type CiFixRepairOutcome =
   | { kind: 'branch-gone' }
   | { kind: 'needs-human'; providerSetupExhaustion: unknown };
 
-export type AutoresolveRepairAdapter = (entry: WatchEntry) => Promise<AutoresolveRepairOutcome>;
+export type AutoresolveRepairAdapter = (entry: WatchEntry) => Promise<AutoresolveOutcome>;
 export type CiFixRepairAdapter = (entry: WatchEntry) => Promise<CiFixRepairOutcome>;
 
 interface RepairRequestBase {
@@ -63,7 +65,7 @@ export type RepairRequest = AutoresolveRepairRequest | CiFixRepairRequest;
 
 /** A claimed repair and the outcome emitted by its matching adapter. */
 export type RepairCompletion =
-  | { request: AutoresolveRepairRequest; outcome: AutoresolveRepairOutcome }
+  | { request: AutoresolveRepairRequest; outcome: AutoresolveOutcome }
   | { request: CiFixRepairRequest; outcome: CiFixRepairOutcome };
 
 /**

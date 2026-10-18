@@ -48,7 +48,7 @@ import {
   type RepairCompletion,
   type RepairRequest,
   type WatchEntry,
-  type AutoresolveRepairOutcome,
+  type AutoresolveOutcome,
   type CiFixRepairOutcome,
 } from './repair-queue.js';
 import type { CiFixOutcome } from './ci-fix.js';
@@ -354,10 +354,6 @@ function mergeSweepEntry(
  * `enabled` is read by the caller from `mergeable_autoresolve.enabled` so the
  * sweep stays byte-identical to today when the feature is off (AC4).
  */
-export type AutoresolveDispatchOutcome = {
-  kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack';
-};
-
 /** The dispatcher result retained by a queued repair until its claim completes. */
 export interface AutoresolveDispatchOpts {
   /** Config gate — when false, the sweep runs exactly as before (no new work). */
@@ -376,7 +372,7 @@ export interface AutoresolveDispatchOpts {
    * this only after the daemon claims and stamps the entry (AC3).
    * Returns the outcome consumed by the pooled outcome handler.
    */
-  dispatch: (entry: WatchEntry) => Promise<AutoresolveDispatchOutcome | void>;
+  dispatch: (entry: WatchEntry) => Promise<AutoresolveOutcome | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -480,7 +476,7 @@ function isAutoresolveOutcome(
   options: PooledRepairOutcomeOptions,
 ): options is PooledRepairOutcomeOptions & {
   request: Extract<RepairCompletion, { request: { kind: 'autoresolve' } }>['request'];
-  outcome: AutoresolveRepairOutcome;
+  outcome: AutoresolveOutcome;
 } {
   return options.request.kind === 'autoresolve';
 }
@@ -498,41 +494,63 @@ export async function applyPooledRepairOutcome(options: PooledRepairOutcomeOptio
   return applyCiFixRepairOutcome(options);
 }
 
+/** Rewrite just the completed repair's current watch entry. */
+async function rewritePooledRepairWatchEntry(
+  projectRoot: string,
+  prUrl: string,
+  mutate: (entry: WatchEntry) => WatchEntry,
+): Promise<void> {
+  await updateWatch(projectRoot, (entries) => entries.map((entry) =>
+    entry.prUrl === prUrl ? mutate(entry) : entry));
+}
+
+/** Mark a repair paused before provider work and leave a durable recovery comment. */
+async function markPooledSetupRecovery({
+  entryRunner,
+  previous,
+  marker,
+  body,
+  description,
+  log,
+}: {
+  entryRunner: GhRunner | (GhRunner & GithubOperationRunner);
+  previous: WatchEntry;
+  marker: string;
+  body: string;
+  description: string;
+  log?: (message: string) => void;
+}): Promise<void> {
+  try {
+    await addLabel(entryRunner, previous.repoCwd, previous.prUrl, 'needs-remediation', log);
+    await upsertComment(entryRunner, previous.repoCwd, previous.prUrl, marker, body, log);
+  } catch (err) {
+    log?.(`[mergeable-sweep] ${description} setup-recovery marker error for ${previous.prUrl}: ${err}`);
+  }
+}
+
 async function applyAutoresolveRepairOutcome(options: Extract<PooledRepairOutcomeOptions, {
   request: { kind: 'autoresolve' };
 }>): Promise<void> {
   const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
-  const rewrite = async (mutate: (entry: WatchEntry) => WatchEntry) => {
-    await updateWatch(projectRoot, (entries) => entries.map((entry) =>
-      entry.prUrl === request.prUrl ? mutate(entry) : entry));
-  };
   const entryRunner = runnerForEntry(runGh, previous, operations);
-  const markSetupRecovery = async (marker: string, body: string, description: string) => {
-    try {
-      await addLabel(entryRunner, previous.repoCwd, previous.prUrl, 'needs-remediation', log);
-      await upsertComment(entryRunner, previous.repoCwd, previous.prUrl, marker, body, log);
-    } catch (err) {
-      log?.(`[mergeable-sweep] ${description} setup-recovery marker error for ${previous.prUrl}: ${err}`);
-    }
-  };
 
   switch (outcome.kind) {
     case 'refreshed':
-      await rewrite((entry) => ({ ...entry, resolveAttempts: 0 }));
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: 0 }));
       return;
     case 'escalated':
-      await rewrite((entry) => ({ ...entry, escalationCause: 'conflict-resolution' }));
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, escalationCause: 'conflict-resolution' }));
       return;
     case 'published-stack':
-      await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
       return;
     case 'setup-stop':
-      await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
-      await markSetupRecovery(
-        '<!-- conductor:rebase-setup -->',
-        '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-        'rebase',
-      );
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+      await markPooledSetupRecovery({ entryRunner, previous,
+        marker: '<!-- conductor:rebase-setup -->',
+        body: '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        description: 'rebase', log,
+      });
       return;
     default: {
       const exhaustive: never = outcome;
@@ -545,35 +563,23 @@ async function applyCiFixRepairOutcome(options: Extract<PooledRepairOutcomeOptio
   request: { kind: 'ci-fix' };
 }>): Promise<void> {
   const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
-  const rewrite = async (mutate: (entry: WatchEntry) => WatchEntry) => {
-    await updateWatch(projectRoot, (entries) => entries.map((entry) =>
-      entry.prUrl === request.prUrl ? mutate(entry) : entry));
-  };
   const entryRunner = runnerForEntry(runGh, previous, operations);
-  const markSetupRecovery = async (marker: string, body: string, description: string) => {
-    try {
-      await addLabel(entryRunner, previous.repoCwd, previous.prUrl, 'needs-remediation', log);
-      await upsertComment(entryRunner, previous.repoCwd, previous.prUrl, marker, body, log);
-    } catch (err) {
-      log?.(`[mergeable-sweep] ${description} setup-recovery marker error for ${previous.prUrl}: ${err}`);
-    }
-  };
   switch (outcome.kind) {
     case 'needs-human':
-      await rewrite((entry) => ({
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
         ...entry,
         ciFixAttempts: previous.ciFixAttempts,
         ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
       }));
-      await markSetupRecovery(
-        '<!-- conductor:ci-fix-setup -->',
-        '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-        'ciFix',
-      );
+      await markPooledSetupRecovery({ entryRunner, previous,
+        marker: '<!-- conductor:ci-fix-setup -->',
+        body: '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        description: 'ciFix', log,
+      });
       return;
     case 'not-started':
     case 'branch-gone':
-      await rewrite((entry) => ({
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
         ...entry,
         ciFixAttempts: previous.ciFixAttempts,
         ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
