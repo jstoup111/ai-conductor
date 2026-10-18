@@ -1,22 +1,27 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-18T12:21:49.889Z
+Status: halted
 Slug: daemon-reconciliation-delays-first-feature-dispatc
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-daemon-reconciliation-delays-first-feature-dispatc
-Head SHA: 7beb0e5886ce6fca17d821fd9617030e3a9daeeb
-Halted at: 2026-10-18T12:05:14.696Z
+Head SHA: 29264cae854b2728598cc1003cb1b855c698fcf3
+Halted at: 2026-10-18T16:19:53.900Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: case transition rejected: source-linked-by-multiple-cases (cases 01dd292d-4fde-4acb-8370-a65ddbf824bb, 9af1d295-d04c-4eaa-894b-e02f602d24f8; sources implementationQuality:sha256:a01ef353efa0f3af58440392053b3b4bfa1c7a9900e381d9a9a87d64da1b5682)
-persisted case history is valid and unchanged
-Inspect with ai-conductor build-review findings --feature daemon-reconciliation-delays-first-feature-dispatc, then clear with ai-conductor halt clear --feature daemon-reconciliation-delays-first-feature-dispatc --rationale "<why>" once the proposed transition is admissible (an engine admits it or a judgement no longer proposes it).
+build_review cumulative kickback cap exceeded:
+Kickback budget (build_review): 8/7 consumed; 0 remaining
+Latest reason: build_review: changed test Covers marker matches no reference grammar
+src/conductor/test/engine/daemon-maintenance-job-wiring.test.ts:75 token `task:rem-as-built-R8 — durable authorization maintenance is best-effort.`
+src/conductor/test/engine/mergeable-sweep.test.ts:2631 token `task:rem-prd-audit-R2 — a feature claim owns its repair candidates.`
+Accepted forms: task:<id>, S<story>.<n>, FR-<n>.
+Adjustment history: reset 8f42c857-24a6-463e-97f6-7c327200549f (laps), raise 2adc1f15-560e-4ad3-b893-8b45d7e7b548 (laps)
+Resume authorization: consumed
+Mechanical faults: 0
+Kickback halt generation: 1792340393796-9gyaz04wjwa
 ```
