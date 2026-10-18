@@ -86,6 +86,11 @@ build_review:
     #
     # No retired key is declared here. A consumer config that still names one
     # loads as a no-op with a one-time notice (FR-20) rather than failing.
+    # Findings the reviewer scores below 40 are suppressed, not kicked back:
+    # an open-ended quality rubric over a large diff otherwise surfaces
+    # low-confidence nits every lap and the feature never converges.
+    implementationQuality:
+      min_confidence: 40
     testQuality:
       enabled: true
       llm_provider: claude
@@ -127,6 +132,11 @@ build_review:
 # test suite and this repository's harness-integrity suite in one BUILD gate.
 test_suite:
   commands:
+    # Vitest strips types without checking them, so a repair that does not
+    # compile would otherwise pass this gate and cost a build_review lap
+    # (bb94f63b0f, 2026-10-18: TS2322 passed test_suite, caught by review).
+    - command: npm run typecheck --silent
+      working_directory: src/conductor
     - command: npm test
       working_directory: src/conductor
     - command: test/test_harness_integrity.sh
@@ -143,7 +153,8 @@ test_suite:
   # Repo-wide structural guards scan the tree by path rather than importing
   # what they police, so `--changed` never selects them; a second run always
   # includes them (~35s) so a guard violation fails here, not first in CI (#3192).
-  changed_command: 'node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && node scripts/run-vitest.mjs run --reporter=dot --silent=true test/structural/ guard.test.ts audit.test.ts drift.test.ts projection.test.ts && cd ../.. && test/test_harness_integrity.sh'
+  # The typecheck (~10s) leads each lap for the same reason as in `commands`.
+  changed_command: 'npm run typecheck --silent && node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && node scripts/run-vitest.mjs run --reporter=dot --silent=true test/structural/ guard.test.ts audit.test.ts drift.test.ts projection.test.ts && cd ../.. && test/test_harness_integrity.sh'
   # Ordered aggregate entries each choose their own directory; scoped runs use
   # this shared fallback to reach the conductor package's Vitest binary.
   working_directory: src/conductor
