@@ -5,9 +5,15 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { sanitizeTranscriptLine } from './self-host/transcript-sanitize.js';
 import { foldTranscriptLedger, transcriptOwnerStep } from './self-host/transcript-retention.js';
 
+declare const featureSlugBrand: unique symbol;
+
+/** A validated feature worktree directory name. */
+export type FeatureSlug = string & { readonly [featureSlugBrand]: 'FeatureSlug' };
+
 export type TranscriptsDispatch =
-  | { readonly kind: 'list'; readonly slug: string }
-  | { readonly kind: 'show'; readonly slug: string; readonly capture: string }
+  | { readonly kind: 'list'; readonly slug: FeatureSlug }
+  | { readonly kind: 'show'; readonly slug: FeatureSlug; readonly capture: string }
+  | { readonly kind: 'invalid-slug'; readonly slug: string }
   | { readonly kind: 'guide' };
 
 type Capture = {
@@ -27,12 +33,19 @@ function isEvent(value: unknown): value is Record<string, unknown> {
 export function detectTranscriptsCommand(argv: string[]): TranscriptsDispatch | null {
   if (argv[2] !== 'transcripts') return null;
   const [slug, ...rest] = argv.slice(3);
-  if (!slug || slug.startsWith('-')) return { kind: 'guide' };
-  if (rest.length === 0) return { kind: 'list', slug };
+  if (!slug) return { kind: 'guide' };
+  const featureSlug = parseFeatureSlug(slug);
+  if (!featureSlug) return { kind: 'invalid-slug', slug };
+  if (rest.length === 0) return { kind: 'list', slug: featureSlug };
   if (rest.length === 2 && rest[0] === '--show' && rest[1] && !rest[1].startsWith('-')) {
-    return { kind: 'show', slug, capture: rest[1] };
+    return { kind: 'show', slug: featureSlug, capture: rest[1] };
   }
   return { kind: 'guide' };
+}
+
+function parseFeatureSlug(value: string): FeatureSlug | undefined {
+  if (value === '' || value === '.' || value === '..' || value.includes('/') || value.includes('\\')) return undefined;
+  return value as FeatureSlug;
 }
 
 async function readRetainedCaptures(worktree: string): Promise<Capture[]> {
@@ -111,6 +124,10 @@ export async function dispatchTranscripts(cmd: TranscriptsDispatch, cwd: string)
   // ai-conductor:session-command-context=operator-only
   if (cmd.kind === 'guide') {
     console.error('ai-conductor transcripts <slug> [--show <capture>]');
+    return 1;
+  }
+  if (cmd.kind === 'invalid-slug') {
+    console.error(`no feature worktree for ${cmd.slug}`);
     return 1;
   }
   // /ai-conductor:session-command-context

@@ -35,8 +35,12 @@ async function capture(
 }
 
 async function run(args: string[]): Promise<{ code: number; output: string[] }> {
+  return runForSlug(slug, args);
+}
+
+async function runForSlug(featureSlug: string, args: string[] = []): Promise<{ code: number; output: string[] }> {
   if (!repo) throw new Error('repo not initialized');
-  const command = detectTranscriptsCommand(['node', 'ai-conductor', 'transcripts', slug, ...args]);
+  const command = detectTranscriptsCommand(['node', 'ai-conductor', 'transcripts', featureSlug, ...args]);
   if (!command) throw new Error('valid transcripts command was not detected');
   const output: string[] = [];
   const log = vi.spyOn(console, 'log').mockImplementation((value: string) => { output.push(value); });
@@ -144,6 +148,29 @@ describe('ai-conductor transcripts', () => {
     const before = await snapshot(worktree);
     expect(await run([])).toEqual({ code: 0, output: [`no retained transcripts for ${slug}`] });
     expect(await snapshot(worktree)).toEqual(before);
+  });
+
+  it.each(['..', '../other', 'a/b', '.'])('rejects path-escaping slug %s without reading its retained captures', async (invalidSlug) => {
+    repo = await mkdtemp(join(tmpdir(), 'transcripts-cli-'));
+    const escapedWorktree = invalidSlug === '../other'
+      ? join(repo, 'other')
+      : invalidSlug === 'a/b'
+        ? join(repo, '.worktrees', 'a', 'b')
+        : invalidSlug === '.'
+          ? join(repo, '.worktrees')
+          : repo;
+    const escapedCapture = join(escapedWorktree, '.pipeline', 'transcripts', 'build', 'escaped', 'sessions', '2026', '10', '14', 'session.jsonl');
+    await mkdir(join(escapedCapture, '..'), { recursive: true });
+    await writeFile(escapedCapture, JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'escaped capture' }] } }));
+    await writeFile(
+      join(escapedWorktree, '.pipeline', 'events.jsonl'),
+      `${JSON.stringify({ type: 'provider_transcripts_captured', ts: '2026-10-14T00:00:10.000Z', step: 'build', runId: 'escaped', attempt: 1, member: 'codex-member', provider: 'codex', path: '.pipeline/transcripts/build/escaped', files: 1, bytes: 1, interrupted: false, skipped: 0, omittedLines: 0 })}\n${JSON.stringify({ type: 'provider_transcripts_retained', ts: '2026-10-14T00:00:10.000Z', path: '.pipeline/transcripts/build/escaped' })}\n`,
+    );
+
+    expect(await runForSlug(invalidSlug)).toEqual({
+      code: 1,
+      output: [`no feature worktree for ${invalidSlug}`],
+    });
   });
 
   it('rejects empty and assistant-free captures while redacting a hand-placed token without writing', async () => {
