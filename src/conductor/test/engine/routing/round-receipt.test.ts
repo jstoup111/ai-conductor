@@ -55,6 +55,7 @@ async function fixture(options: { readonly laps?: ReceiptLapCharges; readonly le
       };
   const made = await createRouteRecord(root, 'demo', {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [
       { findingId: 'prd-fixable', kind: 'audit', owner: host, host, reason: 'task-slice', fallback: [] },

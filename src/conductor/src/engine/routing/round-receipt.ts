@@ -325,13 +325,33 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
 
 /** Task ids in open, uncharged frozen allocations are not authored-plan work. */
 export async function pendingAllocationTaskIds(projectRoot: string, slug: string, routing: ReceiptRoutingScope, git: GitRunner = makeGitRunner(projectRoot)): Promise<string[]> {
+  return (await readRoutedGrowthSnapshot(projectRoot, slug, routing, git)).pendingAllocationTaskIds;
+}
+
+/**
+ * One durable routing view for plan-growth accounting. Reading pending
+ * allocations and the denominator together prevents a route update between
+ * separate enumerations from producing a mixed accounting snapshot.
+ */
+export async function readRoutedGrowthSnapshot(
+  projectRoot: string,
+  slug: string,
+  routing: ReceiptRoutingScope,
+  git: GitRunner = makeGitRunner(projectRoot),
+): Promise<{ readonly pendingAllocationTaskIds: string[]; readonly sealedAuthored: number | undefined }> {
   const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
   const ids = new Set<string>();
+  let sealedAuthored: number | undefined;
   for (const item of records) {
     if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
     if (!item.record.receipt.settlementId) for (const allocation of Object.values(item.record.allocation)) for (const taskId of allocation.remTaskIds) ids.add(taskId);
+    if (item.record.sealedAuthored === undefined) continue;
+    if (sealedAuthored !== undefined && sealedAuthored !== item.record.sealedAuthored) {
+      throw new Error('route receipts disagree on sealed authored denominator');
+    }
+    sealedAuthored = item.record.sealedAuthored;
   }
-  return [...ids].sort();
+  return { pendingAllocationTaskIds: [...ids].sort(), sealedAuthored };
 }
 
 /**
@@ -438,15 +458,7 @@ export async function routedSealedAuthored(
   routing: ReceiptRoutingScope,
   git: GitRunner = makeGitRunner(projectRoot),
 ): Promise<number | undefined> {
-  const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
-  let sealed: number | undefined;
-  for (const item of records) {
-    if (item.kind !== 'ok') throw new Error(`route receipt ${item.kind}`);
-    if (item.record.sealedAuthored === undefined) continue;
-    if (sealed !== undefined && sealed !== item.record.sealedAuthored) throw new Error('route receipts disagree on sealed authored denominator');
-    sealed = item.record.sealedAuthored;
-  }
-  return sealed;
+  return (await readRoutedGrowthSnapshot(projectRoot, slug, routing, git)).sealedAuthored;
 }
 
 export async function pendingAsBuiltFindingsFromRoutes(

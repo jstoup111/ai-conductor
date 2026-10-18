@@ -1020,6 +1020,7 @@ export async function readGrowthAccounting(
     const stateForRouting = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
     const slug = stateForRouting.ok ? stateForRouting.value.feature_desc : undefined;
     let routedPending = new Set<string>();
+    let sealedRoutedAuthored: number | undefined;
     const hasChildState = await access(join(projectRoot, '.pipeline', 'children')).then(() => true).catch(() => false);
     if (slug && hasChildState) {
       try {
@@ -1027,25 +1028,14 @@ export async function readGrowthAccounting(
         if (!config.ok) return { growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap), authoredSource: 'unresolved' };
         const cursor = await resolveActiveChild(projectRoot, slug);
         if (routingEligible(cursor, config.config)) {
-          const { pendingAllocationTaskIds } = await import('./routing/round-receipt.js');
-          routedPending = new Set(await pendingAllocationTaskIds(projectRoot, slug, { cursor, config: config.config }));
-        }
-      } catch {
-        // Route records are a fail-closed accounting input.  Leave the count
-        // unreconciled rather than manufacture a denominator from the leaf.
-        return { growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap), authoredSource: 'unresolved' };
-      }
-    }
-    let sealedRoutedAuthored: number | undefined;
-    if (slug && hasChildState) {
-      try {
-        const config = await loadConfig(projectRoot);
-        const cursor = config.ok ? await resolveActiveChild(projectRoot, slug) : undefined;
-        if (config.ok && cursor && routingEligible(cursor, config.config)) {
-          const { routedSealedAuthored } = await import('./routing/round-receipt.js');
-          sealedRoutedAuthored = await routedSealedAuthored(projectRoot, slug, { cursor, config: config.config });
+          const { readRoutedGrowthSnapshot } = await import('./routing/round-receipt.js');
+          const snapshot = await readRoutedGrowthSnapshot(projectRoot, slug, { cursor, config: config.config });
+          routedPending = new Set(snapshot.pendingAllocationTaskIds);
+          sealedRoutedAuthored = snapshot.sealedAuthored;
         }
       } catch (error) {
+        // A route snapshot is indivisible: falling back after only one of its
+        // inputs failed could pair stale pending ids with a leaf denominator.
         throw new Error(`routed sealed growth denominator is unreadable: ${error instanceof Error ? error.message : String(error)}`);
       }
     }

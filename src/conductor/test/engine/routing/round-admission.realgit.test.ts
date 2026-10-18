@@ -19,6 +19,7 @@ const roundId = parseRoundId('r1')!;
 
 const input = {
   roundId,
+  sealedAuthored: 1,
   kind: 'audit' as const,
   items: [{ findingId: 'finding', kind: 'audit' as const, owner: c1, host: c1, reason: 'task-slice', fallback: [] }],
   allocation: { [c1]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },

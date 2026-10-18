@@ -15014,22 +15014,25 @@ export class Conductor {
     let sealedAuthored: number | undefined;
     try {
       sealedAuthored = await routedSealedAuthored(this.projectRoot, slug, { cursor, config: this.config });
-    } catch { /* first taskless route has no prior receipt authority */ }
+    } catch (error) {
+      return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+    }
     if (sealedAuthored === undefined) {
       try {
         const planPath = await resolveFeaturePlanPath(this.projectRoot, slug);
-        if (planPath !== undefined) {
-          const plan = await readFile(planPath, 'utf8');
-          sealedAuthored = countAuthoredTaskHeadings(plan);
-        }
-      } catch { /* unavailable sealed plan is refused below */ }
+        if (planPath === undefined) return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator could not resolve the feature plan` };
+        sealedAuthored = countAuthoredTaskHeadings(await readFile(planPath, 'utf8'));
+      } catch (error) {
+        return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator could not resolve the feature plan: ${error instanceof Error ? error.message : String(error)}` };
+      }
     }
+    if (sealedAuthored === undefined) return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator could not resolve the feature plan` };
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
       kind: 'audit',
       items: [{ findingId: input.findingId(host), kind: 'audit', owner: host, host, reason: input.reason, fallback: [] }],
       allocation: { [host]: { remTaskIds: [], blockBodies: [], ...(input.retryHint === undefined ? {} : { retryHint: input.retryHint }) } },
-      ...(sealedAuthored === undefined ? {} : { sealedAuthored }),
+      sealedAuthored,
     });
     if (created.kind !== 'created') return { kind: 'halted', reason: `routing round ${roundId} record creation failed: ${created.kind}` };
 

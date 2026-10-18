@@ -49,6 +49,7 @@ async function fixture() {
   await git(['commit', '-qm', 'base']);
   const made = await createRouteRecord(root, 'demo', {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [{ findingId: 'finding', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
     allocation: { [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },

@@ -478,7 +478,7 @@ describe('task command child slice membership', () => {
         sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] },
       }, coverageBindingFilesystem);
       const created = await createRouteRecord(root, 'demo', {
-        roundId, kind: 'audit',
+        roundId, sealedAuthored: 1, kind: 'audit',
         items: [{ findingId: 'finding', kind: 'audit', owner: c1, host: c2, reason: 'routed', fallback: [], existingTask: true, taskIds: ['T1'] }],
         allocation: { [c2]: { remTaskIds: ['rem-r1-1'], blockBodies: ['### Task rem-r1-1\n'] } },
       });

@@ -13,6 +13,7 @@ import {
   readRouteRecord,
   writeRouteRecord,
 } from '../../../src/engine/routing/route-record-store.js';
+import type { CreateRouteRecordInput } from '../../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
@@ -25,6 +26,7 @@ if (!c1) throw new Error('1 must be a valid child id');
 
 const routeRecord: RouteRecord = {
   roundId,
+  sealedAuthored: 1,
   kind: 'audit',
   phase: 'open',
   items: [{ findingId: 'finding-1', kind: 'audit', owner: c1, host: c1, reason: 'task ownership', fallback: [] }],
@@ -195,7 +197,7 @@ describe('ref-backed route record store', () => {
         hosts: { [c1]: 'pending' as const },
       };
 
-      expect(await createRouteRecord(fixture.repo, 'demo', malformedExistingTask)).toEqual({ kind: 'unavailable' });
+      expect(await createRouteRecord(fixture.repo, 'demo', malformedExistingTask as unknown as CreateRouteRecordInput)).toEqual({ kind: 'unavailable' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({ kind: 'absent' });
 
       await routeFixture(fixture);

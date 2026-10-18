@@ -78,6 +78,7 @@ describe('routed round conductor resume', () => {
     const roundId = parseRoundId('r1')!;
     const created = await createRouteRecord(subject.repo, 'demo', {
       roundId,
+      sealedAuthored: 1,
       kind: 'audit',
       items: [{ findingId: 'finding', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
       allocation: { [child]: { remTaskIds: [], blockBodies: [] } },

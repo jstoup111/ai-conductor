@@ -73,6 +73,7 @@ async function createRoutedFixture(): Promise<RoutedFixture> {
 
   const created = await createRouteRecord(root, 'demo', {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [],
     allocation: { [c1]: { remTaskIds: ['rem-72'], blockBodies: ['### Task rem-72\n'] } },

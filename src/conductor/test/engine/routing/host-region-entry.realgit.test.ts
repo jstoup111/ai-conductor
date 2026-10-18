@@ -56,7 +56,7 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
     acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
   }));
   const created = await createRouteRecord(repo, 'demo', {
-    roundId, kind,
+    roundId, sealedAuthored: 1, kind,
     items: [{ findingId: 'finding', kind, owner: child, host: child, reason: 'task-slice', fallback: [] }],
     allocation: { [child]: {
       remTaskIds: ['rem-prd-audit-T1'],

@@ -70,6 +70,7 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
 
   const created = await createRouteRecord(repo, 'demo', {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [{
       findingId: 'f1', kind: 'audit', owner: source, host: source, reason: 'task-slice', fallback: [], existingTask: true, taskIds: ['rem-prd-audit-T1'],

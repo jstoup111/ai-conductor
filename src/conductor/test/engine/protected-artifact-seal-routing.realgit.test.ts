@@ -79,6 +79,7 @@ async function routedFixture(blockId = 'rem-prd-audit-T2') {
   }, envelopeFilesystem);
   const created = await createRouteRecord(repo, slug, {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [{ findingId: 'finding', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
     allocation: { [child]: { remTaskIds: ['rem-prd-audit-T2'], blockBodies: [`### Task rem-prd-audit-T2: Routed repair\n**Child:** 2\n**Round:** r1\n`] } },

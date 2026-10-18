@@ -52,6 +52,11 @@ export type RoutingTransactionOp =
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
+/** Every newly admitted route seals its authored-task denominator. */
+export type CreateRouteRecordInput = Pick<
+  RouteRecord,
+  'roundId' | 'kind' | 'items' | 'allocation' | 'pendingAsBuiltFindings'
+> & { readonly sealedAuthored: number; readonly receipt?: RouteRecord['receipt'] };
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
 export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'unavailable' };
 
@@ -200,7 +205,7 @@ export async function writeRoutingTransaction(
 export async function createRouteRecord(
   worktree: string,
   slug: string,
-  input: Pick<RouteRecord, 'roundId' | 'kind' | 'items' | 'allocation' | 'sealedAuthored' | 'pendingAsBuiltFindings'> & { readonly receipt?: RouteRecord['receipt'] },
+  input: CreateRouteRecordInput,
   dependencies: RouteRecordStoreDependencies = {},
 ): Promise<{ readonly kind: 'created'; readonly record: RouteRecord } | Exclude<WriteRouteRecordResult, { readonly kind: 'updated' }>> {
   const hosts = Object.keys(input.allocation).reduce((result, value) => ({ ...result, [value]: 'pending' as const }), {} as Record<string, RouteRecord['hosts'][keyof RouteRecord['hosts']]>);

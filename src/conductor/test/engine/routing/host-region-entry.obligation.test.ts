@@ -58,6 +58,7 @@ async function fixture(input: { taskId: string; restage?: boolean; taskStatus?: 
   }
   const created = await createRouteRecord(repo, 'demo', {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [{
       findingId: `finding-${input.taskId}`,

@@ -70,6 +70,7 @@ async function cumulativeCapFixture(credit: 'available' | 'consumed') {
   await git(['init', '-q', '-b', 'main']);
   const route = await createRouteRecord(root, 'demo', {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [],
     allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
@@ -163,6 +164,7 @@ async function enteredHostFixture() {
   }));
   const created = await createRouteRecord(root, 'demo', {
     roundId,
+    sealedAuthored: 1,
     kind: 'audit',
     items: [],
     allocation: { [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1: Routed repair\n'] } },
@@ -225,7 +227,7 @@ describe('routed repair credit', () => {
     const git = makeGitRunner(root);
     await git(['init', '-q', '-b', 'main']);
     const created = await createRouteRecord(root, 'demo', {
-      roundId, kind: 'audit', items: [], allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
+      roundId, sealedAuthored: 1, kind: 'audit', items: [], allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
     }, { git });
     if (created.kind !== 'created') throw new Error(`failed to create routed event fixture: ${created.kind}`);
     const admitted = await admitRound(root, 'demo', created.record, child, { git });
@@ -273,7 +275,7 @@ describe('routed repair credit', () => {
     const git = makeGitRunner(root);
     await git(['init', '-q', '-b', 'main']);
     const created = await createRouteRecord(root, 'demo', {
-      roundId, kind: 'audit', items: [], allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
+      roundId, sealedAuthored: 1, kind: 'audit', items: [], allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
     }, { git });
     if (created.kind !== 'created') throw new Error(`failed to create open routed round: ${created.kind}`);
     const admitted = await admitRound(root, 'demo', created.record, child, { git });
