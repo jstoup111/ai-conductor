@@ -195,6 +195,7 @@ import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
+import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound } from './routing/round-admission.js';
 import { routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
@@ -1462,9 +1463,11 @@ export class Conductor {
         const execution = resolveExecutionChild(cursor, slug);
         if (execution?.source !== 'routed-host' || execution.roundId === undefined) return undefined;
         const headSha = await currentCommitSha(this.projectRoot);
-        if (!headSha) return undefined;
-        const raw = JSON.parse(await readFile(pipelinePathFor(this.projectRoot, 'acceptance-verify-green.json', execution.target.child), 'utf8')) as Record<string, unknown>;
-        return raw.roundId === execution.roundId && raw.host === execution.target.child && raw.headSha === headSha && raw.done === true
+        // Routed completion must never fall through to the legacy RED
+        // predicate.  Supply the expected identity even when the recorded
+        // verification result is absent, stale, or refused; artifacts.ts
+        // then rejects that exact failure closed.
+        return headSha
           ? { roundId: execution.roundId, host: execution.target.child, headSha }
           : undefined;
       } catch { return undefined; }
@@ -7103,7 +7106,14 @@ export class Conductor {
             break;
           case 'exhausted':
           case 'halted': {
-            const reason = routedAdmission.reason;
+            // Receipt recovery may discover an exhausted historical counter
+            // before this process-local mirror reaches its cap.  Keep the
+            // established self-heal halt vocabulary for manual-test FAILs.
+            const reason = routedAdmission.kind === 'exhausted'
+              ? `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
+                `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
+                (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '')
+              : routedAdmission.reason;
             await this.writeHaltMarker(reason + '\n', 'needs-human');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             const prUrl = await this.surfaceRemediationPr(reason);
@@ -15027,7 +15037,31 @@ export class Conductor {
     const roundId = await nextRoundId(this.projectRoot, slug);
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
 
-    const host = execution.target.child;
+    const envelope = await readCoverageBindingEnvelope(this.projectRoot, {
+      readFile: (path) => readFile(path, 'utf8'),
+      mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+      writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
+      rename,
+    });
+    const declaredPositions = envelope?.sliceMembership === undefined
+      ? []
+      : [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
+        .filter((position) => Number.isSafeInteger(position) && position > 0)
+        .sort((left, right) => left - right) as ChildId[];
+    if (declaredPositions.length === 0) {
+      return { kind: 'halted', reason: 'taskless routing cannot read the sealed task-slice ownership envelope' };
+    }
+    const judged = await runResidueRoutingCall({
+      items: [{ itemId: input.findingId(execution.target.child), rationale: input.reason }],
+      declaredPositions,
+      judge: this.stepRunner.dispatchResidueRoutingJudgement === undefined
+        ? undefined
+        : (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
+    });
+    if (judged.kind === 'halt') {
+      return { kind: 'halted', reason: `taskless routing judgement failed: ${judged.detail}` };
+    }
+    const host = resolveResidueOwner(judged.answers[0]!).owner as ChildId;
     let sealedAuthored: number | undefined;
     try {
       sealedAuthored = await routedSealedAuthored(this.projectRoot, slug, { cursor, config: this.config });
@@ -15181,13 +15215,17 @@ export class Conductor {
           reason: v.kickback?.evidence ?? '',
         }, kickbackChild);
         const count = kickback.entry.count;
+        // A custom-step taskless receipt observes the same durable ordering as
+        // manual-test admission: counter, event, cap, then any route write.
+        const routedFromCustomStep = !ALL_STEPS.some((definition) => definition.name === stepName);
+        if (routedFromCustomStep) await this.events.emit(this.stampGateTier({
+          type: 'kickback', from: stepName, to: target,
+          evidence: v.kickback?.evidence, count,
+          ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
+        }));
         if (kickback.exhausted) {
-          await this.events.emit(this.stampGateTier({
-            type: 'kickback',
-            from: stepName,
-            to: target,
-            evidence: v.kickback?.evidence,
-            count,
+          if (!routedFromCustomStep) await this.events.emit(this.stampGateTier({
+            type: 'kickback', from: stepName, to: target, evidence: v.kickback?.evidence, count,
             ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
           }));
           const pingPongReason =
@@ -15204,13 +15242,7 @@ export class Conductor {
         // The originating custom step owns the taskless identity even when it
         // re-opens a built-in gate such as build.  Ledger charging remains on
         // the re-opened target above.
-        const routedFromCustomStep = !ALL_STEPS.some((definition) => definition.name === stepName);
         if (routedFromCustomStep) {
-          await this.events.emit(this.stampGateTier({
-            type: 'kickback', from: stepName, to: target,
-            evidence: v.kickback?.evidence, count,
-            ...(kickbackChild === undefined ? {} : { child: kickbackChild }),
-          }));
           const routedAdmission = await this.admitRoutedCustomStepKickback(state, stepName, count);
           switch (routedAdmission.kind) {
             case 'admitted':

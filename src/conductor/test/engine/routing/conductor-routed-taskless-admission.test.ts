@@ -1,6 +1,6 @@
 // Covers: tasks:33,65
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -76,8 +76,18 @@ async function subject() {
   const root = await mkdtemp(join(tmpdir(), 'routed-taskless-admission-'));
   roots.push(root);
   await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+  await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+    version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
+    sliceMembership: { taskSlices: { T1: 1 }, titles: [] },
+  }));
   const events = new ConductorEventEmitter();
-  const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+  const runner: StepRunner = {
+    run: vi.fn(async () => ({ success: true })),
+    dispatchResidueRoutingJudgement: vi.fn(async () => ({
+      success: true,
+      output: JSON.stringify({ version: 'v1', items: [{ itemId: 'fixture', child: 1, candidates: [1], rationale: 'fixture' }] }),
+    })),
+  };
   const conductor = new Conductor({
     projectRoot: root,
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),

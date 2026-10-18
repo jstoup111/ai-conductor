@@ -10,7 +10,7 @@ import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { completeRerouteSync, rerouteRound, settleRoutedBuildClaim, verifyPrerequisiteClaim } from '../../../src/engine/routing/prerequisite-claim.js';
 import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, drainOutbox, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, drainOutbox, readRepairMarker, readRouteRecord, transitionHost, writeRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, rejectedPinRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
@@ -226,6 +226,26 @@ describe('verified prerequisite reroute (real local Git)', () => {
       expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({
         kind: 'record', record: { hosts: { 1: 'rerouted', 2: 'admitted' } },
       });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('refuses a BUILD claim when its admitted destination prerequisite path is absent', async () => {
+    const subject = await fixture();
+    try {
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('missing routed work order');
+      const updated = await writeRouteRecord(subject.repo, stored, {
+        ...stored.record,
+        items: stored.record.items.map((item) => ({ ...item, prerequisitePaths: ['src-required.ts'] })),
+      }, { git: subject.git });
+      if (updated.kind !== 'updated') throw new Error(`work order update ${updated.kind}`);
+      const before = await routingRefs(subject.git);
+
+      await expect(settleRoutedBuildClaim({
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] },
+        worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'failed', detail: expect.stringContaining('lacks prerequisite paths') });
+      expect(await routingRefs(subject.git)).toBe(before);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 

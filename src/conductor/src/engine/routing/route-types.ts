@@ -154,6 +154,8 @@ interface RoutedItemBase {
   readonly host: ChildId;
   readonly reason: string;
   readonly fallback: readonly ChildId[];
+  /** Immutable prerequisite inputs admitted with the work order. */
+  readonly prerequisitePaths?: readonly string[];
   /** The placement judgement is durable context for the host. */
   readonly rationale?: string;
 }
@@ -505,9 +507,14 @@ function parseRoutedItem(value: unknown): RoutedItem | undefined {
   const fallback = value.fallback.map(parseChild);
   if (fallback.some((child) => child === undefined)) return undefined;
   if (value.rationale !== undefined && typeof value.rationale !== 'string') return undefined;
+  const prerequisitePaths = value.prerequisitePaths === undefined
+    ? undefined
+    : parseStringArray(value.prerequisitePaths);
+  if (value.prerequisitePaths !== undefined && !prerequisitePaths) return undefined;
   const base: RoutedItemBase = {
     findingId, kind, owner, host, reason, fallback: fallback as ChildId[],
     ...(value.rationale === undefined ? {} : { rationale: value.rationale }),
+    ...(prerequisitePaths === undefined ? {} : { prerequisitePaths }),
   };
   if (value.existingTask !== true) {
     return value.existingTask === undefined && value.taskIds === undefined && value.obligation === undefined && value.restage === undefined

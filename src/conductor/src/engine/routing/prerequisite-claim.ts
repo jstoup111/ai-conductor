@@ -388,7 +388,16 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
   if (parsed.kind === 'malformed') return { kind: 'failed', detail: 'routed prerequisite claim is malformed' };
   const git = input.git ?? makeGitRunner(input.worktree);
   const leaf = input.leaf ?? await resolveSealedLeaf(input.worktree);
-  const verified = await verifyPrerequisiteClaim({ claim: parsed.claim, host: input.host, slug: input.slug, leaf, git });
+  const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind !== 'record') return { kind: 'needs-human', detail: `routed prerequisite claim work order is ${stored.kind}` };
+  const prerequisitePaths = [...new Set(
+    stored.record.items
+      .filter((item) => item.host === input.host)
+      .flatMap((item) => item.prerequisitePaths ?? []),
+  )];
+  const verified = await verifyPrerequisiteClaim({
+    claim: parsed.claim, host: input.host, slug: input.slug, leaf, git, prerequisitePaths,
+  });
   if (verified.kind !== 'verified') return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
   const moved = await rerouteRound({
     worktree: input.worktree, slug: input.slug, roundId: input.roundId,

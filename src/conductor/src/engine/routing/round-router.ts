@@ -161,7 +161,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: ownership.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    const base = { findingId: source.id, kind: 'audit' as const, owner: ownership.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : ownership.reason, fallback: [] };
+    const base = { findingId: source.id, kind: 'audit' as const, owner: ownership.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : ownership.reason, fallback: [], ...(paths.inputs.length === 0 ? {} : { prerequisitePaths: paths.inputs }) };
     const existingTask = existingTaskFields(source, mixedRound);
     const item: RoutedItem = existingTask === undefined ? base : { ...base, ...existingTask };
     resolved.push({ source, item });
@@ -176,7 +176,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: owner.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    const base = { findingId: source.id, kind: 'audit' as const, owner: owner.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : owner.reason, rationale: owner.rationale, fallback: [] };
+    const base = { findingId: source.id, kind: 'audit' as const, owner: owner.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : owner.reason, rationale: owner.rationale, fallback: [], ...(paths.inputs.length === 0 ? {} : { prerequisitePaths: paths.inputs }) };
     const existingTask = existingTaskFields(source, mixedRound);
     const item: RoutedItem = existingTask === undefined ? base : { ...base, ...existingTask };
     resolved.push({ source, item });

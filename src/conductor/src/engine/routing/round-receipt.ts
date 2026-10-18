@@ -184,6 +184,9 @@ function withTasklessCharge(receipt: RoundReceipt, gate: TasklessReceiptGate): R
 /** Apply the durable accounting carried by one already-settled round receipt. */
 function applySettledReceiptToLedger(ledger: KickbackLedger, record: RouteRecord): KickbackLedger {
   if (record.receipt.settlementId === undefined) return ledger;
+  if (record.sealedAuthored === undefined) {
+    throw new Error(`routing round ${record.roundId} has no sealed authored denominator`);
+  }
   const settlementId = record.receipt.settlementId;
   const charges = receiptCharges(record);
   const gates = { ...ledger.gates };
@@ -193,7 +196,7 @@ function applySettledReceiptToLedger(ledger: KickbackLedger, record: RouteRecord
     const entry = gates[gate] ?? defaultGateEntry();
     gates[gate] = { ...entry, laps: (entry.laps ?? 0) + laps };
   }
-  const prior = ledger.growth ?? { authored: record.sealedAuthored ?? 0, added: 0, byGate: {} };
+  const prior = ledger.growth ?? { authored: record.sealedAuthored, added: 0, byGate: {} };
   // A joined round charges its single growth value once. The owner is the first
   // charged gate in budget-gate order (prd_audit before as-built), never the
   // receipt's key order, so the ledger attribution is deterministic.

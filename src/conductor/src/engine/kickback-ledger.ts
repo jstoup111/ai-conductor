@@ -1021,6 +1021,7 @@ export async function readGrowthAccounting(
     const slug = stateForRouting.ok ? stateForRouting.value.feature_desc : undefined;
     let routedPending = new Set<string>();
     let sealedRoutedAuthored: number | undefined;
+    let routedAccounting = false;
     const hasChildState = await access(join(projectRoot, '.pipeline', 'children')).then(() => true).catch(() => false);
     if (slug && hasChildState) {
       try {
@@ -1028,6 +1029,7 @@ export async function readGrowthAccounting(
         if (!config.ok) return { growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap), authoredSource: 'unresolved' };
         const cursor = await resolveActiveChild(projectRoot, slug);
         if (routingEligible(cursor, config.config)) {
+          routedAccounting = true;
           const { readRoutedGrowthSnapshot } = await import('./routing/round-receipt.js');
           const snapshot = await readRoutedGrowthSnapshot(projectRoot, slug, { cursor, config: config.config });
           routedPending = new Set(snapshot.pendingAllocationTaskIds);
@@ -1069,9 +1071,34 @@ export async function readGrowthAccounting(
       // entries can write rem blocks on another child branch, so deriving
       // again from whichever plan happens to be checked out would turn that
       // branch movement into free (or phantom) feature growth.
-      if (options.persist && derived.resolved) {
+      if (routedAccounting && options.persist && derived.resolved) {
         await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
       }
+      return { growth: withRemaining(derived.growth, cap), authoredSource };
+    }
+
+    // The sealed-denominator rules are only for routed features.  Preserve
+    // the established N=1 reconciliation (including its no-first-read-write
+    // behavior) byte-for-byte for routing-off and unsliced features.
+    if (!routedAccounting) {
+      if (stored.authored === 0 && derived.resolved && derived.growth.authored > 0) {
+        throw new Error(`stored authored denominator 0 disagrees with sealed plan denominator ${derived.growth.authored}`);
+      }
+      const matchesPlan = !derived.resolved || (pendingGrowth
+        ? stored.authored === derived.growth.authored
+        : stored.authored + stored.added === derived.growth.authored);
+      if (growthTotalsAgree(stored) && matchesPlan) return { growth: withRemaining(stored, cap), authoredSource };
+      if (growthTotalsAgree(stored) && derived.resolved) {
+        const reconciled = {
+          authored: Math.max(0, derived.growth.authored - stored.added),
+          added: stored.added,
+          byGate: { ...stored.byGate },
+        };
+        if (options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
+        return { growth: withRemaining(reconciled, cap), authoredSource };
+      }
+      console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
+      if (options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
       return { growth: withRemaining(derived.growth, cap), authoredSource };
     }
 
