@@ -153,7 +153,7 @@ import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.j
 import { installedHarnessVersionForConfig, resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead } from './engine/tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead, type TrackerClient } from './engine/tracker-client.js';
 import { bindMutationToPullRequest } from './engine/ship-draft-pr.js';
 import { createGithubIntakeAuthorization } from './engine/engineer/intake/github-issues.js';
 import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
@@ -254,6 +254,7 @@ import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { enrollWatch, sweepMergeableLabels, updateWatch, type SweepOpts } from './engine/mergeable-sweep.js';
 import { RepairQueue, type RepairRequest } from './engine/repair-queue.js';
+import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { isPaused } from './engine/pause-marker.js';
 import {
@@ -1121,6 +1122,97 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
         renderDashboard(dashboardState, { includeCompleted: options.showCompleted }),
       );
     },
+  };
+}
+
+type RepairClaimDisposition =
+  | { readonly kind: 'admit' }
+  | { readonly kind: 'drop'; readonly reason: string };
+
+function assertNever(value: never): never {
+  throw new Error(`unhandled repair claim state: ${String(value)}`);
+}
+
+/**
+ * Claim-time admission is deliberately stricter than sweep-time eligibility:
+ * a queued repair may be stale by the time a worker slot becomes available.
+ */
+export function repairClaimDisposition(
+  request: RepairRequest,
+  state: PrMergeState,
+): RepairClaimDisposition {
+  if (state.readFailure || state.contextFailure) return { kind: 'drop', reason: 'state unreadable' };
+
+  switch (state.state) {
+    case 'MERGED':
+    case 'CLOSED':
+    case 'UNKNOWN':
+    case 'NOTFOUND':
+      return { kind: 'drop', reason: `state ${state.state.toLowerCase()}` };
+    case 'OPEN':
+      if (state.isDraft) return { kind: 'drop', reason: 'draft' };
+      switch (request.kind) {
+        case 'autoresolve':
+          return state.mergeable === 'CONFLICTING'
+            ? { kind: 'admit' }
+            : { kind: 'drop', reason: `mergeable ${state.mergeable.toLowerCase()}` };
+        case 'ci-fix':
+          switch (state.checksOutcome) {
+            case 'failed': return { kind: 'admit' };
+            case 'pending':
+            case 'green':
+            case 'none': return { kind: 'drop', reason: `checks ${state.checksOutcome}` };
+            default: return assertNever(state.checksOutcome);
+          }
+        default: return assertNever(request.kind);
+      }
+    default:
+      return assertNever(state.state);
+  }
+}
+
+export function createClaimTimeRepairRunner(options: {
+  projectRoot: string;
+  tracker: Pick<TrackerClient, 'readPullRequestMergeState'>;
+  log: (message: string) => void;
+  isWorkClaimActive: (slug: string) => boolean;
+  runners: Map<string, () => Promise<void>>;
+  now?: () => Date;
+}): (request: RepairRequest) => Promise<void> {
+  const { projectRoot, tracker, log, isWorkClaimActive, runners, now = () => new Date() } = options;
+  return async (request) => {
+    let state: PrMergeState;
+    try {
+      state = await tracker.readPullRequestMergeState(request.prUrl, projectRoot, log);
+    } catch {
+      log(`[daemon] dropping repair ${request.prUrl}: state unreadable`);
+      return;
+    }
+    const disposition = repairClaimDisposition(request, state);
+    if (disposition.kind === 'drop') {
+      log(`[daemon] dropping repair ${request.prUrl}: ${disposition.reason}`);
+      return;
+    }
+    if (request.slug && isWorkClaimActive(request.slug)) {
+      log(`[daemon] dropping repair ${request.prUrl}: feature is in flight`);
+      return;
+    }
+    // Claim time, rather than sweep time, owns attempt accounting. A restart
+    // after this serialized write intentionally consumes an attempt; a
+    // queued/held/stale request does not.
+    await updateWatch(projectRoot, (entries) => entries.map((entry) => {
+      if (entry.prUrl !== request.prUrl) return entry;
+      return request.kind === 'ci-fix'
+        ? { ...entry, ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1, lastCiFixAt: now().toISOString() }
+        : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1 };
+    }));
+    const run = runners.get(request.prUrl);
+    if (!run) {
+      log(`[daemon] dropping repair ${request.prUrl}: no registered adapter`);
+      return;
+    }
+    await run();
+    runners.delete(request.prUrl);
   };
 }
 
@@ -2460,34 +2552,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const result = await runDaemon(
     {
       claims: workClaims,
-      repairs: { queue: repairQueue, run: async (request: RepairRequest) => {
-        // Re-read before touching a worktree: queued state is advisory and
-        // may have been resolved while the pool was full.
-        const state = await tracker.readPullRequestMergeState(request.prUrl, projectRoot, log);
-        if (state.state === 'MERGED' || state.state === 'CLOSED' || state.isDraft ||
-          (request.kind === 'ci-fix' && state.checksOutcome === 'green') ||
-          (request.kind === 'autoresolve' && state.mergeable !== 'CONFLICTING') ||
-          (request.slug && isWorkClaimActive(request.slug))) {
-          log(`[daemon] dropping repair ${request.prUrl}: no longer eligible`);
-          return;
-        }
-        // Claim time, rather than sweep time, owns attempt accounting. A
-        // restart after this serialized write intentionally consumes an
-        // attempt; a queued/held request does not.
-        await updateWatch(projectRoot, (entries) => entries.map((entry) => {
-          if (entry.prUrl !== request.prUrl) return entry;
-          return request.kind === 'ci-fix'
-            ? { ...entry, ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1, lastCiFixAt: new Date().toISOString() }
-            : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1 };
-        }));
-        const run = queuedRepairRunners.get(request.prUrl);
-        if (!run) {
-          log(`[daemon] dropping repair ${request.prUrl}: no registered adapter`);
-          return;
-        }
-        await run();
-        queuedRepairRunners.delete(request.prUrl);
-      } },
+      repairs: { queue: repairQueue, run: createClaimTimeRepairRunner({
+        projectRoot,
+        tracker,
+        log,
+        isWorkClaimActive,
+        runners: queuedRepairRunners,
+      }) },
       emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),

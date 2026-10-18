@@ -1,5 +1,8 @@
 // Covers: task:4, task:11
-import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createClaimTimeRepairRunner } from '../src/daemon-cli.js';
 import {
   ciRepairOutcomeDiagnostic,
   ciRepairPreDispatchDisposition,
@@ -8,6 +11,12 @@ import {
 } from '../src/engine/daemon-ci-fix.js';
 import type { PrMergeState } from '../src/engine/pr-labels.js';
 import type { WatchEntry } from '../src/engine/mergeable-sweep.js';
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 const entry: WatchEntry = {
   prUrl: 'https://github.com/acme/widget/pull/7', slug: 'widget', repoCwd: '/repo', ciFixAttempts: 1,
@@ -62,6 +71,70 @@ function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>
 }
 
 describe('daemon CI-fix production dispatch callback', () => {
+  it.each([
+    ['UNKNOWN', { ...selected, state: 'UNKNOWN' }, 'ci-fix'],
+    ['NOTFOUND', { ...selected, state: 'NOTFOUND' }, 'ci-fix'],
+    ['read failure', { ...selected, readFailure: { kind: 'runner', error: new Error('unavailable') } }, 'ci-fix'],
+    ['pending rollup', { ...selected, checksOutcome: 'pending' }, 'ci-fix'],
+    ['no rollup', { ...selected, checksOutcome: 'none' }, 'ci-fix'],
+    ['non-conflicting autoresolve', { ...selected, mergeable: 'MERGEABLE' }, 'autoresolve'],
+    ['rejected state read', undefined, 'autoresolve'],
+  ] as const)('drops a stale %s repair before its attempt write or adapter call', async (_caseName, result, kind) => {
+    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    roots.push(root);
+    await mkdir(join(root, '.daemon'), { recursive: true });
+    const prUrl = 'https://github.com/acme/widget/pull/7';
+    await writeFile(join(root, '.daemon', 'mergeable-watch.jsonl'), `${JSON.stringify({
+      prUrl, slug: 'widget', repoCwd: root, ciFixAttempts: 3, resolveAttempts: 2,
+    })}\n`);
+    const adapter = vi.fn(async () => undefined);
+    const log = vi.fn();
+    const runner = createClaimTimeRepairRunner({
+      projectRoot: root,
+      tracker: {
+        readPullRequestMergeState: async () => {
+          if (result === undefined) throw new Error('read rejected');
+          return result;
+        },
+      },
+      log,
+      isWorkClaimActive: () => false,
+      runners: new Map([[prUrl, adapter]]),
+    });
+
+    await runner({ kind, prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z' });
+
+    expect(adapter).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledOnce();
+    await expect(readFile(join(root, '.daemon', 'mergeable-watch.jsonl'), 'utf8')).resolves.toBe(`${JSON.stringify({
+      prUrl, slug: 'widget', repoCwd: root, ciFixAttempts: 3, resolveAttempts: 2,
+    })}\n`);
+  });
+
+  it('writes the claimed failed CI-fix attempt before calling its adapter', async () => {
+    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    roots.push(root);
+    await mkdir(join(root, '.daemon'), { recursive: true });
+    const prUrl = 'https://github.com/acme/widget/pull/7';
+    await writeFile(join(root, '.daemon', 'mergeable-watch.jsonl'), `${JSON.stringify({ prUrl, slug: 'widget', repoCwd: root, ciFixAttempts: 3 })}\n`);
+    const adapter = vi.fn(async () => {
+      const stored = JSON.parse(await readFile(join(root, '.daemon', 'mergeable-watch.jsonl'), 'utf8')) as WatchEntry;
+      expect(stored.ciFixAttempts).toBe(4);
+    });
+    const runner = createClaimTimeRepairRunner({
+      projectRoot: root,
+      tracker: { readPullRequestMergeState: async () => selected },
+      log: vi.fn(),
+      isWorkClaimActive: () => false,
+      runners: new Map([[prUrl, adapter]]),
+      now: () => new Date('2026-10-17T00:00:00.000Z'),
+    });
+
+    await runner({ kind: 'ci-fix', prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z' });
+
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['auth', { readFailure: { kind: 'runner', error: new Error('401 unauthorized') } }, 'auth'],
     ['permission', { readFailure: { kind: 'runner', error: new Error('403 forbidden') } }, 'permission'],

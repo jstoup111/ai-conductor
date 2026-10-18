@@ -290,13 +290,16 @@ export type PrMergeStateReadFailure =
   | { kind: 'invalid-json'; error: unknown }
   | { kind: 'invalid-response' };
 
+/** States understood by the PR reader. Unknown provider values fail closed. */
+export type PullRequestState = 'OPEN' | 'MERGED' | 'CLOSED' | 'UNKNOWN' | 'NOTFOUND';
+
 /** A response was read, but its check context cannot safely be consumed. */
 export type PrCheckContextFailure =
   | { kind: 'invalid-rollup' }
   | { kind: 'invalid-rollup-entry'; index: number };
 
 export interface PrMergeState {
-  state: string;
+  state: PullRequestState;
   mergeable: string;
   /** GitHub's PR creation timestamp, used to order pooled repairs. */
   createdAt?: string;
@@ -582,7 +585,9 @@ export async function prMergeState(
       return { ...ERROR_SENTINEL, readFailure: { kind: 'invalid-response' } };
     }
     const data = parsed as GhPrViewJson;
-    const state = data.state ?? 'UNKNOWN';
+    const state: PullRequestState = data.state === 'OPEN' || data.state === 'MERGED' || data.state === 'CLOSED'
+      ? data.state
+      : 'UNKNOWN';
     const mergeable = data.mergeable ?? 'UNKNOWN';
     const rollup = parseCheckRollup(data.statusCheckRollup);
     if ('failure' in rollup) {
