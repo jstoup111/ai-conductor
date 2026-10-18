@@ -132,4 +132,22 @@ describe('MaintenanceJob', () => {
     await expect(job.settled()).resolves.toBeUndefined();
     expect(step).toHaveBeenCalledTimes(1);
   });
+
+  it('reopens an aborted close, but a drain close remains terminal until reopened', async () => {
+    const step = vi.fn(async () => {});
+    const job = new MaintenanceJob([['sweep', step]]);
+
+    // A stale restart requester may decline to fire; its close is reversible.
+    job.close();
+    job.reopen();
+    job.trigger();
+    await job.settled();
+    expect(step).toHaveBeenCalledTimes(1);
+
+    // A drain owns the boundary, so its close is not reopened by a trigger.
+    job.close();
+    job.trigger();
+    await job.settled();
+    expect(step).toHaveBeenCalledTimes(1);
+  });
 });

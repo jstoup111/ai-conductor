@@ -1542,6 +1542,9 @@ export async function runDaemon(
     maintenanceJob.close();
     await maintenanceJob.settled();
     const result = await deps.requestRestart({ fromIdentity, targetIdentity });
+    if (!result.fired && !deps.shouldStop?.() && !maintenance.isDraining()) {
+      maintenanceJob.reopen();
+    }
     return result.fired;
   };
 
@@ -1928,6 +1931,9 @@ export async function runDaemon(
                     // the restart request was aborted and the loop retries at the next idle boundary.
                     if (result.fired) {
                       return 'engine_restart';
+                    }
+                    if (!deps.shouldStop?.() && !maintenance.isDraining()) {
+                      maintenanceJob.reopen();
                     }
                     // If fired: false, fall through to continue idle polling and retry
                   }

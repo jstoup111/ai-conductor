@@ -67,6 +67,11 @@ export class MaintenanceJob {
     if (this.lifecycle.kind === 'running') this.lifecycle.rerunPending = false;
   }
 
+  /** Allows future triggers after a non-terminal close. */
+  reopen(): void {
+    this.closed = false;
+  }
+
   /** Whether closing would need to settle an active maintenance pass. */
   isRunning(): boolean {
     return this.lifecycle.kind === 'running';

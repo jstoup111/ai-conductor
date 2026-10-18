@@ -220,6 +220,53 @@ describe('daemon maintenance job wiring', () => {
     await daemon;
   });
 
+  it('reopens maintenance after a predispatch stale restart request declines, then dispatches', async () => {
+    const calls: string[] = [];
+    let staleChecks = 0;
+    const restart = vi.fn(async () => {
+      calls.push('restart');
+      return { fired: false };
+    });
+
+    const result = await runDaemon(depsFor(calls, [{ slug: 'one' }, { slug: 'two' }], {
+      staleEngineChecker: {
+        check: () => ++staleChecks === 1 ? 'stale' : 'current',
+        targetIdentity: () => 'target',
+        capturedIdentity: () => 'captured',
+      },
+      requestRestart: restart,
+    }), { concurrency: 1, once: false, maxItems: 2, isSelfHost: true, autoRestartOnStaleEngine: true, idlePollMs: 0 });
+
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(result.processed.map((outcome) => outcome.slug)).toEqual(['one', 'two']);
+    expect(calls).toEqual(expect.arrayContaining(['dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable']));
+    // Collection after the aborted predispatch restart still triggers a pass.
+    expect(calls.filter((call) => call === 'resume').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('reopens maintenance after a natural-idle stale restart request declines', async () => {
+    const calls: string[] = [];
+    let staleChecks = 0;
+    const restart = vi.fn(async () => {
+      calls.push('restart');
+      return { fired: false };
+    });
+
+    await runDaemon(depsFor(calls, [], {
+      staleEngineChecker: {
+        check: () => ++staleChecks === 1 ? 'stale' : 'current',
+        targetIdentity: () => 'target',
+        capturedIdentity: () => 'captured',
+      },
+      requestRestart: restart,
+    }), { concurrency: 1, once: false, maxIdlePolls: 1, isSelfHost: true, autoRestartOnStaleEngine: true, idlePollMs: 0 });
+
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(expect.arrayContaining(['dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable']));
+    // The following idle poll starts a new pass after the aborted restart.
+    expect(calls.filter((call) => call === 'resume').length).toBeGreaterThanOrEqual(2);
+  });
+
   // Covers: task:rem-as-built-R10.
   it('waits for a running maintenance job during shouldStop teardown without starting another step', async () => {
     const calls: string[] = [];
