@@ -106,7 +106,10 @@ describe('round receipt settlement', () => {
       const before = await readKickbackLedger(subject.root);
       const stored = await readRouteRecord(subject.root, 'demo', roundId, { git: subject.git });
       if (stored.kind !== 'record') throw new Error('missing route record');
-      expect((await writeRouteRecord(subject.root, stored, { ...stored.record, currentHostIndex: 1 }, { git: subject.git })).kind).toBe('updated');
+      // The round advances to its next host only after the first finished in place.
+      expect((await writeRouteRecord(subject.root, stored, {
+        ...stored.record, phase: 'open', hosts: { [host]: 'restacked', [leaf]: 'admitted' }, currentHostIndex: 1,
+      }, { git: subject.git })).kind).toBe('updated');
 
       await expect(settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: leaf, budgets: budgets(), routing, git: subject.git })).resolves.toMatchObject({ kind: 'acknowledged' });
       const after = await readKickbackLedger(subject.root);

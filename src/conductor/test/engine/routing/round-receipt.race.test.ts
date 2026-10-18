@@ -63,11 +63,14 @@ async function addOutboxEntries(subject: Awaited<ReturnType<typeof fixture>>, co
   const states = ['admitted', 'repairing', 'built'] as const;
   let stored = await readRouteRecord(subject.root, 'demo', roundId, { git: subject.git });
   if (stored.kind !== 'record') throw new Error('missing route record');
-  const opened = await writeRouteRecord(subject.root, stored, { ...stored.record, phase: 'open' }, { git: subject.git });
+  // Admission opens the round and admits its host in one write.
+  const admitted = transitionHost(stored, host, 'admitted', { credit: false });
+  if (admitted.kind !== 'updated') throw new Error('could not admit host');
+  const opened = await writeRouteRecord(subject.root, stored, { ...admitted.record, phase: 'open' }, { git: subject.git });
   if (opened.kind !== 'updated') throw new Error(`could not open route: ${opened.kind}`);
   stored = await readRouteRecord(subject.root, 'demo', roundId, { git: subject.git });
   if (stored.kind !== 'record') throw new Error('route record missing after open');
-  for (const state of states.slice(0, count)) {
+  for (const state of states.slice(1, count)) {
     const moved = transitionHost(stored, host, state, { credit: false });
     if (moved.kind !== 'updated') throw new Error(`could not move host to ${state}`);
     if ((await writeRouteRecord(subject.root, stored, moved.record, { git: subject.git })).kind !== 'updated') throw new Error(`could not write ${state}`);

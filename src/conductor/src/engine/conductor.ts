@@ -304,6 +304,7 @@ import {
   type OverScopeRenderableFinding,
 } from './accepted-widenings.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
+import { bypassesAcceptanceDispatch, permitsAcceptanceRedSelfHeal, type AcceptancePreDispatchOutcome } from './acceptance-pre-dispatch.js';
 import {
   FullSuiteVerifier,
   projectExecutionSummaryEntries,
@@ -10205,8 +10206,9 @@ export class Conductor {
         // step advances straight to 'done' without ever dispatching the
         // writing-system-tests skill (no retry burned, no `step_retry`); on
         // failure, fall through into the normal retry loop below unchanged,
-        // so the existing dispatch/HALT behavior is untouched.
-        let acceptanceRedPreHealed = false;
+        // so the existing dispatch/HALT behavior is untouched. A routed host
+        // instead settles the pass through verify-green, verified or refused.
+        let acceptancePreDispatch: AcceptancePreDispatchOutcome = { kind: 'not-attempted' };
         if (
           this.verifyArtifacts &&
           step.name === 'acceptance_specs' &&
@@ -10242,12 +10244,10 @@ export class Conductor {
               });
               succeeded = true;
               successOutput = undefined;
-              acceptanceRedPreHealed = true;
+              acceptancePreDispatch = { kind: 'routed-verified' };
             } else {
               acceptanceRedHealFailureReason = verified.reason;
-              // A routed pass never falls through to the RED self-heal.  Its
-              // observed green contract is the only authority for this pass.
-              acceptanceRedPreHealed = true;
+              acceptancePreDispatch = { kind: 'routed-refused' };
             }
           }
           const hasRepairableRedEvidenceRefusal =
@@ -10255,7 +10255,7 @@ export class Conductor {
             (preCheck.acceptanceRedRefusalClass === 'missing' ||
               preCheck.acceptanceRedRefusalClass === 'unparseable' ||
               preCheck.acceptanceRedRefusalClass === 'shape');
-          if (!acceptanceRedPreHealed && hasRepairableRedEvidenceRefusal) {
+          if (permitsAcceptanceRedSelfHeal(acceptancePreDispatch) && hasRepairableRedEvidenceRefusal) {
             const specFiles = await findArtifactFilesForStep(
               this.projectRoot,
               'acceptance_specs',
@@ -10312,7 +10312,7 @@ export class Conductor {
                   });
                   succeeded = true;
                   successOutput = undefined;
-                  acceptanceRedPreHealed = true;
+                  acceptancePreDispatch = { kind: 'red-healed' };
                 }
               } else {
                 acceptanceRedHealFailureReason = healResult.reason;
@@ -10321,7 +10321,7 @@ export class Conductor {
           }
         }
 
-        if (!acceptanceRedPreHealed)
+        if (!bypassesAcceptanceDispatch(acceptancePreDispatch))
         while (attempt < stepMaxRetries) {
           attempt++;
           const isAuthorizedRecoveryTrial = authorizedRecoveryTrial;

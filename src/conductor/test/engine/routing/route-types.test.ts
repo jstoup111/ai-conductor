@@ -61,7 +61,6 @@ const routeRecord = {
     laps: { prd_audit: 1 }, growth: 2, taskless: { manual_test: 1 }, echo: { 'lint-docs': 3 },
     settlementId: 'settlement-1', acks: { 2: true },
   },
-  entry: { host: 2, pinnedBase: 'c'.repeat(40), tree: 'd'.repeat(40) },
   fallback: [{ from: 1, to: 2, evidence: ['src/b.ts'], branch: 'feat/c1/demo', head: 'e'.repeat(40) }],
   reroute: { sourceBranch: 'feat/c1/demo', rejectedTip: 'f'.repeat(40), resetTip: 'a'.repeat(40), destination: 2 },
   outbox: [{
@@ -69,6 +68,36 @@ const routeRecord = {
     event: { type: 'routed_repair_phase', eventId: 'event-1', occurredAt: '2026-10-12T00:00:00.000Z' },
   }],
 };
+
+const entry = { host: 2, pinnedBase: 'c'.repeat(40), tree: 'd'.repeat(40) };
+
+/** The record after reroute sync and region entry: source rerouted, destination repairing and pinned. */
+const { reroute: _syncedReroute, fallback: rerouteFallback, outbox: rerouteOutbox, ...rerouteHead } = routeRecord;
+void _syncedReroute;
+const enteredRecord = {
+  ...rerouteHead,
+  hosts: { 1: 'rerouted', 2: 'repairing', 3: 'pending' },
+  entry,
+  fallback: rerouteFallback,
+  outbox: rerouteOutbox,
+};
+
+/** The record createRouteRecord writes: prepared, every host pending, index 0, nothing entered or moved. */
+const preparedRecord = {
+  roundId: 'r1', kind: 'audit', phase: 'prepared',
+  items: [{ findingId: 'finding-1', kind: 'audit', owner: 1, host: 1, reason: 'task ownership', fallback: [] }],
+  allocation: { 1: { remTaskIds: ['rem-4'], blockBodies: ['### Task rem-4\n'] } },
+  hosts: { 1: 'pending' },
+  currentHostIndex: 0,
+  receipt: emptyUnsettledReceipt(),
+  outbox: [],
+};
+
+/** The record admitRound writes: open, with the first host admitted. */
+const admittedRecord = { ...preparedRecord, phase: 'open', hosts: { 1: 'admitted' } };
+
+/** A round that finished: its rerouted source and its done destination are both terminal. */
+const closedRecord = { ...enteredRecord, phase: 'closed', hosts: { 1: 'rerouted', 2: 'done', 3: 'done' } };
 
 describe('routed repair durable record parsers', () => {
   it('parses only bounded, branded route round ids', () => {
@@ -81,9 +110,59 @@ describe('routed repair durable record parsers', () => {
   });
 
   it('round-trips the settled, reroute-moved, and entry-pinned record byte-identically', () => {
-    const parsed = parseRouteRecord(JSON.stringify(routeRecord));
-    expect(parsed).toEqual(routeRecord);
-    expect(JSON.stringify(parsed)).toBe(JSON.stringify(routeRecord));
+    for (const record of [routeRecord, enteredRecord]) {
+      const parsed = parseRouteRecord(JSON.stringify(record));
+      expect(parsed).toEqual(record);
+      expect(JSON.stringify(parsed)).toBe(JSON.stringify(record));
+    }
+  });
+
+  it('parses every lifecycle state a production route writer records', () => {
+    const written: Record<string, unknown> = {
+      'created (prepared, all pending)': preparedRecord,
+      'created with a charged settlement before admission': {
+        ...preparedRecord,
+        receipt: { laps: { prd_audit: 1 }, growth: 1, taskless: {}, echo: {}, settlementId: 's-1', acks: { 1: true } },
+      },
+      'admitted (open, first host admitted)': admittedRecord,
+      'entered (open, admitted host pinned)': { ...admittedRecord, entry: { ...entry, host: 1 } },
+      'repairing (open, pinned host repairing)': { ...admittedRecord, hosts: { 1: 'repairing' }, entry: { ...entry, host: 1 } },
+      'built in place': { ...admittedRecord, hosts: { 1: 'built' }, entry: { ...entry, host: 1 } },
+      'done in place': { ...admittedRecord, hosts: { 1: 'done' } },
+      'advanced to the next host': { ...admittedRecord, hosts: { 1: 'restacked', 2: 'admitted' }, currentHostIndex: 1 },
+      'reroute moved, awaiting sync': routeRecord,
+      'reroute synced (destination admitted)': { ...enteredRecord, hosts: { 1: 'rerouted', 2: 'admitted', 3: 'pending' }, entry: undefined },
+      'reroute synced and entered': enteredRecord,
+      'closed': closedRecord,
+    };
+    for (const [state, record] of Object.entries(written)) {
+      expect(parseRouteRecord(JSON.stringify(record)), state).toBeDefined();
+    }
+  });
+
+  it('rejects every route-record lifecycle combination no writer can produce', () => {
+    const contradictions: Record<string, unknown> = {
+      'prepared with a reroute payload and a reroute-moved source': { ...routeRecord, phase: 'prepared' },
+      'prepared with an admitted host': { ...preparedRecord, hosts: { 1: 'admitted' } },
+      'prepared past its first host': { ...preparedRecord, hosts: { 1: 'pending', 2: 'pending' }, currentHostIndex: 1 },
+      'prepared with a pinned entry': { ...preparedRecord, entry: { ...entry, host: 1 } },
+      'prepared with a fallback movement': { ...preparedRecord, fallback: routeRecord.fallback },
+      'open with an unadmitted current host and no reroute': { ...preparedRecord, phase: 'open' },
+      'open with two hosts in flight': { ...enteredRecord, hosts: { 1: 'rerouted', 2: 'repairing', 3: 'admitted' } },
+      'open with a reroute whose destination is already admitted': { ...routeRecord, hosts: { 1: 'reroute-moved', 2: 'admitted', 3: 'pending' } },
+      'open with a reroute whose unentered destination is pinned': { ...routeRecord, entry },
+      'open with a reroute-moved host but no reroute payload': { ...enteredRecord, hosts: { 1: 'reroute-moved', 2: 'repairing', 3: 'pending' } },
+      'a rerouted host without a recorded movement': { ...enteredRecord, fallback: [] },
+      'a movement from a host that never moved': { ...enteredRecord, fallback: [{ ...routeRecord.fallback[0]!, from: 3, to: 2 }] },
+      'closed with a pending current host': { ...closedRecord, hosts: { 1: 'rerouted', 2: 'pending', 3: 'done' } },
+      'closed with a built current host awaiting its exit restack': { ...closedRecord, hosts: { 1: 'rerouted', 2: 'built', 3: 'done' } },
+      'closed with another host still repairing': { ...closedRecord, hosts: { 1: 'rerouted', 2: 'done', 3: 'repairing' } },
+      'closed with a reroute awaiting sync': { ...routeRecord, phase: 'closed', hosts: { 1: 'reroute-moved', 2: 'done', 3: 'done' } },
+      'an entry pinned for a host other than the current host': { ...enteredRecord, entry: { ...entry, host: 1 } },
+    };
+    for (const [combination, record] of Object.entries(contradictions)) {
+      expect(parseRouteRecord(JSON.stringify(record)), combination).toBeUndefined();
+    }
   });
 
   it('accepts an existing-task item only when its durable task binding is present', () => {
@@ -93,8 +172,8 @@ describe('routed repair durable record parsers', () => {
   });
 
   it('rejects an entry whose host is absent or differs from the current host', () => {
-    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, entry: { ...routeRecord.entry, host: 4 } }))).toBeUndefined();
-    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, entry: { ...routeRecord.entry, host: 1 } }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...enteredRecord, entry: { ...entry, host: 4 } }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...enteredRecord, entry: { ...entry, host: 1 } }))).toBeUndefined();
   });
 
   it('rejects a closed round whose current host has not reached a terminal lifecycle state', () => {

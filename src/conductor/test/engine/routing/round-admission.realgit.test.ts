@@ -146,7 +146,7 @@ describe('routed-round admission (real local Git)', () => {
         }
         return subject.git(args, options);
       };
-      const next: RouteRecord = { ...stored.record, phase: 'open' };
+      const next: RouteRecord = { ...stored.record, phase: 'open', hosts: { [c1]: 'admitted' } };
       expect(await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: next }], { git: raced }))
         .toEqual({ kind: 'cas-failed' });
       expect(await readRouteRecord(subject.repo, 'demo', roundId)).toEqual(stored);

@@ -17,6 +17,7 @@ import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseChildId } from '../child-context.js';
 import { readRouteRecord, writeRouteRecord } from './route-record-store.js';
 import {
+  assertNever,
   emptyUnsettledReceipt,
   parseRoundId,
   routingEligible,
@@ -477,10 +478,11 @@ export async function pendingAsBuiltFindingsFromRoutes(
       case 'prepared':
       case 'open':
         for (const finding of item.record.pendingAsBuiltFindings ?? []) findings.set(finding.finding, finding);
-        break;
+        continue;
       case 'closed':
-        break;
+        continue;
     }
+    assertNever(item.record.phase);
   }
   return [...findings.values()];
 }

@@ -577,18 +577,94 @@ function currentHostFor(
   return host === undefined ? undefined : parseChildId(host);
 }
 
-/** Reject durable combinations which cannot occur in the routing lifecycle. */
-function hasConsistentRouteLifecycle(
-  phase: RoundPhase,
+/** The cross-field lifecycle facts one durable route record must agree on. */
+interface RouteLifecycleState {
+  readonly phase: RoundPhase;
+  readonly hosts: Readonly<Record<ChildId, HostState>>;
+  readonly currentHostIndex: number;
+  readonly entry: HostEntry | undefined;
+  readonly fallback: readonly RouteFallback[] | undefined;
+  readonly reroute: ReroutePhase | undefined;
+}
+
+/** A host that has entered its region and not yet moved its repair away. */
+function isActiveHostState(state: HostState): boolean {
+  return state === 'admitted' || state === 'repairing';
+}
+
+/** A host whose region work finished in place rather than by moving upward. */
+function isCompletedHostState(state: HostState): boolean {
+  return state === 'built' || state === 'restacked' || state === 'done';
+}
+
+/** A host whose repair was moved to a higher host by a verified reroute. */
+function isMovedHostState(state: HostState): boolean {
+  return state === 'reroute-moved' || state === 'rerouted';
+}
+
+/**
+ * Every recorded upward movement names a moved source below a known
+ * destination, and every moved host is the source of a recorded movement.
+ */
+function hasConsistentFallback(
   hosts: Readonly<Record<ChildId, HostState>>,
-  currentHostIndex: number,
-  entry: HostEntry | undefined,
+  fallback: readonly RouteFallback[],
 ): boolean {
+  const sources = new Set<number>();
+  for (const movement of fallback) {
+    const source = hosts[movement.from];
+    if (source === undefined || !isMovedHostState(source) || hosts[movement.to] === undefined || movement.to <= movement.from) return false;
+    sources.add(movement.from);
+  }
+  return Object.entries(hosts).every(([child, state]) => !isMovedHostState(state) || sources.has(Number(child)));
+}
+
+/**
+ * Validates a route record as ONE lifecycle state.  The writers are
+ * creation (`prepared`, every host pending at index 0), admission (`open`,
+ * current host admitted), region entry (entry pinned for an admitted or
+ * repairing current host), reroute (source `reroute-moved`, the pending
+ * destination becomes current with no entry and an in-progress `reroute`),
+ * reroute sync (source `rerouted`, destination admitted, no `reroute`), and
+ * ADR decision 6's in-place host exits and round close.  Any combination
+ * outside those reachable states is malformed.
+ */
+function hasConsistentRouteLifecycle(state: RouteLifecycleState): boolean {
+  const { phase, hosts, currentHostIndex, entry, fallback, reroute } = state;
   const currentHost = currentHostFor(hosts, currentHostIndex);
-  if (currentHost === undefined || hosts[currentHost] === undefined) return false;
-  if (phase === 'prepared' && hosts[currentHost] !== 'pending') return false;
-  if (phase === 'closed' && (hosts[currentHost] === 'pending' || hosts[currentHost] === 'admitted')) return false;
-  return entry === undefined || entry.host === currentHost;
+  if (currentHost === undefined) return false;
+  const current = hosts[currentHost];
+  if (current === undefined) return false;
+  if (entry !== undefined && entry.host !== currentHost) return false;
+  if (fallback !== undefined && !hasConsistentFallback(hosts, fallback)) return false;
+  const others = Object.entries(hosts)
+    .filter(([child]) => Number(child) !== currentHost)
+    .map(([, hostState]) => hostState);
+  const movingHosts = Object.values(hosts).filter((hostState) => hostState === 'reroute-moved').length;
+  switch (phase) {
+    case 'prepared':
+      // Creation is the only writer of a prepared round; admission opens it
+      // in the same transaction that moves its first host out of pending.
+      return currentHostIndex === 0 && Object.values(hosts).every((hostState) => hostState === 'pending')
+        && entry === undefined && fallback === undefined && reroute === undefined;
+    case 'open':
+      // Exactly one host is in flight: no other host may be active.
+      if (others.some(isActiveHostState)) return false;
+      if (reroute !== undefined) {
+        // Between the reroute transaction and its tree sync: one source is
+        // moving, and the destination is the pending, unentered current host.
+        return movingHosts === 1 && current === 'pending' && entry === undefined
+          && reroute.destination === currentHost && fallback !== undefined && fallback.length > 0;
+      }
+      if (movingHosts > 0) return false;
+      return isActiveHostState(current) || isCompletedHostState(current);
+    case 'closed':
+      // ADR decision 6: a round closes when its last host is restacked, done
+      // or rerouted, so no host is in flight, built, or awaiting a reroute sync.
+      return reroute === undefined && (current === 'restacked' || current === 'done')
+        && others.every((hostState) => hostState === 'restacked' || hostState === 'done' || hostState === 'rerouted');
+  }
+  return assertNever(phase);
 }
 
 /** Parses exactly the bounded round-id grammar used in route ref names. */
@@ -621,10 +697,13 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
     || (receipt.settlementId !== undefined && (Object.keys(receipt.acks).length === 0 || Object.keys(receipt.acks).some((ack) => hosts[Number(ack) as ChildId] === undefined)))
-    || (value.entry !== undefined && !entry) || !hasConsistentRouteLifecycle(phase, hosts, currentHostIndex, entry) || (fallback?.some((item) => item === undefined) ?? false)
+    || (value.entry !== undefined && !entry) || (fallback?.some((item) => item === undefined) ?? false)
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
     || (value.sealedAuthored !== undefined && sealedAuthored === undefined)
     || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)) return undefined;
+  if (!hasConsistentRouteLifecycle({
+    phase, hosts, currentHostIndex, entry, fallback: fallback as RouteFallback[] | undefined, reroute,
+  })) return undefined;
   const items = value.items.map(parseRoutedItem);
   if (items.some((item) => item === undefined)) return undefined;
   const record: RouteRecord = {

@@ -410,10 +410,11 @@ describe('verified prerequisite reroute (real local Git)', () => {
     try {
       const stored = await readRouteRecord(unavailable.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('missing route record');
-      await writeRoutingTransaction(unavailable.repo, 'demo', [{
+      // A destination that already finished in place is the reachable non-pending case.
+      expect(await writeRoutingTransaction(unavailable.repo, 'demo', [{
         kind: 'update-record', previous: stored,
-        record: { ...stored.record, hosts: { ...stored.record.hosts, [c2]: 'repairing' } },
-      }]);
+        record: { ...stored.record, hosts: { ...stored.record.hosts, [c2]: 'done' } },
+      }])).toEqual({ kind: 'updated' });
       await expect(rerouteRound({ worktree: unavailable.repo, slug: 'demo', roundId, from: c1, to: c2, evidence: ['parseB'], git: unavailable.git }))
         .resolves.toMatchObject({ kind: 'refused', detail: expect.stringContaining('destination is not pending') });
       expect(await refAt(unavailable.git, 'refs/heads/feat/c1/demo')).toBe(unavailable.rejected);

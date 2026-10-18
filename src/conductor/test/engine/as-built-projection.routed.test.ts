@@ -11,9 +11,11 @@ import { makeGitRunner } from '../../src/engine/rebase.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../src/engine/routing/route-record-store.js';
 import { routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
+import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
 
 const roots: string[] = [];
 const child = parseChildId(1)!;
+const destination = parseChildId(2)!;
 
 async function fixture(): Promise<{ readonly root: string; readonly git: ReturnType<typeof makeGitRunner> }> {
   const root = await mkdtemp(join(tmpdir(), 'as-built-projection-routed-'));
@@ -75,7 +77,9 @@ async function writeRoute(
     phase,
     // This route has moved away from its original host. Pending as-built work
     // follows the round lifecycle, not this transitory host state.
-    hosts: { ...stored.record.hosts, [child]: 'rerouted' },
+    hosts: { [child]: 'rerouted', [destination]: phase === 'open' ? 'admitted' : 'done' },
+    currentHostIndex: 1,
+    fallback: [{ from: child, to: destination, evidence: ['src/a.ts'], branch: 'feat/c1/demo', head: parseCommitSha('a'.repeat(40))! }],
   });
   if (written.kind !== 'updated') throw new Error(`route record update failed: ${written.kind}`);
 }

@@ -1,5 +1,5 @@
 // Covers: task:207
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,6 +22,7 @@ import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import type { StepRunner } from '../../../src/engine/step-runner-types.js';
 
 const child = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
@@ -49,36 +50,57 @@ async function routedFixture() {
   return { root };
 }
 
+function routedConductor(root: string, events: ConductorEventEmitter, runner: StepRunner) {
+  const cursor = {
+    kind: 'repair-pending' as const,
+    child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
+    branch: 'feat/daemon-demo', repairChildren: [child],
+    routedRepair: { child, roundId },
+  };
+  return new Conductor({
+    projectRoot: root,
+    stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    featureSlug: 'demo',
+    fromStep: 'acceptance_specs',
+    mode: 'auto', daemon: true, verifyArtifacts: true,
+    config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+    events,
+    stepRunner: runner,
+    acceptanceRedExec: vi.fn(),
+    childRegionLifecycle: {
+      resolveActiveChild: async () => cursor,
+      enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
+      enterChildRegion: async () => ({ kind: 'completed' }) as never,
+    },
+  });
+}
+
 describe('Conductor routed acceptance verify-green path', () => {
+  it('settles a refused verify-green without self-healing RED, dispatching, or reporting success', async () => {
+    const { root } = await routedFixture();
+    mocks.verifyGreenAcceptance.mockResolvedValue({ kind: 'refused', reason: 'routed acceptance specs are not green' });
+    const events = new ConductorEventEmitter();
+    const receipts: Array<Record<string, unknown>> = [];
+    events.on('acceptance_red', (event) => { receipts.push(event as unknown as Record<string, unknown>); });
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+
+    await routedConductor(root, events, runner).run();
+
+    expect(mocks.verifyGreenAcceptance).toHaveBeenCalledTimes(1);
+    expect(mocks.selfHealAcceptanceRed).not.toHaveBeenCalled();
+    expect(runner.run).not.toHaveBeenCalledWith('acceptance_specs', expect.anything());
+    expect(receipts).not.toContainEqual(expect.objectContaining({ state: 'satisfied', mode: 'verify-green' }));
+    expect((await readFile(join(root, '.pipeline', 'HALT'), 'utf8')).trim()).toBe('routed acceptance specs are not green');
+  });
+
   it('runs verify-green from acceptance_specs, never self-heals RED, and emits its distinct receipt', async () => {
     const { root } = await routedFixture();
     mocks.verifyGreenAcceptance.mockResolvedValue({ kind: 'verified', headSha: 'a'.repeat(40) });
     const events = new ConductorEventEmitter();
     const receipts: Array<Record<string, unknown>> = [];
     events.on('acceptance_red', (event) => { receipts.push(event as unknown as Record<string, unknown>); });
-    const cursor = {
-      kind: 'repair-pending' as const,
-      child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true,
-      branch: 'feat/daemon-demo', repairChildren: [child],
-      routedRepair: { child, roundId },
-    };
     const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
-    const conductor = new Conductor({
-      projectRoot: root,
-      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
-      featureSlug: 'demo',
-      fromStep: 'acceptance_specs',
-      mode: 'auto', daemon: true, verifyArtifacts: true,
-      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
-      events,
-      stepRunner: runner,
-      acceptanceRedExec: vi.fn(),
-      childRegionLifecycle: {
-        resolveActiveChild: async () => cursor,
-        enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
-        enterChildRegion: async () => ({ kind: 'completed' }) as never,
-      },
-    });
+    const conductor = routedConductor(root, events, runner);
 
     await conductor.run();
 
