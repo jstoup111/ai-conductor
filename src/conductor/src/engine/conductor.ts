@@ -672,6 +672,13 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
+function manualTestExhaustionReason(count: number, evidence: string): string {
+  const rows = evidence.split('\n').filter(Boolean);
+  return `manual-test FAIL unresolved after ${count} build ` +
+    `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${rows[0] ?? 'no failure detail'}` +
+    (rows.length > 1 ? ` (+${rows.length - 1} more FAIL row(s))` : '');
+}
+
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
@@ -7110,9 +7117,7 @@ export class Conductor {
             // before this process-local mirror reaches its cap.  Keep the
             // established self-heal halt vocabulary for manual-test FAILs.
             const reason = routedAdmission.kind === 'exhausted'
-              ? `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
-                `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
-                (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '')
+              ? manualTestExhaustionReason(manualTestSelfHeals, evidence)
               : routedAdmission.reason;
             await this.writeHaltMarker(reason + '\n', 'needs-human');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -7144,10 +7149,7 @@ export class Conductor {
         );
         return { action: 'continue', nextIndex: navigationIndex - 1 }; // for-loop i++ lands on build
       }
-      const reason =
-        `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
-        `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
-        (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
+      const reason = manualTestExhaustionReason(manualTestSelfHeals, failRows.join('\n'));
       await this.writeHaltMarker(reason + '\n', 'needs-human');
       await this.persistPendingStateChanges(state, 'persist conductor transition');
       const prUrl = await this.surfaceRemediationPr(reason);
@@ -15069,15 +15071,8 @@ export class Conductor {
       return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator is unreadable: ${error instanceof Error ? error.message : String(error)}` };
     }
     if (sealedAuthored === undefined) {
-      try {
-        const planPath = await resolveFeaturePlanPath(this.projectRoot, slug);
-        if (planPath === undefined) return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator could not resolve the feature plan` };
-        sealedAuthored = countAuthoredTaskHeadings(await readFile(planPath, 'utf8'));
-      } catch (error) {
-        return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator could not resolve the feature plan: ${error instanceof Error ? error.message : String(error)}` };
-      }
+      return { kind: 'halted', reason: `routing round ${roundId} has no sealed authored denominator in a route receipt` };
     }
-    if (sealedAuthored === undefined) return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator could not resolve the feature plan` };
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
       kind: 'audit',
@@ -15136,7 +15131,7 @@ export class Conductor {
         return capacity.kind === 'available'
           ? capacity
           : capacity.kind === 'exhausted'
-            ? { kind: 'exhausted', reason: `manual_test admission is exhausted at ${capacity.count}` }
+            ? { kind: 'exhausted', reason: manualTestExhaustionReason(capacity.count, evidence) }
             : capacity;
       },
       mutateReceipt: async ({ slug, roundId, routing }) => {
@@ -15144,7 +15139,7 @@ export class Conductor {
         return charged.kind === 'charged'
           ? { kind: 'charged' }
           : charged.kind === 'exhausted'
-            ? { kind: 'exhausted', reason: `routing round ${roundId} manual_test admission is exhausted at ${charged.count}` }
+            ? { kind: 'exhausted', reason: manualTestExhaustionReason(charged.count, evidence) }
             : { kind: 'halted', reason: charged.reason };
       },
     });

@@ -418,7 +418,6 @@ export async function rebuildLedgerFromReceipts(
     let ledger: KickbackLedger = {
       version: 1,
       gates: {},
-      growth: { authored: 0, added: 0, byGate: {} },
       settlementReceipts: {},
     };
     for (const item of records) {
@@ -426,7 +425,6 @@ export async function rebuildLedgerFromReceipts(
       if (item.record.sealedAuthored !== undefined) {
         if (sealedAuthored !== undefined && sealedAuthored !== item.record.sealedAuthored) return { kind: 'unreadable' } as const;
         sealedAuthored = item.record.sealedAuthored;
-        if (ledger.growth?.authored === 0) ledger = { ...ledger, growth: { ...ledger.growth!, authored: sealedAuthored } };
       }
       const receipt = item.record.receipt;
       for (const [gate, amount] of Object.entries(receipt.taskless ?? {})) {
@@ -437,8 +435,7 @@ export async function rebuildLedgerFromReceipts(
       ledger = applySettledReceiptToLedger(ledger, item.record);
     }
     // A receipt reconstruction without the sealed denominator would turn a
-    // lost worktree into free growth.  Refuse rather than persist a zero
-    // placeholder that later readers could mistake for authority.
+    // lost worktree into free growth. Refuse rather than inventing a zero.
     if (sealedAuthored === undefined) return { kind: 'unreadable' } as const;
     await writeKickbackLedgerUnlocked(projectRoot, ledger);
     return { kind: 'rebuilt' } as const;

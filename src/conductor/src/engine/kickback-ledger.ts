@@ -959,15 +959,22 @@ function growthTotalsAgree(growth: PlanGrowthRecord): boolean {
 
 const AUTHORED_TASK_HEADING = /^#{1,6}\s+Task\s+([A-Za-z0-9._-]+)(?::|\s[—–]|\s*$)/gim;
 
-/** Count plan-authored task headings, excluding remediation tasks and pending work. */
+/** Count the sealed plan's authored headings, excluding remediation and pending work. */
 export function countAuthoredTaskHeadings(plan: string, pendingTaskIds: ReadonlySet<string> = new Set()): number {
   return [...plan.matchAll(AUTHORED_TASK_HEADING)]
     .filter((match) => !match[1]!.startsWith('rem-') && !pendingTaskIds.has(match[1]!)).length;
 }
 
+/** The legacy flat ledger counts every plan task except an uncharged pending repair. */
+function countFlatPlanTaskHeadings(plan: string, pendingTaskIds: ReadonlySet<string>): number {
+  return [...plan.matchAll(AUTHORED_TASK_HEADING)]
+    .filter((match) => !pendingTaskIds.has(match[1]!)).length;
+}
+
 async function deriveGrowthFromActivePlan(
   projectRoot: string,
   pendingTaskIds: ReadonlySet<string> = new Set(),
+  { routed = false }: { readonly routed?: boolean } = {},
 ): Promise<{ growth: PlanGrowthRecord; resolved: boolean }> {
   const state = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
   const featureDesc = state.ok ? state.value.feature_desc : undefined;
@@ -978,16 +985,10 @@ async function deriveGrowthFromActivePlan(
 
   try {
     const plan = await readFile(selection.path, 'utf-8');
-    const authored = countAuthoredTaskHeadings(plan, pendingTaskIds);
-    // Before growth was recorded, plans could contain only `rem-*` headings
-    // that were part of the authored plan rather than appended remediation.
-    // Preserve that legacy shape only when there is no authored heading and no
-    // known pending repair to exclude. Once a regular task (or a pending
-    // allocation) is present, `rem-*` retains its normal remediation meaning.
-    const legacyAuthoredOnlyRemediation = authored === 0 && pendingTaskIds.size === 0
-      ? [...plan.matchAll(AUTHORED_TASK_HEADING)].length
-      : authored;
-    return { growth: { authored: legacyAuthoredOnlyRemediation, added: 0, byGate: {} }, resolved: true };
+    const authored = routed
+      ? countAuthoredTaskHeadings(plan, pendingTaskIds)
+      : countFlatPlanTaskHeadings(plan, pendingTaskIds);
+    return { growth: { authored, added: 0, byGate: {} }, resolved: true };
   } catch (error) {
     console.warn(
       `[kickback-ledger] unable to derive growth from active plan ${selection.path}: ` +
@@ -999,8 +1000,8 @@ async function deriveGrowthFromActivePlan(
 
 /**
  * Read growth accounting, deriving its initial authored denominator only from
- * the feature's resolved plan. Remediation headers are never authored-plan
- * work, even when they predate this feature's growth record.
+ * the feature's resolved plan. Routed receipts retain their sealed denominator;
+ * flat features retain their established active-plan reconciliation.
  */
 export async function readGrowthAccounting(
   projectRoot: string,
@@ -1055,6 +1056,7 @@ export async function readGrowthAccounting(
         ...(pendingGrowth ? ledger.pendingRepair?.taskIds ?? [] : []),
         ...routedPending,
       ]),
+      { routed: routedAccounting },
     );
     // A shared repair may be admitted again against the rem task that an
     // earlier round already appended and settled. Its task id is present in
@@ -1062,7 +1064,7 @@ export async function readGrowthAccounting(
     // the comparison. Keep a view that excludes routed allocations only so
     // either shape can prove the same sealed denominator.
     const derivedWithFlatPending = pendingGrowth
-      ? await deriveGrowthFromActivePlan(projectRoot, routedPending)
+      ? await deriveGrowthFromActivePlan(projectRoot, routedPending, { routed: routedAccounting })
       : derived;
     const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
 
@@ -1081,9 +1083,6 @@ export async function readGrowthAccounting(
     // the established N=1 reconciliation (including its no-first-read-write
     // behavior) byte-for-byte for routing-off and unsliced features.
     if (!routedAccounting) {
-      if (stored.authored === 0 && derived.resolved && derived.growth.authored > 0) {
-        throw new Error(`stored authored denominator 0 disagrees with sealed plan denominator ${derived.growth.authored}`);
-      }
       const matchesPlan = !derived.resolved || (pendingGrowth
         ? stored.authored === derived.growth.authored
         : stored.authored + stored.added === derived.growth.authored);
@@ -1100,6 +1099,10 @@ export async function readGrowthAccounting(
       console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
       if (options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
       return { growth: withRemaining(derived.growth, cap), authoredSource };
+    }
+
+    if (stored.authored === 0 && derived.resolved && derived.growth.authored > 0) {
+      throw new Error(`stored authored denominator 0 disagrees with sealed plan denominator ${derived.growth.authored}`);
     }
 
     // `deriveGrowthFromActivePlan` already excludes every `rem-*` heading, so

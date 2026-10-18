@@ -52,14 +52,27 @@ describe('taskless routed admission receipts', () => {
   it.each([
     ['manual_test'],
     ['custom-step'],
-  ])('halts %s admission before creating routing refs when its plan cannot resolve', async (kind) => {
+  ])('halts %s admission before creating routing refs when no receipt supplies a sealed denominator', async (kind) => {
     const subject = await fixture({ route: false });
     await mkdir(join(subject.root, '.pipeline', 'children', '1'), { recursive: true });
+    await writeFile(join(subject.root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { T1: 1 }, titles: [] },
+    }));
     const conductor = new Conductor({
       projectRoot: subject.root,
       stateFilePath: join(subject.root, '.pipeline', 'conduct-state.json'),
       events: new ConductorEventEmitter(),
-      stepRunner: { run: async () => ({ success: true }) } satisfies StepRunner,
+      stepRunner: {
+        run: async () => ({ success: true }),
+        dispatchResidueRoutingJudgement: async (prompt) => {
+          const itemId = JSON.parse(prompt.split('\n\n').at(-1)!).items[0].itemId;
+          return {
+            success: true,
+            output: JSON.stringify({ version: 'v1', items: [{ itemId, child: 1, candidates: [1], rationale: 'fixture' }] }),
+          };
+        },
+      } satisfies StepRunner,
       config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } } as never,
       childRegionLifecycle: {
         resolveActiveChild: async () => ({ kind: 'active', child, position: 1, isLeaf: true, branch: 'feat/demo' }) as never,
@@ -70,7 +83,7 @@ describe('taskless routed admission receipts', () => {
     const admission = kind === 'manual_test'
       ? (conductor as any).admitRoutedManualTestKickback(state, 'manual-test evidence')
       : (conductor as any).admitRoutedCustomStepKickback(state, 'lint-docs', 1);
-    await expect(admission).resolves.toMatchObject({ kind: 'halted', reason: expect.stringMatching(/sealed authored denominator could not resolve the feature plan/) });
+    await expect(admission).resolves.toMatchObject({ kind: 'halted', reason: expect.stringMatching(/no sealed authored denominator in a route receipt/) });
 
     const refs = await subject.git(['show-ref']);
     expect(refs.stdout).not.toContain('refs/conductor/demo/routes/');

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:30, task:66, task:rem-as-built-rem-ab4-1
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:18, task:30, task:rem-as-built-rem-ab4-1
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
@@ -50,7 +50,6 @@ import {
   applyKickbackBudgetAdjustment,
   kickbackLedgerPathFor,
   clearKickbackLedger,
-  countAuthoredTaskHeadings,
   readKickbackLedgerResult,
   withKickbackLedgerLease,
   type KickbackGateEntry,
@@ -604,7 +603,7 @@ describe('kickback-ledger', () => {
       });
     });
 
-    it('derives authored count from only the recorded active plan, excluding remediation tasks', async () => {
+    it('derives authored count from only the recorded active plan, including pre-existing rem tasks', async () => {
       const activePlan = join(dir, '.docs/plans/active.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -624,7 +623,7 @@ describe('kickback-ledger', () => {
       ].join('\n'));
 
       await expect(readGrowth(dir, 4)).resolves.toEqual({
-        authored: 2,
+        authored: 3,
         added: 0,
         byGate: {},
         remaining: 4,
@@ -707,7 +706,7 @@ describe('kickback-ledger', () => {
       });
     });
 
-    it('fails closed instead of reconciling a stale authored denominator', async () => {
+    it('reads reconciled plan growth without persisting when requested', async () => {
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({
@@ -726,13 +725,18 @@ describe('kickback-ledger', () => {
       const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
       const before = await readFile(ledgerPath, 'utf8');
 
-      await expect(readGrowthAccounting(dir, 4, { persist: false }))
-        .rejects.toThrow('stored authored denominator 0 disagrees with sealed plan denominator 12');
+      await expect(readGrowthAccounting(dir, 4, { persist: false })).resolves.toEqual({
+        growth: { authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 2 },
+        authoredSource: 'plan',
+      });
       await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
 
-      await expect(readGrowth(dir, 4))
-        .rejects.toThrow('stored authored denominator 0 disagrees with sealed plan denominator 12');
-      await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(before);
+      await expect(readGrowth(dir, 4)).resolves.toEqual({
+        authored: 10, added: 2, byGate: { prd_audit: 2 }, remaining: 2,
+      });
+      await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+        growth: { authored: 10, added: 2, byGate: { prd_audit: 2 } },
+      });
     });
 
     it('prefers the recorded active plan over the slug-matched feature plan', async () => {
@@ -780,8 +784,8 @@ describe('kickback-ledger', () => {
 
     it.each([
       ['without a stored growth record', undefined],
-      ['with a stored growth record', { authored: 5, added: 0, byGate: {} }],
-    ])('excludes remediation and pending task ids from authored growth %s', async (_case, growth) => {
+      ['with a stored growth record', { authored: 6, added: 0, byGate: {} }],
+    ])('excludes only pending task ids from authored growth %s', async (_case, growth) => {
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
@@ -811,7 +815,7 @@ describe('kickback-ledger', () => {
       const cap = prdAuditAppendCap({} as HarnessConfig, 6);
 
       await expect(readGrowth(dir, cap)).resolves.toEqual({
-        authored: 5,
+        authored: 6,
         added: 0,
         byGate: {},
         remaining: 1,
@@ -837,28 +841,18 @@ describe('kickback-ledger', () => {
 
       try {
         await expect(readGrowth(dir, 4)).resolves.toEqual({
-          authored: 1,
+          authored: 2,
           added: 0,
           byGate: {},
           remaining: 4,
         });
         await expect(readKickbackLedger(dir)).resolves.toMatchObject({
-          growth: { authored: 1, added: 0, byGate: {} },
+          growth: { authored: 2, added: 0, byGate: {} },
         });
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('impossible growth record'));
       } finally {
         warnSpy.mockRestore();
       }
-    });
-
-    it('counts only authored task headings across supported separators', () => {
-      expect(countAuthoredTaskHeadings([
-        '### Task 1: First authored task',
-        '### Task 2 — Second authored task',
-        '### Task rem-a: Remediation task',
-        '### Task 3',
-        '#### Task 4: Nested authored task',
-      ].join('\n'))).toBe(4);
     });
 
     it('emits plan growth through the supplied event-spine sink', async () => {

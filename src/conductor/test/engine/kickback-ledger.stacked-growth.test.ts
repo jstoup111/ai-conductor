@@ -40,10 +40,13 @@ async function fixture() {
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo' }));
   await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
-  await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task 1: Authored work\n');
+  await writeFile(join(root, '.docs', 'plans', 'demo.md'), Array.from(
+    { length: 12 },
+    (_, index) => `### Task ${index + 1}: Authored work`,
+  ).join('\n'));
   const created = await createRouteRecord(root, 'demo', {
     roundId,
-    sealedAuthored: 1,
+    sealedAuthored: 12,
     kind: 'audit',
     items: [{ findingId: 'finding', kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [] }],
     allocation: { [child]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n'] } },
@@ -58,10 +61,13 @@ describe('stacked routed growth accounting', () => {
     const subject = await fixture();
 
     await expect(readGrowthAccounting(subject.root, 4, { persist: false })).resolves.toEqual({
-      growth: { authored: 1, added: 0, byGate: {}, remaining: 4 },
+      growth: { authored: 12, added: 0, byGate: {}, remaining: 4 },
       authoredSource: 'plan',
     });
     expect(routing.resolveActiveChild).toHaveBeenCalledTimes(1);
+    await expect(readGrowthAccounting(subject.root, 4, { persist: true })).resolves.toMatchObject({
+      growth: { authored: 12, added: 0 },
+    });
   });
 
   it('fails closed for both routed accounting inputs when a route record is unreadable', async () => {
@@ -73,5 +79,15 @@ describe('stacked routed growth accounting', () => {
       .rejects.toThrow('routed sealed growth denominator is unreadable: route receipt unreadable');
     await expect(access(join(subject.root, '.pipeline', 'kickback-ledger.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(routing.resolveActiveChild).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed rather than reconciling a routed stored zero denominator', async () => {
+    const subject = await fixture();
+    await writeFile(join(subject.root, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1, gates: {}, growth: { authored: 0, added: 0, byGate: {} },
+    }));
+
+    await expect(readGrowthAccounting(subject.root, 4, { persist: false }))
+      .rejects.toThrow('stored authored denominator 0 disagrees with routed sealed denominator 12');
   });
 });

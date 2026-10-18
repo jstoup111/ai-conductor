@@ -961,7 +961,7 @@ describe('kickback-budget inspect daemon plan-growth budget', () => {
   it('uses config and raised shared caps for recorded remediation growth', async () => {
     const baseLedger = {
       version: 1,
-      growth: { authored: 24, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
+      growth: { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } },
       gates: {},
     };
     const config = 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n';
@@ -978,7 +978,7 @@ describe('kickback-budget inspect daemon plan-growth budget', () => {
   it('reconciles the inspect view without persisting the ledger', async () => {
     const fixture = await daemonFeature({
       headings: 12,
-      ledger: { version: 1, growth: { authored: 10, added: 2, byGate: { prd_audit: 2 } }, gates: {} },
+      ledger: { version: 1, growth: { authored: 0, added: 2, byGate: { prd_audit: 2 } }, gates: {} },
     });
     try {
       const before = await readFile(fixture.ledgerPath);
