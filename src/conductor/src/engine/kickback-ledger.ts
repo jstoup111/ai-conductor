@@ -979,7 +979,15 @@ async function deriveGrowthFromActivePlan(
   try {
     const plan = await readFile(selection.path, 'utf-8');
     const authored = countAuthoredTaskHeadings(plan, pendingTaskIds);
-    return { growth: { authored, added: 0, byGate: {} }, resolved: true };
+    // Before growth was recorded, plans could contain only `rem-*` headings
+    // that were part of the authored plan rather than appended remediation.
+    // Preserve that legacy shape only when there is no authored heading and no
+    // known pending repair to exclude. Once a regular task (or a pending
+    // allocation) is present, `rem-*` retains its normal remediation meaning.
+    const legacyAuthoredOnlyRemediation = authored === 0 && pendingTaskIds.size === 0
+      ? [...plan.matchAll(AUTHORED_TASK_HEADING)].length
+      : authored;
+    return { growth: { authored: legacyAuthoredOnlyRemediation, added: 0, byGate: {} }, resolved: true };
   } catch (error) {
     console.warn(
       `[kickback-ledger] unable to derive growth from active plan ${selection.path}: ` +
@@ -1077,16 +1085,23 @@ export async function readGrowthAccounting(
       return { growth: withRemaining(derived.growth, cap), authoredSource };
     }
 
+    // `deriveGrowthFromActivePlan` already excludes every `rem-*` heading, so
+    // its authored count is the sealed baseline, not the plan's total task
+    // count. A settled append therefore changes `added` but must never be
+    // folded back into the denominator being reconciled.
+    //
     // A pending new task is excluded from `derived`, retaining every earlier
     // settled append. If the receipt instead reuses an already-settled task,
     // `derivedWithFlatPending` preserves that task in the count. Both forms
-    // must agree with the sealed baseline plus settled growth; no other
-    // denominator is accepted.
-    const expectedDerivedAuthored = stored.authored + stored.added;
+    // must agree with the sealed baseline; no other denominator is accepted.
+    const expectedDerivedAuthored = stored.authored;
+    const legacyExpectedDerivedAuthored = stored.authored + stored.added;
     const matchesPlan = !derived.resolved ||
       expectedDerivedAuthored === derived.growth.authored ||
+      legacyExpectedDerivedAuthored === derived.growth.authored ||
       (derivedWithFlatPending.resolved &&
-        expectedDerivedAuthored === derivedWithFlatPending.growth.authored);
+        (expectedDerivedAuthored === derivedWithFlatPending.growth.authored ||
+          legacyExpectedDerivedAuthored === derivedWithFlatPending.growth.authored));
     if (growthTotalsAgree(stored) && matchesPlan) {
       return { growth: withRemaining(stored, cap), authoredSource };
     }
