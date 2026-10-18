@@ -750,6 +750,36 @@ export class Conductor {
     await this.emitLoopHalt(body, prUrl);
   }
 
+  /** Enter routed hosts before the shared child-region lifecycle takes over. */
+  private async enterRoutedHostRegion(
+    execution: ExecutionChildResolution,
+    slug: string,
+    state: ConductState,
+  ): Promise<boolean> {
+    if (execution.source !== 'routed-host') return true;
+
+    const hostEntry = await this.enterHostRegion({
+      worktree: this.projectRoot,
+      slug,
+      roundId: execution.roundId!,
+      host: execution.target.child,
+      emitter: this.events,
+      completionContext: await this.completionCtx(state),
+    });
+    if (hostEntry.kind === 'halted') {
+      await this.haltChildRegionRefusal(
+        `routed host ${execution.target.child} entry halted: ${hostEntry.detail}\n` +
+        (hostEntry.outcome === undefined ? '' : `Outcome: ${hostEntry.outcome}`),
+      );
+      return false;
+    }
+    if (hostEntry.kind === 'refused') {
+      await this.haltChildRegionRefusal(`routed host ${execution.target.child} entry refused: ${hostEntry.detail}`);
+      return false;
+    }
+    return true;
+  }
+
   private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {
     switch (cursor.kind) {
       case 'divergent':
@@ -7251,27 +7281,7 @@ export class Conductor {
             const execution = resolveExecutionChild(cursor, slug);
             if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
               const target: ActiveChildLifecycleTarget = execution.target;
-              if (execution.source === 'routed-host') {
-                const hostEntry = await this.enterHostRegion({
-                  worktree: this.projectRoot,
-                  slug,
-                  roundId: execution.roundId!,
-                  host: target.child,
-                  emitter: this.events,
-                  completionContext: await this.completionCtx(state),
-                });
-                if (hostEntry.kind === 'halted') {
-                  await this.haltChildRegionRefusal(
-                    `routed host ${target.child} entry halted: ${hostEntry.detail}\n` +
-                    (hostEntry.outcome === undefined ? '' : `Outcome: ${hostEntry.outcome}`),
-                  );
-                  return;
-                }
-                if (hostEntry.kind === 'refused') {
-                  await this.haltChildRegionRefusal(`routed host ${target.child} entry refused: ${hostEntry.detail}`);
-                  return;
-                }
-              }
+              if (!await this.enterRoutedHostRegion(execution, slug, state)) return;
               const entered = await this.enterChildRegion(
                 this.projectRoot,
                 slug,

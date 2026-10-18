@@ -80,7 +80,7 @@ describe('routed repair durable record parsers', () => {
     }
   });
 
-  it('round-trips the typed settled receipt, host entry pin, obligation, fallback and reroute state byte-identically', () => {
+  it('round-trips the settled, reroute-moved, and entry-pinned record byte-identically', () => {
     const parsed = parseRouteRecord(JSON.stringify(routeRecord));
     expect(parsed).toEqual(routeRecord);
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(routeRecord));
@@ -92,8 +92,18 @@ describe('routed repair durable record parsers', () => {
     expect(parseRouteRecord(JSON.stringify(existingTaskRecord))).toEqual(existingTaskRecord);
   });
 
-  it('rejects an entry whose host is absent, so one host cannot consume another host\'s pin', () => {
+  it('rejects an entry whose host is absent or differs from the current host', () => {
     expect(parseRouteRecord(JSON.stringify({ ...routeRecord, entry: { ...routeRecord.entry, host: 4 } }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, entry: { ...routeRecord.entry, host: 1 } }))).toBeUndefined();
+  });
+
+  it('rejects a closed round whose current host has not reached a terminal lifecycle state', () => {
+    expect(parseRouteRecord(JSON.stringify({ ...routeRecord, phase: 'closed' }))).toBeUndefined();
+    expect(parseRouteRecord(JSON.stringify({
+      ...routeRecord,
+      phase: 'closed',
+      hosts: { ...routeRecord.hosts, 2: 'admitted' },
+    }))).toBeUndefined();
   });
 
   it('rejects reroutes without a matching latest fallback movement', () => {

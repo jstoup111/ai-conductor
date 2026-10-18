@@ -171,28 +171,38 @@ describe('ref-backed route record store', () => {
         return realGit(args, options);
       };
 
-      expect(await writeRouteRecord(fixture.repo, stored, { ...routeRecord, phase: 'prepared' }, { git })).toEqual({ kind: 'cas-failed' });
+      expect(await writeRouteRecord(fixture.repo, stored, {
+        ...routeRecord,
+        phase: 'prepared',
+        hosts: { [c1]: 'pending' },
+      }, { git })).toEqual({ kind: 'cas-failed' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: concurrent });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
   });
 
-  it('refuses malformed existing-task records before create or update can move a route ref', async () => {
+  it('refuses malformed route records before create or update can move a route ref', async () => {
     const fixture = await createRepo();
     try {
-      const malformed = {
+      const malformedExistingTask = {
         ...routeRecord,
         items: [{ ...routeRecord.items[0]!, existingTask: true }],
       } as unknown as RouteRecord;
+      const malformedLifecycle = {
+        ...routeRecord,
+        phase: 'closed' as const,
+        hosts: { [c1]: 'pending' as const },
+      };
 
-      expect(await createRouteRecord(fixture.repo, 'demo', malformed)).toEqual({ kind: 'unavailable' });
+      expect(await createRouteRecord(fixture.repo, 'demo', malformedExistingTask)).toEqual({ kind: 'unavailable' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({ kind: 'absent' });
 
       await routeFixture(fixture);
       const stored = await readRouteRecord(fixture.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('expected stored route record');
-      expect(await writeRouteRecord(fixture.repo, stored, malformed)).toEqual({ kind: 'unavailable' });
+      expect(await writeRouteRecord(fixture.repo, stored, malformedExistingTask)).toEqual({ kind: 'unavailable' });
+      expect(await writeRouteRecord(fixture.repo, stored, malformedLifecycle)).toEqual({ kind: 'unavailable' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(stored);
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });

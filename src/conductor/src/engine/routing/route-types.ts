@@ -568,6 +568,29 @@ function parseHosts(value: unknown): Readonly<Record<ChildId, HostState>> | unde
   return hosts;
 }
 
+/** The current host is indexed by ascending child position in durable records. */
+function currentHostFor(
+  hosts: Readonly<Record<ChildId, HostState>>,
+  currentHostIndex: number,
+): ChildId | undefined {
+  const host = Object.keys(hosts).map(Number).sort((left, right) => left - right)[currentHostIndex];
+  return host === undefined ? undefined : parseChildId(host);
+}
+
+/** Reject durable combinations which cannot occur in the routing lifecycle. */
+function hasConsistentRouteLifecycle(
+  phase: RoundPhase,
+  hosts: Readonly<Record<ChildId, HostState>>,
+  currentHostIndex: number,
+  entry: HostEntry | undefined,
+): boolean {
+  const currentHost = currentHostFor(hosts, currentHostIndex);
+  if (currentHost === undefined || hosts[currentHost] === undefined) return false;
+  if (phase === 'prepared' && hosts[currentHost] !== 'pending') return false;
+  if (phase === 'closed' && (hosts[currentHost] === 'pending' || hosts[currentHost] === 'admitted')) return false;
+  return entry === undefined || entry.host === currentHost;
+}
+
 /** Parses exactly the bounded round-id grammar used in route ref names. */
 export function parseRoundId(value: string): RoundId | undefined {
   const match = ROUND_ID.exec(value);
@@ -598,7 +621,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
     || (receipt.settlementId !== undefined && (Object.keys(receipt.acks).length === 0 || Object.keys(receipt.acks).some((ack) => hosts[Number(ack) as ChildId] === undefined)))
-    || (value.entry !== undefined && (!entry || hosts[entry.host] === undefined)) || (fallback?.some((item) => item === undefined) ?? false)
+    || (value.entry !== undefined && !entry) || !hasConsistentRouteLifecycle(phase, hosts, currentHostIndex, entry) || (fallback?.some((item) => item === undefined) ?? false)
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
     || (value.sealedAuthored !== undefined && sealedAuthored === undefined)
     || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)) return undefined;
