@@ -96,7 +96,9 @@ describe('daemon width-one parity', () => {
     expect(peak).toBe(1);
     expect(runRepair).toHaveBeenCalledOnce();
     expect(terminalEffects).toHaveBeenCalledTimes(3);
-    expect(terminalEffects).not.toHaveBeenCalledWith({ slug: 'repair:https://example.test/repair', status: 'done' });
+    // Repair completions free a pool slot only. They must never follow the
+    // feature terminal path, even though both worker kinds share collection.
+    expect(terminalEffects.mock.calls.map(([outcome]) => outcome.slug)).toEqual(['first', 'second', 'third']);
     expect(result.processed).not.toContainEqual({ slug: 'repair:https://example.test/repair', status: 'done' });
     expect(events.indexOf('repair:start')).toBeGreaterThan(events.indexOf('feature:finish:first'));
     expect(events.indexOf('repair:start')).toBeLessThan(events.indexOf('feature:start:second'));

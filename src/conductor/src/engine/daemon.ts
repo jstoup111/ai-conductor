@@ -1189,6 +1189,12 @@ export async function runDaemon(
   let lastSeenSha: string | null = deps.readPersistedBaseSha
     ? await deps.readPersistedBaseSha()
     : null;
+  // A background maintenance pass and a refreshed-backlog fold can both reach
+  // re-kick while the first sweep is awaiting I/O. Serialize the compare →
+  // sweep → persist transaction so only one of them observes a given advance.
+  // Keep the tail rejection-free: a failed sweep remains visible to its caller
+  // but must not poison a later base reconciliation.
+  let baseShaReconciliation: Promise<void> = Promise.resolve();
 
   /**
    * Detect a base-SHA advance and, on a genuine one, run the re-kick sweep then
@@ -1202,32 +1208,36 @@ export async function runDaemon(
    * Re-evaluated at the same call sites as the fill-pool pause check, so
    * lifting the pause mid-run makes re-kick eligible again at the next call.
    */
-  const maybeRekick = async (
+  const maybeRekick = (
     refresh: boolean,
     knownCurrent?: string | null,
   ): Promise<void> => {
-    if (await checkPaused()) return;
-    let current = knownCurrent;
-    if (current === undefined) {
-      if (!deps.resolveBaseSha) return;
-      try {
-        current = await deps.resolveBaseSha({ refresh });
-      } catch (err) {
-        log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
-        return;
+    const reconciliation = baseShaReconciliation.then(async () => {
+      if (await checkPaused()) return;
+      let current = knownCurrent;
+      if (current === undefined) {
+        if (!deps.resolveBaseSha) return;
+        try {
+          current = await deps.resolveBaseSha({ refresh });
+        } catch (err) {
+          log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
+          return;
+        }
       }
-    }
-    if (!current) return; // unresolved → no advance this tick (FR-10)
-    if (current === lastSeenSha) return; // no advance (PR #109 invariant preserved)
-    // A genuine advance only re-kicks when there is a prior SHA to advance FROM;
-    // a null seed is first-run init (record, no sweep — FR-5).
-    if (lastSeenSha != null) {
-      await deps.rekickSweep?.(current, {
-        isFeatureInFlight,
-      });
-    }
-    lastSeenSha = current;
-    await deps.writePersistedBaseSha?.(current);
+      if (!current) return; // unresolved → no advance this tick (FR-10)
+      if (current === lastSeenSha) return; // no advance (PR #109 invariant preserved)
+      // A genuine advance only re-kicks when there is a prior SHA to advance FROM;
+      // a null seed is first-run init (record, no sweep — FR-5).
+      if (lastSeenSha != null) {
+        await deps.rekickSweep?.(current, {
+          isFeatureInFlight,
+        });
+      }
+      lastSeenSha = current;
+      await deps.writePersistedBaseSha?.(current);
+    });
+    baseShaReconciliation = reconciliation.catch(() => {});
+    return reconciliation;
   };
 
   // ── Background origin refresh (single flight) ─────────────────────────────
