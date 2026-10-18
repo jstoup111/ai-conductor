@@ -260,7 +260,7 @@ import {
   type SweepOpts,
   type WatchEntry,
 } from './engine/mergeable-sweep.js';
-import { RepairQueue, type RepairRequest } from './engine/repair-queue.js';
+import { RepairQueue, type RepairCompletion, type RepairRequest } from './engine/repair-queue.js';
 import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { isPaused } from './engine/pause-marker.js';
@@ -1032,7 +1032,6 @@ export function createDaemonSweepBinding(
 
 /** The small composition boundary for the deferred, observational startup dashboard. */
 export interface StartupDashboardBindingOptions {
-  pausedAtBoot: boolean;
   projectRoot: string;
   worktreeBase: string;
   processedDir: string;
@@ -1059,7 +1058,7 @@ export interface StartupDashboardBindingOptions {
  */
 export function createStartupDashboardBinding(options: StartupDashboardBindingOptions): {
   discoverAndCacheStartup: (options: { refresh: boolean }) => Promise<BacklogItem[]>;
-  renderStartupDashboard: () => Promise<void>;
+  renderStartupDashboard: (pausedAtStartup: boolean) => Promise<void>;
 } {
   let cachedStartupDiscovery: BacklogItem[] | undefined;
   const discoverAndCacheStartup = async (discoverOptions: { refresh: boolean }): Promise<BacklogItem[]> => {
@@ -1070,8 +1069,8 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
 
   return {
     discoverAndCacheStartup,
-    renderStartupDashboard: async () => {
-      if (options.pausedAtBoot) return;
+    renderStartupDashboard: async (pausedAtStartup) => {
+      if (pausedAtStartup) return;
       const state = await (options.scanInheritedState ?? scanInheritedState)({
         worktreeBase: options.worktreeBase,
         processedDir: options.processedDir,
@@ -1171,7 +1170,7 @@ export function repairClaimDisposition(
             case 'none': return { kind: 'drop', reason: `checks ${state.checksOutcome}` };
             default: return assertNever(state.checksOutcome);
           }
-        default: return assertNever(request.kind);
+        default: return assertNever(request);
       }
     default:
       return assertNever(state.state);
@@ -1184,7 +1183,7 @@ export function createClaimTimeRepairRunner(options: {
   log: (message: string) => void;
   isWorkClaimActive: (slug: string) => boolean;
   requeue?: (request: RepairRequest) => void;
-  applyOutcome?: (request: RepairRequest, previous: WatchEntry, outcome: Awaited<ReturnType<RepairRequest['run']>>) => Promise<void>;
+  applyOutcome?: (completion: RepairCompletion, previous: WatchEntry) => Promise<void>;
   now?: () => Date;
 }): (request: RepairRequest) => Promise<void> {
   const { projectRoot, tracker, log, isWorkClaimActive, requeue, applyOutcome = async () => {}, now = () => new Date() } = options;
@@ -1219,8 +1218,13 @@ export function createClaimTimeRepairRunner(options: {
         : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1, lastResolveAt: now().toISOString() };
       return claimed;
     }));
-    const outcome = await request.run(claimed ?? previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot });
-    await applyOutcome(request, previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot }, outcome);
+    const claimedEntry = claimed ?? previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot };
+    const previousEntry = previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot };
+    if (request.kind === 'autoresolve') {
+      await applyOutcome({ request, outcome: await request.run(claimedEntry) }, previousEntry);
+      return;
+    }
+    await applyOutcome({ request, outcome: await request.run(claimedEntry) }, previousEntry);
   };
 }
 
@@ -2463,7 +2467,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // The deferred dashboard is observational: it receives that exact cached
   // result and therefore neither repeats discovery nor refreshes the root.
   const startupDashboard = createStartupDashboardBinding({
-    pausedAtBoot,
     projectRoot,
     worktreeBase,
     processedDir,
@@ -2565,11 +2568,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         log,
         isWorkClaimActive,
         requeue: (request) => { repairQueue.enqueue(request); },
-        applyOutcome: (request, previous, outcome) => applyPooledRepairOutcome({
+        applyOutcome: (completion, previous) => applyPooledRepairOutcome({
           projectRoot,
-          request,
           previous,
-          outcome,
+          ...completion,
           log,
         }),
       }) },

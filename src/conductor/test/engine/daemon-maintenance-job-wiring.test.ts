@@ -104,6 +104,21 @@ describe('daemon maintenance job wiring', () => {
     ]));
   });
 
+  it('uses the startup pause gate for the deferred dashboard when the marker flips', async () => {
+    const calls: string[] = [];
+    let paused = true;
+
+    await runDaemon(depsFor(calls, [], {
+      isPaused: async () => {
+        const result = paused;
+        paused = false;
+        return result;
+      },
+    }), { concurrency: 1, once: true });
+
+    expect(calls).not.toContain('dashboard');
+  });
+
   it('collects a worker and dispatches the next feature while a maintenance job is pending', async () => {
     const calls: string[] = [];
     const firstFeature = deferred<FeatureOutcome>();

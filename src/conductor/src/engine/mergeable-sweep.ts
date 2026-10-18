@@ -45,9 +45,11 @@ import {
 } from './shipped-readiness.js';
 import {
   type RepairQueue,
+  type RepairCompletion,
   type RepairRequest,
   type WatchEntry,
-  type PooledRepairOutcome,
+  type AutoresolveRepairOutcome,
+  type CiFixRepairOutcome,
 } from './repair-queue.js';
 import type { CiFixOutcome } from './ci-fix.js';
 export type { WatchEntry } from './repair-queue.js';
@@ -466,8 +468,21 @@ function runnerForEntry(
   return Object.assign(gh.bind(undefined), operationRunner);
 }
 
-function assertPooledRepairOutcomeNever(value: never): never {
-  throw new Error(`unhandled pooled repair outcome: ${JSON.stringify(value)}`);
+type PooledRepairOutcomeOptions = {
+  projectRoot: string;
+  previous: WatchEntry;
+  runGh?: GhRunner;
+  operations?: SweepOpts['operations'];
+  log?: (message: string) => void;
+} & RepairCompletion;
+
+function isAutoresolveOutcome(
+  options: PooledRepairOutcomeOptions,
+): options is PooledRepairOutcomeOptions & {
+  request: Extract<RepairCompletion, { request: { kind: 'autoresolve' } }>['request'];
+  outcome: AutoresolveRepairOutcome;
+} {
+  return options.request.kind === 'autoresolve';
 }
 
 /**
@@ -478,15 +493,14 @@ function assertPooledRepairOutcomeNever(value: never): never {
  * result union here prevents a newly-added adapter outcome from silently
  * skipping its bookkeeping on the queued path.
  */
-export async function applyPooledRepairOutcome(options: {
-  projectRoot: string;
-  request: RepairRequest;
-  previous: WatchEntry;
-  outcome: PooledRepairOutcome;
-  runGh?: GhRunner;
-  operations?: SweepOpts['operations'];
-  log?: (message: string) => void;
-}): Promise<void> {
+export async function applyPooledRepairOutcome(options: PooledRepairOutcomeOptions): Promise<void> {
+  if (isAutoresolveOutcome(options)) return applyAutoresolveRepairOutcome(options);
+  return applyCiFixRepairOutcome(options);
+}
+
+async function applyAutoresolveRepairOutcome(options: Extract<PooledRepairOutcomeOptions, {
+  request: { kind: 'autoresolve' };
+}>): Promise<void> {
   const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
   const rewrite = async (mutate: (entry: WatchEntry) => WatchEntry) => {
     await updateWatch(projectRoot, (entries) => entries.map((entry) =>
@@ -502,30 +516,48 @@ export async function applyPooledRepairOutcome(options: {
     }
   };
 
-  if (request.kind === 'autoresolve') {
-    switch (outcome.kind) {
-      case 'refreshed':
-        await rewrite((entry) => ({ ...entry, resolveAttempts: 0 }));
-        return;
-      case 'escalated':
-        await rewrite((entry) => ({ ...entry, escalationCause: 'conflict-resolution' }));
-        return;
-      case 'published-stack':
-        await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
-        return;
-      case 'setup-stop':
-        await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
-        await markSetupRecovery(
-          '<!-- conductor:rebase-setup -->',
-          '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-          'rebase',
-        );
-        return;
-      default:
-        return assertPooledRepairOutcomeNever(outcome);
+  switch (outcome.kind) {
+    case 'refreshed':
+      await rewrite((entry) => ({ ...entry, resolveAttempts: 0 }));
+      return;
+    case 'escalated':
+      await rewrite((entry) => ({ ...entry, escalationCause: 'conflict-resolution' }));
+      return;
+    case 'published-stack':
+      await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+      return;
+    case 'setup-stop':
+      await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+      await markSetupRecovery(
+        '<!-- conductor:rebase-setup -->',
+        '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        'rebase',
+      );
+      return;
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
     }
   }
+}
 
+async function applyCiFixRepairOutcome(options: Extract<PooledRepairOutcomeOptions, {
+  request: { kind: 'ci-fix' };
+}>): Promise<void> {
+  const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
+  const rewrite = async (mutate: (entry: WatchEntry) => WatchEntry) => {
+    await updateWatch(projectRoot, (entries) => entries.map((entry) =>
+      entry.prUrl === request.prUrl ? mutate(entry) : entry));
+  };
+  const entryRunner = runnerForEntry(runGh, previous, operations);
+  const markSetupRecovery = async (marker: string, body: string, description: string) => {
+    try {
+      await addLabel(entryRunner, previous.repoCwd, previous.prUrl, 'needs-remediation', log);
+      await upsertComment(entryRunner, previous.repoCwd, previous.prUrl, marker, body, log);
+    } catch (err) {
+      log?.(`[mergeable-sweep] ${description} setup-recovery marker error for ${previous.prUrl}: ${err}`);
+    }
+  };
   switch (outcome.kind) {
     case 'needs-human':
       await rewrite((entry) => ({
@@ -551,8 +583,10 @@ export async function applyPooledRepairOutcome(options: {
     case 'failed':
     case 'published':
       return;
-    default:
-      return assertPooledRepairOutcomeNever(outcome);
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
   }
 }
 
@@ -1040,13 +1074,23 @@ export async function sweepMergeableLabels({
         enqueue({
           kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug,
           prCreatedAt: state.createdAt ?? queuedAt, queuedAt,
-          run: async (claimed) => {
+          run: async (claimed): Promise<CiFixRepairOutcome> => {
             const outcome = await ciFix.dispatch(claimed, state);
-            return (outcome?.kind === 'green-verified'
-              ? { kind: 'published' }
-              : outcome?.kind === 'needs-human' && !('providerSetupExhaustion' in outcome)
-                ? { kind: 'failed', stage: 'provider' }
-                : outcome ?? { kind: 'failed', stage: 'worktree' }) as PooledRepairOutcome;
+            if (!outcome) return { kind: 'failed', stage: 'worktree' };
+            switch (outcome.kind) {
+              case 'green-verified':
+                return { kind: 'published' };
+              case 'needs-human':
+                return 'providerSetupExhaustion' in outcome
+                  ? { kind: 'needs-human', providerSetupExhaustion: outcome.providerSetupExhaustion }
+                  : { kind: 'failed', stage: 'provider' };
+              case 'not-started':
+              case 'noop':
+              case 'failed':
+              case 'published':
+              case 'branch-gone':
+                return outcome;
+            }
           },
         });
       }

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runDaemon, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
 import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
-import { RepairQueue } from '../../src/engine/repair-queue.js';
+import { RepairQueue, type RepairRequest } from '../../src/engine/repair-queue.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { PASSING_SUITE, buildPrFixture, skipReplay } from './autoresolve-pr-fixture.js';
 
@@ -14,6 +14,19 @@ const repairCapabilityContract = {
   repairs: { queue: new RepairQueue() },
 } satisfies Pick<DaemonDeps, 'repairs'>;
 void repairCapabilityContract;
+
+const autoresolveRequestContract: Extract<RepairRequest, { kind: 'autoresolve' }> = {
+  kind: 'autoresolve', prUrl: 'https://example.test/autoresolve', prCreatedAt: '', queuedAt: '',
+  // @ts-expect-error autoresolve requests cannot carry CI-fix outcomes.
+  run: async () => ({ kind: 'failed', stage: 'worktree' }),
+};
+const ciFixRequestContract: Extract<RepairRequest, { kind: 'ci-fix' }> = {
+  kind: 'ci-fix', prUrl: 'https://example.test/ci-fix', prCreatedAt: '', queuedAt: '',
+  // @ts-expect-error CI-fix requests cannot carry autoresolve outcomes.
+  run: async () => ({ kind: 'refreshed' }),
+};
+void autoresolveRequestContract;
+void ciFixRequestContract;
 
 describe('daemon pooled repairs', () => {
   it('claims repairs before features and releases their reserved pool key', async () => {

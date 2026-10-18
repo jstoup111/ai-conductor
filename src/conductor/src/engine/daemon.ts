@@ -468,7 +468,7 @@ export interface DaemonDeps {
    * FR-1: scan inherited state and render the startup dashboard to both sinks.
    * Invoked ONCE, before any dispatch.
    */
-  renderStartupDashboard?: () => Promise<void>;
+  renderStartupDashboard?: (pausedAtStartup: boolean) => Promise<void>;
   /**
    * FR-4: resolve the current base-branch tip SHA from the discovery ref
    * (`refresh` requests a remote fetch first). Returns `null` when the SHA
@@ -1272,10 +1272,9 @@ export async function runDaemon(
   // deliberately started only after that attempt, whether it dispatches or
   // finds no eligible item.  Its ordered steps preserve the former startup
   // maintenance sequence without making the dispatcher await it.
-  // Captured by the first claim gate below.  The dashboard preserves its
-  // former paused-at-boot behavior without adding another pause read after
-  // the claim attempt.
-  let pausedAtBoot = false;
+  // Captured by the startup discovery gate below. The dashboard receives this
+  // exact result rather than re-reading pause state after the first claim.
+  let pausedAtStartup = false;
   let startupDashboardPending = true;
   const runPhase = async (phase: Exclude<MaintenancePhaseInput, { phase: 'repair' | 'parked-reconcile' }>, run: () => Promise<void>): Promise<void> => {
     if (!deps.emitMaintenancePhase) return run();
@@ -1302,7 +1301,7 @@ export async function runDaemon(
       if (!startupDashboardPending) return;
       startupDashboardPending = false;
       await runPhase({ phase: 'startup-dashboard' }, async () => {
-        if (!pausedAtBoot) await deps.renderStartupDashboard?.();
+        if (!pausedAtStartup) await deps.renderStartupDashboard?.(pausedAtStartup);
       });
     }],
     ['rekick', async () => {
@@ -1350,11 +1349,11 @@ export async function runDaemon(
   // Pause is a claim gate, not maintenance.  Check it before startup discovery:
   // discovery can invoke consumer-owned work-source hooks, which must not run
   // while an operator has paused the daemon.
-  pausedAtBoot = await checkPaused();
+  pausedAtStartup = await checkPaused();
   // The first fill pass consumes this reading instead of re-polling: the
   // first claim has exactly one pause gate (ADR dispatch-first D1).
-  let unconsumedBootPause: boolean | undefined = pausedAtBoot;
-  if (!pausedAtBoot) {
+  let unconsumedBootPause: boolean | undefined = pausedAtStartup;
+  if (!pausedAtStartup) {
     try {
       if (deps.emitMaintenancePhase) {
         await timeMaintenancePhase({ phase: 'startup-refresh' }, async () => {
@@ -1604,7 +1603,6 @@ export async function runDaemon(
       const bootPause = unconsumedBootPause;
       unconsumedBootPause = undefined;
       paused = maintenance.isDraining() || (bootPause ?? (await checkPaused()));
-      if (firstFillPass) pausedAtBoot = paused;
       buildAuthMissing = await checkBuildAuthMissing();
       ghVersionBlocked = await checkGhVersionFloor();
       episodeActive = deps.rateLimitEpisode?.active?.() ?? false;

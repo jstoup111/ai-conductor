@@ -20,27 +20,51 @@ export interface WatchEntry {
   labelClearAttempts?: number;
 }
 
-/** Outcomes are interpreted by the sweep's single pooled-outcome handler. */
-export type PooledRepairOutcome =
-  | { kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack' }
+/** Outcomes emitted only by the autoresolve adapter. */
+export type AutoresolveRepairOutcome =
+  | { kind: 'refreshed' }
+  | { kind: 'escalated' }
+  | { kind: 'setup-stop' }
+  | { kind: 'published-stack' };
+
+/** Outcomes emitted only by the CI-fix adapter. */
+export type CiFixRepairOutcome =
   | { kind: 'not-started'; provider?: string; reason?: unknown }
   | { kind: 'noop'; provider?: string }
   | { kind: 'failed'; stage: 'provider' | 'guard' | 'verification' | 'publication' | 'worktree'; provider?: string; reason?: unknown }
   | { kind: 'published'; provider?: string }
   | { kind: 'branch-gone' }
   | { kind: 'needs-human'; providerSetupExhaustion: unknown };
-export type PooledRepairAdapter = (entry: WatchEntry) => Promise<PooledRepairOutcome>;
 
-/** A bounded dispatcher-owned handoff between maintenance sweeps and workers. */
-export interface RepairRequest {
-  kind: 'ci-fix' | 'autoresolve';
+export type AutoresolveRepairAdapter = (entry: WatchEntry) => Promise<AutoresolveRepairOutcome>;
+export type CiFixRepairAdapter = (entry: WatchEntry) => Promise<CiFixRepairOutcome>;
+
+interface RepairRequestBase {
   prUrl: string;
   slug?: string;
   prCreatedAt: string;
   queuedAt: string;
-  /** The only adapter permitted to execute this request after it is claimed. */
-  run: PooledRepairAdapter;
 }
+
+/** A bounded dispatcher-owned handoff between maintenance sweeps and workers. */
+export type AutoresolveRepairRequest = RepairRequestBase & {
+  kind: 'autoresolve';
+  /** The only adapter permitted to execute this request after it is claimed. */
+  run: AutoresolveRepairAdapter;
+};
+
+export type CiFixRepairRequest = RepairRequestBase & {
+  kind: 'ci-fix';
+  /** The only adapter permitted to execute this request after it is claimed. */
+  run: CiFixRepairAdapter;
+};
+
+export type RepairRequest = AutoresolveRepairRequest | CiFixRepairRequest;
+
+/** A claimed repair and the outcome emitted by its matching adapter. */
+export type RepairCompletion =
+  | { request: AutoresolveRepairRequest; outcome: AutoresolveRepairOutcome }
+  | { request: CiFixRepairRequest; outcome: CiFixRepairOutcome };
 
 /**
  * In-memory repair requests. A PR has at most one outstanding request, even

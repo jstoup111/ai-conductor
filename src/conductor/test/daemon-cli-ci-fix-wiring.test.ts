@@ -88,7 +88,7 @@ describe('daemon CI-fix production dispatch callback', () => {
     await writeFile(join(root, '.daemon', 'mergeable-watch.jsonl'), `${JSON.stringify({
       prUrl, slug: 'widget', repoCwd: root, ciFixAttempts: 3, resolveAttempts: 2,
     })}\n`);
-    const adapter = vi.fn(async () => ({ kind: 'failed' as const, stage: 'worktree' as const }));
+    const adapter = vi.fn();
     const log = vi.fn();
     const runner = createClaimTimeRepairRunner({
       projectRoot: root,
@@ -102,7 +102,17 @@ describe('daemon CI-fix production dispatch callback', () => {
       isWorkClaimActive: () => false,
     });
 
-    await runner({ kind, prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z', run: adapter });
+    if (kind === 'ci-fix') {
+      await runner({ kind, prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z', run: async () => {
+        adapter();
+        return { kind: 'failed', stage: 'worktree' };
+      } });
+    } else {
+      await runner({ kind, prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z', run: async () => {
+        adapter();
+        return { kind: 'escalated' };
+      } });
+    }
 
     expect(adapter).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledOnce();
