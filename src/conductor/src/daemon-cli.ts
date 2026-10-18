@@ -192,7 +192,7 @@ import {
   makeWatchHaltClearedSeam,
   resolveDaemonBaseSha,
 } from './engine/daemon-deps.js';
-import { InMemoryWorkClaims } from './engine/work-claims.js';
+import { encodeClaimKey, featureSlugs, InMemoryWorkClaims } from './engine/work-claims.js';
 import { WorktreeLifecycleQueue } from './engine/worktree.js';
 import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from './engine/park-marker.js';
 import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js';
@@ -1051,6 +1051,40 @@ export interface StartupDashboardBindingOptions {
   writeDashboard: (persisted: string, console: string) => void;
 }
 
+export interface ParkedCandidateEnrichmentOptions {
+  projectRoot: string;
+  slug: string;
+  annotation: string | undefined;
+  log: (message: string) => void;
+  isOperatorParked: StartupDashboardBindingOptions['isOperatorParked'];
+  getProvenanceType: StartupDashboardBindingOptions['getProvenanceType'];
+  readMarker?: (path: string) => Promise<string>;
+}
+
+/** Add dashboard-only parked metadata, avoiding marker reads for non-parked candidates. */
+export async function enrichParkedCandidate(options: ParkedCandidateEnrichmentOptions): Promise<ParkedEntry | undefined> {
+  if (!await options.isOperatorParked(options.projectRoot, options.slug, (error) =>
+    options.log(`anomaly checking if ${options.slug} is parked: ${error.message}`),
+  )) return undefined;
+
+  const provenance = await options.getProvenanceType(options.projectRoot, options.slug);
+  let reason: string | undefined;
+  if (provenance === 'auto') {
+    try {
+      const content = await (options.readMarker ?? ((path) => readFile(path, 'utf-8')))(
+        join(options.projectRoot, '.daemon', 'parked', options.slug),
+      );
+      const firstLine = content.split('\n')[0];
+      if (firstLine?.startsWith('auto-parked:')) {
+        reason = firstLine.substring('auto-parked:'.length).trim();
+      }
+    } catch {
+      // Marker metadata is enrichment only.
+    }
+  }
+  return { slug: options.slug, provenance: provenance ?? undefined, reason, annotation: options.annotation };
+}
+
 /**
  * Keeps the first startup discovery as the dashboard's sole eligibility input.
  * It is exported so the callback can be exercised with boundary fakes without
@@ -1097,30 +1131,15 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
       ] as const));
       const parked: ParkedEntry[] = [];
       for (const slug of candidateSlugs) {
-        if (await options.isOperatorParked(options.projectRoot, slug, (error) =>
-          options.log(`anomaly checking if ${slug} is parked: ${error.message}`),
-        )) {
-          const provenance = await options.getProvenanceType(options.projectRoot, slug);
-          let reason: string | undefined;
-          if (provenance === 'auto') {
-            try {
-              const markerPath = join(options.projectRoot, '.daemon', 'parked', slug);
-              const content = await readFile(markerPath, 'utf-8');
-              const firstLine = content.split('\n')[0];
-              if (firstLine?.startsWith('auto-parked:')) {
-                reason = firstLine.substring('auto-parked:'.length).trim();
-              }
-            } catch {
-              // Marker metadata is enrichment only.
-            }
-          }
-          parked.push({
-            slug,
-            provenance: provenance ?? undefined,
-            reason,
-            annotation: annotations.get(slug),
-          });
-        }
+        const entry = await enrichParkedCandidate({
+          projectRoot: options.projectRoot,
+          slug,
+          annotation: annotations.get(slug),
+          log: options.log,
+          isOperatorParked: options.isOperatorParked,
+          getProvenanceType: options.getProvenanceType,
+        });
+        if (entry) parked.push(entry);
       }
       const dashboardState = { ...state, parked };
       options.writeDashboard(
@@ -2907,7 +2926,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           autoCleanup: reconcileParkedAutoCleanup,
           reclaimMergedWorktrees,
           isFeatureInFlight,
-          inFlightSlugs: () => workClaims.list(),
+          inFlightSlugs: () => featureSlugs(workClaims),
           onEvent: (event) => { void events.emit(event); },
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events }),
@@ -2930,7 +2949,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           repairs: {
             queue: repairQueue,
           },
-          isRepairRunning: (prUrl) => workClaims.list().includes(`repair:${prUrl}`),
+          isRepairRunning: (prUrl) => workClaims.list().includes(encodeClaimKey({ kind: 'repair', prUrl })),
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).

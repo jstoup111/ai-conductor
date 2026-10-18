@@ -1,8 +1,28 @@
 // Covers: task:8
 import { describe, expect, it } from 'vitest';
-import { createStartupDashboardBinding } from '../../src/daemon-cli.js';
+import { createStartupDashboardBinding, enrichParkedCandidate } from '../../src/daemon-cli.js';
 
 describe('daemon-cli startup dashboard wiring (Task 8)', () => {
+  it('enriches parked candidates from a readable auto-park marker and leaves unreadable metadata blank', async () => {
+    const base = {
+      projectRoot: '/project', slug: 'parked-feature', annotation: undefined, log: () => {},
+      isOperatorParked: async () => true,
+      getProvenanceType: async () => 'auto' as const,
+    };
+    await expect(enrichParkedCandidate({ ...base, readMarker: async () => 'auto-parked: setup failed\nmore\n' }))
+      .resolves.toEqual({ slug: 'parked-feature', provenance: 'auto', reason: 'setup failed', annotation: undefined });
+    await expect(enrichParkedCandidate({ ...base, readMarker: async () => { throw new Error('unreadable'); } }))
+      .resolves.toEqual({ slug: 'parked-feature', provenance: 'auto', reason: undefined, annotation: undefined });
+
+    let readMarker = false;
+    await expect(enrichParkedCandidate({
+      ...base,
+      isOperatorParked: async () => false,
+      readMarker: async () => { readMarker = true; return ''; },
+    })).resolves.toBeUndefined();
+    expect(readMarker).toBe(false);
+  });
+
   it('uses the daemon-supplied startup pause gate instead of retaining its own snapshot', async () => {
     let discoveries = 0;
     let scans = 0;

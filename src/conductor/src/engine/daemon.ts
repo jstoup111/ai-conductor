@@ -18,7 +18,7 @@ import chalk from 'chalk';
 import type { ComplexityTier, FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
-import { InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
+import { encodeClaimKey, featureSlugs, InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
 import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { DaemonMaintenance, MaintenanceJob } from './daemon-maintenance.js';
@@ -151,7 +151,7 @@ export async function pickEligible(
   ctx: PickEligibleCtx,
 ): Promise<BacklogItem | undefined> {
   for (const b of backlog.items) {
-    if (ctx.claims.list().includes(b.slug)) continue;
+    if (featureSlugs(ctx.claims).includes(b.slug)) continue;
     // Operator-park (Task 7): a durable, HALT-independent stop. Checked
     // alongside `isHalted` below, but never lifted by a cleared HALT marker —
     // only an explicit un-park makes the slug eligible again.
@@ -919,7 +919,7 @@ export async function runDaemon(
   // list only holds the promises needed to await outcomes; it never decides
   // whether a feature may be dispatched.
   const inFlight = {
-    has: (slug: string): boolean => claims.list().includes(slug),
+    has: (slug: string): boolean => featureSlugs(claims).includes(slug),
     get size(): number {
       return claims.list().length;
     },
@@ -929,12 +929,11 @@ export async function runDaemon(
     () => deps.rateLimitEpisode?.active?.() ?? false,
     idlePollMs,
     now,
-    () => claims.list(),
+    () => featureSlugs(claims),
     options.concurrency,
   );
   const workers: Worker[] = [];
-  const isFeatureInFlight = (slug: string): boolean =>
-    workers.some((worker) => worker.kind === 'feature' && worker.slug === slug);
+  const isFeatureInFlight = (slug: string): boolean => featureSlugs(claims).includes(slug);
   // Keep one completion observer for the current worker set. A busy poll must
   // not race every timer tick directly against live workers: every losing race
   // leaves another reaction attached until that worker settles.
@@ -1035,7 +1034,8 @@ export async function runDaemon(
     return true;
   };
 
-  const repairClaim = (request: RepairRequest): string => `repair:${request.prUrl}`;
+  const repairClaim = (request: RepairRequest): string =>
+    encodeClaimKey({ kind: 'repair', prUrl: request.prUrl });
   const repairBand = (request: RepairRequest): [number, string] => {
     const band = deps.repairPriority?.(request.slug);
     const rank = band && /^P[0-9]+$/i.test(band) ? Number(band.slice(1)) : Number.MAX_SAFE_INTEGER;

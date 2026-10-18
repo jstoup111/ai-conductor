@@ -23,6 +23,7 @@ import {
 } from '../../src/engine/park-marker.js';
 import { TEARDOWN_SCRIPT } from '../../src/engine/worktree-prepare.js';
 import * as daemonParkCli from '../../src/engine/daemon-park-cli.js';
+import { encodeClaimKey, featureSlugs, InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 // Reconciliation normally constructs its GitHub runner at the production
 // boundary. Keep these unit tests isolated while making an unspecified merged
@@ -49,6 +50,7 @@ describe('engine/park-reconciliation — parked input memo', () => {
       { slug: otherSlug, branch: `feat/${otherSlug}` },
     ];
     let inFlight = new Set<string>();
+    const claims = new InMemoryWorkClaims();
     const runGit = vi.fn<GitRunner>(async (args) => {
       switch (args[0]) {
         case 'worktree': return { stdout: '' };
@@ -69,7 +71,7 @@ describe('engine/park-reconciliation — parked input memo', () => {
       autoCleanup: false,
       reclaimMergedWorktrees: false,
       isFeatureInFlight: (candidate) => inFlight.has(candidate),
-      inFlightSlugs: () => [...inFlight],
+      inFlightSlugs: () => [...inFlight, ...featureSlugs(claims)],
       memo,
       now: () => now,
     });
@@ -118,6 +120,23 @@ describe('engine/park-reconciliation — parked input memo', () => {
       memo.completedAt = undefined;
       memo.result = undefined;
       inFlight = new Set();
+      now = 0;
+      await reconcile();
+      const beforeRepair = mergeBaseCalls();
+      const repairKey = encodeClaimKey({ kind: 'repair', prUrl: 'https://example.test/pull/17' });
+      claims.claim(repairKey);
+      now = 1;
+      await reconcile();
+      expect({ claims: claims.list(), mergeBaseCalls: mergeBaseCalls() }).toEqual({
+        claims: [repairKey],
+        mergeBaseCalls: beforeRepair,
+      });
+
+      memo.fingerprint = undefined;
+      memo.completedAt = undefined;
+      memo.result = undefined;
+      inFlight = new Set();
+      claims.release(repairKey);
       now = 0;
       await reconcile();
       const beforeTimeout = mergeBaseCalls();
