@@ -75,6 +75,7 @@ describe('daemon width-one parity', () => {
             slug: item.slug,
             prCreatedAt: '2026-10-15T00:00:00Z',
             queuedAt: '2026-10-15T00:00:00Z',
+            run: async () => ({ kind: 'failed', stage: 'worktree' }),
           });
         }
         await Promise.resolve();

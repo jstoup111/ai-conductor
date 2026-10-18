@@ -88,7 +88,7 @@ describe('daemon CI-fix production dispatch callback', () => {
     await writeFile(join(root, '.daemon', 'mergeable-watch.jsonl'), `${JSON.stringify({
       prUrl, slug: 'widget', repoCwd: root, ciFixAttempts: 3, resolveAttempts: 2,
     })}\n`);
-    const adapter = vi.fn(async () => undefined);
+    const adapter = vi.fn(async () => ({ kind: 'failed' as const, stage: 'worktree' as const }));
     const log = vi.fn();
     const runner = createClaimTimeRepairRunner({
       projectRoot: root,
@@ -100,10 +100,9 @@ describe('daemon CI-fix production dispatch callback', () => {
       },
       log,
       isWorkClaimActive: () => false,
-      runners: new Map([[prUrl, adapter]]),
     });
 
-    await runner({ kind, prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z' });
+    await runner({ kind, prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z', run: adapter });
 
     expect(adapter).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledOnce();
@@ -121,19 +120,40 @@ describe('daemon CI-fix production dispatch callback', () => {
     const adapter = vi.fn(async () => {
       const stored = JSON.parse(await readFile(join(root, '.daemon', 'mergeable-watch.jsonl'), 'utf8')) as WatchEntry;
       expect(stored.ciFixAttempts).toBe(4);
+      return { kind: 'failed' as const, stage: 'worktree' as const };
     });
     const runner = createClaimTimeRepairRunner({
       projectRoot: root,
       tracker: { readPullRequestMergeState: async () => selected },
       log: vi.fn(),
       isWorkClaimActive: () => false,
-      runners: new Map([[prUrl, adapter]]),
       now: () => new Date('2026-10-17T00:00:00.000Z'),
     });
 
-    await runner({ kind: 'ci-fix', prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z' });
+    await runner({ kind: 'ci-fix', prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z', run: adapter });
 
     expect(adapter).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the request-owned adapter with a repair deferred for an in-flight feature', async () => {
+    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    roots.push(root);
+    const queue = new RepairQueue();
+    const prUrl = 'https://github.com/acme/widget/pull/7';
+    const adapter = vi.fn(async () => ({ kind: 'failed' as const, stage: 'worktree' as const }));
+    const request = {
+      kind: 'ci-fix' as const, prUrl, slug: 'widget',
+      prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z', run: adapter,
+    };
+    const runner = createClaimTimeRepairRunner({
+      projectRoot: root, tracker: { readPullRequestMergeState: async () => selected }, log: vi.fn(),
+      isWorkClaimActive: () => true, requeue: (deferred) => { queue.enqueue(deferred); },
+    });
+
+    await runner(request);
+
+    expect(adapter).not.toHaveBeenCalled();
+    expect(queue.take()).toBe(request);
   });
 
   it('stamps a claimed autoresolve before its adapter and makes the next sweep observe cooldown', async () => {
@@ -152,14 +172,14 @@ describe('daemon CI-fix production dispatch callback', () => {
       projectRoot: root,
       tracker: { readPullRequestMergeState: async () => ({ ...selected, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY', checksOutcome: 'none' }) },
       log: vi.fn(), isWorkClaimActive: () => false,
-      runners: new Map([[prUrl, adapter]]), now: () => new Date(at),
+      now: () => new Date(at),
     });
 
-    await runner({ kind: 'autoresolve', prUrl, slug: 'widget', prCreatedAt: at, queuedAt: at });
+    await runner({ kind: 'autoresolve', prUrl, slug: 'widget', prCreatedAt: at, queuedAt: at, run: adapter });
     const eligible = vi.fn(async (entry: WatchEntry) => ({ eligible: entry.lastResolveAt !== at }));
     const queue = new RepairQueue();
     await sweepMergeableLabels({
-      projectRoot: root, repairs: { queue, register: () => {} },
+      projectRoot: root, repairs: { queue },
       tracker: { readPullRequestMergeState: async () => ({ ...selected, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY', checksOutcome: 'none' }) },
       autoresolve: { enabled: true, isEligible: eligible, dispatch: async () => ({ kind: 'escalated' }) },
     });

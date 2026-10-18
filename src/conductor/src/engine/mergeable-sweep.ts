@@ -386,10 +386,9 @@ export interface AutoresolveDispatchOpts {
     state: PrMergeState,
   ) => Promise<{ eligible: boolean; reason?: string }>;
   /**
-   * Dispatch resolution for the chosen entry. Called with the entry AFTER
-   * its attempt counter has already been bumped and `lastResolveAt` set
-   * (AC3) — the git work itself happens inside this callback.
-   * Returns the outcome kind so the sweep can reset the counter on success.
+   * Dispatch resolution for the chosen entry. The request-owned adapter calls
+   * this only after the daemon claims and stamps the entry (AC3).
+   * Returns the outcome consumed by the pooled outcome handler.
    */
   dispatch: (entry: WatchEntry) => Promise<AutoresolveDispatchOutcome | void>;
   /** Clock override for tests; defaults to `new Date()`. */
@@ -418,10 +417,9 @@ export interface CiFixDispatchOpts {
     state: PrMergeState,
   ) => Promise<{ eligible: boolean; reason?: string }>;
   /**
-   * Dispatch CI fix for the chosen entry. Called with the entry AFTER
-   * its attempt counter has already been bumped and `lastCiFixAt` set
-   * (AC3) — the git work itself happens inside this callback.
-   * Returns the outcome kind so the sweep can reset the counter on success.
+   * Dispatch CI fix for the chosen entry. The request-owned adapter calls
+   * this only after the daemon claims and stamps the entry (AC3).
+   * Returns the outcome consumed by the pooled outcome handler.
    */
   dispatch: (
     entry: WatchEntry,
@@ -450,7 +448,6 @@ export interface SweepOpts {
   /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
   repairs?: {
     queue: RepairQueue;
-    register: (request: RepairRequest, run: PooledRepairAdapter) => void;
   };
   /** True while a pooled repair has already claimed this PR. */
   isRepairRunning?: (prUrl: string) => boolean;
@@ -542,7 +539,7 @@ export async function applyPooledRepairOutcome(options: {
         );
         return;
       default:
-        return assertPooledRepairOutcomeNever(autoresolveOutcome);
+        return assertPooledRepairOutcomeNever(autoresolveOutcome as never);
     }
   }
 
@@ -573,7 +570,7 @@ export async function applyPooledRepairOutcome(options: {
     case 'published':
       return;
     default:
-      return assertPooledRepairOutcomeNever(ciFixOutcome);
+      return assertPooledRepairOutcomeNever(ciFixOutcome as never);
   }
 }
 
@@ -1027,7 +1024,7 @@ export async function sweepMergeableLabels({
       }
     }
 
-    const enqueue = (request: RepairRequest, run?: PooledRepairAdapter): void => {
+    const enqueue = (request: RepairRequest): void => {
       if (!repairs) return;
       if (isRepairRunning?.(request.prUrl)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
@@ -1035,119 +1032,41 @@ export async function sweepMergeableLabels({
       }
       if (!repairs.queue.enqueue(request)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already queued)`);
-      } else if (run) {
-        repairs.register(request, run);
       }
     };
 
-    // Daemon calls hand work to its pool.  Standalone callers predate that
-    // queue and retain the synchronous, bounded dispatch contract below.
+    // The sweep only selects and queues repair work. The daemon pool owns
+    // claim-time attempt accounting, adapter execution, and outcomes.
     if (autoresolve?.enabled) {
-      if (repairs) {
-        for (const { entry, state } of conflictingCandidates) {
-          const elig = await autoresolve.isEligible(entry, state);
-          if (!elig.eligible) continue;
-          const queuedAt = now().toISOString();
-          const request = { kind: 'autoresolve' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
-          enqueue(request, async (claimed) =>
-            (await autoresolve.dispatch(claimed)) ?? { kind: 'escalated' });
-        }
-      } else {
-        let dispatched = false;
-        for (const { entry, state } of conflictingCandidates) {
-          const entryGh = runnerForEntry(gh, entry, operations);
-          const eligibility = await autoresolve.isEligible(entry, state);
-          if (!eligibility.eligible) continue;
-          if (dispatched) {
-            log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-            continue;
-          }
-          dispatched = true;
-          const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
-          const current = idx >= 0 ? survivors[idx] : entry;
-          const updated: WatchEntry = {
-            ...current,
-            resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
-            lastResolveAt: (autoresolve.now ? autoresolve.now() : new Date()).toISOString(),
-          };
-          if (idx >= 0) survivors[idx] = updated;
-          const result = await autoresolve.dispatch(updated);
-          if (result?.kind === 'refreshed') {
-            survivors[idx] = { ...updated, resolveAttempts: 0 };
-          } else if (result?.kind === 'escalated') {
-            survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
-          } else if (result?.kind === 'published-stack') {
-            survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-          } else if (result?.kind === 'setup-stop') {
-            survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-            try {
-              await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-              await upsertComment(entryGh, entry.repoCwd, entry.prUrl, '<!-- conductor:rebase-setup -->', '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.', log);
-            } catch (err) {
-              log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
-            }
-          }
-        }
+      for (const { entry, state } of conflictingCandidates) {
+        const eligibility = await autoresolve.isEligible(entry, state);
+        if (!eligibility.eligible) continue;
+        const queuedAt = now().toISOString();
+        enqueue({
+          kind: 'autoresolve', prUrl: entry.prUrl, slug: entry.slug,
+          prCreatedAt: state.createdAt ?? queuedAt, queuedAt,
+          run: async (claimed) => (await autoresolve.dispatch(claimed)) ?? { kind: 'escalated' },
+        });
       }
     }
 
     if (ciFix?.enabled) {
-      if (repairs) {
-        for (const { entry, state } of failedCandidates) {
-          const elig = await ciFix.isEligible(entry, state);
-          if (!elig.eligible) continue;
-          const queuedAt = now().toISOString();
-          const request = { kind: 'ci-fix' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
-          enqueue(request, async (claimed) => {
+      for (const { entry, state } of failedCandidates) {
+        const eligibility = await ciFix.isEligible(entry, state);
+        if (!eligibility.eligible) continue;
+        const queuedAt = now().toISOString();
+        enqueue({
+          kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug,
+          prCreatedAt: state.createdAt ?? queuedAt, queuedAt,
+          run: async (claimed) => {
             const outcome = await ciFix.dispatch(claimed, state);
-            return outcome?.kind === 'green-verified'
+            return (outcome?.kind === 'green-verified'
               ? { kind: 'published' }
               : outcome?.kind === 'needs-human' && !('providerSetupExhaustion' in outcome)
                 ? { kind: 'failed', stage: 'provider' }
-                : outcome ?? { kind: 'failed', stage: 'worktree' };
-          });
-        }
-      } else {
-        let dispatched = false;
-        for (const { entry, state } of failedCandidates) {
-          const entryGh = runnerForEntry(gh, entry, operations);
-          const eligibility = await ciFix.isEligible(entry, state);
-          if (!eligibility.eligible) continue;
-          if (dispatched) {
-            log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-            continue;
-          }
-          dispatched = true;
-          const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
-          const current = idx >= 0 ? survivors[idx] : entry;
-          const updated: WatchEntry = {
-            ...current,
-            ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
-            lastCiFixAt: (ciFix.now ? ciFix.now() : new Date()).toISOString(),
-            ciFailureDetected: true,
-          };
-          if (idx >= 0) survivors[idx] = updated;
-          try {
-            const result = await ciFix.dispatch(updated, state);
-            if (result?.kind === 'needs-human') {
-              survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
-              try {
-                await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-                await upsertComment(entryGh, entry.repoCwd, entry.prUrl, '<!-- conductor:ci-fix-setup -->', '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.', log);
-              } catch (err) {
-                log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
-              }
-            } else if (result?.kind === 'not-started' || result?.kind === 'branch-gone') {
-              survivors[idx] = {
-                ...current,
-                ciFixAttempts: entry.ciFixAttempts,
-                ...(entry.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: entry.lastCiFixAt }),
-              };
-            }
-          } catch (err) {
-            log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
-          }
-        }
+                : outcome ?? { kind: 'failed', stage: 'worktree' }) as PooledRepairOutcome;
+          },
+        });
       }
     }
 

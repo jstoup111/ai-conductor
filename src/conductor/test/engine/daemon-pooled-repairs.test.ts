@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runDaemon, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
 import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
-import { enrollWatch, sweepMergeableLabels, type PooledRepairAdapter } from '../../src/engine/mergeable-sweep.js';
+import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import { RepairQueue } from '../../src/engine/repair-queue.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { PASSING_SUITE, buildPrFixture, skipReplay } from './autoresolve-pr-fixture.js';
@@ -18,8 +18,8 @@ void repairCapabilityContract;
 describe('daemon pooled repairs', () => {
   it('claims repairs before features and releases their reserved pool key', async () => {
     const queue = new RepairQueue();
-    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/2', slug: 'p2', prCreatedAt: '2026-01-02T00:00:00Z', queuedAt: '2026-01-03T00:00:00Z' });
-    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/0', slug: 'p0', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-03T00:00:00Z' });
+    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/2', slug: 'p2', prCreatedAt: '2026-01-02T00:00:00Z', queuedAt: '2026-01-03T00:00:00Z', run: async () => ({ kind: 'failed', stage: 'worktree' }) });
+    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/0', slug: 'p0', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-03T00:00:00Z', run: async () => ({ kind: 'failed', stage: 'worktree' }) });
     const claims = new InMemoryWorkClaims();
     const repairs: string[] = [];
     const features: string[] = [];
@@ -43,7 +43,7 @@ describe('daemon pooled repairs', () => {
 
   it('does not claim queued repairs while paused or rate limited', async () => {
     const queue = new RepairQueue();
-    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/1', slug: 'one', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-01T00:00:00Z' });
+    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/1', slug: 'one', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-01T00:00:00Z', run: async () => ({ kind: 'failed', stage: 'worktree' }) });
     const runRepair = vi.fn(async () => {});
     await runDaemon({
       repairs: { queue, run: runRepair }, isPaused: async () => true,
@@ -60,7 +60,6 @@ describe('daemon pooled repairs', () => {
       main: { 'rewrite.test.ts': 'upstream\n' },
     });
     const queue = new RepairQueue();
-    const runners = new Map<string, PooledRepairAdapter>();
     const resolver = vi.fn(async ({ projectRoot, supersessionJudgement }) => {
       expect(supersessionJudgement).toBe(true);
       await skipReplay(projectRoot);
@@ -91,7 +90,7 @@ describe('daemon pooled repairs', () => {
             labels: [], isDraft: false, hasHaltBodyMarker: false,
           }),
         },
-        repairs: { queue, register: (request, run) => runners.set(request.prUrl, run) },
+        repairs: { queue },
         autoresolve: {
           enabled: true,
           isEligible: async () => ({ eligible: true }),
@@ -106,7 +105,7 @@ describe('daemon pooled repairs', () => {
 
       await runDaemon({
         repairs: { queue, run: async (request) => {
-          await runners.get(request.prUrl)?.({ prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: fixture.repo });
+          await request.run({ prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: fixture.repo });
         } },
         discoverBacklog: async () => [],
         runFeature: async (item) => done(item.slug),

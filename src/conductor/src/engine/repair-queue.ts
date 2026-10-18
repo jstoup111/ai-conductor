@@ -1,3 +1,5 @@
+import type { PooledRepairAdapter } from './mergeable-sweep.js';
+
 /** A bounded dispatcher-owned handoff between maintenance sweeps and workers. */
 export interface RepairRequest {
   kind: 'ci-fix' | 'autoresolve';
@@ -5,6 +7,8 @@ export interface RepairRequest {
   slug?: string;
   prCreatedAt: string;
   queuedAt: string;
+  /** The only adapter permitted to execute this request after it is claimed. */
+  run: PooledRepairAdapter;
 }
 
 /**

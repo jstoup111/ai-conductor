@@ -257,7 +257,6 @@ import {
   enrollWatch,
   sweepMergeableLabels,
   updateWatch,
-  type PooledRepairAdapter,
   type SweepOpts,
   type WatchEntry,
 } from './engine/mergeable-sweep.js';
@@ -1184,11 +1183,11 @@ export function createClaimTimeRepairRunner(options: {
   tracker: Pick<TrackerClient, 'readPullRequestMergeState'>;
   log: (message: string) => void;
   isWorkClaimActive: (slug: string) => boolean;
-  runners: Map<string, PooledRepairAdapter>;
-  applyOutcome?: (request: RepairRequest, previous: WatchEntry, outcome: Awaited<ReturnType<PooledRepairAdapter>>) => Promise<void>;
+  requeue?: (request: RepairRequest) => void;
+  applyOutcome?: (request: RepairRequest, previous: WatchEntry, outcome: Awaited<ReturnType<RepairRequest['run']>>) => Promise<void>;
   now?: () => Date;
 }): (request: RepairRequest) => Promise<void> {
-  const { projectRoot, tracker, log, isWorkClaimActive, runners, applyOutcome = async () => {}, now = () => new Date() } = options;
+  const { projectRoot, tracker, log, isWorkClaimActive, requeue, applyOutcome = async () => {}, now = () => new Date() } = options;
   return async (request) => {
     let state: PrMergeState;
     try {
@@ -1203,7 +1202,8 @@ export function createClaimTimeRepairRunner(options: {
       return;
     }
     if (request.slug && isWorkClaimActive(request.slug)) {
-      log(`[daemon] dropping repair ${request.prUrl}: feature is in flight`);
+      requeue?.(request);
+      log(`[daemon] deferring repair ${request.prUrl}: feature is in flight`);
       return;
     }
     // Claim time, rather than sweep time, owns attempt accounting. A restart
@@ -1219,14 +1219,8 @@ export function createClaimTimeRepairRunner(options: {
         : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1, lastResolveAt: now().toISOString() };
       return claimed;
     }));
-    const run = runners.get(request.prUrl);
-    if (!run) {
-      log(`[daemon] dropping repair ${request.prUrl}: no registered adapter`);
-      return;
-    }
-    const outcome = await run(claimed ?? previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot });
+    const outcome = await request.run(claimed ?? previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot });
     await applyOutcome(request, previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot }, outcome);
-    runners.delete(request.prUrl);
   };
 }
 
@@ -2562,7 +2556,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Maintenance discovers repairs; the dispatcher owns their pool claims and
   // invokes these captured sanctioned call-sites at claim time.
   const repairQueue = new RepairQueue();
-  const queuedRepairRunners = new Map<string, PooledRepairAdapter>();
   const result = await runDaemon(
     {
       claims: workClaims,
@@ -2571,7 +2564,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         tracker,
         log,
         isWorkClaimActive,
-        runners: queuedRepairRunners,
+        requeue: (request) => { repairQueue.enqueue(request); },
         applyOutcome: (request, previous, outcome) => applyPooledRepairOutcome({
           projectRoot,
           request,
@@ -2930,7 +2923,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           canRemoveWorktree,
           repairs: {
             queue: repairQueue,
-            register: (request, run) => queuedRepairRunners.set(request.prUrl, run),
           },
           isRepairRunning: (prUrl) => workClaims.list().includes(`repair:${prUrl}`),
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING

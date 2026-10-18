@@ -8,7 +8,7 @@ describe('daemon maintenance phase events', () => {
   it('emits startup, first-claim, maintenance, and repair occurrences on the supplied spine', async () => {
     const events: Extract<ConductorEvent, { type: 'daemon_maintenance_phase' }>[] = [];
     const queue = new RepairQueue();
-    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/repair', slug: 'repair', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-01T00:00:00Z' });
+    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/repair', slug: 'repair', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-01T00:00:00Z', run: async () => ({ kind: 'failed', stage: 'worktree' }) });
     let clock = 0;
     await runDaemon({
       repairs: { queue, run: async () => { clock += 2; } },
@@ -41,7 +41,7 @@ describe('daemon maintenance phase events', () => {
   it('emits a deferred repair once while a pause holds the queue', async () => {
     const events: Extract<ConductorEvent, { type: 'daemon_maintenance_phase' }>[] = [];
     const queue = new RepairQueue();
-    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/held', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-01T00:00:00Z' });
+    queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/held', prCreatedAt: '2026-01-01T00:00:00Z', queuedAt: '2026-01-01T00:00:00Z', run: async () => ({ kind: 'failed', stage: 'worktree' }) });
     await runDaemon({
       repairs: { queue, run: async () => {} }, isPaused: async () => true,
       discoverBacklog: async () => [], runFeature: async (item) => ({ slug: item.slug, status: 'done' as const }),
