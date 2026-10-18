@@ -913,7 +913,7 @@ export class Conductor {
     owner: TranscriptOwner,
     captureAttempt: TranscriptCaptureDispatchIdentity | undefined,
     outcome: TranscriptRetentionOutcome,
-    member?: string,
+    auxiliaryMember?: string,
   ): Promise<void> {
     const runId = this.stepRunner.selfHostRunId?.();
     if (runId === undefined || captureAttempt === undefined) {
@@ -924,7 +924,7 @@ export class Conductor {
       owner,
       runId,
       attempt: captureAttempt,
-      ...(member === undefined ? {} : { member }),
+      ...(auxiliaryMember === undefined ? {} : { auxiliaryMember }),
     }, outcome);
   }
 
@@ -6122,7 +6122,7 @@ export class Conductor {
                 owner: transcriptOwner,
                 runId: identity.runId,
                 attempt: identity.attempt,
-                ...(identity.member === undefined ? {} : { member: identity.member }),
+                ...(identity.auxiliaryMember === undefined ? {} : { auxiliaryMember: identity.auxiliaryMember }),
               },
               events: this.events,
             });
@@ -6138,7 +6138,7 @@ export class Conductor {
               owner: transcriptOwner,
               runId: identity.runId,
               attempt: identity.attempt,
-              ...(identity.member === undefined ? {} : { member: identity.member }),
+              ...(identity.auxiliaryMember === undefined ? {} : { auxiliaryMember: identity.auxiliaryMember }),
             },
             events: this.events,
             injectedToken: daemonToken,

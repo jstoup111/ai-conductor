@@ -196,7 +196,7 @@ export async function provisionProviderHome(
     runId: captureIdentity!.runId,
     attempt: captureIdentity!.attempt,
     step: transcriptCaptureLeaseStep(captureIdentity!),
-    member: captureIdentity!.member,
+    member: captureIdentity!.auxiliaryMember,
     provider: provider.id,
   });
   const parentEnv = options.parentEnv ?? process.env;
@@ -272,7 +272,7 @@ export async function provisionProviderHome(
           worktreeRoot: options.worktreeRoot,
           runId: captureIdentity!.runId,
           attempt: captureIdentity!.attempt,
-          member: captureIdentity!.member,
+          member: captureIdentity!.auxiliaryMember,
           provider: provider.id,
         }).then(() => {})
         : undefined,
@@ -283,7 +283,7 @@ export async function provisionProviderHome(
           worktreeRoot: options.worktreeRoot,
           runId: captureIdentity!.runId,
           attempt: captureIdentity!.attempt,
-          member: captureIdentity!.member,
+          member: captureIdentity!.auxiliaryMember,
           provider: provider.id,
         });
     } else if (homeDir) {

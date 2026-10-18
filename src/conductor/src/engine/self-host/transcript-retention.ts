@@ -61,7 +61,7 @@ export type TranscriptCaptureMember =
  */
 export interface TranscriptSettlementKey {
   readonly owner: TranscriptOwner;
-  readonly member: TranscriptCaptureMember;
+  readonly auxiliaryMember: TranscriptCaptureMember;
   readonly runId: string;
   readonly attempt: number;
 }
@@ -69,7 +69,7 @@ export interface TranscriptSettlementKey {
 type TranscriptSettlementIdentity = {
   readonly runId: string;
   readonly attempt: TranscriptCaptureDispatchIdentity;
-  readonly member?: string;
+  readonly auxiliaryMember?: string;
 } & (
   | { readonly owner: TranscriptOwner; readonly step?: never }
   | { readonly owner?: never; readonly step: StepName }
@@ -81,7 +81,7 @@ export function transcriptSettlementKey(
 ): TranscriptSettlementKey {
   return {
     owner: ownerFromCaptureSource(source),
-    member: source.member === undefined ? { kind: 'absent' } : { kind: 'present', value: source.member },
+    auxiliaryMember: source.auxiliaryMember === undefined ? { kind: 'absent' } : { kind: 'present', value: source.auxiliaryMember },
     runId: source.runId,
     attempt: source.attempt,
   };
@@ -192,7 +192,7 @@ export class TranscriptRetention {
           owner: transcriptOwnerFromCapturedEvent(event),
           runId: event.runId,
           attempt: event.attempt,
-          ...(event.member === undefined ? {} : { member: event.member }),
+          ...(event.member === undefined ? {} : { auxiliaryMember: event.member }),
         }),
         path: event.path,
         interrupted: event.interrupted,
@@ -230,11 +230,11 @@ export class TranscriptRetention {
     const normalized = normalizeOwner(owner);
     const identities = [...this.pending.values()].flatMap((captures) => captures)
       .filter((capture) => transcriptOwnerKey(capture.owner) === transcriptOwnerKey(normalized) && capture.runId === runId)
-      .map(({ owner: captureOwner, runId: captureRunId, attempt, member }) => ({
+      .map(({ owner: captureOwner, runId: captureRunId, attempt, auxiliaryMember }) => ({
         owner: captureOwner,
         runId: captureRunId,
         attempt: asTranscriptCaptureDispatchIdentity(attempt),
-        ...(member.kind === 'present' ? { member: member.value } : {}),
+        ...(auxiliaryMember.kind === 'present' ? { auxiliaryMember: auxiliaryMember.value } : {}),
       }));
     for (const identity of identities) await this.settleAttempt(identity, outcome);
   }
@@ -269,7 +269,7 @@ export class TranscriptRetention {
         owner: capture.owner,
         runId: capture.runId,
         attempt: asTranscriptCaptureDispatchIdentity(capture.attempt),
-        ...(capture.member.kind === 'present' ? { member: capture.member.value } : {}),
+        ...(capture.auxiliaryMember.kind === 'present' ? { auxiliaryMember: capture.auxiliaryMember.value } : {}),
       }, 'failed');
     }
   }
@@ -442,7 +442,7 @@ function captureKey(identity: TranscriptSettlementKey): string {
     transcriptOwnerKey(identity.owner),
     identity.runId,
     identity.attempt,
-    identity.member.kind === 'present' ? identity.member.value : '',
+    identity.auxiliaryMember.kind === 'present' ? identity.auxiliaryMember.value : '',
   ].join('\u0000');
 }
 
@@ -492,19 +492,23 @@ function transcriptOwnerFromCapturedEvent(event: Extract<Parameters<EventHandler
 }
 
 function transcriptOwnerFromEvent(event: TranscriptEventRecord): TranscriptOwner | undefined {
-  if (typeof event.owner === 'object' && event.owner !== null) {
-    const owner = event.owner as Record<string, unknown>;
-    if (owner.kind === 'registered-step' && typeof owner.step === 'string' && isStepName(owner.step)) {
-      return { kind: 'registered-step', step: owner.step };
-    }
-    if (owner.kind === 'configured-group-member' && typeof owner.parentGroup === 'string' && isStepName(owner.parentGroup) && typeof owner.member === 'string') {
-      return { kind: 'configured-group-member', parentGroup: owner.parentGroup, member: owner.member };
-    }
-    if (owner.kind === 'legacy-unknown-step') return { kind: 'legacy-unknown-step' };
-    return undefined;
-  }
+  if (event.owner !== undefined) return decodeTranscriptOwner(event.owner);
   if (typeof event.step === 'string' && isStepName(event.step)) return { kind: 'registered-step', step: event.step };
   if (event.step === 'unknown-step') return { kind: 'legacy-unknown-step' };
+  return undefined;
+}
+
+/** Decode an untrusted ledger owner into the closed, typed event identity. */
+function decodeTranscriptOwner(value: unknown): TranscriptOwner | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const owner = value as Record<string, unknown>;
+  if (owner.kind === 'registered-step' && isStepName(owner.step)) {
+    return { kind: 'registered-step', step: owner.step };
+  }
+  if (owner.kind === 'configured-group-member' && isStepName(owner.parentGroup) && typeof owner.member === 'string') {
+    return { kind: 'configured-group-member', parentGroup: owner.parentGroup, member: owner.member };
+  }
+  if (owner.kind === 'legacy-unknown-step') return { kind: 'legacy-unknown-step' };
   return undefined;
 }
 

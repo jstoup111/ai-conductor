@@ -247,7 +247,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     runId: opts.captureIdentity!.runId,
     attempt: opts.captureIdentity!.attempt,
     step: transcriptCaptureLeaseStep(opts.captureIdentity!),
-    member: opts.captureIdentity!.member,
+    member: opts.captureIdentity!.auxiliaryMember,
     provider: provider.id,
   });
   const parentEnv = opts.parentEnv ?? process.env;
@@ -322,7 +322,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
           worktreeRoot: opts.worktreeRoot,
           runId: opts.captureIdentity!.runId,
           attempt: opts.captureIdentity!.attempt,
-          member: opts.captureIdentity!.member,
+          member: opts.captureIdentity!.auxiliaryMember,
           provider: provider.id,
         });
     } else if (configDir) {
@@ -345,7 +345,7 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         worktreeRoot: opts.worktreeRoot,
         runId: opts.captureIdentity!.runId,
         attempt: opts.captureIdentity!.attempt,
-        member: opts.captureIdentity!.member,
+        member: opts.captureIdentity!.auxiliaryMember,
         provider: provider.id,
       }).then(() => {})
       : undefined,

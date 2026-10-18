@@ -915,7 +915,7 @@ export async function executeProviderCandidates({
       owner: auxiliaryMember === undefined
         ? { kind: 'registered-step', step }
         : { kind: 'configured-group-member', parentGroup: step, member: auxiliaryMember },
-      ...(auxiliaryMember === undefined ? {} : { member: auxiliaryMember }),
+      ...(auxiliaryMember === undefined ? {} : { auxiliaryMember }),
     });
 
   // A fallback may become the actual candidate only after another provider has

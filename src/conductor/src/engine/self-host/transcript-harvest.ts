@@ -3,7 +3,6 @@ import { matchesGlob, join, relative, sep } from 'node:path';
 
 import { collectKnownSecrets, sanitizeTranscriptLine } from './transcript-sanitize.js';
 import { sanitizeProviderMember } from './provider-member.js';
-import { isStepName } from '../execution-identity.js';
 import { ownerFromCaptureSource, transcriptOwnerStep } from './transcript-retention.js';
 import type { ConductorEvent, TranscriptOwner } from '../../types/events.js';
 import type { StepName } from '../../types/steps.js';
@@ -46,11 +45,11 @@ type TranscriptCaptureSourceFields = {
    * not the owner's identity. It is deliberately independent of a
    * configured-group-member owner's `owner.member`: configured member
    * `build_review` of group `explore` dispatching its `security` rubric is
-   * `{ owner: { member: 'build_review' }, member: 'security' }`. The owner names
+   * `{ owner: { member: 'build_review' }, auxiliaryMember: 'security' }`. The owner names
    * the transcript directory; this names the capture within it and keys
    * settlement, so two rubrics of one member never share a capture.
    */
-  readonly member?: string;
+  readonly auxiliaryMember?: string;
 };
 
 /** New captures have one closed owner identity; old leases remain step-only. */
@@ -75,7 +74,7 @@ export function transcriptCapture(source: ProviderTranscriptCaptureSource & { re
   readonly path: string;
   readonly destination: string;
 } {
-  const name = [`${source.runId}-a${source.attempt}`, source.member === undefined ? undefined : sanitizeProviderMember(source.member), source.provider]
+  const name = [`${source.runId}-a${source.attempt}`, source.auxiliaryMember === undefined ? undefined : sanitizeProviderMember(source.auxiliaryMember), source.provider]
     .filter((part): part is string => part !== undefined).join('-');
   const path = join('.pipeline', 'transcripts', transcriptOwnerDirectory(ownerFromCaptureSource(source)), name);
   return { path, destination: join(source.worktreeRoot, path) };
@@ -95,7 +94,7 @@ export function transcriptCaptureLeaseStep(source: TranscriptCaptureSource): Ste
   if ('owner' in source && source.owner !== undefined) {
     switch (source.owner.kind) {
       case 'registered-step': return source.owner.step;
-      case 'configured-group-member': return isStepName(source.owner.parentGroup) ? source.owner.parentGroup : undefined;
+      case 'configured-group-member': return source.owner.parentGroup;
       case 'legacy-unknown-step': return undefined;
     }
     return assertNever(source.owner);
@@ -113,15 +112,19 @@ export async function emitTranscriptHarvest(
   source: ProviderTranscriptCaptureSource & { readonly path: string; readonly interrupted: boolean },
   result: TranscriptHarvestResult,
 ): Promise<void> {
-  const { interrupted, ...identityFields } = source;
+  const { interrupted, auxiliaryMember, ...identityFields } = source;
   const owner = ownerFromCaptureSource(source);
   const step = transcriptOwnerStep(owner);
   const event: ConductorEvent = result.kind === 'captured'
     ? {
         type: 'provider_transcripts_captured', ...identityFields, owner, step, interrupted,
+        ...(auxiliaryMember === undefined ? {} : { member: auxiliaryMember }),
         files: result.files, bytes: result.bytes, skipped: result.skipped.length, omittedLines: result.omittedLines,
       }
-    : { type: 'provider_transcripts_harvest_failed', ...identityFields, owner, step, error: result.error };
+    : {
+        type: 'provider_transcripts_harvest_failed', ...identityFields, owner, step, error: result.error,
+        ...(auxiliaryMember === undefined ? {} : { member: auxiliaryMember }),
+      };
   try { await events?.emit(event); } catch { /* teardown telemetry is best-effort */ }
 }
 

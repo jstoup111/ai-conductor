@@ -236,7 +236,7 @@ describe('TranscriptRetention', () => {
       await capture(events, root, retry, 'build_review', false, 3, {
         runId: 'review', attempt: 1, member: 'build_review',
       });
-      await retention.settleAttempt({ step: 'build_review', runId: 'review', attempt: asTranscriptCaptureDispatchIdentity(1), member: 'build_review' }, 'succeeded-with-progress');
+      await retention.settleAttempt({ step: 'build_review', runId: 'review', attempt: asTranscriptCaptureDispatchIdentity(1), auxiliaryMember: 'build_review' }, 'succeeded-with-progress');
 
       await expect(access(join(root, failed))).resolves.toBeUndefined();
       await expect(access(join(root, auxiliary))).resolves.toBeUndefined();

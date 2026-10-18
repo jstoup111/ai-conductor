@@ -4,9 +4,27 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { harvestThenRemove, harvestTranscripts, transcriptCapture } from '../../../src/engine/self-host/transcript-harvest.js';
+import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture } from '../../../src/engine/self-host/transcript-harvest.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 describe('transcriptCapture', () => {
+  it('projects an auxiliary dispatch label to the persisted event member field only', async () => {
+    const events = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    events.on('provider_transcripts_captured', (event) => { emitted.push(event); });
+
+    await emitTranscriptHarvest(events, {
+      owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'rubric-a' },
+      runId: 'run', attempt: 1, auxiliaryMember: 'security', provider: 'codex',
+      path: '.pipeline/transcripts/rubric-a/run-a1-security-codex', interrupted: false,
+    }, { kind: 'captured', files: 1, bytes: 2, skipped: [], omittedLines: 0 });
+
+    expect(emitted).toEqual([expect.objectContaining({
+      member: 'security',
+      owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'rubric-a' },
+    })]);
+  });
+
   it.each([
     ['a/b', 'a%002Fb'],
     ['..', '%002E%002E'],
@@ -33,7 +51,7 @@ describe('transcriptCapture', () => {
   it.each(['../../escape', 'a/b', 'a/../../escape'])('keeps a member capture beneath its step directory', (member) => {
     const root = '/worktree';
     const capture = transcriptCapture({
-      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, member, provider: 'codex',
+      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, auxiliaryMember: member, provider: 'codex',
     });
     const stepDirectory = resolve(root, '.pipeline', 'transcripts', 'build_review');
 
@@ -42,17 +60,17 @@ describe('transcriptCapture', () => {
 
   it('keeps ordinary member capture names stable', () => {
     expect(transcriptCapture({
-      worktreeRoot: '/worktree', step: 'build_review', runId: 'run', attempt: 1, member: 'rubric-a', provider: 'codex',
+      worktreeRoot: '/worktree', step: 'build_review', runId: 'run', attempt: 1, auxiliaryMember: 'rubric-a', provider: 'codex',
     }).path).toBe(join('.pipeline', 'transcripts', 'build_review', 'run-a1-rubric-a-codex'));
   });
 
   it('encodes distinct unsafe members into distinct single-segment capture names', () => {
     const root = '/worktree';
     const slash = transcriptCapture({
-      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, member: 'a/b', provider: 'codex',
+      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, auxiliaryMember: 'a/b', provider: 'codex',
     });
     const question = transcriptCapture({
-      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, member: 'a?b', provider: 'codex',
+      worktreeRoot: root, step: 'build_review', runId: 'run', attempt: 1, auxiliaryMember: 'a?b', provider: 'codex',
     });
     const stepDirectory = resolve(root, '.pipeline', 'transcripts', 'build_review');
 

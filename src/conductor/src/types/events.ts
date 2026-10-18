@@ -51,7 +51,7 @@ export type TranscriptOwnerStep = StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP
  */
 export type TranscriptOwner =
   | { readonly kind: 'registered-step'; readonly step: StepName }
-  | { readonly kind: 'configured-group-member'; readonly parentGroup: string; readonly member: string }
+  | { readonly kind: 'configured-group-member'; readonly parentGroup: StepName; readonly member: string }
   | { readonly kind: 'legacy-unknown-step' };
 
 /** Closed disposition of pull-request publication for a completed run. */
@@ -349,7 +349,7 @@ export interface ExecutionContext {
 /** A telemetry subject is either a registered lifecycle step or a configured branch. */
 export type ExecutionSubject =
   | { kind: 'lifecycle-step'; step: StepName }
-  | { kind: 'configured-member'; parentGroup: string; member: string };
+  | { kind: 'configured-member'; parentGroup: StepName; member: string };
 
 /** Closed, non-textual facts permitted on the CI repair diagnostic bus event. */
 export type CiRepairDiagnosticStage = 'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
