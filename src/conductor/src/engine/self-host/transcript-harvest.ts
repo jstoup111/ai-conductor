@@ -41,6 +41,15 @@ export type TranscriptHarvestResult = CapturedTranscriptHarvest | FailedTranscri
 type TranscriptCaptureSourceFields = {
   readonly runId: string;
   readonly attempt: number;
+  /**
+   * The auxiliary dispatch inside the owner (for example a build_review rubric),
+   * not the owner's identity. It is deliberately independent of a
+   * configured-group-member owner's `owner.member`: configured member
+   * `build_review` of group `explore` dispatching its `security` rubric is
+   * `{ owner: { member: 'build_review' }, member: 'security' }`. The owner names
+   * the transcript directory; this names the capture within it and keys
+   * settlement, so two rubrics of one member never share a capture.
+   */
   readonly member?: string;
 };
 
