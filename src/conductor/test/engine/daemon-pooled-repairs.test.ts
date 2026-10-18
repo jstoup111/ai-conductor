@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runDaemon, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
 import { resolveConflictingPr } from '../../src/engine/autoresolve.js';
-import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
+import { enrollWatch, sweepMergeableLabels, type PooledRepairAdapter } from '../../src/engine/mergeable-sweep.js';
 import { RepairQueue } from '../../src/engine/repair-queue.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { PASSING_SUITE, buildPrFixture, skipReplay } from './autoresolve-pr-fixture.js';
@@ -60,7 +60,7 @@ describe('daemon pooled repairs', () => {
       main: { 'rewrite.test.ts': 'upstream\n' },
     });
     const queue = new RepairQueue();
-    const runners = new Map<string, () => Promise<void>>();
+    const runners = new Map<string, PooledRepairAdapter>();
     const resolver = vi.fn(async ({ projectRoot, supersessionJudgement }) => {
       expect(supersessionJudgement).toBe(true);
       await skipReplay(projectRoot);
@@ -105,7 +105,9 @@ describe('daemon pooled repairs', () => {
       });
 
       await runDaemon({
-        repairs: { queue, run: async (request) => runners.get(request.prUrl)?.() },
+        repairs: { queue, run: async (request) => {
+          await runners.get(request.prUrl)?.({ prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: fixture.repo });
+        } },
         discoverBacklog: async () => [],
         runFeature: async (item) => done(item.slug),
       }, { concurrency: 1, once: true });

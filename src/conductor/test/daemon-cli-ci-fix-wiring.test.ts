@@ -10,7 +10,8 @@ import {
   createDaemonCiFixDispatch,
 } from '../src/engine/daemon-ci-fix.js';
 import type { PrMergeState } from '../src/engine/pr-labels.js';
-import type { WatchEntry } from '../src/engine/mergeable-sweep.js';
+import { RepairQueue } from '../src/engine/repair-queue.js';
+import { sweepMergeableLabels, type WatchEntry } from '../src/engine/mergeable-sweep.js';
 
 const roots: string[] = [];
 
@@ -133,6 +134,37 @@ describe('daemon CI-fix production dispatch callback', () => {
     await runner({ kind: 'ci-fix', prUrl, slug: 'widget', prCreatedAt: '2026-10-01T00:00:00.000Z', queuedAt: '2026-10-01T00:00:00.000Z' });
 
     expect(adapter).toHaveBeenCalledOnce();
+  });
+
+  it('stamps a claimed autoresolve before its adapter and makes the next sweep observe cooldown', async () => {
+    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    roots.push(root);
+    await mkdir(join(root, '.daemon'), { recursive: true });
+    const prUrl = 'https://github.com/acme/widget/pull/7';
+    await writeFile(join(root, '.daemon', 'mergeable-watch.jsonl'), `${JSON.stringify({ prUrl, slug: 'widget', repoCwd: root, resolveAttempts: 2 })}\n`);
+    const at = '2026-10-17T00:00:00.000Z';
+    const adapter = vi.fn(async () => {
+      const stored = JSON.parse(await readFile(join(root, '.daemon', 'mergeable-watch.jsonl'), 'utf8')) as WatchEntry;
+      expect(stored).toMatchObject({ resolveAttempts: 3, lastResolveAt: at });
+      return { kind: 'escalated' as const };
+    });
+    const runner = createClaimTimeRepairRunner({
+      projectRoot: root,
+      tracker: { readPullRequestMergeState: async () => ({ ...selected, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY', checksOutcome: 'none' }) },
+      log: vi.fn(), isWorkClaimActive: () => false,
+      runners: new Map([[prUrl, adapter]]), now: () => new Date(at),
+    });
+
+    await runner({ kind: 'autoresolve', prUrl, slug: 'widget', prCreatedAt: at, queuedAt: at });
+    const eligible = vi.fn(async (entry: WatchEntry) => ({ eligible: entry.lastResolveAt !== at }));
+    const queue = new RepairQueue();
+    await sweepMergeableLabels({
+      projectRoot: root, repairs: { queue, register: () => {} },
+      tracker: { readPullRequestMergeState: async () => ({ ...selected, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY', checksOutcome: 'none' }) },
+      autoresolve: { enabled: true, isEligible: eligible, dispatch: async () => ({ kind: 'escalated' }) },
+    });
+    expect(eligible).toHaveBeenCalledWith(expect.objectContaining({ lastResolveAt: at }), expect.anything());
+    expect(queue.list()).toEqual([]);
   });
 
   it.each([

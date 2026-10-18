@@ -252,7 +252,15 @@ import {
 } from './engine/daemon-rekick.js';
 import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { enrollWatch, sweepMergeableLabels, updateWatch, type SweepOpts } from './engine/mergeable-sweep.js';
+import {
+  applyPooledRepairOutcome,
+  enrollWatch,
+  sweepMergeableLabels,
+  updateWatch,
+  type PooledRepairAdapter,
+  type SweepOpts,
+  type WatchEntry,
+} from './engine/mergeable-sweep.js';
 import { RepairQueue, type RepairRequest } from './engine/repair-queue.js';
 import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
@@ -1176,10 +1184,11 @@ export function createClaimTimeRepairRunner(options: {
   tracker: Pick<TrackerClient, 'readPullRequestMergeState'>;
   log: (message: string) => void;
   isWorkClaimActive: (slug: string) => boolean;
-  runners: Map<string, () => Promise<void>>;
+  runners: Map<string, PooledRepairAdapter>;
+  applyOutcome?: (request: RepairRequest, previous: WatchEntry, outcome: Awaited<ReturnType<PooledRepairAdapter>>) => Promise<void>;
   now?: () => Date;
 }): (request: RepairRequest) => Promise<void> {
-  const { projectRoot, tracker, log, isWorkClaimActive, runners, now = () => new Date() } = options;
+  const { projectRoot, tracker, log, isWorkClaimActive, runners, applyOutcome = async () => {}, now = () => new Date() } = options;
   return async (request) => {
     let state: PrMergeState;
     try {
@@ -1200,18 +1209,23 @@ export function createClaimTimeRepairRunner(options: {
     // Claim time, rather than sweep time, owns attempt accounting. A restart
     // after this serialized write intentionally consumes an attempt; a
     // queued/held/stale request does not.
+    let previous: WatchEntry | undefined;
+    let claimed: WatchEntry | undefined;
     await updateWatch(projectRoot, (entries) => entries.map((entry) => {
       if (entry.prUrl !== request.prUrl) return entry;
-      return request.kind === 'ci-fix'
+      previous = entry;
+      claimed = request.kind === 'ci-fix'
         ? { ...entry, ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1, lastCiFixAt: now().toISOString() }
-        : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1 };
+        : { ...entry, resolveAttempts: (entry.resolveAttempts ?? 0) + 1, lastResolveAt: now().toISOString() };
+      return claimed;
     }));
     const run = runners.get(request.prUrl);
     if (!run) {
       log(`[daemon] dropping repair ${request.prUrl}: no registered adapter`);
       return;
     }
-    await run();
+    const outcome = await run(claimed ?? previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot });
+    await applyOutcome(request, previous ?? { prUrl: request.prUrl, slug: request.slug ?? '', repoCwd: projectRoot }, outcome);
     runners.delete(request.prUrl);
   };
 }
@@ -2548,7 +2562,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Maintenance discovers repairs; the dispatcher owns their pool claims and
   // invokes these captured sanctioned call-sites at claim time.
   const repairQueue = new RepairQueue();
-  const queuedRepairRunners = new Map<string, () => Promise<void>>();
+  const queuedRepairRunners = new Map<string, PooledRepairAdapter>();
   const result = await runDaemon(
     {
       claims: workClaims,
@@ -2558,6 +2572,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         log,
         isWorkClaimActive,
         runners: queuedRepairRunners,
+        applyOutcome: (request, previous, outcome) => applyPooledRepairOutcome({
+          projectRoot,
+          request,
+          previous,
+          outcome,
+          log,
+        }),
       }) },
       emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog: discoverAndCacheStartup,
@@ -3087,7 +3108,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 stage: 'context', reason, disposition: 'deferred' });
             },
             dispatch: async (entry, state) => {
-              if (!ciFixEnabled) return;
+              if (!ciFixEnabled) return { kind: 'not-started' };
               return await withFeatureEventPersistence({
                 worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
                 run: async (featureEvents) => {

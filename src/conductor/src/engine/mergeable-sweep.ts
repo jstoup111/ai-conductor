@@ -364,6 +364,15 @@ function mergeSweepEntry(
  * `enabled` is read by the caller from `mergeable_autoresolve.enabled` so the
  * sweep stays byte-identical to today when the feature is off (AC4).
  */
+export type AutoresolveDispatchOutcome = {
+  kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack';
+};
+
+/** The dispatcher result retained by a queued repair until its claim completes. */
+export type PooledRepairOutcome = AutoresolveDispatchOutcome | CiFixOutcome;
+
+export type PooledRepairAdapter = (entry: WatchEntry) => Promise<PooledRepairOutcome>;
+
 export interface AutoresolveDispatchOpts {
   /** Config gate — when false, the sweep runs exactly as before (no new work). */
   enabled: boolean;
@@ -382,7 +391,7 @@ export interface AutoresolveDispatchOpts {
    * (AC3) — the git work itself happens inside this callback.
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack' } | void>;
+  dispatch: (entry: WatchEntry) => Promise<AutoresolveDispatchOutcome | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -441,7 +450,7 @@ export interface SweepOpts {
   /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
   repairs?: {
     queue: RepairQueue;
-    register: (request: RepairRequest, run: () => Promise<void>) => void;
+    register: (request: RepairRequest, run: PooledRepairAdapter) => void;
   };
   /** True while a pooled repair has already claimed this PR. */
   isRepairRunning?: (prUrl: string) => boolean;
@@ -474,6 +483,98 @@ function runnerForEntry(
   // Bind a fresh read wrapper for this entry so its target-bound mutation
   // runner cannot be reused by a later entry in the same sweep.
   return Object.assign(gh.bind(undefined), operationRunner);
+}
+
+function assertPooledRepairOutcomeNever(value: never): never {
+  throw new Error(`unhandled pooled repair outcome: ${JSON.stringify(value)}`);
+}
+
+/**
+ * Apply the registry and PR-facing consequences of a completed pooled repair.
+ *
+ * The pool claims and stamps an entry before calling its adapter; this handler
+ * is the one counterpart to the former inline dispatch branches.  Keeping the
+ * result union here prevents a newly-added adapter outcome from silently
+ * skipping its bookkeeping on the queued path.
+ */
+export async function applyPooledRepairOutcome(options: {
+  projectRoot: string;
+  request: RepairRequest;
+  previous: WatchEntry;
+  outcome: PooledRepairOutcome;
+  runGh?: GhRunner;
+  operations?: SweepOpts['operations'];
+  log?: (message: string) => void;
+}): Promise<void> {
+  const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
+  const rewrite = async (mutate: (entry: WatchEntry) => WatchEntry) => {
+    await updateWatch(projectRoot, (entries) => entries.map((entry) =>
+      entry.prUrl === request.prUrl ? mutate(entry) : entry));
+  };
+  const entryRunner = runnerForEntry(runGh, previous, operations);
+  const markSetupRecovery = async (marker: string, body: string, description: string) => {
+    try {
+      await addLabel(entryRunner, previous.repoCwd, previous.prUrl, 'needs-remediation', log);
+      await upsertComment(entryRunner, previous.repoCwd, previous.prUrl, marker, body, log);
+    } catch (err) {
+      log?.(`[mergeable-sweep] ${description} setup-recovery marker error for ${previous.prUrl}: ${err}`);
+    }
+  };
+
+  if (request.kind === 'autoresolve') {
+    const autoresolveOutcome = outcome as AutoresolveDispatchOutcome;
+    switch (autoresolveOutcome.kind) {
+      case 'refreshed':
+        await rewrite((entry) => ({ ...entry, resolveAttempts: 0 }));
+        return;
+      case 'escalated':
+        await rewrite((entry) => ({ ...entry, escalationCause: 'conflict-resolution' }));
+        return;
+      case 'published-stack':
+        await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+        return;
+      case 'setup-stop':
+        await rewrite((entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }));
+        await markSetupRecovery(
+          '<!-- conductor:rebase-setup -->',
+          '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+          'rebase',
+        );
+        return;
+      default:
+        return assertPooledRepairOutcomeNever(autoresolveOutcome);
+    }
+  }
+
+  const ciFixOutcome = outcome as CiFixOutcome;
+  switch (ciFixOutcome.kind) {
+    case 'needs-human':
+      await rewrite((entry) => ({
+        ...entry,
+        ciFixAttempts: previous.ciFixAttempts,
+        ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
+      }));
+      await markSetupRecovery(
+        '<!-- conductor:ci-fix-setup -->',
+        '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        'ciFix',
+      );
+      return;
+    case 'not-started':
+    case 'branch-gone':
+      await rewrite((entry) => ({
+        ...entry,
+        ciFixAttempts: previous.ciFixAttempts,
+        ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
+      }));
+      return;
+    case 'noop':
+    case 'failed':
+    case 'published':
+      return;
+    default:
+      return assertPooledRepairOutcomeNever(ciFixOutcome);
+  }
 }
 
 /**
@@ -926,7 +1027,7 @@ export async function sweepMergeableLabels({
       }
     }
 
-    const enqueue = (request: RepairRequest, run?: () => Promise<void>): void => {
+    const enqueue = (request: RepairRequest, run?: PooledRepairAdapter): void => {
       if (!repairs) return;
       if (isRepairRunning?.(request.prUrl)) {
         log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
@@ -948,7 +1049,8 @@ export async function sweepMergeableLabels({
           if (!elig.eligible) continue;
           const queuedAt = now().toISOString();
           const request = { kind: 'autoresolve' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
-          enqueue(request, async () => { await autoresolve.dispatch(entry); });
+          enqueue(request, async (claimed) =>
+            (await autoresolve.dispatch(claimed)) ?? { kind: 'escalated' });
         }
       } else {
         let dispatched = false;
@@ -996,7 +1098,14 @@ export async function sweepMergeableLabels({
           if (!elig.eligible) continue;
           const queuedAt = now().toISOString();
           const request = { kind: 'ci-fix' as const, prUrl: entry.prUrl, slug: entry.slug, prCreatedAt: state.createdAt ?? queuedAt, queuedAt };
-          enqueue(request, async () => { await ciFix.dispatch(entry, state); });
+          enqueue(request, async (claimed) => {
+            const outcome = await ciFix.dispatch(claimed, state);
+            return outcome?.kind === 'green-verified'
+              ? { kind: 'published' }
+              : outcome?.kind === 'needs-human' && !('providerSetupExhaustion' in outcome)
+                ? { kind: 'failed', stage: 'provider' }
+                : outcome ?? { kind: 'failed', stage: 'worktree' };
+          });
         }
       } else {
         let dispatched = false;
