@@ -74,7 +74,7 @@ async function subject() {
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     events,
     stepRunner: runner,
-    config: { stacked_prs: { enabled: true, max_slices: 1, route_whole_feature_fixes: true } } as never,
+    config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } } as never,
     childRegionLifecycle: {
       resolveActiveChild: async () => ({
         kind: 'active', child: 1, position: 1, isLeaf: true, branch: 'feat/demo',
