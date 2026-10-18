@@ -766,3 +766,53 @@ Tasks 7, 16 ─▶ Task 19
 **Done when:**
 - Task 13 is satisfied by this task.
 - The repair for task rem-as-built-R11 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-r9b-predispatch-settle: daemon.ts rebuildAndMaybeRestartForStaleEngine: replace the unconditional close() at :1508-1510 with a non-terminal await maintenanceJob.settled() before refresh/rebuild. Call close()+settled() only immediately before deps.requestRestart, so the fresh, suppressed, unavailable and unfired returns at :1539/:1550/:1554/:1557 leave the job open. Add tests: after a fresh/no-restart predispatch check, a later collectOne/idle trigger still runs the maintenance steps. A restart still runs strictly after a pending pass settles.
+**Gate:** prd-audit
+**Rationale:** Verified (100%): daemon.ts:1508-1510 permanently closes the MaintenanceJob on every armed predispatch boundary. daemon-maintenance.ts close() sets closed=true and trigger() then returns early, so a fresh-engine result leaves maintenance dead for the rest of the process. This is an implementation defect in rem-as-built-R9 under approved ADR decision 3, and no architectural decision is needed. The fix keeps settlement non-terminal until a restart is actually requested. Test coverage gains the fresh/no-restart path.
+**Criterion:** S3.2
+**Parent task:** rem-as-built-R9
+**Done when:**
+- [test] S3.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-r9b-predispatch-settle is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-r9b-idle-stale-restart: daemon.ts natural-idle stale restart (~:1933): call maintenanceJob.close() and await maintenanceJob.settled() immediately before deps.requestRestart, matching :1792/:1845. Add a test asserting requestRestart runs strictly after a pending job's settled() resolves on the natural-idle stale path.
+**Gate:** as-built
+**Rationale:** Verified (99%): daemon.ts:1933 calls deps.requestRestart on the natural-idle stale path with no close/settle. The other boundaries at :1792 and :1845 already do this. The finding is a missed sibling site of rem-as-built-R9, and the change is mechanical BUILD work.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 3
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-r9b-idle-stale-restart is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-r9b-drain-no-await: daemon.ts beginDrain (~:1430): keep maintenanceJob.close() but remove await maintenanceJob.settled(), leaving settlement to the drained action boundary (:1768 and the restart/relink sites). Add a test: with a never-resolving maintenance step and an active worker, a drain request still lets the busy observer collect the finished worker, and the drained action awaits settlement.
+**Gate:** as-built
+**Rationale:** Verified (99%): beginDrain awaits maintenanceJob.settled() at daemon.ts:1430-1431, and the busy observer awaits beginDrain before collecting workers. Pending maintenance therefore blocks collection, which violates ADR decision 3's dispatch-first intent. The fix is narrow code placement: close at drain start, settle at the drained action boundary, which :1768 already handles.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 3
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-r9b-drain-no-await is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-r9b-fold-no-await-tail: daemon.ts reconciliation tail (~:1215/:1239) and foldRefresh (~:1289): keep reconciliations serialized with each other, but foldRefresh must not await a pending background reconciliation. Either chain the fold's reconciliation onto the tail without awaiting it from the fill pass, or skip/coalesce when one is in flight, and catch rejections. Add a test: with a never-resolving background rekick pending, a fill pass that folds a refreshed backlog still dispatches and collects.
+**Gate:** as-built
+**Rationale:** Inferred (95%) from the cited lines: commit 1a750770c8 serialized rekick reconciliation on a shared tail that foldRefresh awaits, so foreground fill passes wait on background maintenance again. ADR decision 3 already says background maintenance must not block dispatch or collection, so this is conforming implementation work and needs no ADR change.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 3
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-r9b-fold-no-await-tail is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-d5-durable-claim-write: mergeable-sweep.ts: make updateWatch persist through a throwing write, either a strict rewriteWatch variant or a flag, so a claim-write failure propagates instead of returning a successful result. Keep the C3 swallow only for existing best-effort callers. In daemon-cli.ts repair claim (~:1230-1254), treat a thrown or failed claim write as not claimed and never invoke either adapter. Add tests: with writeFile failing, updateWatch rejects, and neither repair adapter is called.
+**Gate:** as-built
+**Rationale:** Verified (100%): rewriteWatch (mergeable-sweep.ts:288-297) swallows write errors, and updateWatch then returns mutation.result as a successful claim. Repair adapters (daemon-cli.ts ~:1251/:1254) can therefore run without durable attempt accounting, which violates ADR decision 5. The prior remediation was marked done but did not land. The fix is code-level.
+**Governing clause:** adr-2026-10-14-dispatch-first-daemon-maintenance decision 5
+**Done when:**
+- adr-2026-10-14-dispatch-first-daemon-maintenance decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-d5-durable-claim-write is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-r4b-skip-inflight-repair: daemon.ts startNextRepair (~:1084): iterate the sorted repair queue and skip, leaving queued, any request whose slug is in flight as a feature build. Start the first eligible repair before falling through to feature claims, with no takeByUrl, repair claim, merge-state read or phase event for skipped entries. Add tests in daemon-pooled-repairs.test.ts: (a) width 2, feature A in flight, repairs A(P0) and B(P2) queued: B's repair takes the free slot ahead of a new feature; (b) width 2, only A's repair queued: the runner is called zero times across three fill passes while A runs, then the repair starts after A finishes.
+**Gate:** prd-audit
+**Rationale:** Verified (100%): daemon.ts:1084 returns undefined when the head repair's slug is in flight, so every other queued repair is skipped and the slot falls through to feature claims. This is a defect in rem-prd-audit-R4's implementation, and the required width-2 multi-pass test is missing. Both are BUILD work.
+**Criterion:** S5.7
+**Parent task:** rem-prd-audit-R4
+**Done when:**
+- [test] S5.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-r4b-skip-inflight-repair is committed and its targeted tests pass.
