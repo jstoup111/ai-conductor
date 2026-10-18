@@ -240,7 +240,7 @@ async function bindHostObligations(
   }
   const bindings = new Map<string, RoutedObligation>();
   for (const item of record.items) {
-    if (item.host !== input.host || item.taskIds === undefined) continue;
+    if (item.host !== input.host || item.existingTask !== true) continue;
     const admitted = await admitRoutedObligation({
       projectRoot: input.worktree,
       planPath,
@@ -273,7 +273,7 @@ async function bindHostObligations(
       ...record,
       items: record.items.map((item) => {
         const obligation = bindings.get(item.findingId);
-        return obligation === undefined ? item : { ...item, obligation };
+        return obligation === undefined || item.existingTask !== true ? item : { ...item, obligation };
       }),
     },
   };
@@ -285,7 +285,7 @@ async function reconcileHostObligations(
   planPath: string,
 ): Promise<{ readonly kind: 'reconciled' } | { readonly kind: 'refused'; readonly detail: string }> {
   for (const item of record.items) {
-    if (item.host !== input.host || item.taskIds === undefined) continue;
+    if (item.host !== input.host || item.existingTask !== true) continue;
     if (item.obligation === undefined) {
       return { kind: 'refused', detail: `routing item ${item.findingId} is missing its host obligation binding` };
     }

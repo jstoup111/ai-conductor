@@ -146,7 +146,7 @@ export function routingEligible(cursor: { readonly kind: string }, config: { rea
   return routingSettingOn(config) && (cursor.kind === 'active' || cursor.kind === 'repair-pending');
 }
 
-export interface RoutedItem {
+interface RoutedItemBase {
   readonly findingId: string;
   readonly kind: RouteKind;
   readonly owner: ChildId;
@@ -155,14 +155,26 @@ export interface RoutedItem {
   readonly fallback: readonly ChildId[];
   /** The placement judgement is durable context for the host. */
   readonly rationale?: string;
-  /** Existing-task work is represented, but must not be re-staged. */
-  readonly existingTask?: true;
-  readonly restage?: boolean;
-  /** Authored task bindings for an existing-task repair. */
-  readonly taskIds?: readonly string[];
-  /** The durable routed-obligation boundary, written at host region entry. */
-  readonly obligation?: RoutedObligation;
 }
+
+/** An ordinary routed item has no authored-task repair state. */
+export type NewTaskRoutedItem = RoutedItemBase & {
+  readonly existingTask?: never;
+  readonly restage?: never;
+  readonly taskIds?: never;
+  readonly obligation?: never;
+};
+
+/** An existing-task repair owns its non-empty binding and optional entry state. */
+export type ExistingTaskRoutedItem = RoutedItemBase & {
+  readonly existingTask: true;
+  readonly taskIds: readonly [string, ...string[]];
+  readonly restage?: false;
+  readonly obligation?: RoutedObligation;
+};
+
+/** The existing-task flag is the durable discriminator for routed-item state. */
+export type RoutedItem = NewTaskRoutedItem | ExistingTaskRoutedItem;
 
 /** The routed obligation is the durable authority for its engine-state projection. */
 export interface RoutedObligation {
@@ -371,6 +383,11 @@ function parseStringArray(value: unknown, predicate: (entry: string) => boolean 
     : undefined;
 }
 
+function parseNonEmptyStringArray(value: unknown): readonly [string, ...string[]] | undefined {
+  const parsed = parseStringArray(value);
+  return parsed !== undefined && parsed.length > 0 ? parsed as readonly [string, ...string[]] : undefined;
+}
+
 function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
@@ -496,18 +513,24 @@ function parseRoutedItem(value: unknown): RoutedItem | undefined {
   const fallback = value.fallback.map(parseChild);
   if (fallback.some((child) => child === undefined)) return undefined;
   if (value.rationale !== undefined && typeof value.rationale !== 'string') return undefined;
-  if (value.existingTask !== undefined && value.existingTask !== true) return undefined;
-  if (value.restage !== undefined && typeof value.restage !== 'boolean') return undefined;
-  const taskIds = value.taskIds === undefined ? undefined : parseStringArray(value.taskIds);
-  const obligation = value.obligation === undefined ? undefined : parseRoutedObligation(value.obligation);
-  if ((value.taskIds !== undefined && (!taskIds || taskIds.length === 0)) || (value.existingTask === true && taskIds === undefined) || (value.obligation !== undefined && !obligation)
-    || (value.restage === false && taskIds === undefined) || (obligation !== undefined && taskIds === undefined)) return undefined;
-  return {
+  const base: RoutedItemBase = {
     findingId, kind, owner, host, reason, fallback: fallback as ChildId[],
     ...(value.rationale === undefined ? {} : { rationale: value.rationale }),
-    ...(value.existingTask === true ? { existingTask: true as const } : {}),
-    ...(value.restage === undefined ? {} : { restage: value.restage }),
-    ...(taskIds === undefined ? {} : { taskIds }),
+  };
+  if (value.existingTask !== true) {
+    return value.existingTask === undefined && value.taskIds === undefined && value.obligation === undefined && value.restage === undefined
+      ? base
+      : undefined;
+  }
+  if (value.restage !== undefined && value.restage !== false) return undefined;
+  const taskIds = parseNonEmptyStringArray(value.taskIds);
+  const obligation = value.obligation === undefined ? undefined : parseRoutedObligation(value.obligation);
+  if (!taskIds || (value.obligation !== undefined && !obligation)) return undefined;
+  return {
+    ...base,
+    existingTask: true,
+    taskIds,
+    ...(value.restage === false ? { restage: false as const } : {}),
     ...(obligation === undefined ? {} : { obligation }),
   };
 }

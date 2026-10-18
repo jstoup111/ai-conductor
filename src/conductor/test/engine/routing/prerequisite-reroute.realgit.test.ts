@@ -71,7 +71,7 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
     roundId,
     kind: 'audit',
     items: [{
-      findingId: 'f1', kind: 'audit', owner: source, host: source, reason: 'task-slice', fallback: [], taskIds: ['rem-prd-audit-T1'],
+      findingId: 'f1', kind: 'audit', owner: source, host: source, reason: 'task-slice', fallback: [], existingTask: true, taskIds: ['rem-prd-audit-T1'],
       obligation: { branch: `feat/c${source}/demo`, head: sha(closed1), tree: sha(closed1Tree) },
     }],
     allocation: {

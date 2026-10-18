@@ -479,7 +479,7 @@ describe('task command child slice membership', () => {
       }, coverageBindingFilesystem);
       const created = await createRouteRecord(root, 'demo', {
         roundId, kind: 'audit',
-        items: [{ findingId: 'finding', kind: 'audit', owner: c1, host: c2, reason: 'routed', fallback: [], taskIds: ['T1'] }],
+        items: [{ findingId: 'finding', kind: 'audit', owner: c1, host: c2, reason: 'routed', fallback: [], existingTask: true, taskIds: ['T1'] }],
         allocation: { [c2]: { remTaskIds: ['rem-r1-1'], blockBodies: ['### Task rem-r1-1\n'] } },
       });
       if (created.kind !== 'created') throw new Error(`could not create route record: ${created.kind}`);

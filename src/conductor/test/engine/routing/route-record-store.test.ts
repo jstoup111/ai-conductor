@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import {
+  createRouteRecord,
   readRepairMarker,
   readRevalidationQueue,
   readRouteRecord,
@@ -172,6 +173,27 @@ describe('ref-backed route record store', () => {
 
       expect(await writeRouteRecord(fixture.repo, stored, { ...routeRecord, phase: 'prepared' }, { git })).toEqual({ kind: 'cas-failed' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: concurrent });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses malformed existing-task records before create or update can move a route ref', async () => {
+    const fixture = await createRepo();
+    try {
+      const malformed = {
+        ...routeRecord,
+        items: [{ ...routeRecord.items[0]!, existingTask: true }],
+      } as unknown as RouteRecord;
+
+      expect(await createRouteRecord(fixture.repo, 'demo', malformed)).toEqual({ kind: 'unavailable' });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({ kind: 'absent' });
+
+      await routeFixture(fixture);
+      const stored = await readRouteRecord(fixture.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('expected stored route record');
+      expect(await writeRouteRecord(fixture.repo, stored, malformed)).toEqual({ kind: 'unavailable' });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(stored);
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }

@@ -35,6 +35,12 @@ function isRejectedPinRef(slug: string, ref: string): boolean {
   const escapedSlug = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`^refs/conductor/${escapedSlug}/rejected/r[1-9][0-9]*/[1-9][0-9]*$`).test(ref);
 }
+
+/** Reject malformed route records before their blob can be written or referenced. */
+function serializeRouteRecord(record: RouteRecord): string | undefined {
+  const serialized = JSON.stringify(record);
+  return parseRouteRecord(serialized) === undefined ? undefined : serialized;
+}
 export type RoutingTransactionOp =
   | { readonly kind: 'create-record'; readonly record: RouteRecord }
   | { readonly kind: 'update-record'; readonly previous: StoredRouteRecord; readonly record: RouteRecord }
@@ -128,7 +134,9 @@ export async function writeRoutingTransaction(
     for (const op of ops) {
       switch (op.kind) {
         case 'create-record': {
-          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(op.record) });
+          const serialized = serializeRouteRecord(op.record);
+          if (serialized === undefined) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
           const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
           if (!blob) return { kind: 'unavailable' };
           // `update … <zero>` is Git's CAS-create form.  Unlike the
@@ -139,7 +147,9 @@ export async function writeRoutingTransaction(
         }
         case 'update-record': {
           if (op.previous.slug !== slug || op.previous.record.roundId !== op.record.roundId) return { kind: 'unavailable' };
-          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(op.record) });
+          const serialized = serializeRouteRecord(op.record);
+          if (serialized === undefined) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
           const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
           if (!blob) return { kind: 'unavailable' };
           lines.push(`update ${routeRecordRefFor(slug, op.record.roundId)} ${blob} ${op.previous.blob}`);

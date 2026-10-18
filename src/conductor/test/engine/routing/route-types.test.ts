@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_CHILD_ID } from '../../../src/engine/child-context.js';
+import type { ChildId } from '../../../src/engine/child-context.js';
 import {
   MAX_ROUTE_ROUNDS,
   parseRepairMarker,
@@ -9,6 +10,7 @@ import {
   parseRouteRecord,
   parseRoundId,
   emptyUnsettledReceipt,
+  type RoutedItem,
   type UnsettledRoundReceipt,
 } from '../../../src/engine/routing/route-types.js';
 
@@ -24,12 +26,29 @@ const compileTimeUnsettledReceipt: UnsettledRoundReceipt = {
 };
 void compileTimeUnsettledReceipt;
 
+const c1 = 1 as ChildId;
+
+const compileTimeExistingTaskItem: RoutedItem = {
+  findingId: 'existing-task', kind: 'audit', owner: c1, host: c1, reason: 'repair', fallback: [],
+  existingTask: true,
+  taskIds: ['T1'],
+};
+void compileTimeExistingTaskItem;
+
+const compileTimeOrdinaryItem: RoutedItem = {
+  findingId: 'ordinary', kind: 'audit', owner: c1, host: c1, reason: 'new remediation', fallback: [],
+  // @ts-expect-error Authored-task bindings require the existing-task discriminator.
+  taskIds: ['T1'],
+};
+void compileTimeOrdinaryItem;
+
 const routeRecord = {
   roundId: 'r1',
   kind: 'audit',
   phase: 'open',
   items: [{
     findingId: 'finding-1', kind: 'audit', owner: 1, host: 2, reason: 'task ownership', fallback: [3],
+    existingTask: true,
     taskIds: ['T1'],
     obligation: { branch: 'feat/c2/demo', head: 'a'.repeat(40), tree: 'b'.repeat(40) },
   }],
@@ -115,11 +134,11 @@ describe('routed repair durable record parsers', () => {
 
   it('rejects settled receipts without a host acknowledgement or with an unknown acknowledging host', () => {
     const withoutAcknowledgements = structuredClone(routeRecord);
-    withoutAcknowledgements.receipt.acks = {};
+    (withoutAcknowledgements.receipt.acks as Record<number, true>) = {};
     expect(parseRouteRecord(JSON.stringify(withoutAcknowledgements))).toBeUndefined();
 
     const unknownAcknowledgement = structuredClone(routeRecord);
-    unknownAcknowledgement.receipt.acks = { 4: true };
+    (unknownAcknowledgement.receipt.acks as Record<number, true>) = { 4: true };
     expect(parseRouteRecord(JSON.stringify(unknownAcknowledgement))).toBeUndefined();
   });
 
@@ -143,6 +162,14 @@ describe('routed repair durable record parsers', () => {
     delete unmixedExisting.restage;
     expect(parseRouteRecord(JSON.stringify(unmixedExistingWithoutTaskIds))).toBeUndefined();
 
+    const ordinaryWithTaskBinding = structuredClone(routeRecord);
+    delete (ordinaryWithTaskBinding.items[0]! as Record<string, unknown>).existingTask;
+    expect(parseRouteRecord(JSON.stringify(ordinaryWithTaskBinding))).toBeUndefined();
+
+    const existingWithRestageTrue = structuredClone(routeRecord);
+    (existingWithRestageTrue.items[0]! as Record<string, unknown>).restage = true;
+    expect(parseRouteRecord(JSON.stringify(existingWithRestageTrue))).toBeUndefined();
+
     const invalidBranch = structuredClone(routeRecord);
     (invalidBranch.items[0]!.obligation as Record<string, unknown>).branch = 'feat/../x';
     expect(parseRouteRecord(JSON.stringify(invalidBranch))).toBeUndefined();
@@ -153,7 +180,8 @@ describe('routed repair durable record parsers', () => {
     const item = (enriched.items as Array<Record<string, unknown>>)[0]!;
     const allocation = enriched.allocation as Record<string, Record<string, unknown>>;
     item.rationale = 'implements D2';
-    item.restage = true;
+    item.existingTask = true;
+    item.restage = false;
     allocation['2']!.retryHint = 'manual_test: FAIL';
     expect(parseRouteRecord(JSON.stringify(enriched))).toEqual(enriched);
 

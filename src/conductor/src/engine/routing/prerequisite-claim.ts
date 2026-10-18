@@ -281,9 +281,14 @@ export async function rerouteRound(input: RerouteRoundInput): Promise<RerouteRou
     allocation: nextAllocation,
     currentHostIndex,
     entry: undefined,
-    items: transitioned.record.items.map((item) => item.host !== input.from ? item : {
-      ...item, host: input.to,
-      obligation: item.obligation === undefined ? undefined : { ...item.obligation, branch: destinationBranchRef.slice('refs/heads/'.length), head: destinationHead, tree: destinationTree },
+    items: transitioned.record.items.map((item) => {
+      if (item.host !== input.from) return item;
+      if (item.existingTask !== true || item.obligation === undefined) return { ...item, host: input.to };
+      return {
+        ...item,
+        host: input.to,
+        obligation: { ...item.obligation, branch: destinationBranchRef.slice('refs/heads/'.length), head: destinationHead, tree: destinationTree },
+      };
     }),
     fallback: [...(transitioned.record.fallback ?? []), { from: input.from, to: input.to, evidence: input.evidence, branch: sourceBranch, head: rejectedTip }],
     reroute: { sourceBranch, rejectedTip, resetTip, destination: input.to },

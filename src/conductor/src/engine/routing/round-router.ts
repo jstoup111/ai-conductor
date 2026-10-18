@@ -7,7 +7,7 @@ import type { GitRunner } from '../rebase.js';
 import { classifyCitedPaths, selectHost } from './cannot-host.js';
 import { deriveTaskBoundOwner } from './owner-derivation.js';
 import { resolveResidueOwner, runResidueRoutingCall, type ResidueRoutingJudge } from './residue-routing-call.js';
-import type { FrozenAllocation, RoutedItem, RoundId } from './route-types.js';
+import type { ExistingTaskRoutedItem, FrozenAllocation, RoutedItem, RoundId } from './route-types.js';
 
 /**
  * The authority that admitted an item.  Proposed remediation tasks describe
@@ -120,11 +120,11 @@ function hintFor(gap: CriterionBoundRemediationGap): string {
   return [gap.rationale, gap.criterion].filter((value): value is string => typeof value === 'string' && value !== '').join('\n');
 }
 
-function existingTaskFields(source: AdmittedRoutingItem, mixedRound: boolean): Pick<RoutedItem, 'existingTask' | 'taskIds' | 'restage'> {
-  if (!source.existingTask) return {};
+function existingTaskFields(source: AdmittedRoutingItem, mixedRound: boolean): Pick<ExistingTaskRoutedItem, 'existingTask' | 'taskIds' | 'restage'> | undefined {
+  if (!source.existingTask) return undefined;
   return {
     existingTask: true,
-    taskIds: [...source.ownerTaskIds!].sort(),
+    taskIds: [...source.ownerTaskIds!].sort() as [string, ...string[]],
     ...(mixedRound ? { restage: false } : {}),
   };
 }
@@ -161,7 +161,10 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: ownership.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: ownership.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : ownership.reason, fallback: [], ...existingTaskFields(source, mixedRound) } });
+    const base = { findingId: source.id, kind: 'audit' as const, owner: ownership.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : ownership.reason, fallback: [] };
+    const existingTask = existingTaskFields(source, mixedRound);
+    const item: RoutedItem = existingTask === undefined ? base : { ...base, ...existingTask };
+    resolved.push({ source, item });
   }
 
   const judged = await runResidueRoutingCall({ items: residue.map(residueJudgeItem), declaredPositions: input.declaredPositions, judge: input.judge });
@@ -173,7 +176,10 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: owner.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: owner.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : owner.reason, rationale: owner.rationale, fallback: [], ...existingTaskFields(source, mixedRound) } });
+    const base = { findingId: source.id, kind: 'audit' as const, owner: owner.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : owner.reason, rationale: owner.rationale, fallback: [] };
+    const existingTask = existingTaskFields(source, mixedRound);
+    const item: RoutedItem = existingTask === undefined ? base : { ...base, ...existingTask };
+    resolved.push({ source, item });
   }
 
   if (resolved.length === 0) return { kind: 'halt', haltClass: 'needs-human', detail: 'No admitted work can be routed' };

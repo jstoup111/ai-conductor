@@ -62,6 +62,7 @@ async function fixture(input: { taskId: string; restage?: boolean; taskStatus?: 
     items: [{
       findingId: `finding-${input.taskId}`,
       kind: 'audit', owner: child, host: child, reason: 'task-slice', fallback: [],
+      existingTask: true,
       taskIds: [input.taskId],
       ...(input.restage === false ? { restage: false } : {}),
     }],
