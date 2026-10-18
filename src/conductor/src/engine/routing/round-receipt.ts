@@ -133,7 +133,6 @@ export async function consumeRoutedRepairCredit(input: RoutedRepairCreditInput):
 export type RoundSettlementResult =
   | { readonly kind: 'settled'; readonly settlementId: string }
   | { readonly kind: 'acknowledged'; readonly settlementId: string }
-  | { readonly kind: 'none' }
   | { readonly kind: 'refused'; readonly reason: 'not-current-host' }
   | { readonly kind: 'exhausted'; readonly gate: string; readonly allowance: 'laps' | 'growth' }
   | { readonly kind: 'halted'; readonly reason: string };

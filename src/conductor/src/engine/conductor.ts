@@ -190,7 +190,7 @@ import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } 
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
-import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope } from './routing/round-receipt.js';
+import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
 import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
@@ -9801,8 +9801,7 @@ export class Conductor {
           if (step.name !== 'build') return false;
           let settlement:
             | Awaited<ReturnType<typeof settlePendingRepair>>
-            | { kind: 'settled' | 'acknowledged' | 'none' }
-            | { kind: 'exhausted'; gate: string; allowance: 'laps' | 'growth' }
+            | RoundSettlementResult
             | undefined;
           let settlementFailure: string | undefined;
           let settlementLedger: Awaited<ReturnType<typeof readKickbackLedger>> | undefined;
@@ -9841,8 +9840,17 @@ export class Conductor {
                 budgets,
                 routing: { cursor, config: this.config },
               });
-              if (routed.kind === 'halted' || routed.kind === 'refused') settlementFailure = routed.reason;
-              else settlement = routed;
+              switch (routed.kind) {
+                case 'settled':
+                case 'acknowledged':
+                case 'exhausted':
+                  settlement = routed;
+                  break;
+                case 'refused':
+                case 'halted':
+                  settlementFailure = routed.reason;
+                  break;
+              }
             } else {
               settlement = await settlePendingRepair(
                 this.projectRoot,
