@@ -456,7 +456,8 @@ export function transcriptOwnerKey(owner: TranscriptOwner): string {
   return assertNever(owner);
 }
 
-function ownerFromCaptureSource(source: TranscriptCaptureSource): TranscriptOwner {
+/** Resolve a capture source's owner, mapping legacy step-only sources. */
+export function ownerFromCaptureSource(source: TranscriptCaptureSource): TranscriptOwner {
   if ('owner' in source && source.owner !== undefined) return source.owner;
   return source.step === 'unknown-step'
     ? { kind: 'legacy-unknown-step' }

@@ -4,6 +4,7 @@ import { matchesGlob, join, relative, sep } from 'node:path';
 import { sanitizeTranscriptLine } from './transcript-sanitize.js';
 import { sanitizeProviderMember } from './provider-member.js';
 import { isStepName } from '../execution-identity.js';
+import { ownerFromCaptureSource, transcriptOwnerStep } from './transcript-retention.js';
 import type { ConductorEvent, TranscriptOwner } from '../../types/events.js';
 import type { StepName } from '../../types/steps.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
@@ -67,7 +68,7 @@ export function transcriptCapture(source: ProviderTranscriptCaptureSource & { re
 } {
   const name = [`${source.runId}-a${source.attempt}`, source.member === undefined ? undefined : sanitizeProviderMember(source.member), source.provider]
     .filter((part): part is string => part !== undefined).join('-');
-  const path = join('.pipeline', 'transcripts', transcriptOwnerDirectory(transcriptOwner(source)), name);
+  const path = join('.pipeline', 'transcripts', transcriptOwnerDirectory(ownerFromCaptureSource(source)), name);
   return { path, destination: join(source.worktreeRoot, path) };
 }
 
@@ -104,7 +105,7 @@ export async function emitTranscriptHarvest(
   result: TranscriptHarvestResult,
 ): Promise<void> {
   const { interrupted, ...identityFields } = source;
-  const owner = transcriptOwner(source);
+  const owner = ownerFromCaptureSource(source);
   const step = transcriptOwnerStep(owner);
   const event: ConductorEvent = result.kind === 'captured'
     ? {
@@ -113,21 +114,6 @@ export async function emitTranscriptHarvest(
       }
     : { type: 'provider_transcripts_harvest_failed', ...identityFields, owner, step, error: result.error };
   try { await events?.emit(event); } catch { /* teardown telemetry is best-effort */ }
-}
-
-function transcriptOwner(source: TranscriptCaptureSource): TranscriptOwner {
-  if ('owner' in source && source.owner !== undefined) return source.owner;
-  if (source.step === 'unknown-step') return { kind: 'legacy-unknown-step' };
-  return { kind: 'registered-step', step: source.step };
-}
-
-function transcriptOwnerStep(owner: TranscriptOwner): string {
-  switch (owner.kind) {
-    case 'registered-step': return owner.step;
-    case 'configured-group-member': return owner.member;
-    case 'legacy-unknown-step': return 'unknown-step';
-  }
-  return assertNever(owner);
 }
 
 function relativePosix(home: string, path: string): string {
