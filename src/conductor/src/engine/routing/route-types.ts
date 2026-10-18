@@ -569,11 +569,10 @@ function parseHosts(value: unknown): Readonly<Record<ChildId, HostState>> | unde
 }
 
 /** The current host is indexed by ascending child position in durable records. */
-function currentHostFor(
-  hosts: Readonly<Record<ChildId, HostState>>,
-  currentHostIndex: number,
+export function currentHostOf(
+  record: Pick<RouteRecord, 'hosts' | 'currentHostIndex'>,
 ): ChildId | undefined {
-  const host = Object.keys(hosts).map(Number).sort((left, right) => left - right)[currentHostIndex];
+  const host = Object.keys(record.hosts).map(Number).sort((left, right) => left - right)[record.currentHostIndex];
   return host === undefined ? undefined : parseChildId(host);
 }
 
@@ -631,7 +630,7 @@ function hasConsistentFallback(
  */
 function hasConsistentRouteLifecycle(state: RouteLifecycleState): boolean {
   const { phase, hosts, currentHostIndex, entry, fallback, reroute } = state;
-  const currentHost = currentHostFor(hosts, currentHostIndex);
+  const currentHost = currentHostOf({ hosts, currentHostIndex });
   if (currentHost === undefined) return false;
   const current = hosts[currentHost];
   if (current === undefined) return false;

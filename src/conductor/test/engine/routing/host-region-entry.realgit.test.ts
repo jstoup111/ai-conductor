@@ -377,7 +377,7 @@ describe('routed host region entry (real local Git)', () => {
     await expect(enterHostRegion({
       worktree: subject.repo, slug: 'demo', roundId, host: child,
       emitter: new ConductorEventEmitter(), git: subject.git, planPath, checkCompletion,
-    })).resolves.toMatchObject({ kind: 'halted', outcome: 'derived-already-complete' });
+    })).resolves.toMatchObject({ kind: 'derived-already-complete' });
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
       kind: 'record', record: { hosts: { 1: 'admitted' } },
     });

@@ -21,9 +21,10 @@ vi.mock('../../../src/engine/kickback-ledger.js', async (importOriginal) => {
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { settleRoundAtDispatch } from '../../../src/engine/routing/round-receipt.js';
-import { emptyUnsettledReceipt, parseRoundId, type ReceiptLapCharges } from '../../../src/engine/routing/route-types.js';
+import { currentHostOf, emptyUnsettledReceipt, parseRoundId, parseRouteRecord, type ReceiptLapCharges } from '../../../src/engine/routing/route-types.js';
 
 const host = parseChildId(1)!;
 const leaf = parseChildId(2)!;
@@ -73,6 +74,43 @@ async function fixture(options: { readonly laps?: ReceiptLapCharges; readonly le
 }
 
 describe('round receipt settlement', () => {
+  it('uses the parser current host for sparse host keys before settling', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'round-receipt-sparse-hosts-'));
+    const git = makeGitRunner(root);
+    const first = parseChildId(2)!;
+    const second = parseChildId(4)!;
+    try {
+      await git(['init', '-q', '-b', 'main']);
+      await git(['config', 'user.email', 'receipt@example.test']);
+      await git(['config', 'user.name', 'Receipt']);
+      const created = await createRouteRecord(root, 'demo', {
+        roundId,
+        sealedAuthored: 1,
+        kind: 'audit',
+        items: [
+          { findingId: 'first', kind: 'audit', owner: first, host: first, reason: 'task-slice', fallback: [] },
+          { findingId: 'second', kind: 'audit', owner: second, host: second, reason: 'task-slice', fallback: [] },
+        ],
+        allocation: {
+          [first]: { remTaskIds: ['rem-prd-audit-T2'], blockBodies: ['### Task rem-prd-audit-T2\n'] },
+          [second]: { remTaskIds: ['rem-prd-audit-T4'], blockBodies: ['### Task rem-prd-audit-T4\n'] },
+        },
+      }, { git });
+      if (created.kind !== 'created') throw new Error(created.kind);
+      const admitted = await admitRound(root, 'demo', created.record, first, { git });
+      if (admitted.kind !== 'admitted') throw new Error(admitted.kind);
+      const stored = await readRouteRecord(root, 'demo', roundId, { git });
+      if (stored.kind !== 'record') throw new Error(stored.kind);
+      const parsed = parseRouteRecord(JSON.stringify(stored.record));
+
+      expect(currentHostOf(parsed!)).toBe(first);
+      await expect(settleRoundAtDispatch({ projectRoot: root, slug: 'demo', roundId, dispatchingChild: first, budgets: budgets(), routing, git }))
+        .resolves.toMatchObject({ kind: 'settled' });
+      await expect(settleRoundAtDispatch({ projectRoot: root, slug: 'demo', roundId, dispatchingChild: second, budgets: budgets(), routing, git }))
+        .resolves.toMatchObject({ kind: 'refused', reason: 'not-current-host' });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('CAS-settles host 1 before the provider dispatch, charging one prd_audit lap and two frozen tasks', async () => {
     const subject = await fixture();
     try {

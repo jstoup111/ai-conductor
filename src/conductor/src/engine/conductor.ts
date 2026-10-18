@@ -767,18 +767,27 @@ export class Conductor {
       emitter: this.events,
       completionContext: await this.completionCtx(state),
     });
-    if (hostEntry.kind === 'halted') {
-      await this.haltChildRegionRefusal(
-        `routed host ${execution.target.child} entry halted: ${hostEntry.detail}\n` +
-        (hostEntry.outcome === undefined ? '' : `Outcome: ${hostEntry.outcome}`),
-      );
-      return false;
+    switch (hostEntry.kind) {
+      case 'entered':
+      case 'resume':
+        return true;
+      case 'derived-already-complete': {
+        const body =
+          `routed host ${execution.target.child} entry derived already complete: ${hostEntry.detail}\n` +
+          'Outcome: derived-already-complete';
+        await this.writeHaltMarker(`${body}\n`, 'needs-human');
+        const prUrl = await this.surfaceRemediationPr(body);
+        await this.emitLoopHalt(body, prUrl);
+        return false;
+      }
+      case 'halted':
+        await this.haltChildRegionRefusal(`routed host ${execution.target.child} entry halted: ${hostEntry.detail}`);
+        return false;
+      case 'refused':
+        await this.haltChildRegionRefusal(`routed host ${execution.target.child} entry refused: ${hostEntry.detail}`);
+        return false;
     }
-    if (hostEntry.kind === 'refused') {
-      await this.haltChildRegionRefusal(`routed host ${execution.target.child} entry refused: ${hostEntry.detail}`);
-      return false;
-    }
-    return true;
+    return assertNever(hostEntry);
   }
 
   private renderChildCursorRefusal(cursor: Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>): string {

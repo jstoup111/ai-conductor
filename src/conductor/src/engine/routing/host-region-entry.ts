@@ -26,7 +26,8 @@ export type EnterHostRegionResult =
   | { readonly kind: 'entered'; readonly pinnedBase: CommitSha }
   | { readonly kind: 'resume'; readonly pinnedBase: CommitSha }
   /** The audit route has no runnable host-local BUILD work. */
-  | { readonly kind: 'halted'; readonly detail: string; readonly outcome?: 'derived-already-complete' }
+  | { readonly kind: 'derived-already-complete'; readonly detail: string }
+  | { readonly kind: 'halted'; readonly detail: string }
   | { readonly kind: 'refused'; readonly detail: string };
 
 export interface EnterHostRegionInput {
@@ -405,8 +406,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     });
     if (completion.done) {
       return {
-        kind: 'halted',
-        outcome: 'derived-already-complete',
+        kind: 'derived-already-complete',
         detail:
           `routing audit round ${input.roundId} host ${input.host} has no dispatchable BUILD work; ` +
           'every routed task is already evidence-complete',

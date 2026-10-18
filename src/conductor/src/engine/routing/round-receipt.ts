@@ -14,10 +14,10 @@ import {
   type PendingRepairSettlementBudget,
 } from '../kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { parseChildId } from '../child-context.js';
 import { readRouteRecord, writeRouteRecord } from './route-record-store.js';
 import {
   assertNever,
+  currentHostOf,
   emptyUnsettledReceipt,
   parseRoundId,
   routingEligible,
@@ -146,15 +146,6 @@ export interface SettleRoundAtDispatchInput {
   readonly budgets: readonly PendingRepairSettlementBudget[];
   readonly routing: ReceiptRoutingScope;
   readonly git?: GitRunner;
-}
-
-function orderedHosts(record: RouteRecord): ChildId[] {
-  return Object.keys(record.hosts).map((value) => parseChildId(value)).filter((value): value is ChildId => value !== undefined)
-    .sort((a, b) => a - b);
-}
-
-function currentHost(record: RouteRecord): ChildId | undefined {
-  return orderedHosts(record)[record.currentHostIndex];
 }
 
 function receiptSettlementId(roundId: RoundId, receipt: RouteRecord['receipt']): string {
@@ -286,7 +277,7 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
       // evidence and halt before a provider receives BUILD; a generic error
       // would otherwise bypass that evidence path.
       if (stored.kind !== 'record') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
-      if (currentHost(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
+      if (currentHostOf(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
       const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
       if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       const receipt = stored.record.receipt;
