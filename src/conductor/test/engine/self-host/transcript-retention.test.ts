@@ -34,7 +34,7 @@ async function capture(
   step: 'build' | 'build_review',
   interrupted = false,
   bytes = 3,
-  identity: { runId?: string; attempt?: number; member?: string; owner?: { kind: 'configured-group-member'; parentGroup: 'explore'; member: string } } = {},
+  identity: { runId?: string; attempt?: number; member?: string; owner?: { kind: 'configured-group-member'; parentGroup: string; member: string } } = {},
 ) {
   await mkdir(join(root, path), { recursive: true });
   await writeFile(join(root, path, 'session.jsonl'), 'x'.repeat(bytes));
@@ -75,6 +75,22 @@ describe('TranscriptRetention', () => {
       await expect(access(join(root, failed))).rejects.toMatchObject({ code: 'ENOENT' });
       expect((await persisted(root)).filter((event) => event.type === 'provider_transcripts_evicted'))
         .toEqual([expect.objectContaining({ path: failed, reason: 'count' })]);
+    } finally {
+      retention.stop();
+      persister.stop();
+    }
+  });
+
+  it('folds a capture owned by an operator-defined group that is not a registered step', async () => {
+    const { root, events, persister } = await fixture();
+    const retention = new TranscriptRetention(root, events);
+    const owner = { kind: 'configured-group-member', parentGroup: 'quality/audit', member: 'reviewer' } as const;
+    const path = '.pipeline/transcripts/reviewer/run-a1-codex';
+    try {
+      await retention.ready();
+      await capture(events, root, path, 'build_review', false, 3, { owner });
+      expect(foldTranscriptLedger(await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).get(path))
+        .toMatchObject({ owner, state: 'pending' });
     } finally {
       retention.stop();
       persister.stop();

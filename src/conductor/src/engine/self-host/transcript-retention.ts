@@ -505,7 +505,8 @@ function decodeTranscriptOwner(value: unknown): TranscriptOwner | undefined {
   if (owner.kind === 'registered-step' && isStepName(owner.step)) {
     return { kind: 'registered-step', step: owner.step };
   }
-  if (owner.kind === 'configured-group-member' && isStepName(owner.parentGroup) && typeof owner.member === 'string') {
+  if (owner.kind === 'configured-group-member' && typeof owner.parentGroup === 'string' && owner.parentGroup.length > 0
+    && typeof owner.member === 'string') {
     return { kind: 'configured-group-member', parentGroup: owner.parentGroup, member: owner.member };
   }
   if (owner.kind === 'legacy-unknown-step') return { kind: 'legacy-unknown-step' };

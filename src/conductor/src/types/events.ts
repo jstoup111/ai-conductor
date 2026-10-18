@@ -51,7 +51,9 @@ export type TranscriptOwnerStep = StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP
  */
 export type TranscriptOwner =
   | { readonly kind: 'registered-step'; readonly step: StepName }
-  | { readonly kind: 'configured-group-member'; readonly parentGroup: StepName; readonly member: string }
+  // Configured group names are operator-defined (e.g. `quality/audit`), not
+  // registered lifecycle steps, so parentGroup is deliberately a plain string.
+  | { readonly kind: 'configured-group-member'; readonly parentGroup: string; readonly member: string }
   | { readonly kind: 'legacy-unknown-step' };
 
 /** Closed disposition of pull-request publication for a completed run. */

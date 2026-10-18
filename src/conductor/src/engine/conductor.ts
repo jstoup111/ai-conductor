@@ -414,7 +414,6 @@ import {
 import { transcriptTerminalOutcome } from './self-host/transcript-terminal-outcome.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
-import { isStepName } from './execution-identity.js';
 import { classifyRebaseOperation } from './gate-code-validity.js';
 import {
   computeAndWriteVerdict,
@@ -2595,19 +2594,10 @@ export class Conductor {
     });
     this.events.on('step_completed', (event) => {
       if (event.type !== 'step_completed' || event.step === 'build') return;
-      // A configured branch reports its parent group as the lifecycle step,
-      // while its provider capture is owned by the member step. Settle both
-      // identities: the parent remains the group lifecycle owner and the
-      // member closes exactly the captures it dispatched.
-      const member = event.executionContext?.subject.kind === 'configured-member'
-        ? event.executionContext.subject.member
-        : undefined;
-      return Promise.all([
-        this.settleTranscriptTerminal(event),
-        ...(member === undefined || member === event.step || !isStepName(member)
-          ? []
-          : [this.settleTranscriptTerminal({ ...event, step: member })]),
-      ]).then(() => undefined);
+      // A configured branch reports its parent group as the lifecycle step;
+      // transcriptOwner derives the member owner from its execution context,
+      // so one settlement closes exactly the captures that member dispatched.
+      return this.settleTranscriptTerminal(event);
     });
     this.log = opts.log;
     this.fullSuiteVerifier =

@@ -3,6 +3,7 @@ import { matchesGlob, join, relative, sep } from 'node:path';
 
 import { collectKnownSecrets, sanitizeTranscriptLine } from './transcript-sanitize.js';
 import { sanitizeProviderMember } from './provider-member.js';
+import { isStepName } from '../execution-identity.js';
 import { ownerFromCaptureSource, transcriptOwnerStep } from './transcript-retention.js';
 import type { ConductorEvent, TranscriptOwner } from '../../types/events.js';
 import type { StepName } from '../../types/steps.js';
@@ -94,7 +95,7 @@ export function transcriptCaptureLeaseStep(source: TranscriptCaptureSource): Ste
   if ('owner' in source && source.owner !== undefined) {
     switch (source.owner.kind) {
       case 'registered-step': return source.owner.step;
-      case 'configured-group-member': return source.owner.parentGroup;
+      case 'configured-group-member': return isStepName(source.owner.parentGroup) ? source.owner.parentGroup : undefined;
       case 'legacy-unknown-step': return undefined;
     }
     return assertNever(source.owner);
