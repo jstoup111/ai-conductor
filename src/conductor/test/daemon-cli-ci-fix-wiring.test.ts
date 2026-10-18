@@ -145,6 +145,7 @@ describe('daemon CI-fix production dispatch callback', () => {
     expect(adapter).toHaveBeenCalledOnce();
   });
 
+  // Covers: task:rem-as-built-R5.
   it.each(['ci-fix', 'autoresolve'] as const)('fails closed when %s claim persistence rejects', async (kind) => {
     const adapter = vi.fn(async () => kind === 'ci-fix'
       ? { kind: 'failed' as const, stage: 'worktree' as const }

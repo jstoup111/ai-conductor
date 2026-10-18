@@ -33,6 +33,7 @@ void autoresolveRequestContract;
 void ciFixRequestContract;
 
 describe('daemon pooled repairs', () => {
+  // Covers: task:rem-prd-audit-R3, task:rem-prd-audit-R3-2, task:rem-prd-audit-R4.
   it('claims repairs before features and releases their reserved pool key', async () => {
     const queue = new RepairQueue();
     queue.enqueue({ kind: 'ci-fix', prUrl: 'https://example.test/2', slug: 'p2', prCreatedAt: '2026-01-02T00:00:00Z', queuedAt: '2026-01-03T00:00:00Z', run: async () => ({ kind: 'failed', stage: 'worktree' }) });

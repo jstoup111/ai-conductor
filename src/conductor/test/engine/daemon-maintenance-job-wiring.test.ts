@@ -180,6 +180,7 @@ describe('daemon maintenance job wiring', () => {
     ]));
   });
 
+  // Covers: task:rem-as-built-R9.
   it('closes a pending maintenance job before a stale-engine drain restart and suppresses later triggers', async () => {
     const calls: string[] = [];
     const feature = deferred<FeatureOutcome>();
@@ -218,6 +219,7 @@ describe('daemon maintenance job wiring', () => {
     await daemon;
   });
 
+  // Covers: task:rem-as-built-R10.
   it('waits for a running maintenance job during shouldStop teardown without starting another step', async () => {
     const calls: string[] = [];
     const dashboard = deferred<void>();

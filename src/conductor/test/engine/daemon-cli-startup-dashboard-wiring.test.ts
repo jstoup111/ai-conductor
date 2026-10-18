@@ -51,6 +51,7 @@ describe('daemon-cli startup dashboard wiring (Task 8)', () => {
     expect(scans).toBe(0);
   });
 
+  // Covers: task:rem-as-built-R7.
   it('renders the exact cached startup discovery without another discovery, root refresh, or git fetch', async () => {
     const cachedDiscovery = [{ slug: 'cached-eligible' }];
     const discoveryCalls: boolean[] = [];

@@ -109,6 +109,7 @@ describe('daemon serial equivalence (Task 25)', () => {
       .toBe('scanning backlog (concurrency 1, continuous)…');
   });
 
+  // Covers: task:rem-prd-audit-R6.
   it('keeps the recorded N=1 dispatch, refresh, restart, stale, sweep, and lifecycle ordering', async () => {
     serialTrace.entries.length = 0;
     const backlog = [{ slug: 'alpha' }, { slug: 'beta' }, { slug: 'gamma' }];

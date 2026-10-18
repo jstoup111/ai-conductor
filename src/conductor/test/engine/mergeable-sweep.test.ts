@@ -2652,6 +2652,7 @@ describe('sweepMergeableLabels — Task 13 repair queue', () => {
   });
 
   // Covers: task:13
+  // Covers: task:rem-as-built-R11.
   it('deduplicates queued and running repairs, preserves cap escalation, and admits no CI repair without preflight', async () => {
     const queued = PR_URL;
     const running = PR_URL_2;
