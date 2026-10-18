@@ -9,13 +9,13 @@ import { LEGACY_TRANSCRIPT_OWNER_STEP, type ConductorEvent, type TranscriptOwner
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
   emitTranscriptHarvest as emitTranscriptHarvestEvent,
+  harvestProviderHome,
   harvestThenRemove,
   harvestTranscripts,
   transcriptCapture,
   type HarvestTranscriptsOptions,
   type TranscriptHarvestResult,
 } from './transcript-harvest.js';
-import { collectKnownSecrets } from './transcript-sanitize.js';
 import { sanitizeProviderMember } from './provider-member.js';
 import { TranscriptRetention } from './transcript-retention.js';
 
@@ -525,13 +525,13 @@ async function harvestInterruptedHome(options: {
   const skipped: string[] = [];
   for (const child of children) {
     const childHome = join(options.home, child.name);
-    const authText = await fsp.readFile(join(childHome, descriptor.selfHostShape.selectedAuthPath), 'utf8')
-      .catch(() => '');
-    const result = await harvest({
-        home: childHome,
-        globs: descriptor.selfHostShape.transcripts.globs,
-        destination: capture.destination,
-        knownSecrets: collectKnownSecrets(authText, options.daemonBuildToken === undefined ? [] : [options.daemonBuildToken]),
+    const result = await harvestProviderHome({
+      home: childHome,
+      selectedAuthPath: descriptor.selfHostShape.selectedAuthPath,
+      globs: descriptor.selfHostShape.transcripts.globs,
+      destination: capture.destination,
+      extraSecrets: options.daemonBuildToken === undefined ? [] : [options.daemonBuildToken],
+      harvest,
     });
     if (result.kind === 'failed') {
       return [{

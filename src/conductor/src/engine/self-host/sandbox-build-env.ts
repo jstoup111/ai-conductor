@@ -44,8 +44,7 @@ import { BUILT_IN_PROVIDERS, requireProviderCapability } from '../../execution/p
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 import { resolveSkillName } from '../skill-names.js';
-import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, transcriptCaptureLeaseStep, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
-import { collectKnownSecrets } from './transcript-sanitize.js';
+import { emitTranscriptHarvest, retireProviderHome, transcriptCapture, transcriptCaptureLeaseStep, type ProviderHomeTranscriptRetirement, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 export {
   provisionProviderHome,
@@ -196,25 +195,25 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     if (this.tornDown) return;
     this.tornDown = true;
     const capture = this.transcriptCapture;
-    if (capture) {
-      const transcript = transcriptCapture({ ...capture, provider: sandboxProvider().id });
-      const credentials = await fsp.readFile(join(this.configDir, '.credentials.json'), 'utf8').catch(() => '');
-      await harvestThenRemove({
-        harvest: () => harvestTranscripts({
-          home: this.configDir,
-          globs: sandboxProvider().selfHostShape.transcripts.globs,
-          destination: transcript.destination,
-          knownSecrets: collectKnownSecrets(credentials, this.injectedToken === undefined ? [] : [this.injectedToken]),
-        }),
-        // force: true → ENOENT is not an error, so double teardown is a no-op.
-        remove: () => this.fs.rm(this.configDir, { recursive: true, force: true }),
-        report: (result) => this.reportTranscriptHarvest(capture, transcript.path, result),
-      });
-    } else {
+    await retireProviderHome({
+      home: this.configDir,
+      transcript: capture === undefined ? undefined : this.transcriptRetirement(capture),
       // force: true → ENOENT is not an error, so double teardown is a no-op.
-      await this.fs.rm(this.configDir, { recursive: true, force: true });
-    }
-    if (this.releaseScratch) await this.releaseScratch();
+      remove: () => this.fs.rm(this.configDir, { recursive: true, force: true }),
+      ...(this.releaseScratch === undefined ? {} : { releaseScratch: this.releaseScratch }),
+    });
+  }
+
+  private transcriptRetirement(capture: TranscriptCapture): ProviderHomeTranscriptRetirement {
+    const provider = sandboxProvider();
+    const transcript = transcriptCapture({ ...capture, provider: provider.id });
+    return {
+      selectedAuthPath: provider.selfHostShape.selectedAuthPath,
+      globs: provider.selfHostShape.transcripts.globs,
+      destination: transcript.destination,
+      extraSecrets: this.injectedToken === undefined ? [] : [this.injectedToken],
+      report: (result) => this.reportTranscriptHarvest(capture, transcript.path, result),
+    };
   }
 
   private async reportTranscriptHarvest(
@@ -224,7 +223,6 @@ class ThrowawaySandbox implements SandboxBuildEnv {
   ): Promise<void> {
     await emitTranscriptHarvest(capture.events, {
       ...capture,
-      ...(capture.member === undefined ? {} : { member: capture.member }),
       provider: sandboxProvider().id, path, interrupted: false,
     }, result);
   }

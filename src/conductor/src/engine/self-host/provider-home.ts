@@ -16,8 +16,7 @@ import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { resolveSkillName } from '../skill-names.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
-import { collectKnownSecrets } from './transcript-sanitize.js';
-import { emitTranscriptHarvest, harvestThenRemove, harvestTranscripts, transcriptCapture, transcriptCaptureLeaseStep, type TranscriptCaptureSource, type TranscriptHarvestResult } from './transcript-harvest.js';
+import { emitTranscriptHarvest, retireProviderHome, transcriptCapture, transcriptCaptureLeaseStep, type ProviderHomeTranscriptRetirement, type TranscriptCaptureSource } from './transcript-harvest.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 
 export type SelfHostProvider = ProviderWith<'selfHost'>;
@@ -132,7 +131,7 @@ class ThrowawayProviderHome implements ProviderHome {
     private readonly additions: NodeJS.ProcessEnv,
     private readonly args: readonly string[],
     private readonly fs: ProviderHomeFs,
-    private readonly transcript: ProviderHomeTranscript | undefined,
+    private readonly transcript: ProviderHomeTranscriptRetirement | undefined,
     private readonly releaseScratch?: () => Promise<void>,
   ) {}
 
@@ -153,37 +152,16 @@ class ThrowawayProviderHome implements ProviderHome {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
-    if (this.transcript === undefined) {
-      await this.fs.rm(this.homeDir, { recursive: true, force: true });
-    } else {
-      const transcript = this.transcript;
-      await harvestThenRemove({
-        harvest: async () => {
-          const authText = await fsp.readFile(join(this.homeDir, transcript.selectedAuthPath), 'utf8')
-            .catch(() => '');
-          return harvestTranscripts({
-            home: this.homeDir,
-            globs: transcript.globs,
-            destination: transcript.destination,
-            knownSecrets: collectKnownSecrets(authText, []),
-          });
-        },
-        report: async (result) => { await transcript.report(result); },
-        remove: () => this.fs.rm(this.homeDir, { recursive: true, force: true }),
-      });
-    }
-    if (this.releaseScratch) await this.releaseScratch();
+    await retireProviderHome({
+      home: this.homeDir,
+      transcript: this.transcript,
+      remove: () => this.fs.rm(this.homeDir, { recursive: true, force: true }),
+      ...(this.releaseScratch === undefined ? {} : { releaseScratch: this.releaseScratch }),
+    });
   }
 }
 
-interface ProviderHomeTranscript {
-  readonly selectedAuthPath: string;
-  readonly globs: readonly string[];
-  readonly destination: string;
-  report(result: TranscriptHarvestResult): Promise<void>;
-}
-
-function providerHomeTranscript(options: ProvisionProviderHomeOptions, provider: SelfHostProvider): ProviderHomeTranscript | undefined {
+function providerHomeTranscript(options: ProvisionProviderHomeOptions, provider: SelfHostProvider): ProviderHomeTranscriptRetirement | undefined {
   const identity = options.captureIdentity;
   if (identity === undefined) return undefined;
   const source = { ...identity, provider: provider.id };

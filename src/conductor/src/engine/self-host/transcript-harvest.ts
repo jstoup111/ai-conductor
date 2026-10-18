@@ -1,7 +1,7 @@
 import * as fsp from 'node:fs/promises';
 import { matchesGlob, join, relative, sep } from 'node:path';
 
-import { sanitizeTranscriptLine } from './transcript-sanitize.js';
+import { collectKnownSecrets, sanitizeTranscriptLine } from './transcript-sanitize.js';
 import { sanitizeProviderMember } from './provider-member.js';
 import { isStepName } from '../execution-identity.js';
 import { ownerFromCaptureSource, transcriptOwnerStep } from './transcript-retention.js';
@@ -213,6 +213,53 @@ export async function harvestTranscripts(options: HarvestTranscriptsOptions): Pr
 
 function isNotFound(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
+
+/** Harvests one provider home's allowlisted transcripts, redacting its selected auth and any extra secrets. */
+export async function harvestProviderHome(options: {
+  readonly home: string;
+  readonly selectedAuthPath: string;
+  readonly globs: readonly string[];
+  readonly destination: string;
+  readonly extraSecrets?: Iterable<string>;
+  readonly harvest?: (options: HarvestTranscriptsOptions) => Promise<TranscriptHarvestResult>;
+}): Promise<TranscriptHarvestResult> {
+  const authText = await fsp.readFile(join(options.home, options.selectedAuthPath), 'utf8').catch(() => '');
+  return (options.harvest ?? harvestTranscripts)({
+    home: options.home,
+    globs: options.globs,
+    destination: options.destination,
+    knownSecrets: collectKnownSecrets(authText, options.extraSecrets ?? []),
+  });
+}
+
+/** The transcript half of a provider-home retirement; absent when the home has no capture identity. */
+export interface ProviderHomeTranscriptRetirement {
+  readonly selectedAuthPath: string;
+  readonly globs: readonly string[];
+  readonly destination: string;
+  readonly extraSecrets?: Iterable<string>;
+  report(result: TranscriptHarvestResult): Promise<void>;
+}
+
+/** Retires a provider home: harvest-before-remove when captured, then release its scratch lease. */
+export async function retireProviderHome(options: {
+  readonly home: string;
+  readonly transcript: ProviderHomeTranscriptRetirement | undefined;
+  readonly remove: () => Promise<void>;
+  readonly releaseScratch?: () => Promise<void>;
+}): Promise<void> {
+  const transcript = options.transcript;
+  if (transcript === undefined) {
+    await options.remove();
+  } else {
+    await harvestThenRemove({
+      harvest: () => harvestProviderHome({ home: options.home, ...transcript }),
+      report: (result) => transcript.report(result),
+      remove: options.remove,
+    });
+  }
+  if (options.releaseScratch) await options.releaseScratch();
 }
 
 /** Runs normal provider-home retirement in the ADR-mandated harvest-before-remove order. */
