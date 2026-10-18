@@ -1281,6 +1281,22 @@ export async function runDaemon(
     if (!deps.emitMaintenancePhase) return run();
     await timeMaintenancePhase(phase, run, { now, emit: deps.emitMaintenancePhase });
   };
+  let resumeAuthorizationsInFlight: Promise<void> | undefined;
+  const consumeResumeAuthorizations = (): Promise<void> => {
+    if (resumeAuthorizationsInFlight) return resumeAuthorizationsInFlight;
+
+    let pending: Promise<void>;
+    try {
+      pending = deps.consumeResumeAuthorizations?.() ?? Promise.resolve();
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    const shared = pending.finally(() => {
+      if (resumeAuthorizationsInFlight === shared) resumeAuthorizationsInFlight = undefined;
+    });
+    resumeAuthorizationsInFlight = shared;
+    return shared;
+  };
   const maintenanceJob = new MaintenanceJob([
     ['startup-dashboard', async () => {
       if (!startupDashboardPending) return;
@@ -1305,7 +1321,7 @@ export async function runDaemon(
       startupBaseSha = undefined;
       await runPhase({ phase: 'rekick' }, () => maybeRekick(false, knownStartupBase));
     }],
-    ['resume-authorizations', async () => deps.consumeResumeAuthorizations?.()],
+    ['resume-authorizations', consumeResumeAuthorizations],
     ['reconcileHaltPrs', async () => runPhase({ phase: 'halt-pr-reconcile' }, async () => { await deps.reconcileHaltPrs?.(); })],
     ['reconcileParkedFeatures', async () => {
       if (!deps.emitMaintenancePhase) {
@@ -1612,7 +1628,7 @@ export async function runDaemon(
       // The first selection intentionally observes any inherited live HALT
       // before resume authorizations are consumed by background maintenance.
       // Subsequent fill passes retain the established authorization behavior.
-      if (!firstFillPass) await deps.consumeResumeAuthorizations?.();
+      if (!firstFillPass) await consumeResumeAuthorizations();
       const dispatchBlocked = paused || episodeActive || buildAuthMissing || ghVersionBlocked;
       if (dispatchBlocked && deps.repairs?.queue.list().length && deps.emitMaintenancePhase) {
         const reason = paused ? 'paused' : episodeActive ? 'episode' : buildAuthMissing ? 'build-auth' : 'gh-version';

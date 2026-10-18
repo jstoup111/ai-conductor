@@ -1,4 +1,4 @@
-// Covers: task:9, task:11
+// Covers: task:4, task:7, task:9, task:11
 import { describe, expect, it, vi } from 'vitest';
 
 import { runDaemon, type BacklogItem, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
@@ -38,6 +38,40 @@ function depsFor(
 const maintenancePass = ['dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable'];
 
 describe('daemon maintenance job wiring', () => {
+  it('shares an in-flight resume authorization consumer with the next width-2 fill pass', async () => {
+    const calls: string[] = [];
+    const firstFeature = deferred<FeatureOutcome>();
+    const consume = deferred<void>();
+    let halted = true;
+    let consumersInFlight = 0;
+    let maxConsumersInFlight = 0;
+
+    const daemon = runDaemon(depsFor(calls, [{ slug: 'first' }, { slug: 'resumed' }], {
+      discoverBacklog: async () => [{ slug: 'first' }, { slug: 'resumed' }],
+      isHalted: async (slug) => slug === 'resumed' && halted,
+      runFeature: async (item) => {
+        calls.push(`dispatch:${item.slug}`);
+        return item.slug === 'first' ? firstFeature.promise : done(item.slug);
+      },
+      consumeResumeAuthorizations: async () => {
+        consumersInFlight++;
+        maxConsumersInFlight = Math.max(maxConsumersInFlight, consumersInFlight);
+        await consume.promise;
+        halted = false;
+        consumersInFlight--;
+      },
+    }), { concurrency: 2, once: true, maxItems: 2, idlePollMs: 0 });
+
+    await vi.waitFor(() => expect(consumersInFlight).toBe(1));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(maxConsumersInFlight).toBe(1);
+
+    consume.resolve();
+    await vi.waitFor(() => expect(calls).toContain('dispatch:resumed'));
+    firstFeature.resolve(done('first'));
+    await daemon;
+  });
+
   it('runs the dashboard only in the first ordered pass and starts a second pass on terminal collection', async () => {
     const calls: string[] = [];
 
