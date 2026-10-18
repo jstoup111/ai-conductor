@@ -5,14 +5,16 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
 import { completeRerouteSync, rerouteRound, settleRoutedBuildClaim, verifyPrerequisiteClaim } from '../../../src/engine/routing/prerequisite-claim.js';
-import { admitRound } from '../../../src/engine/routing/round-admission.js';
+import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, drainOutbox, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, rejectedPinRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const c1 = parseChildId(1)!;
 const c2 = parseChildId(2)!;
@@ -34,6 +36,9 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
   await git(['init', '-q', '-b', 'main']);
   await git(['config', 'user.email', 'routing@example.test']);
   await git(['config', 'user.name', 'Routing']);
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'plans', 'demo.md'), '### Task T1: Existing work\n');
   await writeFile(join(repo, 'src-a.ts'), 'export const parseA = 1;\n');
   await git(['add', '.']);
   await git(['commit', '-qm', 'base']);
@@ -70,7 +75,7 @@ async function fixture(input: { source?: typeof c1; destination?: typeof c2; des
       obligation: { branch: `feat/c${source}/demo`, head: sha(closed1), tree: sha(closed1Tree) },
     }],
     allocation: {
-      [source]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [`### Task rem-prd-audit-T1\n**Child:** ${source}\n`] },
+      [source]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [`### Task rem-prd-audit-T1: Repair routed task\n**Child:** ${source}\n**Round:** r1\n`] },
       ...(input.destinationInRecord === false ? {} : { [destination]: { remTaskIds: [], blockBodies: [] } }),
     },
   });
@@ -148,7 +153,7 @@ describe('verified prerequisite reroute (real local Git)', () => {
       expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({
         kind: 'record', record: {
           hosts: { 1: 'reroute-moved', 2: 'pending' },
-          allocation: { 2: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1\n**Child:** 2'] } },
+          allocation: { 2: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1: Repair routed task\n**Child:** 2\n**Round:** r1\n'] } },
           fallback: [expect.objectContaining({ from: c1, to: c2, evidence: ['parseB'] })],
           items: [expect.objectContaining({
             host: c2,
@@ -211,6 +216,105 @@ describe('verified prerequisite reroute (real local Git)', () => {
         .resolves.toMatchObject({ kind: 'rerouted', record: { hosts: { 1: 'reroute-moved', 2: 'pending' } } });
       await expect(completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git }))
         .resolves.toMatchObject({ kind: 'completed', record: { hosts: { 1: 'rerouted', 2: 'admitted' } } });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('reconciles a crashed reroute before admitting or dispatching its destination, and retries a failed tree sync', async () => {
+    const subject = await fixture();
+    try {
+      await expect(rerouteRound({ worktree: subject.repo, slug: 'demo', roundId, from: c1, to: c2, evidence: ['parseB'], git: subject.git }))
+        .resolves.toMatchObject({ kind: 'rerouted', record: { hosts: { 1: 'reroute-moved', 2: 'pending' } } });
+
+      const failingSync: GitRunner = async (args, options) => {
+        if (args[0] === 'read-tree') return { exitCode: 1, stdout: '', stderr: 'injected sync failure' };
+        return subject.git(args, options);
+      };
+      await expect(reconcileRounds(subject.repo, 'demo', { git: failingSync })).resolves.toEqual({
+        kind: 'unavailable', detail: 'routing round r1 worktree sync failed: cannot synchronize restacked worktree: injected sync failure',
+      });
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record', record: { hosts: { 1: 'reroute-moved', 2: 'pending' } },
+      });
+
+      await expect(reconcileRounds(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'deferred' });
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record', record: { hosts: { 1: 'rerouted', 2: 'admitted' } },
+      });
+      expect((await subject.git(['rev-parse', 'HEAD^{tree}'])).stdout.trim())
+        .toBe((await subject.git(['rev-parse', `${subject.closed1}^{tree}`])).stdout.trim());
+      await expect(completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git }))
+        .resolves.toMatchObject({ kind: 'completed', record: { hosts: { 1: 'rerouted', 2: 'admitted' } } });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('enters the reroute destination with its moved frozen allocation and unchanged receipt', async () => {
+    const subject = await fixture();
+    try {
+      const before = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (before.kind !== 'record') throw new Error('missing route record before reroute');
+      const receipt = JSON.stringify(before.record.receipt);
+      await expect(rerouteRound({ worktree: subject.repo, slug: 'demo', roundId, from: c1, to: c2, evidence: ['parseB'], git: subject.git }))
+        .resolves.toMatchObject({ kind: 'rerouted' });
+      await expect(completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git }))
+        .resolves.toMatchObject({ kind: 'completed' });
+
+      await mkdir(join(subject.repo, '.pipeline', 'children', '2'), { recursive: true });
+      await writeFile(join(subject.repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo' }));
+      await writeFile(join(subject.repo, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: 'rem-prd-audit-T1', status: 'done' }],
+      }));
+      await writeFile(join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      }));
+      const entered = await enterHostRegion({
+        worktree: subject.repo, slug: 'demo', roundId, host: c2, planPath: '.docs/plans/demo.md',
+        emitter: new ConductorEventEmitter(), git: subject.git,
+      });
+      if (entered.kind !== 'entered') throw new Error('detail' in entered ? entered.detail : `unexpected host-entry result: ${entered.kind}`);
+      expect(entered).toMatchObject({ kind: 'entered', pinnedBase: sha(subject.closed2) });
+      await expect(readFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'utf8'))
+        .resolves.toContain('### Task rem-prd-audit-T1: Repair routed task\n**Child:** 2\n**Round:** r1\n');
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record', record: {
+          hosts: { 1: 'rerouted', 2: 'repairing' },
+          allocation: { 2: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: ['### Task rem-prd-audit-T1: Repair routed task\n**Child:** 2\n**Round:** r1\n'] } },
+        },
+      });
+      const after = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (after.kind !== 'record') throw new Error('missing route record after destination entry');
+      expect(JSON.stringify(after.record.receipt)).toBe(receipt);
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('reroutes an admitted destination onward to the leaf, then refuses a later leaf claim', async () => {
+    const subject = await fixture();
+    try {
+      await expect(rerouteRound({ worktree: subject.repo, slug: 'demo', roundId, from: c1, to: c2, evidence: ['parseB'], git: subject.git }))
+        .resolves.toMatchObject({ kind: 'rerouted' });
+      await expect(completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git }))
+        .resolves.toMatchObject({ kind: 'completed', record: { hosts: { 1: 'rerouted', 2: 'admitted' } } });
+
+      await subject.git(['switch', '-q', 'feat/c2/demo']);
+      await subject.git(['switch', '-q', '-C', 'feat/daemon-demo', 'feat/c2/demo']);
+      await writeFile(join(subject.repo, 'parse-c.ts'), 'export const parseC = 1;\n');
+      await subject.git(['add', 'parse-c.ts']);
+      await subject.git(['commit', '-qm', 'leaf prerequisite']);
+      await subject.git(['switch', '-q', 'feat/c2/demo']);
+
+      const admitted = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (admitted.kind !== 'record') throw new Error('missing admitted destination');
+      const repairing = transitionHost(admitted, c2, 'repairing', { credit: false });
+      if (repairing.kind !== 'updated') throw new Error('cannot enter destination repair');
+      await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: admitted, record: repairing.record }], { git: subject.git }))
+        .resolves.toEqual({ kind: 'updated' });
+
+      await expect(rerouteRound({ worktree: subject.repo, slug: 'demo', roundId, from: c2, to: c3, evidence: ['parseC'], git: subject.git }))
+        .resolves.toMatchObject({ kind: 'rerouted', record: { hosts: { 1: 'rerouted', 2: 'reroute-moved', 3: 'pending' } } });
+      await expect(completeRerouteSync({ worktree: subject.repo, slug: 'demo', roundId, git: subject.git }))
+        .resolves.toMatchObject({ kind: 'completed', record: { hosts: { 1: 'rerouted', 2: 'rerouted', 3: 'admitted' } } });
+      await expect(verifyPrerequisiteClaim({
+        claim: { outcome: 'blocked-by-prerequisite', child: c3, symbols: ['parseC'] }, host: c3, slug: 'demo', leaf: c3, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'refused-not-above' });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
