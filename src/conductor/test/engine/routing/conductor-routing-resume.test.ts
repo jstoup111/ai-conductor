@@ -1,6 +1,6 @@
-// Covers: task:rem-prd-audit-W7
+// Covers: task:67, task:rem-prd-audit-W7
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -72,6 +72,35 @@ async function fixture() {
 }
 
 describe('routed round conductor resume', () => {
+  it('continues a routing-eligible resume when the route receipt namespace is empty', async () => {
+    const subject = await fixture();
+    await expect(subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/']))
+      .resolves.toMatchObject({ stdout: '' });
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    await writeState(statePath, doneThrough('prd_audit'));
+    const dispatched: StepName[] = [];
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          return { success: false, operatorParkedBeforeDispatch: true };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(dispatched).not.toHaveLength(0);
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(join(subject.repo, '.pipeline', 'kickback-ledger.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('re-navigates a post-marker crash to build without re-admitting the round', async () => {
     const subject = await fixture();
     const child = parseChildId(1)!;

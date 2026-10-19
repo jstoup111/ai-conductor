@@ -414,6 +414,10 @@ export async function rebuildLedgerFromReceipts(
   if (exists) return { kind: 'present' };
   return withKickbackLedgerLease(projectRoot, async () => {
     const records = await enumerateRouteReceiptRecords({ projectRoot, slug, routing, git });
+    // An empty, successfully listed namespace is the first routed resume, not
+    // a corrupted receipt ledger.  There is nothing to reconstruct and no
+    // denominator or accounting entry to manufacture.
+    if (records.length === 0) return { kind: 'rebuilt' } as const;
     let sealedAuthored: number | undefined;
     let ledger: KickbackLedger = {
       version: 1,
