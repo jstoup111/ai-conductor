@@ -1,21 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: kickback-budget
-Resolved at: 2026-10-19T11:08:16.641Z
+Status: halted
 Slug: a-routed-fix-cannot-be-built-charged-and-reviewed-
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-a-routed-fix-cannot-be-built-charged-and-reviewed-
-Head SHA: be1f19da30bb6f73c31b6e928af36a1614897eb1
-Halted at: 2026-10-19T02:32:58.840Z
+Head SHA: 1602f6c5cb8fc4d282c9eecb65a46da3233bd360
+Halted at: 2026-10-19T11:19:15.372Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: build-review kickback budget exhausted (cumulative): blocked cases 262b133c-5bcb-4f99-bd07-ed6fbc6a95a5 (effect 661fda12-532f-4da0-949b-831e89ce67fc); count 1, cumulative 8
-Kickback halt generation: 1792377178716-8ujlubnzd2w
+build_review adjudication halted: semantic remediation case regression 6235b71d-4778-4409-8f4a-2c16ad44bd49
 ```
