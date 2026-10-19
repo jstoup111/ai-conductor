@@ -1,0 +1,129 @@
+// Covers: task:11
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { parseChildId } from '../../src/engine/child-context.js';
+import { assembleStack } from '../../src/engine/finish-publication-production.js';
+import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
+import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
+import {
+  activePublicationRecord,
+  writePublicationRecord,
+  type PublicationRecord,
+} from '../../src/engine/stack-publication-record.js';
+import type { GhRunner } from '../../src/engine/tracker-client.js';
+
+const c1 = parseChildId(1)!;
+const c3 = parseChildId(3)!;
+const c5 = parseChildId(5)!;
+
+const members = [
+  { position: c1, branch: 'feat/c1/demo', pr: 101 },
+  { position: c3, branch: 'feat/c3/demo', pr: 103 },
+  { position: c5, branch: 'feat/daemon-demo', pr: 500 },
+] as const;
+
+let root: string;
+
+async function git(args: string[], options?: Parameters<GitRunner>[1]) {
+  return makeGitRunner(root)(args, options);
+}
+
+async function writeRecord(record: PublicationRecord): Promise<void> {
+  await expect(writePublicationRecord(root, 'demo', undefined, record, { git })).resolves.toEqual({ kind: 'updated' });
+}
+
+async function record(): Promise<PublicationRecord> {
+  const stored = await activePublicationRecord(root, 'demo', { git });
+  if (!stored) throw new Error('expected publication record');
+  return stored.record;
+}
+
+function fixture(base: string, trace: string[]) {
+  const gh: GhRunner = async (args) => {
+    trace.push(`read:${args.join(' ')}`);
+    return { stdout: JSON.stringify({ baseRefName: base }) };
+  };
+  const operations: GithubOperationRunner = {
+    run: async (request: GithubOperationRequest) => {
+      if (request.operation !== 'pull-request.retarget') throw new Error(`unexpected operation ${request.operation}`);
+      trace.push(`retarget:${(request.payload as { base: string }).base}`);
+      base = (request.payload as { base: string }).base;
+      return {};
+    },
+  };
+  return { gh, operations };
+}
+
+function tracingGit(trace: string[]): GitRunner {
+  return async (args, options) => {
+    if (args[0] === 'hash-object' && typeof options?.input === 'string') {
+      const value = JSON.parse(options.input) as PublicationRecord;
+      if (value.retarget) trace.push(`write:${value.retarget.phase}`);
+    }
+    return git(args, options);
+  };
+}
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), 'finish-publication-assemble-stack-'));
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'stack@example.invalid']);
+  await git(['config', 'user.name', 'Stack fixture']);
+  await writeFile(join(root, 'README.md'), 'fixture\n');
+  await git(['add', 'README.md']);
+  await git(['commit', '-qm', 'fixture']);
+});
+
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+describe('assembleStack leaf retarget journal', () => {
+  it('CAS-writes intended, retargets #500 to feat/c3/demo, then CAS-writes observed in order', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const { gh, operations } = fixture('main', trace);
+
+    await assembleStack({ root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main', git: tracingGit(trace), gh, operations });
+
+    expect(trace.filter((entry) => entry.startsWith('write:') || entry.startsWith('retarget:'))).toEqual([
+      'write:intended',
+      'retarget:feat/c3/demo',
+      'write:observed',
+    ]);
+    await expect(record()).resolves.toMatchObject({ retarget: { from: 'main', to: 'feat/c3/demo', phase: 'observed' } });
+  });
+
+  it('resumes after an intended write before the call with exactly one retarget', async () => {
+    await writeRecord({
+      version: 1,
+      retarget: { from: 'main', to: 'feat/c3/demo', phase: 'intended' },
+      members,
+    });
+    const trace: string[] = [];
+    const { gh, operations } = fixture('main', trace);
+
+    await assembleStack({ root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main', git: tracingGit(trace), gh, operations });
+
+    expect(trace.filter((entry) => entry.startsWith('retarget:'))).toEqual(['retarget:feat/c3/demo']);
+    await expect(record()).resolves.toMatchObject({ retarget: { phase: 'observed' } });
+  });
+
+  it('resumes after the retarget call by observing the child base without repeating it', async () => {
+    await writeRecord({
+      version: 1,
+      retarget: { from: 'main', to: 'feat/c3/demo', phase: 'intended' },
+      members,
+    });
+    const trace: string[] = [];
+    const { gh, operations } = fixture('feat/c3/demo', trace);
+
+    await assembleStack({ root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main', git: tracingGit(trace), gh, operations });
+
+    expect(trace.filter((entry) => entry.startsWith('retarget:'))).toEqual([]);
+    await expect(record()).resolves.toMatchObject({ retarget: { phase: 'observed' } });
+  });
+});
