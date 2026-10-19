@@ -51,6 +51,11 @@ async function installHooks(root: string, failRoundStamp = false): Promise<void>
   }
 }
 
+function withoutGuardValve(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW: _valve, ...rest } = env;
+  return rest;
+}
+
 async function writeRepairMarker(root: string, host: number, roundId: string): Promise<void> {
   const markerPath = join(root, '.pipeline', 'repair-marker.json');
   await writeFile(markerPath, JSON.stringify({ host, roundId }));
@@ -117,6 +122,23 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     await git(root, ['checkout', '-q', 'feat/c1/demo']);
     const duplicate = await commit(root, 'duplicate.txt', 'feat: same round\n\nRound: r1');
     expect(duplicate.match(/^Round:/gm)).toHaveLength(1);
+  });
+
+  it('stamps the round on a commit made inside a daemon-managed maker session', async () => {
+    const root = await routedFixture();
+    await writeRepairMarker(root, 1, 'r1');
+    await writeFile(join(root, 'session.txt'), 'session\n');
+    await git(root, ['add', 'session.txt']);
+    // The session guard refuses unsanctioned subcommands under this marker;
+    // the hook's `|| true` would hide a refusal, so assert the trailer lands.
+    await execFile('git', ['commit', '-qm', 'feat: daemon session repair'], {
+      cwd: root,
+      // test/setup.ts disables the guard suite-wide; drop that valve so the
+      // hook runs under the real daemon-session policy.
+      env: { ...withoutGuardValve(process.env), CONDUCT_DAEMON_SESSION: '1' },
+    });
+
+    await expect(git(root, ['log', '-1', '--format=%B'])).resolves.toMatch(/^Round: r1$/m);
   });
 
   it('leaves the message unchanged without a marker and preserves N=1 without routing-ref reads', async () => {
