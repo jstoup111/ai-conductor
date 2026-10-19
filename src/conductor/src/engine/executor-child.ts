@@ -84,6 +84,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
   const controller = new AbortController();
   let started = false;
   let complete = false;
+  let finishWaitingForOrder: (() => void) | undefined;
   const sendOutcome = (outcome: FeatureExecutionOutcome) => {
     if (complete) return;
     complete = true;
@@ -91,6 +92,10 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
   };
   const stop = (reason: string) => {
     if (!controller.signal.aborted) controller.abort(reason);
+    // A supervisor can stop or disappear between hello and its work order.
+    // Do not leave this otherwise-idle child attached to its inherited IPC
+    // handle indefinitely; there is no feature state to report in that case.
+    if (!started) finishWaitingForOrder?.();
   };
   port.on('disconnect', () => stop('supervisor disconnected'));
   port.on('message', (raw?: unknown) => {
@@ -99,6 +104,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
   });
   port.send({ kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId: deps.engineVersionId });
   await new Promise<void>((resolve) => {
+    finishWaitingForOrder = resolve;
     const receive = (raw?: unknown) => {
       const parsed = parseExecutorMessage(raw);
       if (parsed.kind !== 'ok' || parsed.message.kind !== 'work-order' || started) return;

@@ -10,6 +10,7 @@ import {
 } from './finish-publication-production.js';
 import { createProvenanceGuardedFinishPresentationRepair } from './finish-presentation-repair.js';
 import { makeProductionGit } from './pr-labels.js';
+import { isOperatorParked } from './park-marker.js';
 import { DefaultStepRunner } from './step-runners.js';
 import { PluginRegistry } from './plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './plugin-loader.js';
@@ -85,6 +86,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   const stateFilePath = join(pipelineDir, 'conduct-state.json');
   const baseBranch = (await originDefaultBranch(makeGitRunner(worktree.path))) ?? 'main';
   const git = makeProductionGit();
+  const waitControllers = new Set<AbortController>();
   const conductor = new Conductor({
     stateFilePath,
     stepRunner,
@@ -112,13 +114,44 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     resume: true,
     daemon: true,
     featureSlug: order.slug,
+    // Child isolation changes process ownership, not operator-park semantics:
+    // consult the same root marker at each existing conductor admission
+    // boundary and leave the feature state intact for a later unpark/retry.
+    operatorParkBoundary: () => isOperatorParked(projectRoot, order.slug),
+    registerAbortController: (controller) => {
+      waitControllers.add(controller);
+      controller.signal.addEventListener('abort', () => waitControllers.delete(controller), { once: true });
+    },
     rateLimitEpisode: input.rateLimitEpisode,
     liveBoundaryCoordinator: input.liveBoundaryCoordinator as never,
     verifyArtifacts: true,
   });
-  const aborted = new Promise<'aborted'>((resolve) => signal.addEventListener('abort', () => resolve('aborted'), { once: true }));
-  const result = await Promise.race([conductor.run().then(() => 'done' as const), aborted]);
-  if (result === 'aborted') return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
+  // The child owns the conductor, so its stop path mirrors the daemon's
+  // in-process SIGTERM path. Register every rate-limit wait locally and abort
+  // it before closing open executions; the conductor then reaches its normal
+  // shutdown boundary instead of continuing orphaned after the IPC child exits.
+  const closeForShutdown = async () => {
+    for (const wait of waitControllers) wait.abort(signal.reason);
+    await conductor.closeOpenExecutionsForShutdown();
+  };
+  let shutdown: Promise<void> | undefined;
+  const beginShutdown = () => shutdown ??= closeForShutdown();
+  signal.addEventListener('abort', () => { void beginShutdown(); }, { once: true });
+  if (signal.aborted) {
+    await beginShutdown();
+    return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
+  }
+  try {
+    await conductor.run();
+  } catch (error) {
+    // An aborted rate-limit clear may reject its in-flight attempt while the
+    // conductor is draining. Shutdown itself is authoritative in that case.
+    if (!signal.aborted) throw error;
+  }
+  if (signal.aborted) {
+    await beginShutdown();
+    return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
+  }
   const state = await readState(stateFilePath);
   if (state.ok && state.value.pr_url) return { slug: order.slug, status: 'done', prUrl: state.value.pr_url };
   return { slug: order.slug, status: 'halted' };

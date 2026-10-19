@@ -29,6 +29,7 @@ class FakePort {
     return this;
   }
   dispatch(value: unknown): void { for (const listener of this.listeners.get('message') ?? []) listener(value); }
+  disconnect(): void { for (const listener of this.listeners.get('disconnect') ?? []) listener(); }
 }
 
 let root: string | undefined;
@@ -79,5 +80,99 @@ describe('executor child entrypoint', () => {
     expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
       { kind: 'outcome', outcome: { slug: 'feature', status: 'done' } },
     ]);
+  });
+
+  it('stops an in-flight child through its abort signal, retains feature state, and reports parked', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-'));
+    const port = new FakePort();
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => { started = resolve; });
+    let observedAbort = false;
+    let exitCode: number | undefined;
+    const done = runExecutorChild(port, {
+      engineVersionId: VERSION,
+      createWorktree: async () => {
+        const path = join(root!, '.worktrees', 'feature');
+        await import('node:fs/promises').then(({ mkdir }) => mkdir(path, { recursive: true }));
+        return { path };
+      },
+      run: async ({ signal }) => {
+        started();
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => {
+          observedAbort = true;
+          resolve();
+        }, { once: true }));
+        await import('node:fs/promises').then(({ writeFile }) => writeFile(
+          join(root!, '.worktrees', 'feature', '.pipeline', 'conduct-state.json'),
+          '{"preserved":true}\n',
+        ));
+        return { slug: 'feature', status: 'parked', reason: String(signal.reason) };
+      },
+      exit: (code) => { exitCode = code; },
+    });
+
+    port.dispatch({ kind: 'work-order', order });
+    await running;
+    port.dispatch({ kind: 'stop', reason: 'supervisor shutdown' });
+    await done;
+
+    expect(observedAbort).toBe(true);
+    expect(exitCode).toBe(0);
+    await expect(readFile(join(root, '.worktrees', 'feature', '.pipeline', 'conduct-state.json'), 'utf8'))
+      .resolves.toBe('{"preserved":true}\n');
+    expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
+      { kind: 'outcome', outcome: { slug: 'feature', status: 'parked', reason: 'supervisor shutdown' } },
+    ]);
+  });
+
+  it('takes the identical parked shutdown path when the supervisor disconnects', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-'));
+    const port = new FakePort();
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => { started = resolve; });
+    let exitCode: number | undefined;
+    const done = runExecutorChild(port, {
+      engineVersionId: VERSION,
+      createWorktree: async () => {
+        const path = join(root!, '.worktrees', 'feature');
+        await import('node:fs/promises').then(({ mkdir }) => mkdir(path, { recursive: true }));
+        return { path };
+      },
+      run: async ({ signal }) => {
+        started();
+        await new Promise<void>((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        return { slug: 'feature', status: 'parked', reason: String(signal.reason) };
+      },
+      exit: (code) => { exitCode = code; },
+    });
+
+    port.dispatch({ kind: 'work-order', order });
+    await running;
+    port.disconnect();
+    await done;
+
+    expect(exitCode).toBe(0);
+    expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
+      { kind: 'outcome', outcome: { slug: 'feature', status: 'parked', reason: 'supervisor disconnected' } },
+    ]);
+  });
+
+  it('exits if stopped before a work order without creating feature state', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-'));
+    const port = new FakePort();
+    let exitCode: number | undefined;
+    const done = runExecutorChild(port, {
+      engineVersionId: VERSION,
+      createWorktree: async () => { throw new Error('must not create worktree'); },
+      run: async () => ({ slug: 'feature', status: 'done' }),
+      exit: (code) => { exitCode = code; },
+    });
+
+    port.dispatch({ kind: 'stop', reason: 'supervisor shutdown' });
+    await done;
+
+    expect(exitCode).toBe(0);
+    await expect(import('node:fs/promises').then(({ access }) => access(join(root!, '.worktrees', 'feature'))))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
