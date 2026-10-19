@@ -178,7 +178,15 @@ export async function sweepExecutorRecordsOnBoot(
       // executor to protect, so its stale record can safely be cleared. Any
       // other failure preserves the authority record for a later safe retry.
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      await removeExecutorRecord(repoRoot, entry.slug);
+      continue;
     }
-    await removeExecutorRecord(repoRoot, entry.slug);
+
+    // SIGTERM only requests exit. Keep the durable pin if the child is still
+    // alive: GC must not discard its engine build, and a later successor can
+    // retry the takeover rather than dispatching through a false absence.
+    if (!await processBoundaries.isPidAlive(entry.record.pid)) {
+      await removeExecutorRecord(repoRoot, entry.slug);
+    }
   }
 }

@@ -68,7 +68,8 @@ describe('executor reference records', () => {
     await writeExecutorRecord(repoRoot, 'matching', executorRecord(202));
     await writeExecutorRecord(repoRoot, 'foreign', executorRecord(303));
     const processCalls: string[] = [];
-    const isPidAlive = vi.fn((pid: number) => pid !== 101);
+    const livePids = new Set([202, 303]);
+    const isPidAlive = vi.fn((pid: number) => livePids.has(pid));
     const readCommandLine = vi.fn(async (pid: number) => {
       processCalls.push(`read:${pid}`);
       if (pid === 202) return `node ${engineDir}/index.js executor-child`;
@@ -76,6 +77,7 @@ describe('executor reference records', () => {
     });
     const kill = vi.fn(async (pid: number, _signal: NodeJS.Signals) => {
       processCalls.push(`kill:${pid}`);
+      livePids.delete(pid);
     });
 
     await sweepExecutorRecordsOnBoot(repoRoot, { isPidAlive, readCommandLine, kill });
@@ -86,5 +88,23 @@ describe('executor reference records', () => {
     expect(readCommandLine).toHaveBeenCalledWith(303);
     expect(processCalls.indexOf('read:202')).toBeLessThan(processCalls.indexOf('kill:202'));
     await expect(listExecutorRecords(repoRoot)).resolves.toEqual([]);
+  });
+
+  it('retains a matching live record until the terminated executor is confirmed dead', async () => {
+    await writeExecutorRecord(repoRoot, 'slow-exit', executorRecord(404));
+    const isPidAlive = vi.fn(() => true);
+    const kill = vi.fn(async () => {});
+
+    await sweepExecutorRecordsOnBoot(repoRoot, {
+      isPidAlive,
+      readCommandLine: async () => `node ${engineDir}/index.js executor-child`,
+      kill,
+    });
+
+    expect(kill).toHaveBeenCalledWith(404, 'SIGTERM');
+    expect(isPidAlive).toHaveBeenCalledTimes(2);
+    await expect(listExecutorRecords(repoRoot)).resolves.toEqual([
+      { kind: 'record', slug: 'slow-exit', record: executorRecord(404) },
+    ]);
   });
 });
