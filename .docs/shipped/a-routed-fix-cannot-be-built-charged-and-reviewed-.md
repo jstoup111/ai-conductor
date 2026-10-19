@@ -4,6 +4,25 @@ spec_hash: a07aa66bc3f8ed5fc762cff9c18bf7385c165f0ff3251d98e034e9d8ac88f307
 pr: https://github.com/jstoup111/ai-conductor/pull/3285
 shipped: 2026-10-19
 engine_version: 20261018T130307Z-2917a81aaac0
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "Neither edit is planned. Both align test fixtures with existing configuration or confine temporary files; no shipped behavior changes."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "Unplanned refactor, needed because the git guard now reaches routing state. Dispatch behavior is unchanged."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-3
+    summary: "Not called out in the plan, but these changes make routed and flat settlement fail closed and keep progress evidence durable. Not user-visible."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
