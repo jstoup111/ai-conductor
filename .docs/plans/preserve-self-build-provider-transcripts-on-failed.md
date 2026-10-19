@@ -702,3 +702,20 @@ Authoritative edges are the per-task `**Dependencies:**` lines.
 **Done when:**
 - adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
 - The repair for task rem-as-built-rem-ab-settle-by-dispatch is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-settle-aux-captures-per-dispatch: Settle failed auxiliary transcript captures at their own dispatch boundary: (1) provider-execution.ts executeAuxiliaryProviderCandidates (:1497-1515) — when an auxiliary attempt returns non-success (both before the next internal retry and when the loop exhausts), signal a per-capture 'failed' settlement for that exact captureAttempt+auxiliaryMember through the existing event spine/ProviderExecutionContext callback (providerExecutionEventCallbacks :378) so the conductor calls transcriptRetention.settleAttempt(..., 'failed'); (2) conductor.ts non-consuming redispatch admission settle (:5785-5794) — replace the main-key-only settleTranscriptAttempt with transcriptRetention.settleBeforeRetry({owner, runId}) so auxiliary rubric captures of the earlier dispatch are settled 'failed' too. Tests (conductor + provider-execution): a build_review rubric capture failing then a rate-limit `attempt--; continue` redispatch that succeeds, and an internal auxiliary retry failing then succeeding, each asserting provider_transcripts_retained for the failed rubric capture and that it survives the later succeeded-with-progress settleStepRun; cover rebase regrade/residue routing callers (step-runners.ts:2697, :2758) via the shared helper.
+**Gate:** prd-audit
+**Rationale:** Verified (95%, read code): the rate-limit/non-consuming redispatch path settles only the main capture key via settleTranscriptAttempt at conductor.ts:5794 (no auxiliaryMember), so failed build_review rubric captures from the earlier dispatch stay pending; the later step_completed reaches settleTranscriptTerminal -> settleStepRun(owner, runId, 'succeeded-with-progress') (conductor.ts:896, transcript-retention.ts:229) which prunes them. ADR decision 4 is authoritative and unambiguous; this is conforming implementation+test drift, so BUILD. Same defect class as the as-built finding, repaired by one task.
+**Criterion:** S6.2
+**Parent task:** rem-as-built-rem-ab-settle-by-dispatch
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-settle-aux-captures-per-dispatch is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-settle-aux-captures-per-dispatch-2: Settle failed auxiliary transcript captures at their own dispatch boundary (provider-execution.ts auxiliary retry loop + conductor.ts:5794 redispatch settle via settleBeforeRetry), with tests proving failed rubric captures are retained across internal auxiliary retries and non-consuming redispatch.
+**Gate:** prd-audit
+**Rationale:** Verified (97%): executeAuxiliaryProviderCandidates (provider-execution.ts:1497) loops retries with distinct captureAttempt ids but never settles failed attempts, and the onAttempt callback (:378-384) emits only provider_attempt; later success settleStepRun prunes all pending owner/run captures. All four auxiliary callers (step-runners.ts:2697, :2758, :3784, :4618) share the helper, so fixing it there closes the class. Approved ADR decision 4 governs; no architectural decision needed, so BUILD via the same task as S6.2.
+**Governing clause:** adr-2026-10-10-retain-self-host-provider-transcripts decision 4
+**Done when:**
+- adr-2026-10-10-retain-self-host-provider-transcripts decision 4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-settle-aux-captures-per-dispatch-2 is committed and its targeted tests pass.
