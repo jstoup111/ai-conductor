@@ -4,7 +4,9 @@ import type { ActiveChildResolution } from './child-cursor.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
   activePublicationRecord,
+  writePublicationRecord,
   type PublicationRecordDependencies,
+  type StoredPublicationRecord,
 } from './stack-publication-record.js';
 import type { GhRunner } from './tracker-client.js';
 import type { GithubOperationRequest } from './github-operations.js';
@@ -93,6 +95,25 @@ export async function verifyMemberReachability(
   }
 
   return { kind: 'reachable' };
+}
+
+/**
+ * Persist the receipt after its unreachable-member event was emitted.  The
+ * event precedes this CAS, so an interrupted sweep is at-least-once; later
+ * successful sweeps suppress duplicate reports from the durable receipt.
+ */
+export async function recordUnreachableMemberReport(
+  root: string,
+  publication: StoredPublicationRecord,
+  dependencies: PublicationRecordDependencies = {},
+): Promise<'recorded' | 'already-reported' | 'not-recorded'> {
+  if (publication.record.unreachableReported === true) return 'already-reported';
+  const write = await writePublicationRecord(root, publication.slug, publication, {
+    ...publication.record,
+    unreachableReported: true,
+    tornDown: true,
+  }, dependencies);
+  return write.kind === 'updated' ? 'recorded' : 'not-recorded';
 }
 
 /** A stack operation payload is never trusted merely because it passed argv decoding. */

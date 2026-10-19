@@ -39,8 +39,15 @@ import { leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner } from './rebase.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
 import { parseGithubUrl } from './github-target.js';
-import { activePublicationRecord, type PublicationRecordDependencies } from './stack-publication-record.js';
-import { verifyMemberReachability } from './stack-publication.js';
+import {
+  activePublicationRecord,
+  readPublicationRecord,
+  writePublicationRecord,
+  type PublicationMemberLifecycle,
+  type PublicationRecordDependencies,
+  type StoredPublicationRecord,
+} from './stack-publication-record.js';
+import { recordUnreachableMemberReport, verifyMemberReachability } from './stack-publication.js';
 import {
   classifyShippedReadiness,
   routeShippedReadiness,
@@ -732,6 +739,18 @@ export async function sweepMergeableLabels({
           );
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
+            // Task 26's unreachable receipt is terminal for reaping: retain
+            // it so a later sweep cannot reinterpret the stack as an ordinary
+            // leaf-only feature and erase the evidence or its child branches.
+            const storedPublication = await readPublicationRecord(
+              entry.repoCwd,
+              entry.slug,
+              publicationRecordDependencies,
+            );
+            if (storedPublication.kind === 'record' && storedPublication.record.tornDown === true) {
+              survivors.push(entry);
+              continue;
+            }
             if (canRemoveWorktree && !(await canRemoveWorktree(entry.slug))) {
               survivors.push(entry);
               continue;
@@ -766,7 +785,23 @@ export async function sweepMergeableLabels({
                 // This sweep still reaps the feature worktree immediately once
                 // the ordinary shipped-record gate passes.
                 survivors.push(entry);
-                if (reachability.kind !== 'reachable') {
+                if (reachability.kind === 'unreachable') {
+                  if (publication.record.unreachableReported !== true) {
+                    emitEvent({
+                      type: 'stack_members_unreachable',
+                      child: reachability.member.position,
+                      pr: reachability.member.pr,
+                    });
+                    await recordUnreachableMemberReport(
+                      entry.repoCwd,
+                      publication,
+                      publicationRecordDependencies,
+                    );
+                  }
+                  log?.(
+                    `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-unreachable`,
+                  );
+                } else if (reachability.kind === 'indeterminate') {
                   log?.(
                     `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
                   );
