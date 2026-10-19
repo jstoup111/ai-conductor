@@ -199,7 +199,7 @@ current adjudication confirms the binding. A resolved case that reappears also h
 of an adjudicated case rather than reopening an unbounded route.
 
 > **Amended 2026-10-19 by #3292:** The regression halt above applies only to an explicit
-> `existingCaseId` rebind of a resolved case. An unbound proposal for a source that only resolved
+> `existingCaseId` rebind with disposition `act` of a resolved case. An unbound proposal for a source that only resolved
 > cases own is admitted as a new case, and a new action is charged against the kickback budget, so
 > the cumulative cap is the bound. See the successor's D5.4–D5.7.
 

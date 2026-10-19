@@ -204,16 +204,21 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   without `existingCaseId` for a source owned only by resolved cases, reconciliation admits it as
 >   a new case of any disposition. A new `act` case reserves a fresh action effect, which the
 >   existing kickback budget charges like any first action, so the cumulative cap is the bound. An
->   explicit `existingCaseId` rebind of a resolved action case still halts as a regression under
->   predecessor D7. Equivalence across a re-raise stays the judge's call, and nothing infers it
->   from prose.
+>   explicit `existingCaseId` rebind with disposition `act` of a resolved action case still halts
+>   as a regression under predecessor D7. The predecessor D7 and D3 rule that an equivalent attempted
+>   case consumes no second kickback and halts applies to a case the judge binds. An unbound
+>   proposal is the judge's statement that the case is not that one. Equivalence across a re-raise
+>   stays the judge's call, and nothing infers it from prose.
 > - **D5.7 — Decision stops share the contract.** A decision or consistency stop over a source owned
 >   only by resolved cases persists as a new open stop. A stop whose case id, owner, disposition and
 >   source ids and outcomes match an open stop is that stop: it converges as already persisted
 >   whatever the link timestamps. An unbound stop converges on the open stop with the same owner and
 >   source set. Every rejected case-store transition, the decision-stop path included, reaches the
 >   operator with its invariant, case ids and source ids on the existing
->   `remediation_adjudication_failed` event and the HALT text.
+>   `remediation_adjudication_failed` event and the HALT text. An escalation or consistency stop
+>   that would add a second open owner of a source is refused this way. The named halt is that
+>   escalation's durable stopping point under portable-build-review-policy D9. Superseding an open
+>   owner with a stop is #3005's decision and is not made here.
 
 ## Consequences
 
