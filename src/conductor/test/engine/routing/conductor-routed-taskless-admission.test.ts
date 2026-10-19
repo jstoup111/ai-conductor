@@ -4,10 +4,13 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { makeGitRunner } from '../../../src/engine/rebase.js';
+
 const seams = vi.hoisted(() => ({
   reread: 'record' as 'record' | 'absent' | 'throw',
   admission: 'admitted' as 'admitted' | 'refused' | 'throw',
   capacity: 'available' as 'available' | 'exhausted',
+  createdRecord: undefined as any,
 }));
 
 vi.mock('../../../src/engine/routing/route-record-store.js', async (importOriginal) => {
@@ -15,28 +18,32 @@ vi.mock('../../../src/engine/routing/route-record-store.js', async (importOrigin
   return {
     ...actual,
     nextRoundId: vi.fn(async () => 'r1'),
-    createRouteRecord: vi.fn(async (_root, _slug, input) => ({
-      kind: 'created' as const,
-      record: {
+    createRouteRecord: vi.fn(async (_root, _slug, input) => {
+      seams.createdRecord = {
         ...input,
         phase: 'prepared' as const,
         hosts: { 1: 'pending' as const },
         currentHostIndex: 0,
-        receipt: {},
+        receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} },
         outbox: [],
-      },
-    })),
+      };
+      return { kind: 'created' as const, record: seams.createdRecord };
+    }),
     readRouteRecord: vi.fn(async () => {
       if (seams.reread === 'throw') throw new Error('reread seam');
       if (seams.reread === 'absent') return { kind: 'absent' as const };
       return {
         kind: 'record' as const,
-        record: {
+        record: seams.createdRecord ?? {
           roundId: 'r1', kind: 'audit' as const, phase: 'prepared' as const,
           items: [], allocation: {}, hosts: { 1: 'pending' as const }, currentHostIndex: 0,
-          receipt: {}, outbox: [],
+          receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} }, outbox: [],
         },
       };
+    }),
+    writeRouteRecord: vi.fn(async (_root, _stored, record) => {
+      seams.createdRecord = record;
+      return { kind: 'updated' as const };
     }),
   };
 });
@@ -57,8 +64,6 @@ vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) =
   const actual = await importOriginal<typeof import('../../../src/engine/routing/round-receipt.js')>();
   return {
     ...actual,
-    // These cases exercise failures after the durable denominator is available.
-    routedSealedAuthored: vi.fn(async () => 1),
     tasklessAdmissionCapacity: vi.fn(async () => seams.capacity === 'exhausted'
       ? { kind: 'exhausted' as const, count: 2 }
       : { kind: 'available' as const, count: 0 }),
@@ -74,13 +79,28 @@ afterEach(async () => {
   seams.reread = 'record';
   seams.admission = 'admitted';
   seams.capacity = 'available';
+  seams.createdRecord = undefined;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 async function subject(judgedChild = 1) {
   const root = await mkdtemp(join(tmpdir(), 'routed-taskless-admission-'));
   roots.push(root);
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'taskless@example.test']);
+  await git(['config', 'user.name', 'Taskless']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
   await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(root, '.docs', 'plans', 'demo.md'), [
+    '### Task T1: First authored task',
+    '',
+    '### Task T2: Second authored task',
+    '',
+  ].join('\n'));
+  await git(['add', 'base.txt']);
+  await git(['commit', '-qm', 'base']);
   await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
     version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: [] },
@@ -159,5 +179,25 @@ describe('routed taskless admission failures', () => {
       items: [expect.objectContaining({ host: 2, owner: 2, findingId: 'fixture-2' })],
       allocation: expect.objectContaining({ 2: expect.anything() }),
     }));
+  });
+
+  it('creates a charged child-2 manual_test receipt from the first authored plan', async () => {
+    const { conductor } = await subject(2);
+    const routes = await import('../../../src/engine/routing/route-record-store.js');
+    vi.mocked(routes.createRouteRecord).mockClear();
+
+    await expect((conductor as any).admitRoutedManualTestKickback(
+      { feature_desc: 'demo' },
+      'manual-test evidence',
+    )).resolves.toEqual({ kind: 'admitted' });
+
+    expect(routes.createRouteRecord).toHaveBeenCalledWith(expect.any(String), 'demo', expect.objectContaining({
+      sealedAuthored: 2,
+      items: [expect.objectContaining({ host: 2, owner: 2, findingId: 'manual-test-fail' })],
+    }));
+    expect(seams.createdRecord).toMatchObject({ sealedAuthored: 2 });
+    expect(seams.createdRecord.receipt).toEqual({
+      laps: {}, growth: 0, taskless: { manual_test: 1 }, echo: {}, acks: {},
+    });
   });
 });
