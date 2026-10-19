@@ -181,6 +181,7 @@ describe('routed taskless admission failures', () => {
     }));
   });
 
+  // Covers: task:rem-prd-audit-rem-prd-audit-S5-1
   it('creates a charged child-2 manual_test receipt from the first authored plan', async () => {
     const { conductor } = await subject(2);
     const routes = await import('../../../src/engine/routing/route-record-store.js');
