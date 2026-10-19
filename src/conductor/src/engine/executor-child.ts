@@ -6,15 +6,73 @@ import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage } from './executor-prot
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import type { ExecutorIpcPort } from './executor-proxies.js';
+import {
+  createExecutorRequestClient,
+  createLiveBoundaryProxy,
+  createProviderAvailabilityProxy,
+  createRateLimitEpisodeProxy,
+  createWorktreeLifecycleProxy,
+  teeExecutorConsole,
+} from './executor-proxies.js';
 
 export interface ExecutorChildDeps {
   engineVersionId: string;
   supervisorEngineVersionId?: string;
   /** Creates/reuses a worktree only after the supervisor has sent its order. */
   createWorktree(order: WorkOrder): Promise<{ path: string }>;
-  run(input: { order: WorkOrder; events: ConductorEventEmitter; signal: AbortSignal }): Promise<FeatureExecutionOutcome>;
+  run(input: ExecutorChildBaseRunInput): Promise<FeatureExecutionOutcome>;
   log?: (line: string) => void;
   exit?: (code: number) => void;
+}
+
+/** The child receives replicas of every dispatcher-owned coordination service. */
+export interface ExecutorChildBaseRunInput {
+  order: WorkOrder;
+  events: ConductorEventEmitter;
+  signal: AbortSignal;
+}
+
+export interface ExecutorChildRunInput extends ExecutorChildBaseRunInput {
+  rateLimitEpisode: ReturnType<typeof createRateLimitEpisodeProxy>;
+  providerAvailability: ReturnType<typeof createProviderAvailabilityProxy>;
+  liveBoundaryCoordinator: ReturnType<typeof createLiveBoundaryProxy>;
+  worktreeLifecycle: ReturnType<typeof createWorktreeLifecycleProxy>;
+}
+
+/**
+ * Compose the IPC replicas once, before the order arrives.  Keeping this
+ * small factory outside the CLI makes the process boundary testable without
+ * giving tests a real child process or any daemon-global state.
+ */
+export function withExecutorBrokerProxies(
+  port: ExecutorIpcPort,
+  deps: Omit<ExecutorChildDeps, 'run' | 'createWorktree'> & {
+    createWorktree(order: WorkOrder, lifecycle: ReturnType<typeof createWorktreeLifecycleProxy>): Promise<{ path: string }>;
+    run(input: ExecutorChildRunInput): Promise<FeatureExecutionOutcome>;
+    liveBoundaryEnabled?: boolean;
+  },
+): ExecutorChildDeps {
+  const client = createExecutorRequestClient(port);
+  const restoreConsole = teeExecutorConsole(port);
+  const run = deps.run;
+  return {
+    ...deps,
+    createWorktree: (order) => deps.createWorktree(order, createWorktreeLifecycleProxy(client)),
+    run: async (input: ExecutorChildBaseRunInput) => {
+      try {
+        return await run({
+          ...input,
+          rateLimitEpisode: createRateLimitEpisodeProxy(client),
+          providerAvailability: createProviderAvailabilityProxy(client),
+          liveBoundaryCoordinator: createLiveBoundaryProxy(client, deps.liveBoundaryEnabled ?? false),
+          worktreeLifecycle: createWorktreeLifecycleProxy(client),
+        });
+      } finally {
+        restoreConsole();
+        client.close('executor run complete');
+      }
+    },
+  };
 }
 
 /**
@@ -61,7 +119,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
           await events.emit({
             type: 'executor_started', slug: order.slug, engineVersionId: order.engineVersionId,
             protocolVersion: EXECUTOR_PROTOCOL_VERSION,
-            supervisorEngineVersionId: deps.supervisorEngineVersionId ?? order.engineVersionId,
+            supervisorEngineVersionId: deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
           });
           const outcome = controller.signal.aborted
             ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }

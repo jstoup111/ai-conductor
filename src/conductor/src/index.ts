@@ -841,14 +841,51 @@ async function dispatchCliCommand(): Promise<void> {
   // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
   // argv can never satisfy the daemon supervisor process matcher.
   if (process.argv[2] === 'executor-child') {
-    const { runExecutorChild } = await import('./engine/executor-child.js');
-    const { resolveEngineVersion } = await import('./engine/shipped-record.js');
-    await runExecutorChild(process as never, {
-      engineVersionId: resolveEngineVersion(__dirname),
-      createWorktree: async () => { throw new Error('executor child was launched without dispatcher worktree wiring'); },
-      run: async ({ order }) => ({ slug: order.slug, status: 'error', reason: 'executor child was launched without dispatcher runner wiring' }),
+    const [
+      { runExecutorChild, withExecutorBrokerProxies },
+      { runExecutorChildFeature },
+      { createWorkOrderGitRunner },
+      { makeFeatureRunnerDeps },
+      { leafBranchFor },
+      { defaultSelfHostDetector },
+    ] = await Promise.all([
+      import('./engine/executor-child.js'),
+      import('./engine/executor-child-runtime.js'),
+      import('./daemon-cli.js'),
+      import('./engine/daemon-deps.js'),
+      import('./engine/feature-branch-identity.js'),
+      import('./engine/self-host/detector.js'),
+    ]);
+    const projectRoot = process.cwd();
+    const engineVersionId = resolveEngineVersion(__dirname);
+    await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
+      engineVersionId,
+      // Reuse the daemon seam, which verifies the WorkOrder before its first
+      // worktree side effect and performs the pinned-base create under the
+      // brokered lifecycle lock.
+      createWorktree: async (order, worktreeLifecycle) => {
+        const runnerDeps = makeFeatureRunnerDeps({
+          projectRoot,
+          worktreeBase: join(projectRoot, '.worktrees'),
+          baseBranch: 'main',
+          runConductorInWorktree: async () => {},
+          workOrderGit: createWorkOrderGitRunner(projectRoot),
+          worktreeLifecycle: worktreeLifecycle as never,
+        });
+        return runnerDeps.createWorktree(order.slug, order);
+      },
+      run: async (input) => {
+        const branch = leafBranchFor(input.order.slug);
+        return runExecutorChildFeature({
+          ...input,
+          worktree: { path: join(projectRoot, '.worktrees', input.order.slug), branch },
+          projectRoot,
+          supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
+        });
+      },
+      liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
       exit: (code) => { process.exitCode = code; },
-    });
+    }));
     return;
   }
   // Per-command help is answered by `main()` before the daemon-session guard,

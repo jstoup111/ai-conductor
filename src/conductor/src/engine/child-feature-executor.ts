@@ -52,12 +52,11 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     // A fallback child executes the supervisor build, not the original failed
     // pin.  Publish that actual identity into its work order and durable
     // record, otherwise status and shipped telemetry lie about the executor.
-    const launchedOrder: WorkOrder = useSupervisorBuild
-      ? {
-          ...order,
-          engineVersionId: versionIdFromEngineDir(engineDir) ?? order.engineVersionId,
-        }
-      : order;
+    const launchedOrder: WorkOrder = {
+      ...order,
+      ...(useSupervisorBuild ? { engineVersionId: versionIdFromEngineDir(engineDir) ?? order.engineVersionId } : {}),
+      supervisorEngineVersionId: deps.supervisorEngineVersionId as WorkOrder['engineVersionId'],
+    };
     const modulePath = join(engineDir, 'index.js');
     const child = fork(modulePath, ['executor-child'], { silent: true });
     const attachment = deps.attachBroker(order.slug, child);

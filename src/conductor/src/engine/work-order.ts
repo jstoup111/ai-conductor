@@ -29,6 +29,8 @@ export interface WorkOrder {
   baseSha: string;
   /** Immutable engine build selected for this individual dispatch. */
   engineVersionId: EngineVersionId;
+  /** Identity of the supervisor that issued this order (diagnostic only). */
+  supervisorEngineVersionId?: EngineVersionId;
   /** Why this order uses the supervisor build rather than the floating dist link. */
   pinFallbackReason?: EnginePinFallbackReason;
   /** Supervisor pool width, retained for child-mode legacy safety guards. */
