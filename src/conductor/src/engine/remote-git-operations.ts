@@ -19,6 +19,8 @@ import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushedTipSource, type PreparedPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
+import { guardPublishedStackWrite } from './stack-tip-guard.js';
+import { makeGitRunner } from './rebase.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
@@ -141,6 +143,45 @@ function featurePushSources(args: readonly string[], destinations: readonly Remo
     if (separator <= 0) return [];
     return [{ slug, branch: destination.ref.slice('refs/heads/'.length), source: refspec!.slice(0, separator).replace(/^\+/, '') }];
   });
+}
+
+function withExpectedLease(args: readonly string[], destination: RemoteGitDestination, expected: string): string[] {
+  return [...args, `--force-with-lease=${destination.ref}:${expected}`];
+}
+
+async function guardPublishedStackPushes(
+  args: readonly string[],
+  remote: string,
+  destinations: readonly RemoteGitDestination[],
+  dependencies: RemoteGitOperationDependencies,
+): Promise<{ readonly kind: 'allow'; readonly args: readonly string[] } | { readonly kind: 'refuse' }> {
+  const candidates = featurePushSources(args, destinations);
+  let guardedArgs = [...args];
+  const localGit: PushLeaseGitRunner = dependencies.pushLeaseGit ?? (async (localArgs, input) => {
+    const result = await makeGitRunner(dependencies.cwd)([...localArgs], input === undefined ? undefined : { input });
+    return { stdout: result.stdout, exitCode: result.exitCode };
+  });
+  for (const candidate of candidates) {
+    const destination = destinations.find((value) => value.operation === 'remote-ref.push'
+      && value.ref === `refs/heads/${candidate.branch}`);
+    if (destination === undefined) continue;
+    const guard = await guardPublishedStackWrite({
+      cwd: dependencies.cwd,
+      remote,
+      slug: candidate.slug,
+      destination: destination.ref,
+      source: candidate.source,
+      git: localGit,
+      lsRemote: (lsArgs) => dependencies.runRemoteGit([...lsArgs], {
+        cwd: dependencies.cwd,
+        credential: 'write',
+        endpoint: destination.endpoint,
+      }),
+    });
+    if (guard.kind === 'refuse') return { kind: 'refuse' };
+    if (guard.kind === 'allow') guardedArgs = withExpectedLease(guardedArgs, destination, guard.expected);
+  }
+  return { kind: 'allow', args: guardedArgs };
 }
 
 async function preparePushRecordings(
@@ -271,14 +312,19 @@ export async function executeRemoteGit(
     }
   }
 
-  const preparation = await preparePushRecordings(args, resolution.targets, dependencies);
+  const guarded = await guardPublishedStackPushes(args, resolution.remote, resolution.targets, dependencies);
+  if (guarded.kind === 'refuse') {
+    return { kind: 'failed', error: 'published stack tip mismatch', targets: resolution.targets };
+  }
+
+  const preparation = await preparePushRecordings(guarded.args, resolution.targets, dependencies);
   if (preparation.kind === 'refused') {
     await discardPushRecordings(preparation.recordings, dependencies);
     return { kind: 'failed', error: preparation.error, targets: resolution.targets };
   }
   const recordings = preparation.recordings;
   try {
-    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'write', endpoint: resolution.targets[0].endpoint });
+    await dependencies.runRemoteGit([...guarded.args], { cwd: dependencies.cwd, credential: 'write', endpoint: resolution.targets[0].endpoint });
     await completePushRecordings(recordings, dependencies);
     return { kind: 'executed', targets: resolution.targets };
   } catch (error) {
@@ -298,7 +344,7 @@ export async function executeRemoteGit(
         throw error;
       }
       try {
-        await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'operator', endpoint: resolution.targets[0].endpoint });
+        await dependencies.runRemoteGit([...guarded.args], { cwd: dependencies.cwd, credential: 'operator', endpoint: resolution.targets[0].endpoint });
         await completePushRecordings(recordings, dependencies);
         return { kind: 'executed', targets: resolution.targets };
       } catch (fallbackError) {
