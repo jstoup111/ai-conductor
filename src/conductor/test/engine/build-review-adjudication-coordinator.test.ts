@@ -1663,6 +1663,98 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
+  it('records a halted judge-bound reuse so a later operator acceptance carries its re-raise', async () => {
+    const aggregateFor = (lapId: string, contentHash: string) => {
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId: lapId as never, snapshotDigest: `snapshot-${lapId}`,
+        results: {
+          security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+          testQuality: {
+            kind: 'judged', rubric: 'testQuality', lapId: lapId as never, snapshotDigest: `snapshot-${lapId}`,
+            contractVersion: 'v3', verdict: 'FAIL', findings: [{
+              concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', evidenceLocations: ['test/example.test.ts:1'],
+              anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash, display: 'example test' } },
+            }],
+          },
+        },
+      });
+      const finding = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+        anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash, display: 'example test' } },
+      });
+      if (!finding) throw new Error('fixture finding is invalid');
+      return { aggregate, finding, source: projectBuildReviewAggregateSources(aggregate)![0]! };
+    };
+    const lap2 = aggregateFor('lap-2', `sha256:${'2'.repeat(64)}`);
+    const lap3 = aggregateFor('lap-3', `sha256:${'3'.repeat(64)}`);
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const original = {
+      id: 'case-bound-reuse', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+      rationale: 'The earlier repair was applied.', resolution: 'resolved' as const,
+      sources: [{ sourceId: 'testQuality:sha256:lap-one', outcome: 'acted' as const, recordedAt: '2026-01-01T00:00:00.000Z' }],
+      effect: { id: 'effect-bound-reuse', kind: 'action' as const, status: 'applied' as const, workOrderId: 'order-bound-reuse' },
+    };
+    await seedCases(store, { version: 'v1', feature, cases: [original] });
+    const lap2SourceId = buildReviewAdjudicationSourceId(lap2.source);
+    const lap3SourceId = buildReviewAdjudicationSourceId(lap3.source);
+    const judgementFor = (sourceId: string): RemediationCaseJudgement => ({
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'case-reuse' }],
+      cases: [{
+        caseRef: 'case-reuse', existingCaseId: original.id, disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The same finding needs the earlier repair.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the test' }] },
+      }],
+    });
+    const lap2Events: ConductorEvent[] = [];
+
+    const halted = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgementFor(lap2SourceId)), aggregate: lap2.aggregate,
+      emit: async (event) => { lap2Events.push(event); },
+    });
+
+    expect(halted).toEqual({ ok: false, detail: `semantic remediation case regression ${original.id}` });
+    expect(lap2Events.map((event) => event.type)).toEqual([
+      'remediation_adjudication_started', 'remediation_semantic_repeat_halt', 'remediation_adjudication_failed',
+    ]);
+    expect(lap2Events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: original.id, effectId: original.effect.id, reason: 'regressed',
+    }));
+    const afterHalt = await store.read();
+    expect(afterHalt).toMatchObject({ ok: true });
+    if (!afterHalt.ok) throw new Error(`unexpected case-store failure: ${afterHalt.reason}`);
+    expect(afterHalt.state.cases).toEqual([{ ...original, sources: [
+      ...original.sources,
+      { sourceId: lap2SourceId, outcome: 'acted', recordedAt: expect.any(String) },
+    ] }]);
+    expect(afterHalt.state.cases[0]!.effect.status).not.toBe('reserved');
+
+    await expect(new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-02T00:00:00.000Z') }).append({
+      feature, finding: lap2.finding, sourceLapId: 'lap-2' as never,
+      summary: 'The lap-2 risk is accepted.', rationale: 'Accepted by the operator.', operator: 'operator',
+    })).resolves.toMatchObject({ ok: true });
+    const lap3Events: ConductorEvent[] = [];
+    const charge = vi.fn(async () => { throw new Error('carried re-raise must not charge'); });
+
+    const carried = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgementFor(lap3SourceId)), aggregate: lap3.aggregate,
+      chargeEffect: charge, emit: async (event) => { lap3Events.push(event); },
+    });
+
+    expect(carried).toMatchObject({ ok: true, route: 'pass' });
+    expect(charge).not.toHaveBeenCalled();
+    expect(lap3Events).not.toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt' }));
+    expect(lap3Events).toContainEqual(expect.objectContaining({
+      type: 'build_review_disposition_carried', findingId: lap3.source.findingId, caseId: original.id,
+      originFindingId: lap2.source.findingId, originLapId: 'lap-2',
+    }));
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      ...original,
+      sources: [...original.sources, expect.objectContaining({ sourceId: lap2SourceId }), expect.objectContaining({ sourceId: lap3SourceId })],
+    })] } });
+  });
+
   it('keeps the regression halt when the resolved case was sourced only by a prior lap', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
