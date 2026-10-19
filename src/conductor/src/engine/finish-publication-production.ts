@@ -13,7 +13,7 @@ import type { ConductState, FinishPublicationEvent, RunMode } from '../types/ind
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './step-runner-types.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
-import { executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
+import { decodeGithubOperationRequest, executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
@@ -25,10 +25,13 @@ import { resolveActiveChild } from './child-cursor.js';
 import {
   observeStackDimension,
   pushChildClosure,
+  readSealedPositions,
   readStackPublicationChildren,
-  verifyChildChain,
+  haltStackTipDiverged,
+  verifyChildChainToLeaf,
+  validateStackPayload,
 } from './stack-publication.js';
-import { activePublicationRecord, writePublicationRecord } from './stack-publication-record.js';
+import { activePublicationRecord, readPublicationRecord, writePublicationRecord } from './stack-publication-record.js';
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { checkChildBodyPostconditions, renderChildBody } from './stack-member-body.js';
@@ -43,6 +46,7 @@ import {
   observePublicationSnapshot,
   resolveInteractivePublicationIntent,
   resolveUnattendedPublicationIntent,
+  StackPublicationHaltError,
   type PublicationDisposition,
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
@@ -236,6 +240,91 @@ function publicationRecordGit(git: GitRunner, cwd: string): PublicationRecordGit
   };
 }
 
+/** Stack API calls are bound to the latest durable record immediately before transport. */
+async function executeValidatedStackOperation(input: {
+  root: string;
+  slug: string;
+  git: PublicationRecordGitRunner;
+  operations: GithubOperationRunner;
+  request: Parameters<typeof executeGithubOperation>[0];
+}) {
+  const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  if (!stored) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'stack publication record is missing');
+  const decodedRequest = decodeGithubOperationRequest(input.request);
+  if (decodedRequest.kind === 'refused') {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack operation is malformed: ${decodedRequest.reason}`);
+  }
+  const decoded = validateStackPayload(stored.record, decodedRequest.request);
+  if (decoded.kind === 'refused') {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack operation refused: ${decoded.reason}`);
+  }
+  const result = await executeGithubOperation(input.request, input.operations);
+  if (result.kind !== 'executed') {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack operation did not execute: ${result.kind}`);
+  }
+  return stored;
+}
+
+/** Ready the dependent child PRs from top to bottom before the retained leaf. */
+async function readyStackChildren(input: {
+  root: string;
+  slug: string;
+  leafUrl: string;
+  template?: string;
+  git: PublicationRecordGitRunner;
+  gh: GhRunner;
+  operations?: GithubOperationRunner;
+}): Promise<void> {
+  const leaf = repositoryAndNumber(input.leafUrl);
+  if (!leaf) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'retained leaf URL is invalid');
+  const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  if (!stored || stored.record.stack?.verified !== true) return;
+  if (!input.operations) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'stack child ready boundary unavailable');
+  for (const member of [...stored.record.members].slice(0, -1).reverse()) {
+    // Re-read immediately before every flip so a changed native stack cannot
+    // turn a stale local record into a ready child.
+    await executeValidatedStackOperation({
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations,
+      request: {
+        operation: 'stack.read', repository: leaf.repository, resource: { kind: 'repository' },
+        context: { actor: 'finish-publication' }, payload: { pullRequest: leaf.number },
+      },
+    });
+    const stdout = await runTrackerRepositoryRead(
+      input.gh, input.root, 'pull-request.read', leaf.repository, { kind: 'pull-request', number: member.pr },
+      ['pr', 'view', String(member.pr), '-R', leaf.repository, '--json', 'body,isDraft,state'],
+    );
+    const current: unknown = JSON.parse(stdout);
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      throw new StackPublicationHaltError('stack_publication_precondition_failed', `child position ${member.position} is unreadable`);
+    }
+    const body = (current as { body?: unknown }).body;
+    const draft = (current as { isDraft?: unknown }).isDraft;
+    const state = (current as { state?: unknown }).state;
+    if (state !== 'OPEN' || typeof draft !== 'boolean' || typeof body !== 'string') {
+      await haltStackTipDiverged(input.root, stored.record.members, undefined, `published stack tip diverged at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `child position ${member.position} is no longer an open draft`);
+    }
+    if (!draft) continue;
+    const postcondition = checkChildBodyPostconditions(body, input.template, member.branch);
+    if (!postcondition.ok) throw new StackPublicationHaltError('stack_publication_precondition_failed', postcondition.reason);
+    const flip = await executeGithubOperation({
+      operation: 'pull-request.ready', repository: leaf.repository,
+      resource: { kind: 'pull-request', number: member.pr }, context: { actor: 'finish-publication' },
+    }, input.operations);
+    if (flip.kind !== 'executed') throw new StackPublicationHaltError('stack_publication_precondition_failed', `could not ready child position ${member.position}`);
+    const verified = await runTrackerRepositoryRead(
+      input.gh, input.root, 'pull-request.read', leaf.repository, { kind: 'pull-request', number: member.pr },
+      ['pr', 'view', String(member.pr), '-R', leaf.repository, '--json', 'isDraft,state'],
+    );
+    const observed: unknown = JSON.parse(verified);
+    if (!observed || typeof observed !== 'object' || (observed as { state?: unknown }).state !== 'OPEN'
+      || (observed as { isDraft?: unknown }).isDraft !== false) {
+      throw new StackPublicationHaltError('stack_publication_precondition_failed', `child ready flip was not observed at position ${member.position}`);
+    }
+  }
+}
+
 /**
  * Retarget the retained leaf only after recording the intended move.  The
  * durable record is the receipt for an interrupted GitHub mutation: every
@@ -253,6 +342,7 @@ export async function assembleStack(input: {
   git: PublicationRecordGitRunner;
   gh: GhRunner;
   operations?: GithubOperationRunner;
+  events?: { emit(event: { type: 'stack_assembled'; prs: readonly number[] }): Promise<void> };
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
   if (!leaf || !input.operations) throw new Error('stack leaf retarget boundary unavailable');
@@ -304,30 +394,99 @@ export async function assembleStack(input: {
 
   if (actualBase === topChild.branch) {
     if (stored.record.retarget?.phase !== 'observed') await writePhase('observed');
-    return;
-  }
-
-  if (actualBase !== input.baseBranch) {
+  } else if (actualBase !== input.baseBranch) {
     throw new Error(`retained leaf pull request base diverged: expected ${input.baseBranch} or ${topChild.branch}, got ${actualBase}`);
-  }
-
-  if (stored.record.retarget === undefined) await writePhase('intended');
-  if (stored.record.retarget?.phase === 'observed') {
+  } else {
+    if (stored.record.retarget === undefined) await writePhase('intended');
+    if (stored.record.retarget?.phase === 'observed') {
     throw new Error('observed stack leaf retarget does not match the retained leaf base');
+    }
+
+    await executeValidatedStackOperation({
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations!,
+      request: {
+        operation: 'pull-request.retarget', repository: leaf.repository,
+        resource: { kind: 'pull-request', number: leaf.number },
+        context: { actor: 'finish-publication' }, payload: { base: topChild.branch },
+      },
+    });
+
+    const observedBase = await readLeafBase();
+    if (observedBase !== topChild.branch) throw new Error('retained leaf retarget was not observed');
+    await writePhase('observed');
   }
 
-  const retarget = await executeGithubOperation({
-    operation: 'pull-request.retarget',
-    repository: leaf.repository,
-    resource: { kind: 'pull-request', number: leaf.number },
-    context: { actor: 'finish-publication' },
-    payload: { base: topChild.branch },
-  }, input.operations);
-  if (retarget.kind !== 'executed') throw new Error('could not retarget retained leaf pull request');
+  const observeNativeStack = async (): Promise<{ number: number; members: readonly number[] } | undefined> => {
+    const current = await executeValidatedStackOperation({
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations!,
+      request: {
+        operation: 'stack.read', repository: leaf.repository, resource: { kind: 'repository' },
+        context: { actor: 'finish-publication' }, payload: { pullRequest: leaf.number },
+      },
+    });
+    const stdout = await runTrackerRepositoryRead(
+      input.gh, input.root, 'repository.read', leaf.repository, { kind: 'repository' },
+      ['api', `repos/${leaf.repository}/stacks?pull_request=${leaf.number}`],
+    );
+    const raw: unknown = JSON.parse(stdout);
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const stack = value as { number?: unknown; pull_requests?: unknown; pullRequests?: unknown };
+    if (!Number.isInteger(stack.number) || (stack.number as number) <= 0) return undefined;
+    const rawMembers = Array.isArray(stack.pull_requests) ? stack.pull_requests : stack.pullRequests;
+    if (!Array.isArray(rawMembers)) return undefined;
+    const members = rawMembers.map((member) => typeof member === 'number'
+      ? member
+      : member && typeof member === 'object' && Number.isInteger((member as { number?: unknown }).number)
+        ? (member as { number: number }).number
+        : undefined);
+    if (members.some((member) => member === undefined)) return undefined;
+    // The validated read above binds the observation to the current record; keep
+    // this local reference so a future refactor cannot turn it into a raw lookup.
+    void current;
+    return { number: stack.number as number, members: members as number[] };
+  };
 
-  const observedBase = await readLeafBase();
-  if (observedBase !== topChild.branch) throw new Error('retained leaf retarget was not observed');
-  await writePhase('observed');
+  let native = await observeNativeStack();
+  if (!native) {
+    await executeValidatedStackOperation({
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations!,
+      request: {
+        operation: 'stack.create', repository: leaf.repository, resource: { kind: 'repository' },
+        context: { actor: 'finish-publication' }, payload: { pullRequests: stored.record.members.map((member) => member.pr) },
+      },
+    });
+    native = await observeNativeStack();
+  }
+  if (!native) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'native stack is unreadable after create');
+
+  if (stored.record.stack?.number !== native.number) {
+    const write = await writePublicationRecord(input.root, input.slug, stored, {
+      ...stored.record, stack: { number: native.number, verified: false },
+    }, { git: input.git });
+    if (write.kind !== 'updated') throw new StackPublicationHaltError('stack_publication_precondition_failed', 'could not record native stack number');
+    stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+    if (!stored) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'written stack record is unreadable');
+  }
+  const missing = stored.record.members.map((member) => member.pr).filter((pr) => !native!.members.includes(pr));
+  if (missing.length > 0) {
+    await executeValidatedStackOperation({
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations,
+      request: {
+        operation: 'stack.add', repository: leaf.repository, resource: { kind: 'stack', number: native.number },
+        context: { actor: 'finish-publication' }, payload: { pullRequests: missing },
+      },
+    });
+    native = await observeNativeStack();
+  }
+  if (!native || native.members.join(',') !== stored.record.members.map((member) => member.pr).join(',')) {
+    throw new StackPublicationHaltError('stack_tip_diverged', 'native stack membership or order diverged');
+  }
+  const verified = await writePublicationRecord(input.root, input.slug, stored, {
+    ...stored.record, stack: { number: native.number, verified: true },
+  }, { git: input.git });
+  if (verified.kind !== 'updated') throw new StackPublicationHaltError('stack_publication_precondition_failed', 'could not mark native stack verified');
+  await input.events?.emit({ type: 'stack_assembled', prs: stored.record.members.map((member) => member.pr) });
 }
 
 /**
@@ -351,11 +510,17 @@ async function establishChildPrs(input: {
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
   if (!leaf || !input.operations || !input.remoteMutation) throw new Error('stack child publication boundary unavailable');
-  const stackGit = input.git as never;
+  const stackGit = publicationRecordGit(input.git, input.root);
   const children = await readStackPublicationChildren(input.root, input.slug, { git: stackGit });
   if (children === 'unreadable') throw new Error('stack child positions are unreadable');
-  const chain = await verifyChildChain(input.root, children, { git: stackGit });
-  if (chain.kind !== 'valid') throw new Error(chain.kind === 'broken' ? `stack child chain broken at ${chain.position}` : 'stack child chain unreadable');
+  const positions = await readSealedPositions(input.slug, stackGit);
+  const leafPosition = Array.isArray(positions) ? positions.at(-1) : undefined;
+  if (leafPosition === undefined) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed leaf position is unreadable');
+  const chain = await verifyChildChainToLeaf(input.root, children, leafBranchFor(input.slug), { git: stackGit });
+  if (chain.kind !== 'valid') throw new StackPublicationHaltError(
+    'stack_publication_precondition_failed',
+    chain.kind === 'broken' ? `stack child chain broken at position ${chain.position}` : 'stack child chain unreadable',
+  );
 
   const list = async (head: string): Promise<ChildPullRequest[]> => {
     const stdout = await runTrackerRepositoryRead(
@@ -379,7 +544,7 @@ async function establishChildPrs(input: {
     const pr = prs[0];
     if (!pr) return undefined;
     if (pr.state !== 'OPEN' || !pr.isDraft || pr.base !== expectedBase) {
-      throw new Error(`diverged child pull request for ${branch}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `diverged child pull request at position ${branch}`);
     }
     return pr;
   };
@@ -389,9 +554,11 @@ async function establishChildPrs(input: {
   // create response is lost.
   await Promise.all(children.map((child, index) => list(child.branch).then((prs) =>
     choose(prs, child.branch, index === 0 ? input.baseBranch : children[index - 1]!.branch))));
-  const prior = await activePublicationRecord(input.root, input.slug, { git: stackGit });
-  if (prior && prior.record.members.some((member, index) => member.position !== [...children.map((child) => child.position), Number.MAX_SAFE_INTEGER][index])) {
-    throw new Error('publication record has divergent members');
+  const rawPrior = await readPublicationRecord(input.root, input.slug, { git: stackGit });
+  const prior = rawPrior.kind === 'record' ? rawPrior : undefined;
+  if (prior && prior.record.members.some((member, index) => member.position !== [...children.map((child) => child.position), leafPosition][index])) {
+    await haltStackTipDiverged(input.root, prior.record.members, input.events as never, 'published stack tip diverged at sealed position');
+    throw new StackPublicationHaltError('stack_tip_diverged', 'publication record has divergent sealed positions');
   }
   const leafView = await list(leafBranchFor(input.slug));
   const retained = leafView.find((candidate) => candidate.number === leaf.number);
@@ -400,7 +567,7 @@ async function establishChildPrs(input: {
     const result = await executeGithubOperation({ operation: 'pull-request.draft', repository: leaf.repository,
       resource: { kind: 'pull-request', number: leaf.number }, context: { actor: 'finish-publication' } }, input.operations);
     if (result.kind !== 'executed') throw new Error('could not re-draft retained leaf pull request');
-    await input.events?.emit({ type: 'stack_member_redrafted', child: children.at(-1)?.position ?? 1 as never, pr: leaf.number } as never);
+    await input.events?.emit({ type: 'stack_member_redrafted', child: leafPosition, pr: leaf.number } as never);
   }
 
   let stored = prior;
@@ -410,11 +577,11 @@ async function establishChildPrs(input: {
       slice: { position: child.position, name: `Stack slice ${child.position}`, taskIds: [], storyIds: [] },
       stories: [], branch: child.branch, base, diffstat: '',
       members: [...children.map((item) => ({ position: item.position, name: item.branch, reference: item.branch })),
-        { position: Number.MAX_SAFE_INTEGER, name: leafBranchFor(input.slug), reference: `#${leaf.number}` }],
+        { position: leafPosition, name: leafBranchFor(input.slug), reference: `#${leaf.number}` }],
       template: input.template,
     });
     const bodyCheck = checkChildBodyPostconditions(body, input.template, child.branch);
-    if (!bodyCheck.ok) throw new Error(bodyCheck.reason);
+    if (!bodyCheck.ok) throw new StackPublicationHaltError('stack_publication_precondition_failed', bodyCheck.reason);
     const pushed = await pushChildClosure(input.root, input.slug, child, {
       git: stackGit,
       remote: {
@@ -425,7 +592,10 @@ async function establishChildPrs(input: {
       },
       remoteGit: input.remoteGit,
     });
-    if (pushed.kind === 'diverged') throw new Error(`child closure diverged at ${child.position}`);
+    if (pushed.kind === 'diverged') {
+      await haltStackTipDiverged(input.root, stored?.record.members ?? [{ pr: leaf.number }], input.events as never, `published stack tip diverged at position ${child.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `child closure diverged at position ${child.position}`);
+    }
     if (pushed.kind === 'read-failed') throw new Error(`child closure read failed at ${child.position}`);
     let member = choose(await list(child.branch), child.branch, base);
     if (!member) {
@@ -447,9 +617,8 @@ async function establishChildPrs(input: {
     await input.events?.emit({ type: 'stack_member_published', child: child.position, pr: member.number } as never);
   }
   if (!stored) throw new Error('stack publication record is missing');
-  const leafPosition = children.at(-1)!.position + 1;
   const final = { version: 1 as const, members: [...stored.record.members,
-    { position: leafPosition as never, branch: leafBranchFor(input.slug), pr: leaf.number }].sort((left, right) => left.position - right.position) };
+    { position: leafPosition, branch: leafBranchFor(input.slug), pr: leaf.number }].sort((left, right) => left.position - right.position) };
   const write = await writePublicationRecord(input.root, input.slug, stored, final, { git: stackGit });
   if (write.kind !== 'updated') throw new Error('could not record retained leaf pull request');
 }
@@ -1145,9 +1314,32 @@ export function createProductionFinishPublicationCoordinator(
             if (status !== 0) throw new Error('required shipped-record accepted-risk evidence could not be published');
             await copyRecordedReviewFindingsToShippedRecord(state.feature_desc);
           },
+          assembleStack: async () => {
+            if (!state.feature_desc || !state.pr_url) throw new Error('missing stack publication identity');
+            await assembleStack({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              leafUrl: state.pr_url,
+              baseBranch: deps.baseBranch,
+              git: publicationRecordGit(deps.git, deps.projectRoot),
+              gh: deps.gh,
+              operations,
+              events: deps.events as never,
+            });
+          },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');
             const prOperations = await retainedOperations(state.pr_url);
+            if (!state.feature_desc) throw new Error('missing stack publication identity');
+            await readyStackChildren({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              leafUrl: state.pr_url,
+              template: deps.prTemplateBytes,
+              git: publicationRecordGit(deps.git, deps.projectRoot),
+              gh: deps.gh,
+              operations: prOperations,
+            });
             await projectAcceptedRiskToRetainedPr(state.pr_url, prOperations);
             if (deps.repairPresentation) {
               await deps.repairPresentation({ prUrl: state.pr_url, state });

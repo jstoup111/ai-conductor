@@ -325,7 +325,7 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
-  FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
+  publicationProgressAllowance,
   nonRetryablePublicationReason,
   renderProseHumanRequiredDetail,
   routeFinishPublicationDisposition,
@@ -10127,6 +10127,7 @@ export class Conductor {
         // halted just because the fixed retry budget ran out.
         let progressAttempts = 0;
         let publicationProgressAttempts = 0;
+        let stackPublicationProgress = false;
         let lastPublicationTransition: PublicationTransition | undefined;
         let lastPublicationRetryDetail: string | undefined;
         const consumeFinishPublicationProgress = async (
@@ -10134,7 +10135,16 @@ export class Conductor {
         ): Promise<boolean> => {
           publicationProgressAttempts++;
           lastPublicationTransition = transition;
-          if (publicationProgressAttempts < FINISH_PUBLICATION_PROGRESS_ALLOWANCE) return true;
+          stackPublicationProgress ||= transition === 'establish_child_prs' || transition === 'assemble_stack';
+          // A stack always crosses establish_child_prs before any other
+          // stacked-only publication progress, so its observed transition is
+          // sufficient to select the sealed feature's nine-transition budget.
+          const allowance = publicationProgressAllowance({
+            stack: stackPublicationProgress
+              ? 'members-missing'
+              : 'not-applicable',
+          } as Parameters<typeof publicationProgressAllowance>[0]);
+          if (publicationProgressAttempts < allowance) return true;
 
           const baseReason =
             `FINISH publication progress allowance exhausted after ` +
@@ -11404,7 +11414,7 @@ export class Conductor {
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await this.haltSerialExecution({
                 reason: route.reason,
-                haltClass: 'needs-human',
+                haltClass: route.haltClass ?? 'needs-human',
                 persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
               });
               process.off('SIGINT', sigintHandler);

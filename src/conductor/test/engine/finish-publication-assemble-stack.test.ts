@@ -42,15 +42,25 @@ async function record(): Promise<PublicationRecord> {
 }
 
 function fixture(base: string, trace: string[]) {
+  let stack: { number: number; pull_requests: readonly { number: number }[] } | undefined;
   const gh: GhRunner = async (args) => {
     trace.push(`read:${args.join(' ')}`);
+    if (args[0] === 'api' && args[1]?.includes('/stacks?pull_request=')) {
+      return { stdout: JSON.stringify(stack === undefined ? [] : [stack]) };
+    }
     return { stdout: JSON.stringify({ baseRefName: base }) };
   };
   const operations: GithubOperationRunner = {
     run: async (request: GithubOperationRequest) => {
-      if (request.operation !== 'pull-request.retarget') throw new Error(`unexpected operation ${request.operation}`);
-      trace.push(`retarget:${(request.payload as { base: string }).base}`);
-      base = (request.payload as { base: string }).base;
+      if (request.operation === 'pull-request.retarget') {
+        trace.push(`retarget:${(request.payload as { base: string }).base}`);
+        base = (request.payload as { base: string }).base;
+      } else if (request.operation === 'stack.create') {
+        stack = { number: 44, pull_requests: (request.payload as { pullRequests: readonly number[] }).pullRequests.map((number) => ({ number })) };
+        trace.push('stack:create');
+      } else if (request.operation !== 'stack.read') {
+        throw new Error(`unexpected operation ${request.operation}`);
+      }
       return {};
     },
   };
@@ -93,8 +103,11 @@ describe('assembleStack leaf retarget journal', () => {
       'write:intended',
       'retarget:feat/c3/demo',
       'write:observed',
+      'write:observed',
+      'write:observed',
     ]);
     await expect(record()).resolves.toMatchObject({ retarget: { from: 'main', to: 'feat/c3/demo', phase: 'observed' } });
+    await expect(record()).resolves.toMatchObject({ stack: { number: 44, verified: true } });
   });
 
   it('resumes after an intended write before the call with exactly one retarget', async () => {

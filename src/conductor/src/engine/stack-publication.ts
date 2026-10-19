@@ -180,9 +180,10 @@ export async function haltStackTipDiverged(
   root: string,
   members: readonly { readonly pr: number }[],
   events?: { emit(event: Extract<ConductorEvent, { type: 'stack_tip_diverged' }>): Promise<void> },
+  detail?: string,
 ): Promise<void> {
   const prs = members.map((member) => member.pr);
-  await writeHaltMarker(root, `published stack tip diverged for PRs: ${prs.join(', ')}\n`, 'stack-tip-diverged');
+  await writeHaltMarker(root, `${detail ?? 'published stack tip diverged'} for PRs: ${prs.join(', ')}\n`, 'stack-tip-diverged');
   await events?.emit({ type: 'stack_tip_diverged', prs });
 }
 
@@ -206,7 +207,7 @@ function hasDurableChildState(cursor: ActiveChildResolution): boolean {
   return cursor.kind === 'active' || cursor.kind === 'repair-pending';
 }
 
-async function readSealedPositions(
+export async function readSealedPositions(
   slug: string,
   git: GitRunner,
 ): Promise<readonly ChildId[] | 'absent' | 'unreadable'> {
@@ -281,6 +282,26 @@ export async function verifyChildChain(
   return { kind: 'valid' };
 }
 
+/** The sealed closure proof includes the edge from the last child to the leaf. */
+export async function verifyChildChainToLeaf(
+  root: string,
+  children: readonly StackPublicationChild[],
+  leafBranch: string,
+  dependencies: { readonly git?: GitRunner } = {},
+): Promise<ChildChainVerification> {
+  const interior = await verifyChildChain(root, children, dependencies);
+  if (interior.kind !== 'valid') return interior;
+  const last = children.at(-1);
+  if (!last) return { kind: 'unreadable' };
+  const git = dependencies.git ?? makeGitRunner(root);
+  try {
+    const contains = await git(['merge-base', '--is-ancestor', last.closure, `refs/heads/${leafBranch}`]);
+    return contains.exitCode === 0 ? { kind: 'valid' } : { kind: 'broken', position: last.position };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
 export type PushChildClosureResult =
   | { readonly kind: 'pushed'; readonly position: ChildId; readonly tip: string }
   | { readonly kind: 'unchanged'; readonly position: ChildId; readonly tip: string }
@@ -337,7 +358,9 @@ export async function pushChildClosure(
   return result.kind === 'executed'
     ? { kind: 'pushed', position: child.position, tip: child.closure }
     : result.kind === 'failed'
-      ? { kind: 'read-failed', position: child.position }
+      ? result.error === 'published stack tip mismatch'
+        ? { kind: 'diverged', position: child.position }
+        : { kind: 'read-failed', position: child.position }
       : { kind: 'diverged', position: child.position };
 }
 

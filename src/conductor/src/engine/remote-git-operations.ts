@@ -20,6 +20,7 @@ import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushedTipSource, type PreparedPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
+import { haltStackTipDiverged } from './stack-publication.js';
 import { makeGitRunner } from './rebase.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
@@ -154,7 +155,7 @@ async function guardPublishedStackPushes(
   remote: string,
   destinations: readonly RemoteGitDestination[],
   dependencies: RemoteGitOperationDependencies,
-): Promise<{ readonly kind: 'allow'; readonly args: readonly string[] } | { readonly kind: 'refuse' }> {
+): Promise<{ readonly kind: 'allow'; readonly args: readonly string[] } | { readonly kind: 'refuse'; readonly members: readonly { readonly pr: number }[] }> {
   const candidates = featurePushSources(args, destinations);
   let guardedArgs = [...args];
   const localGit: PushLeaseGitRunner = dependencies.pushLeaseGit ?? (async (localArgs, input) => {
@@ -178,7 +179,7 @@ async function guardPublishedStackPushes(
         endpoint: destination.endpoint,
       }),
     });
-    if (guard.kind === 'refuse') return { kind: 'refuse' };
+    if (guard.kind === 'refuse') return { kind: 'refuse', members: guard.members };
     if (guard.kind === 'allow') guardedArgs = withExpectedLease(guardedArgs, destination, guard.expected);
   }
   return { kind: 'allow', args: guardedArgs };
@@ -314,6 +315,12 @@ export async function executeRemoteGit(
 
   const guarded = await guardPublishedStackPushes(args, resolution.remote, resolution.targets, dependencies);
   if (guarded.kind === 'refuse') {
+    await haltStackTipDiverged(
+      dependencies.cwd,
+      guarded.members,
+      dependencies.events as never,
+      'published stack tip diverged during guarded push',
+    );
     return { kind: 'failed', error: 'published stack tip mismatch', targets: resolution.targets };
   }
 
