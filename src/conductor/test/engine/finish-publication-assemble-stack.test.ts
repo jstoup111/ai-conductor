@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -52,12 +52,22 @@ async function record(): Promise<PublicationRecord> {
   return stored.record;
 }
 
-function fixture(base: string, trace: string[]) {
-  let stack: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] } | undefined;
+function fixture(
+  base: string,
+  trace: string[],
+  initialStack?: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] },
+) {
+  let stack: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] } | undefined = initialStack;
   const gh: GhRunner = async (args) => {
     trace.push(`read:${args.join(' ')}`);
     if (args[0] === 'api' && args[1]?.includes('/stacks?pull_request=')) {
       return { stdout: JSON.stringify(stack === undefined ? [] : [stack]) };
+    }
+    const number = Number(args[2]);
+    if (Number.isInteger(number)) {
+      const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      const memberBase = number === 101 ? 'main' : number === 103 ? 'feat/c1/demo' : base;
+      return { stdout: JSON.stringify({ baseRefName: memberBase, headRefOid: head }) };
     }
     return { stdout: JSON.stringify({ baseRefName: base }) };
   };
@@ -150,5 +160,23 @@ describe('assembleStack leaf retarget journal', () => {
 
     expect(trace.filter((entry) => entry.startsWith('retarget:'))).toEqual([]);
     await expect(record()).resolves.toMatchObject({ retarget: { phase: 'observed' } });
+  });
+
+  it('discovers by member 1 and refuses a foreign stack before create or add', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    const { gh, operations } = fixture('feat/c3/demo', trace, {
+      number: 91,
+      pull_requests: [{ number: 999, head: { sha: head } }],
+    });
+
+    await expect(assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations,
+    })).rejects.toMatchObject({ reason: 'stack_tip_diverged' });
+
+    expect(trace).toContain('read:api repos/acme/demo/stacks?pull_request=101');
+    expect(trace).not.toContain('stack:create');
   });
 });

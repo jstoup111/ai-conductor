@@ -619,17 +619,21 @@ export async function assembleStack(input: {
     await writePhase('observed');
   }
 
+  // Native stack discovery is anchored at member 1, rather than the retained
+  // leaf.  A leaf may already have been attached elsewhere; querying it first
+  // would turn that conflict into a new stack creation or an unsafe add.
+  const discoverMember = stored.record.members[0]!;
   const observeNativeStack = async (): Promise<{ number: number; members: readonly NativeStackMember[] } | undefined> => {
     const current = await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
         operation: 'stack.read', repository: leaf.repository, resource: { kind: 'repository' },
-        context: { actor: 'finish-publication' }, payload: { pullRequest: leaf.number },
+        context: { actor: 'finish-publication' }, payload: { pullRequest: discoverMember.pr },
       },
     });
     const stdout = await runTrackerRepositoryRead(
       input.gh, input.root, 'repository.read', leaf.repository, { kind: 'repository' },
-      ['api', `repos/${leaf.repository}/stacks?pull_request=${leaf.number}`],
+      ['api', `repos/${leaf.repository}/stacks?pull_request=${discoverMember.pr}`],
     );
     const raw: unknown = JSON.parse(stdout);
     const value = Array.isArray(raw) ? raw[0] : raw;
@@ -656,6 +660,15 @@ export async function assembleStack(input: {
     native = await observeNativeStack();
   }
   if (!native) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'native stack is unreadable after create');
+
+  // An existing native stack is extendable only when it is the ordered prefix
+  // of our immutable publication receipt.  Never "fill in" a foreign member
+  // or reorder an existing stack by issuing stack.add.
+  const isOrderedPrefix = native.members.length <= stored.record.members.length
+    && native.members.every((member, index) => member.number === stored.record.members[index]?.pr);
+  if (!isOrderedPrefix) {
+    throw new StackPublicationHaltError('stack_tip_diverged', 'native stack belongs to another stack or is not an ordered publication prefix');
+  }
 
   if (stored.record.stack?.number !== native.number) {
     const write = await writePublicationRecord(input.root, input.slug, stored, {
@@ -684,6 +697,22 @@ export async function assembleStack(input: {
     const pushed = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, member.branch)]);
     if (pushed.exitCode !== 0 || pushed.stdout.trim() !== native.members[index]!.head) {
       throw new StackPublicationHaltError('stack_tip_diverged', `native stack head diverged at position ${member.position}`);
+    }
+    const stdout = await runTrackerRepositoryRead(
+      input.gh, input.root, 'pull-request.read', leaf.repository,
+      { kind: 'pull-request', number: member.pr },
+      ['pr', 'view', String(member.pr), '-R', leaf.repository, '--json', 'baseRefName,headRefOid'],
+    );
+    const parsed: unknown = JSON.parse(stdout);
+    const base = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as { baseRefName?: unknown }).baseRefName
+      : undefined;
+    const head = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as { headRefOid?: unknown }).headRefOid
+      : undefined;
+    const expectedBase = index === 0 ? input.baseBranch : stored.record.members[index - 1]!.branch;
+    if (base !== expectedBase || head !== pushed.stdout.trim()) {
+      throw new StackPublicationHaltError('stack_tip_diverged', `native stack base or head diverged at position ${member.position}`);
     }
   }
   const verified = await writePublicationRecord(input.root, input.slug, stored, {
