@@ -157,3 +157,10 @@ All judges were fresh subagents. The §4f/§4g passes ran on opus (Tier L).
   - D2 cites task-5, and task 6 pins custom-id stability across v1 and v2;
   - the Story links on tasks 11 and 16;
   - portable D1 is now `task` with task-8.
+- **Coherence, round 3, after #3271 landed (#3308).** One fresh opus judge on the revision.
+  - The carry claim now matches #3271 as landed (85%: its resolver has no version condition).
+  - stable-dispositions D3 moved to no-change; remediate-case D6 now cites a Task 19 no-effect check.
+  - The Story 8 carry-precedence criterion and its Task 19 check now name the threshold and a valid
+    advisory case, because an invalid advisory judgement fails before carry is decided.
+  - The mixed-laps and stable-dispositions notes were reworded: invalidation is still reported,
+    and carry applies only where adjudication is enabled.
