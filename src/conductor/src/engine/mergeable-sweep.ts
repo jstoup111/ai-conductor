@@ -48,6 +48,7 @@ import {
   type StoredPublicationRecord,
 } from './stack-publication-record.js';
 import { recordUnreachableMemberReport, verifyMemberReachability } from './stack-publication.js';
+import { deleteStackChildren } from './stack-teardown.js';
 import {
   classifyShippedReadiness,
   routeShippedReadiness,
@@ -892,6 +893,22 @@ export async function sweepMergeableLabels({
                   log?.(
                     `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
                   );
+                }
+                if (reachability.kind === 'reachable') {
+                  const result = await deleteStackChildren(entry.repoCwd, entry.slug, publication.record, {
+                    git: makeGitRunner(entry.repoCwd), gh, repository,
+                  });
+                  if (result.kind === 'deleted') {
+                    log?.(`[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main`);
+                    continue;
+                  }
+                  if (result.kind === 'kept') {
+                    await writePublicationRecord(entry.repoCwd, entry.slug, publication, {
+                      ...publication.record,
+                      tornDown: true,
+                    }, publicationRecordDependencies);
+                  }
+                  survivors.push(entry);
                 }
                 continue;
               }
