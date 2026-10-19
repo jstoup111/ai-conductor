@@ -45,6 +45,18 @@ export interface RateLimitEpisode {
    * @returns Next wait interval in seconds
    */
   nextWaitSeconds(baseSeconds?: number): number;
+
+  /**
+   * Current coordinator state for replicas owned by a separate process.
+   * Optional so existing test doubles and compatible implementations retain
+   * the original behavioral contract.
+   */
+  snapshot?(): RateLimitEpisodeSnapshot;
+}
+
+export interface RateLimitEpisodeSnapshot {
+  deadline?: number;
+  escalationCounter: number;
 }
 
 export interface CreateOptions {
@@ -244,6 +256,13 @@ export function create(options?: CreateOptions): RateLimitEpisode {
       escalationCounter += 1;
 
       return waitSeconds;
+    },
+
+    snapshot(): RateLimitEpisodeSnapshot {
+      return {
+        deadline: deadline ?? undefined,
+        escalationCounter,
+      };
     },
   };
 }

@@ -85,7 +85,17 @@ export function createRateLimitEpisodeProxy(client: ReturnType<typeof createExec
     },
     active(nowMs = now()) { return deadline !== undefined && nowMs < deadline; },
     clear(signal) { return client.request('rate-limit.clear', {}, signal).then(() => undefined); },
-    nextWaitSeconds(baseSeconds = 60) { return Math.min(3600, baseSeconds * (2 ** escalationCounter)); },
+    nextWaitSeconds(baseSeconds = 60) {
+      const base = Number.isFinite(baseSeconds) && baseSeconds > 0 ? baseSeconds : 60;
+      const waitSeconds = escalationCounter === 0
+        ? base
+        : Math.min(3600, base * (2 ** escalationCounter));
+      escalationCounter += 1;
+      // The return stays synchronous from the replica. The request advances the
+      // supervisor's authoritative counter and refreshes every replica.
+      void client.request('rate-limit.next-wait', { baseSeconds }).catch(() => {});
+      return waitSeconds;
+    },
   };
 }
 

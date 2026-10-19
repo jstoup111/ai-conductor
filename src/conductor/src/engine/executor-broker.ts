@@ -34,7 +34,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
   abortAll(): void;
 } {
   const now = deps.now ?? (() => Date.now());
-  const attachments = new Set<() => void>();
+  const attachments = new Set<(reason?: string) => void>();
   const providerWindows = new Map<string, number>();
   let rateDeadline: number | undefined;
   let escalationCounter = 0;
@@ -42,7 +42,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
   const broadcast = (name: 'rate-limit' | 'provider', value: unknown) => {
     for (const port of ports) port.send({ kind: 'state', name, value });
   };
-  const rateSnapshot = () => ({ deadline: rateDeadline, escalationCounter });
+  const rateSnapshot = () => deps.rateLimitEpisode.snapshot?.() ?? ({ deadline: rateDeadline, escalationCounter });
   const providerSnapshot = () => Object.fromEntries([...providerWindows].filter(([, until]) => until > now()));
   const broadcastState = () => { broadcast('rate-limit', rateSnapshot()); broadcast('provider', providerSnapshot()); };
 
@@ -50,8 +50,10 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
     attach(slug, port) {
       ports.add(port);
       const windows = new Map<string, LiveBoundaryWindow>();
+      const pendingRateLimitClears = new Map<string, AbortController>();
       let releasedLock: (() => void) | undefined;
       let lockHeld: Promise<void> | undefined;
+      let closed = false;
       const featureEvents = createForwardingFeatureEventEmitter(deps.rootEvents, slug);
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
       const release = () => {
@@ -65,17 +67,34 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
             const untilMs = (params as { untilMs?: unknown })?.untilMs;
             if (typeof untilMs === 'number') {
               deps.rateLimitEpisode.enter(untilMs);
-              rateDeadline = Math.max(rateDeadline ?? 0, untilMs);
-              escalationCounter += 1;
+              rateDeadline = deps.rateLimitEpisode.active() ? Math.max(rateDeadline ?? 0, untilMs) : undefined;
               broadcast('rate-limit', rateSnapshot());
             }
             respond(requestId, { ok: undefined }); return;
           }
           if (method === 'rate-limit.clear') {
-            await deps.rateLimitEpisode.clear();
-            rateDeadline = undefined; escalationCounter = 0;
+            const abort = new AbortController();
+            pendingRateLimitClears.set(requestId, abort);
+            // clear() resets the authoritative escalation state before it starts
+            // waiting. Replicate that immediately while preserving its deadline.
+            escalationCounter = 0;
             broadcast('rate-limit', rateSnapshot());
-            respond(requestId, { ok: undefined }); return;
+            try {
+              await deps.rateLimitEpisode.clear(abort.signal);
+              if (closed) return;
+              if (!deps.rateLimitEpisode.active()) rateDeadline = undefined;
+              broadcast('rate-limit', rateSnapshot());
+              respond(requestId, { ok: undefined }); return;
+            } finally {
+              pendingRateLimitClears.delete(requestId);
+            }
+          }
+          if (method === 'rate-limit.next-wait') {
+            const baseSeconds = (params as { baseSeconds?: unknown })?.baseSeconds;
+            const waitSeconds = deps.rateLimitEpisode.nextWaitSeconds(typeof baseSeconds === 'number' ? baseSeconds : undefined);
+            escalationCounter += 1;
+            broadcast('rate-limit', rateSnapshot());
+            respond(requestId, { ok: waitSeconds }); return;
           }
           if (method === 'provider.suppress') {
             const { provider, untilMs } = (params ?? {}) as { provider?: unknown; untilMs?: unknown };
@@ -124,13 +143,26 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           void (message.scope === 'feature' ? featureEvents : deps.rootEvents).emit(message.payload as ConductorEvent);
         } else if (message.kind === 'log') deps.featureLogFor(slug)(`[executor:${message.level}] ${message.message}`);
       };
-      const close = () => { release(); ports.delete(port); attachments.delete(close); };
+      const close = (reason = 'executor broker aborted') => {
+        if (closed) return;
+        closed = true;
+        for (const [requestId, abort] of pendingRateLimitClears) {
+          // A broker shutdown is observable by the child even when the IPC port
+          // itself remains open long enough for its stop protocol.
+          respond(requestId, { error: reason });
+          abort.abort();
+        }
+        pendingRateLimitClears.clear();
+        release();
+        ports.delete(port);
+        attachments.delete(close);
+      };
       port.on('message', onMessage);
-      port.on('disconnect', close);
+      port.on('disconnect', () => close('executor supervisor channel disconnected'));
       attachments.add(close);
       broadcastState();
       return { events: featureEvents, close };
     },
-    abortAll() { for (const close of [...attachments]) close(); },
+    abortAll() { for (const close of [...attachments]) close('executor broker aborted'); },
   };
 }
