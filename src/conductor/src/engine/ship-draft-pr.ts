@@ -38,6 +38,7 @@ import {
   executeGithubOperation,
   type GithubOperationEventEmitter,
   type GithubOperationRunner,
+  type GithubOperationTarget,
 } from './github-operations.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import {
@@ -234,6 +235,31 @@ export function bindMutationToPullRequest(
   const target = pullRequestTargetFromUrl(prUrl, mutation.provenance.repository);
   if (!target) return undefined;
   return { ...mutation, provenance: { ...mutation.provenance, target } };
+}
+
+/** Rebind feature provenance to the exact resource a single write will use. */
+export function bindMutationToTarget(
+  mutation: GithubMutationExecutionContext,
+  target: GithubOperationTarget,
+): GithubMutationExecutionContext | undefined {
+  if (target.repository.toLowerCase() !== mutation.provenance.repository.toLowerCase()) return undefined;
+  return { ...mutation, provenance: { ...mutation.provenance, target } };
+}
+
+/** Build an independently authorized runner for one exact GitHub target. */
+export function createTargetBoundGithubOperationRunner(input: {
+  mutation: GithubMutationExecutionContext;
+  target: GithubOperationTarget;
+  gh: GhRunner;
+  cwd: string;
+  events?: GithubOperationEventEmitter;
+}): GithubOperationRunner | undefined {
+  const mutation = bindMutationToTarget(input.mutation, input.target);
+  return mutation === undefined ? undefined : createGuardedGithubOperationRunner(input.gh, {
+    cwd: input.cwd,
+    mutation,
+    events: input.events,
+  });
 }
 
 /**

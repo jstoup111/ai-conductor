@@ -150,7 +150,7 @@ describe('published stack tip guard', () => {
     await expect(executeRemoteGit(
       ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo'],
       dependencies(repository, calls),
-    )).resolves.toMatchObject({ kind: 'failed', error: 'published stack tip mismatch' });
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'stack-tip-mismatch' });
 
     expect(await sha(origin, 'refs/heads/feat/daemon-demo')).toBe(leaf);
     expect(calls).toHaveLength(1);
@@ -165,7 +165,7 @@ describe('published stack tip guard', () => {
     await expect(executeRemoteGit(
       ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo'],
       dependencies(repository, calls),
-    )).resolves.toMatchObject({ kind: 'failed', error: 'published stack tip mismatch' });
+    )).resolves.toMatchObject({ kind: 'refused', reason: 'stack-tip-mismatch' });
 
     expect(await sha(origin, 'refs/heads/feat/daemon-demo')).toBe(leaf);
     expect(calls).toHaveLength(1);

@@ -314,6 +314,8 @@ export type GithubOperationRefusalReason =
   | 'provenance-timeout'
   | 'invalid-target'
   | 'invalid-payload'
+  /** Remote stack guard refusal; callers decide whether it is a terminal halt. */
+  | 'stack-tip-mismatch'
   | 'unsupported-operation'
   | 'explicit-authorization-required';
 
@@ -402,6 +404,7 @@ export function githubOperationRefusalRemedy(
     case 'provenance-timeout': return 'retry-provenance-read';
     case 'invalid-target': return 'correct-operation-target';
     case 'invalid-payload': return 'correct-operation-payload';
+    case 'stack-tip-mismatch': return 'correct-operation-target';
     case 'unsupported-operation': return 'use-supported-operation';
     case 'explicit-authorization-required': return 'request-explicit-authorization';
   }

@@ -13,7 +13,7 @@ import type { ConductState, FinishPublicationEvent, RunMode } from '../types/ind
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './step-runner-types.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
-import { decodeGithubOperationRequest, executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner } from './github-operations.js';
+import { decodeGithubOperationRequest, executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner, type GithubOperationTarget } from './github-operations.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
@@ -34,7 +34,10 @@ import {
 import { activePublicationRecord, readPublicationRecord, writePublicationRecord } from './stack-publication-record.js';
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
-import { checkChildBodyPostconditions, renderChildBody } from './stack-member-body.js';
+import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
+import { validatePlanSlices } from './plan-slices.js';
+import { parsePlanTaskBodies, parsePlanTaskStoryLineIds } from './plan-task-parse.js';
+import { splitStoryBlocks } from './story-criteria.js';
 import { gateSatisfied } from './selector.js';
 import {
   dispatchFinishRecord,
@@ -53,7 +56,7 @@ import {
   type PrProseJudgmentResult,
   type ReleaseReadinessObservation,
 } from './finish-publication.js';
-import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
+import { createShipDraftPublicationDependencies, createTargetBoundGithubOperationRunner } from './ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import { pushedTipRef } from './push-lease.js';
@@ -221,19 +224,65 @@ function repositoryAndNumber(prUrl: string): { repository: string; number: numbe
 
 type PullRequestBase = { readonly baseRefName?: unknown };
 
+/** Read the sealed plan evidence used to author one child PR; no placeholders. */
+async function sealedChildPresentation(input: {
+  root: string;
+  slug: string;
+  position: number;
+  branch: string;
+  base: string;
+  git: GitRunner;
+}): Promise<{ slice: { position: number; name: string; taskIds: readonly string[]; storyIds: readonly string[] }; stories: readonly { id: string; title: string }[]; diffstat: string }> {
+  const planPath = join(input.root, '.docs', 'plans', `${input.slug}.md`);
+  const plan = await readFile(planPath, 'utf8').catch(() => undefined);
+  if (plan === undefined) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack plan is unreadable');
+  const slices = validatePlanSlices(plan);
+  if (slices.kind !== 'sliced') throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack slices are unreadable');
+  const slice = slices.slices.find((candidate) => candidate.position === input.position);
+  if (!slice) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} is missing`);
+  const taskBodies = parsePlanTaskBodies(plan);
+  const storyIds = [...new Set(slice.taskIds.flatMap((taskId) => parsePlanTaskStoryLineIds(taskBodies.get(taskId) ?? '').flat()))];
+  const storiesPath = join(input.root, '.docs', 'stories', `${input.slug}.md`);
+  const storiesText = await readFile(storiesPath, 'utf8').catch(() => '');
+  const stories = splitStoryBlocks(storiesText).flatMap((story) => story.id === undefined ? [] : [{
+    id: story.id,
+    title: story.text.split('\n').find((line) => /^##\s+Story\s+/i.test(line))?.replace(/^##\s+Story\s+[^:]+:?\s*/i, '') || story.id,
+  }]);
+  const diff = await input.git(['diff', '--stat', `${input.base}...${input.branch}`], { cwd: input.root });
+  return { slice: { position: slice.position, name: slice.title, taskIds: slice.taskIds, storyIds }, stories, diffstat: diff.stdout.trim() };
+}
+
+/** Replace only engine-owned stack navigation; all other bytes stay untouched. */
+function replaceStackNavigation(body: string, navigation: string): string {
+  const start = body.indexOf('## Stack\n');
+  if (start < 0) return `${body.trimEnd()}\n\n${navigation}`;
+  const next = body.indexOf('\n## ', start + '## Stack'.length);
+  return `${body.slice(0, start)}${navigation}${next < 0 ? '' : body.slice(next)}`;
+}
+
 function publicationRecordGit(git: GitRunner, cwd: string): PublicationRecordGitRunner {
   return async (args, options) => {
     try {
-      const result = await git(args, {
+      // The public PR GitRunner predates publication-record writes and omits
+      // stdin/exit status from its narrow type. Preserve both when the
+      // production adapter supplies them: `hash-object --stdin` is otherwise
+      // handed an empty stream and a record can never become durable.
+      const run = git as unknown as (argv: string[], opts: {
+        cwd: string;
+        credential?: 'operator' | 'write';
+        endpoint?: 'https' | 'ssh';
+        input?: string;
+      }) => Promise<{ stdout: string; exitCode?: unknown; stderr?: unknown }>;
+      const result = await run(args, {
         cwd,
         ...(options?.credential === undefined ? {} : { credential: options.credential }),
         ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        ...(options?.input === undefined ? {} : { input: options.input }),
       });
-      const observed = result as { stdout: string; exitCode?: unknown; stderr?: unknown };
       return {
-        exitCode: typeof observed.exitCode === 'number' ? observed.exitCode : 0,
-        stdout: observed.stdout,
-        stderr: typeof observed.stderr === 'string' ? observed.stderr : '',
+        exitCode: typeof result.exitCode === 'number' ? result.exitCode : 0,
+        stdout: result.stdout,
+        stderr: typeof result.stderr === 'string' ? result.stderr : '',
       };
     } catch (error) {
       return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
@@ -247,6 +296,8 @@ async function executeValidatedStackOperation(input: {
   slug: string;
   git: PublicationRecordGitRunner;
   operations: GithubOperationRunner;
+  /** Production binds stack reads/creates/adds to their own repository or stack target. */
+  operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
   request: Parameters<typeof executeGithubOperation>[0];
 }) {
   const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
@@ -259,7 +310,8 @@ async function executeValidatedStackOperation(input: {
   if (decoded.kind === 'refused') {
     throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack operation refused: ${decoded.reason}`);
   }
-  const result = await executeGithubOperation(input.request, input.operations);
+  const runner = input.operationsForTarget?.(decodedRequest.request.target) ?? input.operations;
+  const result = await executeGithubOperation(input.request, runner);
   if (result.kind !== 'executed') {
     throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack operation did not execute: ${result.kind}`);
   }
@@ -458,6 +510,9 @@ export async function assembleStack(input: {
   git: PublicationRecordGitRunner;
   gh: GhRunner;
   operations?: GithubOperationRunner;
+  operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
+  /** Production FINISH enables the post-membership body projection. */
+  refreshMemberBodies?: boolean;
   events?: { emit(event: { type: 'stack_assembled'; prs: readonly number[] }): Promise<void> };
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
@@ -519,7 +574,7 @@ export async function assembleStack(input: {
     }
 
     await executeValidatedStackOperation({
-      root: input.root, slug: input.slug, git: input.git, operations: input.operations!,
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
         operation: 'pull-request.retarget', repository: leaf.repository,
         resource: { kind: 'pull-request', number: leaf.number },
@@ -534,7 +589,7 @@ export async function assembleStack(input: {
 
   const observeNativeStack = async (): Promise<{ number: number; members: readonly number[] } | undefined> => {
     const current = await executeValidatedStackOperation({
-      root: input.root, slug: input.slug, git: input.git, operations: input.operations!,
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
         operation: 'stack.read', repository: leaf.repository, resource: { kind: 'repository' },
         context: { actor: 'finish-publication' }, payload: { pullRequest: leaf.number },
@@ -566,7 +621,7 @@ export async function assembleStack(input: {
   let native = await observeNativeStack();
   if (!native) {
     await executeValidatedStackOperation({
-      root: input.root, slug: input.slug, git: input.git, operations: input.operations!,
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
         operation: 'stack.create', repository: leaf.repository, resource: { kind: 'repository' },
         context: { actor: 'finish-publication' }, payload: { pullRequests: stored.record.members.map((member) => member.pr) },
@@ -587,7 +642,7 @@ export async function assembleStack(input: {
   const missing = stored.record.members.map((member) => member.pr).filter((pr) => !native!.members.includes(pr));
   if (missing.length > 0) {
     await executeValidatedStackOperation({
-      root: input.root, slug: input.slug, git: input.git, operations: input.operations,
+      root: input.root, slug: input.slug, git: input.git, operations: input.operations, operationsForTarget: input.operationsForTarget,
       request: {
         operation: 'stack.add', repository: leaf.repository, resource: { kind: 'stack', number: native.number },
         context: { actor: 'finish-publication' }, payload: { pullRequests: missing },
@@ -602,6 +657,48 @@ export async function assembleStack(input: {
     ...stored.record, stack: { number: native.number, verified: true },
   }, { git: input.git });
   if (verified.kind !== 'updated') throw new StackPublicationHaltError('stack_publication_precondition_failed', 'could not mark native stack verified');
+  // Membership is final only now. Re-render the engine-owned navigation on
+  // every PR from this durable list, never from a captured body or guessed
+  // child URL. Project-owned regions remain byte-identical because this helper
+  // replaces only the ## Stack span.
+  if (!input.refreshMemberBodies) {
+    await input.events?.emit({ type: 'stack_assembled', prs: stored.record.members.map((member) => member.pr) });
+    return;
+  }
+  const members = stored.record.members;
+  const navigationMembers = members.map((member) => ({
+    position: member.position,
+    name: member.branch,
+    reference: `#${member.pr}`,
+  }));
+  for (const member of members) {
+    const stdout = await runTrackerRepositoryRead(
+      input.gh, input.root, 'pull-request.read', leaf.repository,
+      { kind: 'pull-request', number: member.pr },
+      ['pr', 'view', String(member.pr), '-R', leaf.repository, '--json', 'body'],
+    );
+    const observed: unknown = JSON.parse(stdout);
+    const body = observed && typeof observed === 'object' && !Array.isArray(observed)
+      ? (observed as { body?: unknown }).body
+      : undefined;
+    if (typeof body !== 'string') {
+      throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack member ${member.position} body is unreadable`);
+    }
+    const nextBody = replaceStackNavigation(body, renderStackNavigation(navigationMembers, member.position));
+    const isLeaf = member.pr === leaf.number;
+    if (!isLeaf) {
+      const postcondition = checkChildBodyPostconditions(nextBody, undefined, member.branch);
+      if (!postcondition.ok) throw new StackPublicationHaltError('stack_publication_precondition_failed', postcondition.reason);
+    }
+    const edited = await executeGithubOperation({
+      operation: 'pull-request.edit', repository: leaf.repository,
+      resource: { kind: 'pull-request', number: member.pr }, context: { actor: 'finish-publication' },
+      payload: { body: nextBody },
+    }, input.operationsForTarget?.({ repository: leaf.repository, kind: 'pull-request', number: member.pr }) ?? input.operations!);
+    if (edited.kind !== 'executed') {
+      throw new StackPublicationHaltError('stack_publication_precondition_failed', `could not re-render stack member ${member.position}`);
+    }
+  }
   await input.events?.emit({ type: 'stack_assembled', prs: stored.record.members.map((member) => member.pr) });
 }
 
@@ -620,7 +717,9 @@ async function establishChildPrs(input: {
   git: GitRunner;
   gh: GhRunner;
   operations?: GithubOperationRunner;
+  operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
   remoteMutation?: GithubMutationExecutionContext;
+  remoteMutationForTarget?: (target: Extract<GithubOperationTarget, { kind: 'remote-ref' }>) => GithubMutationExecutionContext | undefined;
   remoteGit?: typeof executeRemoteGit;
   events?: GithubOperationEventEmitter;
 }): Promise<void> {
@@ -672,7 +771,13 @@ async function establishChildPrs(input: {
     choose(prs, child.branch, index === 0 ? input.baseBranch : children[index - 1]!.branch))));
   const rawPrior = await readPublicationRecord(input.root, input.slug, { git: stackGit });
   const prior = rawPrior.kind === 'record' ? rawPrior : undefined;
-  if (prior && prior.record.members.some((member, index) => member.position !== [...children.map((child) => child.position), leafPosition][index])) {
+  // A torn-down receipt is only the CAS predecessor for a new publication.
+  // Its old membership is historical cleanup evidence, never input to a
+  // republish: retaining it would manufacture position mismatches and append
+  // the leaf twice.
+  const reusingTornDownReceipt = prior?.record.tornDown === true;
+  if (prior && !reusingTornDownReceipt
+    && prior.record.members.some((member, index) => member.position !== [...children.map((child) => child.position), leafPosition][index])) {
     await haltStackTipDiverged(input.root, prior.record.members, input.events as never, 'published stack tip diverged at sealed position');
     throw new StackPublicationHaltError('stack_tip_diverged', 'publication record has divergent sealed positions');
   }
@@ -680,18 +785,31 @@ async function establishChildPrs(input: {
   const retained = leafView.find((candidate) => candidate.number === leaf.number);
   if (!retained) throw new Error('retained leaf pull request is unreadable');
   if (!retained.isDraft) {
+    const leafOperations = input.operationsForTarget?.({ repository: leaf.repository, kind: 'pull-request', number: leaf.number }) ?? input.operations;
     const result = await executeGithubOperation({ operation: 'pull-request.draft', repository: leaf.repository,
-      resource: { kind: 'pull-request', number: leaf.number }, context: { actor: 'finish-publication' } }, input.operations);
+      resource: { kind: 'pull-request', number: leaf.number }, context: { actor: 'finish-publication' } }, leafOperations);
     if (result.kind !== 'executed') throw new Error('could not re-draft retained leaf pull request');
     await input.events?.emit({ type: 'stack_member_redrafted', child: leafPosition, pr: leaf.number } as never);
   }
 
   let stored = prior;
+  let freshMembership = reusingTornDownReceipt;
   for (const [index, child] of children.entries()) {
     const base = index === 0 ? input.baseBranch : children[index - 1]!.branch;
+    const presentation = await sealedChildPresentation({
+      root: input.root,
+      slug: input.slug,
+      position: child.position,
+      branch: child.branch,
+      base,
+      git: input.git,
+    });
     const body = renderChildBody({
-      slice: { position: child.position, name: `Stack slice ${child.position}`, taskIds: [], storyIds: [] },
-      stories: [], branch: child.branch, base, diffstat: '',
+      slice: presentation.slice,
+      stories: presentation.stories,
+      branch: child.branch,
+      base,
+      diffstat: presentation.diffstat,
       members: [...children.map((item) => ({ position: item.position, name: item.branch, reference: item.branch })),
         { position: leafPosition, name: leafBranchFor(input.slug), reference: `#${leaf.number}` }],
       template: input.template,
@@ -701,7 +819,7 @@ async function establishChildPrs(input: {
     const pushed = await pushChildClosure(input.root, input.slug, child, {
       git: stackGit,
       remote: {
-        mutation: input.remoteMutation,
+        mutation: input.remoteMutationForTarget?.({ repository: leaf.repository, kind: 'remote-ref', ref: `refs/heads/${child.branch}` }) ?? input.remoteMutation,
         events: input.events,
         config: async () => ({ stdout: (await input.git(['config', '--get', 'remote.origin.url'], { cwd: input.root })).stdout }),
         runRemoteGit: async (args, options) => ({ stdout: (await input.git(args, { cwd: options.cwd, credential: options.credential })).stdout }),
@@ -717,12 +835,13 @@ async function establishChildPrs(input: {
     if (!member) {
       const created = await executeGithubOperation({ operation: 'pull-request.create', repository: leaf.repository,
         resource: { kind: 'repository', repository: leaf.repository }, context: { actor: 'finish-publication' },
-        payload: { title: `Stack slice ${child.position}`, body, head: child.branch, base, draft: true } }, input.operations);
+        payload: { title: presentation.slice.name, body, head: child.branch, base, draft: true } },
+      input.operationsForTarget?.({ repository: leaf.repository, kind: 'repository' }) ?? input.operations);
       if (created.kind !== 'executed') throw new Error(`could not create child pull request for ${child.branch}`);
       member = choose(await list(child.branch), child.branch, base);
       if (!member) throw new Error(`created child pull request is not discoverable for ${child.branch}`);
     }
-    const members = [...(stored?.record.members ?? []).filter((candidate) => candidate.position !== child.position),
+    const members = [...(freshMembership ? [] : stored?.record.members ?? []).filter((candidate) => candidate.position !== child.position),
       { position: child.position, branch: child.branch, pr: member.number }]
       .sort((left, right) => left.position - right.position);
     const next = { version: 1 as const, members };
@@ -730,10 +849,11 @@ async function establishChildPrs(input: {
     if (write.kind !== 'updated') throw new Error(`could not record child pull request for ${child.branch}`);
     stored = await activePublicationRecord(input.root, input.slug, { git: stackGit });
     if (!stored) throw new Error('written stack publication record is unreadable');
+    freshMembership = false;
     await input.events?.emit({ type: 'stack_member_published', child: child.position, pr: member.number } as never);
   }
   if (!stored) throw new Error('stack publication record is missing');
-  const final = { version: 1 as const, members: [...stored.record.members,
+  const final = { version: 1 as const, members: [...stored.record.members.filter((member) => member.position !== leafPosition),
     { position: leafPosition, branch: leafBranchFor(input.slug), pr: leaf.number }].sort((left, right) => left.position - right.position) };
   const write = await writePublicationRecord(input.root, input.slug, stored, final, { git: stackGit });
   if (write.kind !== 'updated') throw new Error('could not record retained leaf pull request');
@@ -1104,6 +1224,22 @@ export function createProductionFinishPublicationCoordinator(
         events: deps.events,
       });
       const operations = deps.operations ?? publication?.operations;
+      const publicationMutation = deps.remoteMutation ?? publication?.remoteMutation;
+      // Stacked publication changes targets on every write. Do not reuse the
+      // leaf-ref runner: the policy intentionally rejects that escalation.
+      const operationsForTarget = (target: GithubOperationTarget): GithubOperationRunner | undefined =>
+        deps.operations ?? (publicationMutation === undefined ? undefined : createTargetBoundGithubOperationRunner({
+          mutation: publicationMutation,
+          target,
+          gh: deps.gh,
+          cwd: deps.projectRoot,
+          events: deps.events,
+        }));
+      const mutationForRemoteRef = (target: Extract<GithubOperationTarget, { kind: 'remote-ref' }>) =>
+        publicationMutation === undefined ? undefined : {
+          ...publicationMutation,
+          provenance: { ...publicationMutation.provenance, target },
+        };
       // Publication starts with authority for the branch ref. Every later
       // retained-PR write needs a new, exact PR binding instead; a branch
       // target must never become repository-wide PR authority.
@@ -1418,7 +1554,9 @@ export function createProductionFinishPublicationCoordinator(
               git: deps.git,
               gh: deps.gh,
               operations,
-              remoteMutation: deps.remoteMutation ?? publication?.remoteMutation,
+              operationsForTarget,
+              remoteMutation: publicationMutation,
+              remoteMutationForTarget: mutationForRemoteRef,
               remoteGit: deps.remoteGit,
               events: deps.events,
             });
@@ -1456,6 +1594,8 @@ export function createProductionFinishPublicationCoordinator(
               git: publicationRecordGit(deps.git, deps.projectRoot),
               gh: deps.gh,
               operations,
+              operationsForTarget,
+              refreshMemberBodies: true,
               events: deps.events as never,
             });
           },

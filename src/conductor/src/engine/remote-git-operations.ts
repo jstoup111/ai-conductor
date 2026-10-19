@@ -20,7 +20,6 @@ import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushedTipSource, type PreparedPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
-import { haltStackTipDiverged } from './stack-publication.js';
 import { makeGitRunner } from './rebase.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
@@ -315,13 +314,10 @@ export async function executeRemoteGit(
 
   const guarded = await guardPublishedStackPushes(args, resolution.remote, resolution.targets, dependencies);
   if (guarded.kind === 'refuse') {
-    await haltStackTipDiverged(
-      dependencies.cwd,
-      guarded.members,
-      dependencies.events as never,
-      'published stack tip diverged during guarded push',
-    );
-    return { kind: 'failed', error: 'published stack tip mismatch', targets: resolution.targets };
+    // This low-level choke point has no authority to decide a feature's
+    // terminal state. Return the typed refusal; FINISH records the halt while
+    // halt-record and post-finish maintenance merely skip their write.
+    return { kind: 'refused', reason: 'stack-tip-mismatch', target: resolution.targets[0] };
   }
 
   const preparation = await preparePushRecordings(guarded.args, resolution.targets, dependencies);
