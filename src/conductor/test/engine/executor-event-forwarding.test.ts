@@ -8,7 +8,7 @@ import { createFeatureDaemonLogger } from '../../src/engine/daemon-log.js';
 import { startDaemonEventPersistence, forwardedFeatureOf, isForwardedFromFeature } from '../../src/engine/event-persister.js';
 import { createProviderAvailability } from '../../src/engine/provider-availability.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
-import type { ExecutorIpcPort } from '../../src/engine/executor-proxies.js';
+import { teeExecutorConsole, type ExecutorIpcPort } from '../../src/engine/executor-proxies.js';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
@@ -41,6 +41,48 @@ async function settleForwarding(): Promise<void> {
 }
 
 describe('executor event forwarding', () => {
+  // Covers: task:13
+  it('routes child log messages and console warnings through the slugged feature logger without writing the supervisor console', () => {
+    const lines: string[] = [];
+    const supervisorConsoleWrites: unknown[][] = [];
+    const originalWarn = console.warn;
+    const port = new Port();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode(),
+      providerAvailability: createProviderAvailability({ now: () => Date.now() }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: (slug) => createFeatureDaemonLogger(slug, (line) => lines.push(line)),
+    });
+    broker.attach('feature-a', port);
+
+    // The child console must not inherit the supervisor console sink. Its only
+    // observable write is one IPC message, which the broker then attributes.
+    console.warn = (...values: unknown[]) => { supervisorConsoleWrites.push(values); };
+    const restoreConsole = teeExecutorConsole(port);
+    try {
+      port.receive({ kind: 'log', level: 'info', message: 'child feature line' });
+      console.warn('child warning', 42);
+    } finally {
+      restoreConsole();
+      console.warn = originalWarn;
+    }
+
+    const forwardedWarning = port.sent.find((message) => (
+      (message as { kind?: unknown }).kind === 'log'
+      && (message as { level?: unknown }).level === 'warn'
+    ));
+    expect(forwardedWarning).toEqual({ kind: 'log', level: 'warn', message: 'child warning 42' });
+    expect(port.sent.filter((message) => (message as { kind?: unknown }).kind === 'log')).toHaveLength(1);
+    expect(supervisorConsoleWrites).toEqual([]);
+
+    port.receive(forwardedWarning);
+    expect(lines).toEqual([
+      expect.stringContaining('[feature-a] [executor:info] child feature line'),
+      expect.stringContaining('[feature-a] [executor:warn] child warning 42'),
+    ]);
+  });
+
   it('renders feature events on the proxy bus, forwards marked copies to root, and never writes the feature ledger', async () => {
     const root = await mkdtemp(join(tmpdir(), 'executor-event-forwarding-'));
     temporaryRoots.push(root);
