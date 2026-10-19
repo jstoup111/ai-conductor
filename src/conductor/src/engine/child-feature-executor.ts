@@ -62,15 +62,33 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     const attachment = deps.attachBroker(order.slug, child);
     const entry: RunningChild = { child, order: launchedOrder, attachment };
     running.add(entry);
+    // Publish the pin immediately after fork, before waiting for the child's
+    // hello.  A child is live as soon as fork returns; delaying this until the
+    // handshake leaves a window in which engine-store GC can reclaim its
+    // module.  Exit cleanup below waits for this promise, so an exit racing a
+    // slow write can never leave a newly-written stale record behind.
+    let recordFailure: Error | undefined;
+    const recordPublished = writeExecutorRecord(deps.projectRoot, order.slug, {
+      pid: child.pid ?? -1, engineDir, engineVersionId: launchedOrder.engineVersionId, startedAt: new Date().toISOString(),
+    }).catch((error: unknown) => {
+      recordFailure = error instanceof Error ? error : new Error(String(error));
+      deps.log?.(`[executor ${order.slug}] could not publish executor record: ${recordFailure.message}`);
+      child.kill('SIGTERM');
+    });
     let ended = false;
     let outcome: FeatureExecutionOutcome | undefined;
     let handshake: 'accepted' | 'failed' | 'missing' | undefined;
+    let workOrderSent = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = async (result: FeatureExecutionOutcome): Promise<FeatureExecutionOutcome> => {
       if (ended) return outcome ?? result;
       ended = true; outcome = result;
       if (timer) clearTimeout(timer);
       attachment.close(); running.delete(entry);
+      // A record write started at fork may complete after an early child exit.
+      // Serialize removal after it so records only disappear following the
+      // actual exit and cannot be resurrected by that racing write.
+      await recordPublished;
       await removeExecutorRecord(deps.projectRoot, order.slug).catch(() => {});
       return result;
     };
@@ -103,15 +121,19 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
           handshake = 'failed'; deps.onProtocolMismatch?.(); child.kill('SIGTERM'); return;
         }
         handshake = 'accepted';
-        void writeExecutorRecord(deps.projectRoot, order.slug, {
-          pid: child.pid ?? -1, engineDir, engineVersionId: launchedOrder.engineVersionId, startedAt: new Date().toISOString(),
-        }).then(() => child.send({
-          kind: 'work-order',
-          order: launchedOrder,
-          ...(launchedOrder.effectiveConcurrency === undefined
-            ? {}
-            : { effectiveConcurrency: launchedOrder.effectiveConcurrency }),
-        } satisfies ExecutorMessage));
+        void recordPublished.then(() => {
+          // The handshake permits work only once the live child is durably
+          // pinned.  Do not send after a record failure or an early exit.
+          if (recordFailure || ended || workOrderSent) return;
+          workOrderSent = true;
+          child.send({
+            kind: 'work-order',
+            order: launchedOrder,
+            ...(launchedOrder.effectiveConcurrency === undefined
+              ? {}
+              : { effectiveConcurrency: launchedOrder.effectiveConcurrency }),
+          } satisfies ExecutorMessage);
+        });
         return;
       }
       if (message.kind === 'outcome') {
@@ -123,6 +145,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       }
     });
     const result = await done;
+    if (recordFailure) return errorOutcome(order, `could not publish executor record: ${recordFailure.message}`);
     if (handshake === 'failed' && !useSupervisorBuild) {
       const reason = priorFailure ?? 'executor protocol handshake failed';
       return launch(order, true, reason);
