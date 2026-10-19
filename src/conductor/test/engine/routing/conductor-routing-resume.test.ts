@@ -72,7 +72,7 @@ async function fixture() {
 }
 
 describe('routed round conductor resume', () => {
-  it('continues a routing-eligible resume when the route receipt namespace is empty', async () => {
+  it('does not halt or fabricate receipt accounting when a routing-eligible resume has no route records', async () => {
     const subject = await fixture();
     await expect(subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/']))
       .resolves.toMatchObject({ stdout: '' });
@@ -97,7 +97,10 @@ describe('routed round conductor resume', () => {
     await conductor.run();
 
     expect(dispatched).not.toHaveLength(0);
+    await expect(subject.git(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/']))
+      .resolves.toMatchObject({ stdout: '' });
     await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(join(subject.repo, '.pipeline', 'HALT.class'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(access(join(subject.repo, '.pipeline', 'kickback-ledger.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
