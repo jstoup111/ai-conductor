@@ -121,9 +121,17 @@ export function createProviderAvailabilityProxy(client: ReturnType<typeof create
   };
 }
 
-export function createLiveBoundaryProxy(client: ReturnType<typeof createExecutorRequestClient>): Pick<LiveBoundaryCoordinator, 'runDispatch' | 'openWindow'> | undefined {
+export function createLiveBoundaryProxy(
+  client: ReturnType<typeof createExecutorRequestClient>,
+  enabled = true,
+): Pick<LiveBoundaryCoordinator, 'runDispatch' | 'openWindow'> | undefined {
+  // Consumer daemons have no self-host live boundary. Preserve the existing
+  // inert path without emitting an IPC request for a resource that cannot
+  // exist on their supervisor.
+  if (!enabled) return undefined;
   const open = async (): Promise<LiveBoundaryWindow> => {
     const id = await client.request('live.open', {});
+    if (typeof id !== 'string') throw new Error('executor live-boundary window was not admitted');
     let closed = false;
     return { close: () => { if (!closed) { closed = true; void client.request('live.close', { id }).catch(() => {}); } } };
   };
@@ -131,7 +139,11 @@ export function createLiveBoundaryProxy(client: ReturnType<typeof createExecutor
     async openWindow() { return open(); },
     async runDispatch<T>(run: (openWindow: OpenAdmittedWindow) => Promise<T>): Promise<T> {
       const reservation = await open();
-      try { return await run(() => { throw new Error('executor live-boundary admission cannot be opened synchronously'); }); }
+      // IPC cannot synchronously allocate the candidate window expected by the
+      // conductor callback. The dispatch reservation stays open for the whole
+      // callback instead, so every candidate and its teardown remain ordered
+      // against supervisor root mutations without widening the IPC protocol.
+      try { return await run(() => ({ close: () => {} })); }
       finally { reservation.close(); }
     },
   };

@@ -5,8 +5,10 @@ import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-ep
 import { createProviderAvailability } from '../../src/engine/provider-availability.js';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import { createExecutorBroker } from '../../src/engine/executor-broker.js';
+import { LiveBoundaryCoordinator } from '../../src/engine/self-host/live-boundary-coordinator.js';
 import {
   createExecutorRequestClient,
+  createLiveBoundaryProxy,
   createProviderAvailabilityProxy,
   createRateLimitEpisodeProxy,
   type ExecutorIpcPort,
@@ -42,6 +44,17 @@ function pair(): { supervisor: Port; child: Port; flush(): void } {
       }
     },
   };
+}
+
+async function flushAsync(channel: ReturnType<typeof pair>): Promise<void> {
+  // Requests that await a coordinator re-enter the fake channel on a later
+  // microtask. Advance only microtasks and the explicit in-memory transport;
+  // no timer or real process is involved.
+  for (let i = 0; i < 5; i += 1) {
+    channel.flush();
+    await Promise.resolve();
+  }
+  channel.flush();
 }
 
 function brokerFixture() {
@@ -162,5 +175,119 @@ describe('executor broker', () => {
     expect(proxy.isAvailable('codex')).toBe(false);
     now = 2_001;
     expect(proxy.isAvailable('codex')).toBe(true);
+  });
+
+  it('holds a root mutation behind a child live-boundary window', async () => {
+    const coordinator = new LiveBoundaryCoordinator();
+    const fixture = brokerFixture();
+    const channel = pair();
+    const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child));
+    fixture.broker = createExecutorBroker({
+      rateLimitEpisode: fixture.episode,
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      liveBoundaryCoordinator: coordinator,
+      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+    });
+    fixture.broker.attach('feature', channel.supervisor);
+
+    const window = proxy!.openWindow({ contained: false, reason: 'test' });
+    await flushAsync(channel);
+    const held = await window;
+
+    let mutationStarted = false;
+    const mutation = coordinator.runMutation(async () => { mutationStarted = true; });
+    await Promise.resolve();
+    expect(mutationStarted).toBe(false);
+
+    held.close();
+    await flushAsync(channel);
+    await mutation;
+    expect(mutationStarted).toBe(true);
+  });
+
+  it('opens a child window only after an active root mutation settles', async () => {
+    const coordinator = new LiveBoundaryCoordinator();
+    const channel = pair();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      liveBoundaryCoordinator: coordinator,
+      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+    });
+    const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child));
+    broker.attach('feature', channel.supervisor);
+
+    let finishMutation!: () => void;
+    const mutation = coordinator.runMutation(() => new Promise<void>((resolve) => { finishMutation = resolve; }));
+    await Promise.resolve();
+    const opening = proxy!.openWindow({ contained: false, reason: 'test' });
+    channel.flush();
+    let opened = false;
+    void opening.then(() => { opened = true; });
+    await Promise.resolve();
+    expect(opened).toBe(false);
+
+    finishMutation();
+    await mutation;
+    await flushAsync(channel);
+    await expect(opening).resolves.toMatchObject({ close: expect.any(Function) });
+  });
+
+  it('releases every child window when its channel disconnects', async () => {
+    const coordinator = new LiveBoundaryCoordinator();
+    const channel = pair();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      liveBoundaryCoordinator: coordinator,
+      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+    });
+    const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child));
+    broker.attach('feature', channel.supervisor);
+
+    const first = proxy!.openWindow({ contained: false, reason: 'test' });
+    const second = proxy!.openWindow({ contained: false, reason: 'test' });
+    await flushAsync(channel);
+    await Promise.all([first, second]);
+
+    let mutationStarted = false;
+    const mutation = coordinator.runMutation(async () => { mutationStarted = true; });
+    await Promise.resolve();
+    expect(mutationStarted).toBe(false);
+
+    channel.supervisor.emit('disconnect');
+    await mutation;
+    expect(mutationStarted).toBe(true);
+  });
+
+  it('keeps a child dispatch reservation open without the synchronous admission throw', async () => {
+    const coordinator = new LiveBoundaryCoordinator();
+    const channel = pair();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      liveBoundaryCoordinator: coordinator,
+      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+    });
+    const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child));
+    broker.attach('feature', channel.supervisor);
+
+    const dispatch = proxy!.runDispatch(async (openWindow) => {
+      const candidate = openWindow({ contained: false, reason: 'test' });
+      candidate.close();
+      return 'completed';
+    });
+    await flushAsync(channel);
+
+    await expect(dispatch).resolves.toBe('completed');
+  });
+
+  it('uses no live-boundary IPC in non-self-host mode', () => {
+    const channel = pair();
+    const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child), false);
+
+    expect(proxy).toBeUndefined();
+    expect(channel.child.deliver()).toBe(false);
+    expect(channel.supervisor.deliver()).toBe(false);
   });
 });

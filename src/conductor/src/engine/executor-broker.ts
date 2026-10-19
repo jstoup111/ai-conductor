@@ -38,6 +38,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
   const providerWindows = new Map<string, number>();
   let rateDeadline: number | undefined;
   let escalationCounter = 0;
+  let nextLiveBoundaryWindowId = 0;
   const ports = new Set<ExecutorIpcPort>();
   const broadcast = (name: 'rate-limit' | 'provider', value: unknown) => {
     for (const port of ports) port.send({ kind: 'state', name, value });
@@ -108,7 +109,11 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           if (method === 'live.open') {
             if (!deps.liveBoundaryCoordinator) { respond(requestId, { ok: undefined }); return; }
             const window = await deps.liveBoundaryCoordinator.openWindow({ contained: false, reason: 'executor proxy' });
-            const id = `${slug}-${windows.size + 1}`;
+            // A disconnect may occur while openWindow waits behind a root
+            // mutation. Never retain the late grant: its channel is gone and
+            // it would otherwise block every later mutation forever.
+            if (closed) { window.close(); return; }
+            const id = `${slug}-${++nextLiveBoundaryWindowId}`;
             windows.set(id, window); respond(requestId, { ok: id }); return;
           }
           if (method === 'live.close') {
