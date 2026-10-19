@@ -1,3 +1,4 @@
+// Covers: task:11
 import { readdir, readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
