@@ -16,12 +16,13 @@ import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-
 import { runDaemonStatus } from '../../src/engine/daemon-observe-cli.js';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
-import { renderShippedRecordWithCost } from '../../src/engine/shipped-record.js';
+import { appendTimingSection, renderShippedRecordWithCost } from '../../src/engine/shipped-record.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 import { runTaskStart } from '../../src/engine/task-cli.js';
-import { CELLS, expectGolden, normalizeGolden } from './n1-golden-shared.js';
+import { BASE_SHA, CELLS, expectGolden, normalizeGolden, RECORD, withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
 
@@ -276,5 +277,167 @@ describe('N=1 golden renderings', () => {
       shipped: '2026-01-01',
     }, rollup);
     await expectGolden(`${cell.name}-shipped-record`, shippedRecord);
+  });
+
+  it('freezes the N=1 FINISH leaf, state, commands, events, and resumed authoring path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'n1-golden-finish-'));
+    roots.push(root);
+    const pipeline = join(root, '.pipeline');
+    const prUrl = 'https://github.com/acme/widget/pull/42';
+    const statePath = join(pipeline, 'conduct-state.json');
+    const finishFixture = (name: string) => join(
+      import.meta.dirname,
+      '..',
+      'fixtures',
+      'n1-golden',
+      'finish',
+      `${name}.golden`,
+    );
+    const expectFinishGolden = async (name: string, actual: string) => {
+      const path = finishFixture(name);
+      if (RECORD) {
+        await mkdir(join(import.meta.dirname, '..', 'fixtures', 'n1-golden', 'finish'), { recursive: true });
+        await writeFile(path, `<!-- Recorded from ${BASE_SHA} -->\n${actual}`);
+        return;
+      }
+      const expected = (await readFile(path, 'utf8')).replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '');
+      expect(actual).toBe(expected);
+    };
+    const normalizeRecord = (record: string) => record
+      .replace(/^shipped: \d{4}-\d{2}-\d{2}$/m, 'shipped: <DATE>')
+      .replace(/^(active_ms|provider_active_ms|no_provider_active_ms): .+$/gm, '$1: <TIME_VALUE>');
+
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'n1-golden.md'), '# Implementation Plan: n1-golden\n');
+    await writeFile(join(root, 'README.md'), '# n1 golden\n');
+    await execFile('git', ['init', '-b', 'main', '-q'], { cwd: root });
+    await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await execFile('git', ['config', 'user.name', 'Test User'], { cwd: root });
+    await execFile('git', ['add', 'README.md', '.docs/plans/n1-golden.md'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'fixture'], { cwd: root });
+    await execFile('git', ['checkout', '-b', 'feat/daemon-n1-golden'], { cwd: root });
+    const origin = join(root, 'origin.git');
+    await execFile('git', ['init', '--bare', '-q', origin], { cwd: root });
+    await execFile('git', ['remote', 'add', 'origin', origin], { cwd: root });
+    await execFile('git', ['push', '-u', 'origin', 'feat/daemon-n1-golden'], { cwd: root });
+    await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+
+    const state = {
+      feature_desc: 'n1-golden',
+      worktree_branch: 'feat/daemon-n1-golden',
+      complexity_tier: 'S',
+      track: 'technical',
+      test_suite: 'done',
+      build_review: 'done',
+      manual_test: 'done',
+      architecture_review_as_built: 'done',
+      pr_url: prUrl,
+    } as any;
+    await writeState(statePath, state);
+    await writeFile(
+      join(pipeline, 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'step_completed',
+        step: 'finish',
+        activeInterval: { startedAtMs: 100, durationMs: 250 },
+        observedIntervals: [{ startedAtMs: 150, durationMs: 100 }],
+      })}\n`,
+    );
+
+    const run = async (resumeAfterAuthoring: boolean) => {
+      let title = 'feat: n1 golden';
+      let body = shipDraftPrBody('n1-golden');
+      let isDraft = true;
+      const ghArgv: string[][] = [];
+      const events: unknown[] = [];
+      const git = async (args: string[], opts: { cwd: string }) => {
+        const result = await execFile('git', args, { cwd: opts.cwd });
+        return { stdout: result.stdout };
+      };
+      const gh = async (args: string[]) => {
+        ghArgv.push(args);
+        if (args[0] === 'auth' && args[1] === 'status') return { stdout: 'logged in\n' };
+        if (args[0] === 'api' && args[1] === 'user') return { stdout: JSON.stringify({ login: 'test-user', id: 1 }) };
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ url: prUrl, title, body, isDraft, labels: [] }) };
+        }
+        throw new Error(`unexpected gh argv: ${JSON.stringify(args)}`);
+      };
+      const operations = {
+        run: async (request: { operation: string; payload?: { body?: string } }) => {
+          if (request.operation === 'pull-request.edit' && request.payload?.body !== undefined) body = request.payload.body;
+          if (request.operation === 'pull-request.ready') isDraft = false;
+          return {};
+        },
+      };
+      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: statePath,
+        baseBranch: 'main',
+        git,
+        gh,
+        operations: operations as any,
+        observeReleaseReadiness: async () => 'present',
+        writeShippedRecord: async ({ slug, pr }, cwd) => {
+          const record = appendTimingSection(
+            renderShippedRecordWithCost({
+              slug,
+              pr,
+              shipped: '2026-01-01',
+              specHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            }, await computeCostRollup(cwd)),
+            await computeTimingRollup(cwd),
+          );
+          await mkdir(join(cwd, '.docs', 'shipped'), { recursive: true });
+          await writeFile(join(cwd, '.docs', 'shipped', `${slug}.md`), record);
+          return 0;
+        },
+        recordFinish: async () => 0,
+      });
+      const advance = async (coordinator: ReturnType<typeof makeCoordinator>) => coordinator.advance({
+        state,
+        mode: 'auto',
+        daemon: true,
+        dispatchAuthoring: async () => {
+          title = 'feat: freeze N=1 FINISH';
+          body = '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n';
+          return { success: true };
+        },
+        dispatchJudgment: async () => ({ success: true, output: '{"kind":"accepted"}' }),
+        emit: async (event) => { events.push(event); },
+      });
+
+      const gitArgv = await withGitArgvShim(root, async () => {
+        let coordinator = makeCoordinator();
+        const first = await advance(coordinator);
+        expect(first).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+        if (resumeAfterAuthoring) coordinator = makeCoordinator();
+        const outcomes: unknown[] = [];
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const result = await advance(coordinator);
+          outcomes.push(result);
+          if (result.kind === 'complete') return;
+        }
+        throw new Error(`N=1 FINISH did not reach its terminal outcome: ${JSON.stringify(outcomes)}`);
+      });
+
+      return { body, ghArgv, gitArgv, events, record: await readFile(join(root, '.docs', 'shipped', 'n1-golden.md'), 'utf8') };
+    };
+
+    const normal = await run(false);
+    await expectFinishGolden('leaf-body', normal.body);
+    await expectFinishGolden('conduct-state', JSON.stringify(JSON.parse(await readFile(statePath, 'utf8')), null, 2));
+    await expectFinishGolden('gh-argv', JSON.stringify(normal.ghArgv, null, 2));
+    await expectFinishGolden('git-argv', JSON.stringify(normal.gitArgv, null, 2));
+    await expectFinishGolden('events', normal.events.map((event) => JSON.stringify(event)).join('\n'));
+    await expectFinishGolden('shipped-record', normalizeRecord(normal.record));
+    expect(normal.record).toMatch(/^## Cost\n[\s\S]*^## Time\n(?:state|active_ms):/m);
+
+    await rm(join(root, '.docs', 'shipped'), { recursive: true, force: true });
+    await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+    const resumed = await run(true);
+    await expectFinishGolden('resumed-events', resumed.events.map((event) => JSON.stringify(event)).join('\n'));
+    expect(JSON.stringify(resumed.gitArgv)).not.toContain('refs/conductor/n1-golden/publication');
   });
 });
