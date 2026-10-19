@@ -289,8 +289,12 @@ export const GITHUB_OPERATION_REGISTRY = {
   'issue.create': { access: 'create', targetKinds: ['repository'], payload: 'issue-create' },
   'pull-request.create': { access: 'create', targetKinds: ['repository'], payload: 'pull-request-create' },
   'commit.status.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'commit-status' },
-  'stack.read': { access: 'read', targetKinds: ['repository'], payload: 'stack-read' },
-  'stack.create': { access: 'create', targetKinds: ['repository'], payload: 'stack-members' },
+  // A stack is a feature-scoped publication object even though GitHub addresses
+  // its initial lookup and creation at repository scope.  These operations
+  // therefore need the same committed-owner decision as the member writes;
+  // the publication-record validator binds their payload before transport.
+  'stack.read': { access: 'feature-write', targetKinds: ['repository'], payload: 'stack-read' },
+  'stack.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'stack-members' },
   'stack.add': { access: 'feature-write', targetKinds: ['stack'], payload: 'stack-members' },
   'label-definition.create': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
   'label-definition.update': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },

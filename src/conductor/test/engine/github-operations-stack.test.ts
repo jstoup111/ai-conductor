@@ -13,7 +13,16 @@ describe('guarded stack GitHub operations', () => {
     };
     const operations = createGuardedGithubOperationRunner(gh, {
       cwd: '/fixture/worktree',
-      creation: { authorize: async () => ({}) },
+      mutation: {
+        provenance: {
+          repository: 'jstoup111/ai-conductor', defaultBranch: 'main', specBranch: 'feat/daemon-demo',
+          featureMarker: '.docs/intake/demo.md', publication: 'initial',
+        },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true as const, id: 'operator' }),
+          provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/demo.md', content: 'Owner: operator\n' }] },
+        },
+      },
     });
 
     await executeGithubOperation({

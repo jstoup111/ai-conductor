@@ -103,6 +103,16 @@ function isInitialPullRequestCreation(request: GithubMutationAuthorizationReques
 }
 
 /**
+ * GitHub has no stack identity until creation, so the initial stack operation
+ * is repository-addressed.  It is still feature-owned: the ordinary committed
+ * provenance decision below must succeed.  This narrow exception only skips
+ * the otherwise-impossible resource-identity comparison.
+ */
+function isInitialStackCreation(request: GithubMutationAuthorizationRequest): boolean {
+  return request.operation === 'stack.create' && request.target.kind === 'repository';
+}
+
+/**
  * Authorize one exact feature mutation from the operator's current machine
  * identity and its current, authoritative committed ownership record.
  *
@@ -122,7 +132,8 @@ export async function authorizeGithubMutation(
   }
   if (provenanceTarget !== undefined
     && !githubTargetsMatch(request.target, provenanceTarget)
-    && !isInitialPullRequestCreation(request)) {
+    && !isInitialPullRequestCreation(request)
+    && !isInitialStackCreation(request)) {
     return refused(request, 'invalid-target');
   }
 
