@@ -279,7 +279,7 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
         lastResolveAt: undefined,
       },
       {
-        state: 'CONFLICTING',
+        state: 'OPEN',
         mergeable: 'CONFLICTING',
         hasFailingOrPendingChecks: false,
         labels: [],

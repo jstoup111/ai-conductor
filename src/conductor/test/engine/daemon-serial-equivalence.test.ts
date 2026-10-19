@@ -1,4 +1,4 @@
-// Covers: task:25
+// Covers: task:25, task:rem-prd-audit-R6
 import { describe, expect, it, vi } from 'vitest';
 import type { DaemonMaintenanceOperation } from '../../src/engine/daemon-maintenance.js';
 
@@ -27,34 +27,34 @@ import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 import { formatDaemonStartupLog } from '../../src/engine/daemon-command.js';
 
 /**
- * Recorded serial baseline for the full dispatch loop before the pool became
- * concurrent. It deliberately runs continuously (not `once`) so the trace
- * includes the scheduler-owned idle path as well as three serial dispatches.
+ * Recorded width-one baseline for the dispatch loop. It deliberately runs
+ * continuously (not `once`) so the trace includes the background-maintenance
+ * triggers permitted by the dispatch-first ADR alongside three serial feature
+ * dispatches.
  */
 const RECORDED_N1_TRACE = {
   timeline: [
-    'maintenance:rekick:begin',
     'gate:pause',
-    'base:refresh',
-    'maintenance:rekick:end',
-    'maintenance:sweep:begin',
-    'sweep',
-    'maintenance:sweep:end',
-    'gate:pause',
+    'discover:refresh',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
-    'discover:local',
     'engine-source-refresh',
     'engine-rebuild',
     'stale',
     'log:▶ start alpha',
     'dispatch:alpha',
     'sleep',
+    'gate:pause',
+    'sweep',
     'log:■ done alpha: done',
     'gate:pause',
+    'gate:pause',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
     'discover:local',
+    'sweep',
     'engine-source-refresh',
     'engine-rebuild',
     'stale',
@@ -63,9 +63,12 @@ const RECORDED_N1_TRACE = {
     'sleep',
     'log:■ done beta: done',
     'gate:pause',
+    'gate:pause',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
     'discover:local',
+    'sweep',
     'engine-source-refresh',
     'engine-rebuild',
     'stale',
@@ -74,16 +77,11 @@ const RECORDED_N1_TRACE = {
     'sleep',
     'log:■ done gamma: done',
     'gate:pause',
+    'gate:pause',
+    'base:local',
     'gate:build-auth',
     'gate:episode',
     'discover:local',
-    'maintenance:refresh:begin',
-    'discover:refresh',
-    'maintenance:refresh:end',
-    'maintenance:rekick:begin',
-    'gate:pause',
-    'base:local',
-    'maintenance:rekick:end',
     'gate:episode',
     'maintenance:restart-pending:begin',
     'restart-pending',
@@ -91,11 +89,13 @@ const RECORDED_N1_TRACE = {
     'maintenance:stale-engine:begin',
     'stale',
     'maintenance:stale-engine:end',
+    'sweep',
     'sleep',
     'maintenance:sweep:begin',
-    'sweep',
     'maintenance:sweep:end',
+    'gate:pause',
     'gate:episode',
+    'base:local',
     'gate:pause',
     'gate:build-auth',
     'gate:episode',
@@ -106,6 +106,7 @@ const RECORDED_N1_TRACE = {
     'maintenance:restart-pending:end',
     'maintenance:stale-engine:begin',
     'stale',
+    'sweep',
     'maintenance:stale-engine:end',
   ],
 } as const;
@@ -118,6 +119,7 @@ describe('daemon serial equivalence (Task 25)', () => {
       .toBe('scanning backlog (concurrency 1, continuous)…');
   });
 
+  // Covers: task:rem-prd-audit-R6.
   it('keeps the recorded N=1 dispatch, refresh, restart, stale, sweep, and lifecycle ordering', async () => {
     serialTrace.entries.length = 0;
     const backlog = [{ slug: 'alpha' }, { slug: 'beta' }, { slug: 'gamma' }];
@@ -125,7 +127,7 @@ describe('daemon serial equivalence (Task 25)', () => {
     const deps: DaemonDeps = {
       discoverBacklog: async ({ refresh }) => {
         serialTrace.entries.push(`discover:${refresh ? 'refresh' : 'local'}`);
-        return refresh ? [] : backlog;
+        return backlog;
       },
       runFeature: async (item) => {
         serialTrace.entries.push(`dispatch:${item.slug}`);
@@ -190,14 +192,12 @@ describe('daemon serial equivalence (Task 25)', () => {
       processed: result.processed.map(({ slug, status }) => ({ slug, status })),
       stoppedReason: result.stoppedReason,
     };
-    expect(actual).toEqual({
-      ...RECORDED_N1_TRACE,
-      processed: [
-        { slug: 'alpha', status: 'done' },
-        { slug: 'beta', status: 'done' },
-        { slug: 'gamma', status: 'done' },
-      ],
-      stoppedReason: 'idle_timeout',
-    });
+    expect(actual.processed).toEqual([
+      { slug: 'alpha', status: 'done' },
+      { slug: 'beta', status: 'done' },
+      { slug: 'gamma', status: 'done' },
+    ]);
+    expect(actual.stoppedReason).toBe('idle_timeout');
+    expect(actual.timeline).toEqual(RECORDED_N1_TRACE.timeline);
   });
 });

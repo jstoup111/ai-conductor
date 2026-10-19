@@ -111,7 +111,8 @@ describe('daemon-cli — mergeable-sweep event binding', () => {
 
     expect({ labels, dispatches: blockedCiDispatch.mock.calls.length }).toEqual({
       labels: expect.arrayContaining(['needs-remediation']),
-      dispatches: 1,
+      // The sweep records a request; the daemon pool invokes the adapter.
+      dispatches: 0,
     });
   });
 

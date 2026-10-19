@@ -24,6 +24,89 @@ export interface DaemonDrainState {
 
 type MaintenancePolicy = 'drained' | 'busy-allowed';
 
+/** One ordered, best-effort action performed by the background maintenance job. */
+export type MaintenanceJobStep = readonly [name: string, run: () => Promise<void>];
+
+/**
+ * Serializes best-effort daemon maintenance without making the dispatcher wait
+ * for it. Repeated triggers during a run request one additional pass only.
+ */
+export class MaintenanceJob {
+  private lifecycle:
+    | { kind: 'idle' }
+    | { kind: 'running'; current: Promise<void>; rerunPending: boolean } = { kind: 'idle' };
+  private closed = false;
+
+  constructor(
+    private readonly steps: readonly MaintenanceJobStep[],
+    private readonly log: (message: string) => void = () => {},
+  ) {}
+
+  trigger(): void {
+    if (this.closed) return;
+    if (this.lifecycle.kind === 'running') {
+      this.lifecycle.rerunPending = true;
+      return;
+    }
+    this.start();
+  }
+
+  /** Resolves when the active pass and any chained coalesced rerun finish. */
+  async settled(): Promise<void> {
+    while (this.lifecycle.kind === 'running') {
+      const current = this.lifecycle.current;
+      await current;
+      // The settling transition can synchronously replace `current` with a
+      // requested rerun. Loop so callers never observe only the first pass.
+    }
+  }
+
+  /** Prevents future starts; an already-running pass is allowed to complete. */
+  close(): void {
+    this.closed = true;
+    if (this.lifecycle.kind === 'running') this.lifecycle.rerunPending = false;
+  }
+
+  /** Allows future triggers after a non-terminal close. */
+  reopen(): void {
+    this.closed = false;
+  }
+
+  /** Whether closing would need to settle an active maintenance pass. */
+  isRunning(): boolean {
+    return this.lifecycle.kind === 'running';
+  }
+
+  private start(): void {
+    const running: Extract<typeof this.lifecycle, { kind: 'running' }> = {
+      kind: 'running', current: Promise.resolve(), rerunPending: false,
+    };
+    this.lifecycle = running;
+    running.current = this.runPass().finally(() => this.finish(running));
+  }
+
+  private finish(running: Extract<typeof this.lifecycle, { kind: 'running' }>): void {
+    // This transition has no idle gap: a trigger either sets rerunPending
+    // before it, or starts a fresh pass after it.
+    if (!this.closed && running.rerunPending) {
+      running.rerunPending = false;
+      running.current = this.runPass().finally(() => this.finish(running));
+      return;
+    }
+    this.lifecycle = { kind: 'idle' };
+  }
+
+  private async runPass(): Promise<void> {
+    for (const [name, step] of this.steps) {
+      try {
+        await step();
+      } catch (error) {
+        this.log(`[daemon] ${name} error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+}
+
 const maintenancePolicies: Record<DaemonMaintenanceOperation, MaintenancePolicy> = {
   refresh: 'busy-allowed',
   rekick: 'busy-allowed',
@@ -87,6 +170,11 @@ export class DaemonMaintenance {
     return this.refreshDue() && this.permits('refresh');
   }
 
+  /** Records a completed refresh so later refreshes respect its interval. */
+  recordRefresh(at: number): void {
+    this.lastRefreshAt = at;
+  }
+
   /**
    * The origin refresh, rate-limited to the refresh interval. The dispatcher
    * runs it off its loop and folds the result (and its re-kick) into a later
@@ -99,7 +187,7 @@ export class DaemonMaintenance {
     try {
       return await this.run('refresh', refresh);
     } finally {
-      this.lastRefreshAt = this.now();
+      this.recordRefresh(this.now());
     }
   }
 
@@ -150,7 +238,11 @@ export class DaemonMaintenance {
       case 'drained':
         return this.isDrained();
       case 'busy-allowed':
-        return this.busyMaintenanceEnabled() || this.isDrained();
+        // A root refresh only moves the dispatcher checkout. Work orders pin
+        // their base at claim time, so it is safe to refresh beside a worker
+        // even at the serial width. The background maintenance job is the
+        // caller that now opts into this policy at width 1.
+        return true;
     }
   }
 

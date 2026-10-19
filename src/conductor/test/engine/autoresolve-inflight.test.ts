@@ -75,7 +75,7 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
   };
 
   const prState: PrMergeState = {
-    state: 'CONFLICTING',
+    state: 'OPEN',
     mergeable: 'CONFLICTING',
     hasFailingOrPendingChecks: false,
     labels: [],

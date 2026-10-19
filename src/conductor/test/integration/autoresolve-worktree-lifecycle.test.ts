@@ -96,7 +96,7 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
     await g(['worktree', 'add', '-q', join('.worktrees', 'widget'), 'feat/widget']);
     const entry: WatchEntry = { prUrl: 'https://github.com/acme/widget/pull/1', slug: 'widget', repoCwd: dir };
     const state: PrMergeState = {
-      state: 'CONFLICTING',
+      state: 'OPEN',
       labels: [],
       statusCheckRollup: [],
       mergeable: 'CONFLICTING',

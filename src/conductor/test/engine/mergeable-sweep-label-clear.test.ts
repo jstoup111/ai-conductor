@@ -12,6 +12,7 @@ import {
 } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner, PrMergeState } from '../../src/engine/pr-labels.js';
 import type { GithubOperationRunner, GithubOperationRunnerResponse } from '../../src/engine/github-operations.js';
+import { RepairQueue } from '../../src/engine/repair-queue.js';
 
 const PR_URL = 'https://github.com/acme/widgets/pull/7';
 const legacyEntry = { prUrl: PR_URL, slug: 'widgets', repoCwd: '/repo' };
@@ -80,6 +81,7 @@ describe('sweepMergeableLabels — escalation cause registry', () => {
     await rewriteWatch(project, [legacyEntry]);
 
     const logs: string[] = [];
+    const queue = new RepairQueue();
     await sweepMergeableLabels({
       projectRoot: project,
       log: (message) => logs.push(message),
@@ -89,12 +91,11 @@ describe('sweepMergeableLabels — escalation cause registry', () => {
         isEligible: async () => ({ eligible: true }),
         dispatch: async () => ({ kind: 'escalated' }),
       },
+      repairs: { queue },
     });
 
     expect(logs).toEqual([]);
-    await expect(readWatch(project)).resolves.toMatchObject([
-      { ...legacyEntry, escalationCause: 'conflict-resolution' },
-    ]);
+    expect(queue.list()).toEqual([expect.objectContaining({ kind: 'autoresolve', prUrl: PR_URL })]);
   });
 
   // Covers: task:3
@@ -302,6 +303,7 @@ describe('sweepMergeableLabels — shipped-readiness recovery ordering', () => {
     const selected: WatchEntry[] = [];
     await rewriteWatch(project, [{ ...legacyEntry, escalationCause: 'shipped-readiness' }]);
 
+    const queue = new RepairQueue();
     await sweepMergeableLabels({
       projectRoot: project,
       runGh: fakeGh(
@@ -313,10 +315,12 @@ describe('sweepMergeableLabels — shipped-readiness recovery ordering', () => {
         isEligible: async () => ({ eligible: true }),
         dispatch: async (entry) => { selected.push(entry); },
       },
+      repairs: { queue },
     });
 
     expect(removed).toEqual(['repos/acme/widgets/issues/7/labels/needs-remediation']);
-    expect(selected).toHaveLength(1);
+    expect(selected).toHaveLength(0);
+    expect(queue.list()).toHaveLength(1);
   });
 
   it('clears a recovered conflict-resolution label', async () => {

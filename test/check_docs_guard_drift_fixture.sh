@@ -14,7 +14,14 @@ HARNESS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOOK="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
 GENERATOR="${HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR:-${HARNESS_DIR}/bin/generate-docs-guard-hook}"
 
-fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/docs-guard-drift-fixture-XXXXXX") || {
+if [ -z "${TMPDIR:-}" ] && [ -n "${AI_CONDUCTOR_TEST_TMP_ROOT:-}" ]; then
+  export TMPDIR="$AI_CONDUCTOR_TEST_TMP_ROOT"
+fi
+if [ -n "${TMPDIR:-}" ]; then
+  fixture_dir=$(mktemp -d "$TMPDIR/docs-guard-drift-fixture-XXXXXX")
+else
+  fixture_dir=$(mktemp -d -t docs-guard-drift-fixture-XXXXXX)
+fi || {
   echo "docs-guard drift fixture: temporary-copy failure: unable to create temporary copy directory" >&2
   exit 1
 }

@@ -22,7 +22,11 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import { emitRestackRefused } from '../../src/engine/restack/restack-events.js';
 import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
-import type { ConductorEvent } from '../../src/types/events.js';
+import type {
+  ConductorEvent,
+  MaintenancePhase,
+  MaintenancePhaseOutcome,
+} from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const ACTIVE_STALL_EVENT: ConductorEvent = {
@@ -40,6 +44,48 @@ type Equal<Left, Right> =
       (<Value>() => Value extends Left ? 1 : 2) ? true : false
     : false;
 type Assert<Condition extends true> = Condition;
+type MaintenancePhaseIsClosed = Assert<Equal<
+  MaintenancePhase,
+  | 'startup-refresh'
+  | 'first-claim'
+  | 'rekick'
+  | 'startup-dashboard'
+  | 'halt-pr-reconcile'
+  | 'parked-reconcile'
+  | 'provider-scratch'
+  | 'mergeable-sweep'
+  | 'repair'
+>>;
+type MaintenancePhaseOutcomeIsClosed = Assert<Equal<
+  MaintenancePhaseOutcome,
+  'completed' | 'skipped-unchanged' | 'failed' | 'deferred'
+>>;
+const maintenancePhaseContract: MaintenancePhaseIsClosed & MaintenancePhaseOutcomeIsClosed = true;
+void maintenancePhaseContract;
+const maintenancePhaseFixtures = [
+  { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed' },
+  { type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: 1, outcome: 'skipped-unchanged' },
+  { type: 'daemon_maintenance_phase', phase: 'rekick', durationMs: 1, outcome: 'failed' },
+  { type: 'daemon_maintenance_phase', phase: 'startup-dashboard', durationMs: 1, outcome: 'deferred' },
+  { type: 'daemon_maintenance_phase', phase: 'halt-pr-reconcile', durationMs: 1, outcome: 'completed' },
+  { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'completed' },
+  { type: 'daemon_maintenance_phase', phase: 'provider-scratch', durationMs: 1, outcome: 'completed' },
+  { type: 'daemon_maintenance_phase', phase: 'mergeable-sweep', durationMs: 1, outcome: 'completed' },
+  { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'completed', prUrl: 'https://example.test/pr/1', slug: 'repair-slug' },
+] satisfies ConductorEvent[];
+void maintenancePhaseFixtures;
+// @ts-expect-error repairs always identify their PR.
+const repairWithoutPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'completed' };
+// @ts-expect-error non-repair phases cannot carry repair identity.
+const refreshWithPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', prUrl: 'https://example.test/pr/1' };
+// @ts-expect-error parked reconciliation summaries have a closed vocabulary.
+const parkedSummaryWithUnknownKey: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'completed', summary: { retained: 1 } };
+// @ts-expect-error summaries are only meaningful for the reconciliation phase.
+const refreshWithSummary: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', summary: { reconciled: 1 } };
+void repairWithoutPrUrl;
+void refreshWithPrUrl;
+void parkedSummaryWithUnknownKey;
+void refreshWithSummary;
 type GithubWriteCredentialFallbackEvent = Extract<
   ConductorEvent,
   { type: 'github_write_credential_fallback' }
@@ -233,6 +279,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'monitor_item_deferred',
   'monitor_session_ended',
   'provider_attempt_started',
+  'daemon_maintenance_phase',
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   'group_member_step',
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
@@ -1679,6 +1726,15 @@ describe('event sink subscriptions', () => {
       persisted: true,
       rendered: true,
       audited: false,
+      otel: false,
+    });
+  });
+
+  it('persists maintenance phase durations without rendering, audit, or OTel projection', () => {
+    expect(EVENT_SINKS.daemon_maintenance_phase).toEqual({
+      render: false,
+      persist: true,
+      audit: false,
       otel: false,
     });
   });

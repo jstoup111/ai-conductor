@@ -92,6 +92,58 @@ export type DispatchKind = 'initial' | 'resume' | 'rekick';
 export type DispatchBlockReason = 'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active';
 export type FeatureDispatchOutcome = 'complete' | 'halted' | 'terminated';
 
+/** Closed daemon-maintenance phases so the persisted timing vocabulary remains bounded. */
+export type MaintenancePhase =
+  | 'startup-refresh'
+  | 'first-claim'
+  | 'rekick'
+  | 'startup-dashboard'
+  | 'halt-pr-reconcile'
+  | 'parked-reconcile'
+  | 'provider-scratch'
+  | 'mergeable-sweep'
+  | 'repair';
+
+/** Terminal outcome of one daemon-maintenance phase occurrence. */
+export type MaintenancePhaseOutcome = 'completed' | 'skipped-unchanged' | 'failed' | 'deferred';
+
+/** Counters emitted only by parked-worktree reconciliation. */
+export interface ParkedReconcileMaintenanceSummary {
+  reconciled: number;
+  deferred: number;
+  orphaned: number;
+  parked: number;
+  refused: number;
+  skipped: number;
+}
+
+type DaemonMaintenancePhaseBase = {
+  type: 'daemon_maintenance_phase';
+  durationMs: number;
+  outcome: MaintenancePhaseOutcome;
+};
+
+/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data. */
+export type DaemonMaintenancePhaseEvent =
+  | (DaemonMaintenancePhaseBase & {
+      phase: 'repair';
+      prUrl: string;
+      slug?: string;
+      summary?: never;
+    })
+  | (DaemonMaintenancePhaseBase & {
+      phase: 'parked-reconcile';
+      summary?: ParkedReconcileMaintenanceSummary;
+      prUrl?: never;
+      slug?: never;
+    })
+  | (DaemonMaintenancePhaseBase & {
+      phase: Exclude<MaintenancePhase, 'repair' | 'parked-reconcile'>;
+      prUrl?: never;
+      slug?: never;
+      summary?: never;
+    });
+
 /** Closed outcomes for the daemon's bounded setup repair session. */
 export type SetupRepairDisposition =
   | 'engine-committed'
@@ -469,6 +521,8 @@ type ConductorEventBody =
       signal: string | null;
       at: string;
     }
+  /** Duration and result of a daemon maintenance occurrence on the canonical event spine. */
+  | DaemonMaintenancePhaseEvent
   | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
   | {
       type: 'feature_dispatch_ended';

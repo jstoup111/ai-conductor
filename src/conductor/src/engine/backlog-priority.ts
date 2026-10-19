@@ -116,6 +116,8 @@ export function createPriorityResolver(
   log: (msg: string) => void,
 ): {
   resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution>;
+  /** Current scheduler band for a discovered feature slug. */
+  bandForSlug(slug: string | undefined): string | undefined;
 } {
   // In-memory cache: ref -> resolved priority band.
   const cache = new Map<string, PriorityBand>();
@@ -123,12 +125,16 @@ export function createPriorityResolver(
   // This is separate from the labels cache because a missing issue must not
   // trigger a network read on every local discovery pass.
   const attemptedRefs = new Set<string>();
+  const bandsBySlug = new Map<string, string>();
   // Outage tracking: whether we're currently in a failed state
   let inOutage = false;
   // Warning flag: whether we've warned about the current outage
   let hasWarnedThisOutage = false;
 
   return {
+    bandForSlug(slug: string | undefined): string | undefined {
+      return slug === undefined ? undefined : bandsBySlug.get(slug);
+    },
     async resolve(items: BacklogItem[], options: { refresh: boolean }): Promise<PriorityResolution> {
       const bands = new Map<string, PriorityBand>();
 
@@ -198,6 +204,14 @@ export function createPriorityResolver(
         }
       }
 
+      for (const item of items) {
+        const band = item.sourceRef ? bands.get(item.sourceRef) : undefined;
+        const schedulerBand = band === 'critical' ? 'P0'
+          : band === 'high' ? 'P1'
+            : band === 'medium' ? 'P2'
+              : band === 'low' ? 'P3' : 'P4';
+        bandsBySlug.set(item.slug, schedulerBand);
+      }
       return { mode: 'banded', bands };
     },
   };

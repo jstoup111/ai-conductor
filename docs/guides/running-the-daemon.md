@@ -418,7 +418,8 @@ After spawn, activity is observation-only. While a step's provider subprocess is
 `.pipeline/step-heartbeat` in that feature's worktree on every observed stdout/stderr activity
 boundary (throttled to at most once every few seconds — activity telemetry, not a transcript or
 termination control).
-The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) shows
+The IN-PROGRESS dashboard the daemon prints after its first dispatch decision (and re-prints at key
+transitions; see [dispatch-first maintenance](#dispatch-first-maintenance)) shows
 the current dispatch's elapsed time, the latest validated aggregate test outcome, its current
 input/output token totals when live provider observation is available, and the heartbeat's age when
 one exists:
@@ -532,7 +533,8 @@ succeeds — a failed reset deliberately leaves the marker in place for retry. Y
 
 ### Parked-feature reconciliation
 
-On startup and on every idle poll tick, the daemon classifies each parked slug: `merged`, `orphan`
+On every [background maintenance](#dispatch-first-maintenance) run, the daemon classifies each
+parked slug: `merged`, `orphan`
 (its source issue is closed but the work never merged), `normal`, or `unclassified` (the check was
 unavailable). `ai-conductor daemon status` annotates the parked list accordingly — `— orphan — needs
 manual review` or `— merged — ready to reconcile`.
@@ -557,6 +559,11 @@ It ignores nested worktrees and worktrees outside that directory. A registered c
 without attempting removal when it is in flight, belongs to an `engineer-*` or `resolve-*` lifecycle,
 has an unreadable or present `.pipeline/HALT`, has an invalid slug, or the worktree listing cannot be
 read. This scan does not depend on the mergeable-watch registry.
+
+A run whose inputs match the previous full run — parked slugs, registered worktrees, slug branches,
+shipped records on `origin/main`, markers, and the in-flight set — is skipped for up to 10 minutes
+and reuses the previous counts. It skips GitHub and every per-branch ancestry probe. Any input
+change, the 10-minute bound, or a daemon restart forces a full run.
 
 By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
 is unset or `true`), a `merged` parked slug with a `.docs/shipped/<slug>.md` record on `origin/main`
@@ -900,6 +907,44 @@ A typo'd sub-verb — anything outside `status`, `logs`, `park`, `unpark`, `reco
 `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` — prints `conduct daemon: unknown
 subcommand '<token>'.` followed by the daemon help, and exits 1.
 
+## Dispatch-first maintenance
+
+At startup the daemon runs one backlog refresh and then claims its first eligible feature. It does
+not first wait for the startup dashboard, reconciliation sweeps, or repair sessions. Best-effort
+maintenance starts only once that first claim has dispatched or been refused, or when there is
+nothing to dispatch.
+
+Maintenance is one single-flight background job. Each run performs these phases in order, each
+isolated so one failure does not stop the rest:
+
+1. `startup-dashboard` — first run only, and skipped when the daemon starts paused.
+2. `rekick` — base re-kick, followed by resume-authorization consumption.
+3. `halt-pr-reconcile` — the [halt-PR sweep](#halt-pr-presentation-is-cleared-when-the-halt-resolves).
+4. `parked-reconcile` — [parked-feature reconciliation](#parked-feature-reconciliation).
+5. `provider-scratch` — provider scratch cleanup.
+6. `mergeable-sweep` — the [finish-time mergeability](#finish-time-mergeability) sweep.
+
+Idle polls, busy polls at every pool width, and worker completions trigger the job. A trigger that
+arrives while a run is in progress folds into one rerun. Draining or stopping the daemon waits for
+the current run to settle.
+
+Every phase emits one `daemon_maintenance_phase` event to `.daemon/events.jsonl` with its
+`durationMs` and `outcome` (`completed`, `skipped-unchanged`, `failed`, or `deferred`). Startup
+also records `startup-refresh`, and `first-claim` records the time from scan start to the first
+claim. See
+[daemon events](../reference/artifacts.md#daemon_maintenance_phase).
+
+### Pooled repairs
+
+The mergeable sweep does not run conflict autoresolve or CI repair inline. It queues one repair per
+PR, and repairs take free pool slots ahead of new features: priority band first, then the oldest PR.
+Each repair holds a `repair:<prUrl>` work claim and runs behind the same pause, episode,
+build-auth, and `gh` version guards as feature dispatch. A repair whose feature is in flight stays
+queued until that feature's claim is released. A blocked dispatch records each queued repair as a
+`repair` phase event with outcome `deferred`. At claim time a repair re-reads the PR and is dropped
+(`[daemon] dropping repair <url>: <reason>`) when the PR is closed, merged, draft, unreadable, or no
+longer conflicting or failing. Attempts are counted at claim time, not at sweep time.
+
 ## Finish-time mergeability
 
 After publication, watched PRs have a separate recovery loop controlled by
@@ -1130,8 +1175,10 @@ ordinary repair-resolution path then continues to refuse that stale boundary rat
 ### Halt-PR presentation is cleared when the halt resolves
 
 Escalating a halt marks the feature's PR: draft status, the `needs-remediation` label, a body
-marker, and a halt comment. Every poll, the halt-PR reconciliation sweep re-reads the open PRs and
-re-applies any of those facets that drifted off.
+marker, and a halt comment. On every maintenance run, the halt-PR reconciliation sweep re-reads the
+open PRs and re-applies any of those facets that drifted off. It skips a PR whose feature is in
+flight, which owns its own halt state, and logs `skipped: feature <slug> is in flight` once per
+transition.
 
 The sweep also removes them. A marked PR whose head branch already carries the feature's shipped
 record (`.docs/shipped/<slug>.md`, committed by `/finish`) has shipped, so the sweep undrafts it,

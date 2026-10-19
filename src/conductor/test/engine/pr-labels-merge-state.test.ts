@@ -35,7 +35,7 @@ describe('prMergeState halt body marker', () => {
       expect(state.hasHaltBodyMarker).toBe(expected);
       expect(calls).toHaveLength(1);
       expect(calls[0]).toEqual([
-        'pr', 'view', 'https://github.com/owner/repo/pull/1', '--json', 'state,mergeable,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid',
+        'pr', 'view', 'https://github.com/owner/repo/pull/1', '--json', 'state,mergeable,createdAt,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid',
       ]);
     }
   });
@@ -74,7 +74,7 @@ describe('prMergeState readiness fields', () => {
       expect(state).toMatchObject(expected);
       expect(calls).toEqual([[
         'pr', 'view', 'https://github.com/owner/repo/pull/1', '--json',
-        'state,mergeable,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid',
+        'state,mergeable,createdAt,statusCheckRollup,labels,isDraft,body,mergeStateStatus,baseRefName,headRefOid',
       ]]);
     }
   });

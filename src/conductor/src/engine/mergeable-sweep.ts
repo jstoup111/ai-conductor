@@ -36,7 +36,6 @@ import type { GithubOperationRunner } from './github-operations.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
-import type { CiFixOutcome } from './ci-fix.js';
 import { makeGitRunner } from './rebase.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
 import {
@@ -44,6 +43,16 @@ import {
   routeShippedReadiness,
   type ShippedReadinessVerdict,
 } from './shipped-readiness.js';
+import {
+  type RepairQueue,
+  type RepairCompletion,
+  type RepairRequest,
+  type WatchEntry,
+  type AutoresolveOutcome,
+  type CiFixRepairOutcome,
+} from './repair-queue.js';
+import type { CiFixOutcome } from './ci-fix.js';
+export type { WatchEntry } from './repair-queue.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -74,24 +83,6 @@ function buildExhaustionComment(entry: WatchEntry, state: PrMergeState): string 
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
 
-export interface WatchEntry {
-  prUrl: string;
-  slug: string;
-  repoCwd: string;
-  resolveAttempts?: number;
-  lastResolveAt?: string;
-  ciFixAttempts?: number;
-  lastCiFixAt?: string;
-  ciFailureDetected?: boolean;
-  headSha?: string;
-  headFirstSeenAt?: string;
-  readinessEmitted?: {
-    verdict: ShippedReadinessVerdict;
-    headSha: string;
-  };
-  escalationCause?: 'conflict-resolution' | 'shipped-readiness';
-  labelClearAttempts?: number;
-}
 
 /**
  * Retire a conflict-resolution remediation label only after GitHub reports a
@@ -156,6 +147,13 @@ export async function maybeClearReadinessLabel(
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
+
+/**
+ * In-process, per-project serialization for watch-registry read-modify-write
+ * updates. Each waiter keeps the tail promise alive until its own mutation has
+ * either persisted or failed, so a throwing mutation cannot strand the queue.
+ */
+const watchUpdateLocks = new Map<string, Promise<void>>();
 
 /**
  * Hard cap on the number of entries retained in the watch registry. The
@@ -298,6 +296,79 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
   }
 }
 
+/** Overwrite the registry and surface a persistence failure to a durable caller. */
+async function rewriteWatchStrict(projectRoot: string, entries: WatchEntry[]): Promise<void> {
+  await mkdir(join(projectRoot, '.daemon'), { recursive: true });
+  const content = entries.length > 0 ? entries.map((e) => JSON.stringify(e)).join('\n') + '\n' : '';
+  await writeFile(join(projectRoot, WATCH_FILE), content);
+}
+
+/**
+ * Apply a watch-registry mutation as one serialized read-modify-write update.
+ * Mutator failures deliberately propagate before `rewriteWatch`, preserving
+ * the existing bytes while still releasing the per-project mutex.
+ */
+export type WatchUpdate<T> = {
+  entries: WatchEntry[];
+  result: T;
+  /** A read-only outcome must not normalize or rewrite the registry. */
+  write?: boolean;
+};
+
+export async function updateWatch<T = undefined>(
+  projectRoot: string,
+  mutate: (entries: WatchEntry[]) =>
+    | WatchEntry[]
+    | WatchUpdate<T>
+    | Promise<WatchEntry[] | WatchUpdate<T>>,
+  options: { strictWrite?: boolean } = {},
+): Promise<T | undefined> {
+  const previous = watchUpdateLocks.get(projectRoot) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => done);
+  watchUpdateLocks.set(projectRoot, tail);
+
+  await previous;
+  try {
+    const mutation = await mutate(await readWatch(projectRoot));
+    if (Array.isArray(mutation)) {
+      await (options.strictWrite ? rewriteWatchStrict(projectRoot, mutation) : rewriteWatch(projectRoot, mutation));
+      return undefined;
+    }
+    if (mutation.write !== false) {
+      await (options.strictWrite ? rewriteWatchStrict(projectRoot, mutation.entries) : rewriteWatch(projectRoot, mutation.entries));
+    }
+    return mutation.result;
+  } finally {
+    release();
+    if (watchUpdateLocks.get(projectRoot) === tail) watchUpdateLocks.delete(projectRoot);
+  }
+}
+
+/** Apply only the fields the sweep changed, preserving concurrent updates. */
+function mergeSweepEntry(
+  before: WatchEntry,
+  after: WatchEntry,
+  fresh: WatchEntry,
+): WatchEntry {
+  const merged: Record<string, unknown> = { ...fresh };
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (Object.is(before[key as keyof WatchEntry], after[key as keyof WatchEntry])) continue;
+    if (key in after) merged[key] = after[key as keyof WatchEntry];
+    else delete merged[key];
+  }
+  return {
+    ...merged,
+    prUrl: fresh.prUrl,
+    slug: fresh.slug,
+    repoCwd: fresh.repoCwd,
+  };
+}
+
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -309,6 +380,7 @@ export async function rewriteWatch(projectRoot: string, entries: WatchEntry[]): 
  * `enabled` is read by the caller from `mergeable_autoresolve.enabled` so the
  * sweep stays byte-identical to today when the feature is off (AC4).
  */
+/** The dispatcher result retained by a queued repair until its claim completes. */
 export interface AutoresolveDispatchOpts {
   /** Config gate — when false, the sweep runs exactly as before (no new work). */
   enabled: boolean;
@@ -322,12 +394,11 @@ export interface AutoresolveDispatchOpts {
     state: PrMergeState,
   ) => Promise<{ eligible: boolean; reason?: string }>;
   /**
-   * Dispatch resolution for the chosen entry. Called with the entry AFTER
-   * its attempt counter has already been bumped and `lastResolveAt` set
-   * (AC3) — the git work itself happens inside this callback.
-   * Returns the outcome kind so the sweep can reset the counter on success.
+   * Dispatch resolution for the chosen entry. The request-owned adapter calls
+   * this only after the daemon claims and stamps the entry (AC3).
+   * Returns the outcome consumed by the pooled outcome handler.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' | 'published-stack' } | void>;
+  dispatch: (entry: WatchEntry) => Promise<AutoresolveOutcome | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -354,10 +425,9 @@ export interface CiFixDispatchOpts {
     state: PrMergeState,
   ) => Promise<{ eligible: boolean; reason?: string }>;
   /**
-   * Dispatch CI fix for the chosen entry. Called with the entry AFTER
-   * its attempt counter has already been bumped and `lastCiFixAt` set
-   * (AC3) — the git work itself happens inside this callback.
-   * Returns the outcome kind so the sweep can reset the counter on success.
+   * Dispatch CI fix for the chosen entry. The request-owned adapter calls
+   * this only after the daemon claims and stamps the entry (AC3).
+   * Returns the outcome consumed by the pooled outcome handler.
    */
   dispatch: (
     entry: WatchEntry,
@@ -383,6 +453,14 @@ export interface SweepOpts {
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
+  /** Dispatcher-owned repair handoff. Sweeps enqueue but never execute repairs. */
+  repairs?: {
+    queue: RepairQueue;
+  };
+  /** True while a pooled repair has already claimed this PR. */
+  isRepairRunning?: (prUrl: string) => boolean;
+  /** True while the feature worker owns this slug; repairs must remain queued. */
+  isFeatureInFlight?: (slug: string) => boolean;
   /**
    * Optional worktree teardown seam for the shipped-record gate.
    * MERGED and CLOSED may use this dependency; NOTFOUND never does.
@@ -414,6 +492,148 @@ function runnerForEntry(
   return Object.assign(gh.bind(undefined), operationRunner);
 }
 
+type PooledRepairOutcomeOptions = {
+  projectRoot: string;
+  previous: WatchEntry;
+  runGh?: GhRunner;
+  operations?: SweepOpts['operations'];
+  log?: (message: string) => void;
+} & RepairCompletion;
+
+function isAutoresolveOutcome(
+  options: PooledRepairOutcomeOptions,
+): options is PooledRepairOutcomeOptions & {
+  request: Extract<RepairCompletion, { request: { kind: 'autoresolve' } }>['request'];
+  outcome: AutoresolveOutcome;
+} {
+  return options.request.kind === 'autoresolve';
+}
+
+/**
+ * Apply the registry and PR-facing consequences of a completed pooled repair.
+ *
+ * The pool claims and stamps an entry before calling its adapter; this handler
+ * is the one counterpart to the former inline dispatch branches.  Keeping the
+ * result union here prevents a newly-added adapter outcome from silently
+ * skipping its bookkeeping on the queued path.
+ */
+export async function applyPooledRepairOutcome(options: PooledRepairOutcomeOptions): Promise<void> {
+  if (isAutoresolveOutcome(options)) return applyAutoresolveRepairOutcome(options);
+  return applyCiFixRepairOutcome(options);
+}
+
+/** Rewrite just the completed repair's current watch entry. */
+async function rewritePooledRepairWatchEntry(
+  projectRoot: string,
+  prUrl: string,
+  mutate: (entry: WatchEntry) => WatchEntry,
+  log?: (message: string) => void,
+): Promise<boolean> {
+  const outcome = await updateWatch(projectRoot, (entries): WatchUpdate<boolean> => {
+    if (!entries.some((entry) => entry.prUrl === prUrl)) {
+      return { entries, result: false, write: false };
+    }
+    return {
+      entries: entries.map((entry) => entry.prUrl === prUrl ? mutate(entry) : entry),
+      result: true,
+    };
+  });
+  if (!outcome) log?.(`[mergeable-sweep] dropping repair outcome for ${prUrl}: watch entry missing`);
+  return outcome ?? false;
+}
+
+/** Mark a repair paused before provider work and leave a durable recovery comment. */
+async function markPooledSetupRecovery({
+  entryRunner,
+  previous,
+  marker,
+  body,
+  description,
+  log,
+}: {
+  entryRunner: GhRunner | (GhRunner & GithubOperationRunner);
+  previous: WatchEntry;
+  marker: string;
+  body: string;
+  description: string;
+  log?: (message: string) => void;
+}): Promise<void> {
+  try {
+    await addLabel(entryRunner, previous.repoCwd, previous.prUrl, 'needs-remediation', log);
+    await upsertComment(entryRunner, previous.repoCwd, previous.prUrl, marker, body, log);
+  } catch (err) {
+    log?.(`[mergeable-sweep] ${description} setup-recovery marker error for ${previous.prUrl}: ${err}`);
+  }
+}
+
+async function applyAutoresolveRepairOutcome(options: Extract<PooledRepairOutcomeOptions, {
+  request: { kind: 'autoresolve' };
+}>): Promise<void> {
+  const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
+  const entryRunner = runnerForEntry(runGh, previous, operations);
+
+  switch (outcome.kind) {
+    case 'refreshed':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: 0 }), log);
+      return;
+    case 'escalated':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, escalationCause: 'conflict-resolution' }), log);
+      return;
+    case 'published-stack':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }), log);
+      return;
+    case 'setup-stop':
+      if (!await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({ ...entry, resolveAttempts: previous.resolveAttempts ?? 0 }), log)) return;
+      await markPooledSetupRecovery({ entryRunner, previous,
+        marker: '<!-- conductor:rebase-setup -->',
+        body: '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        description: 'rebase', log,
+      });
+      return;
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
+  }
+}
+
+async function applyCiFixRepairOutcome(options: Extract<PooledRepairOutcomeOptions, {
+  request: { kind: 'ci-fix' };
+}>): Promise<void> {
+  const { projectRoot, request, previous, outcome, runGh = makeProductionGh(), operations, log } = options;
+  const entryRunner = runnerForEntry(runGh, previous, operations);
+  switch (outcome.kind) {
+    case 'needs-human':
+      if (!await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
+        ...entry,
+        ciFixAttempts: previous.ciFixAttempts,
+        ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
+      }), log)) return;
+      await markPooledSetupRecovery({ entryRunner, previous,
+        marker: '<!-- conductor:ci-fix-setup -->',
+        body: '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+        description: 'ciFix', log,
+      });
+      return;
+    case 'not-started':
+    case 'branch-gone':
+      await rewritePooledRepairWatchEntry(projectRoot, request.prUrl, (entry) => ({
+        ...entry,
+        ciFixAttempts: previous.ciFixAttempts,
+        ...(previous.lastCiFixAt === undefined ? { lastCiFixAt: undefined } : { lastCiFixAt: previous.lastCiFixAt }),
+      }), log);
+      return;
+    case 'noop':
+    case 'failed':
+    case 'published':
+      return;
+    default: {
+      const exhaustive: never = outcome;
+      return exhaustive;
+    }
+  }
+}
+
 /**
  * For each tracked PR: evaluate merge state then update the `mergeable` label
  * according to the decision tree; prune closed/merged PRs. Never throws (FR-15).
@@ -426,6 +646,9 @@ export async function sweepMergeableLabels({
   operations,
   autoresolve,
   ciFix,
+  repairs,
+  isRepairRunning,
+  isFeatureInFlight,
   teardownWorktree,
   shippedRecordProbe,
   canRemoveWorktree,
@@ -452,13 +675,9 @@ export async function sweepMergeableLabels({
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
-    // Task 17 (AC1/AC2): PRs whose `mergeable` field is CONFLICTING, gathered
-    // during the label pass so the autoresolve dispatch below never re-fetches
-    // PR state. Only populated/consulted when autoresolve is configured.
+    // Repair candidates are gathered from the one merge-state read per entry;
+    // the sweep neither re-reads state nor awaits a repair session.
     const conflictingCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
-    // Task 10 (AC1/AC2): PRs whose `checksOutcome` is 'failed', gathered
-    // during the label pass so the ciFix dispatch below never re-fetches
-    // PR state. Only populated/consulted when ciFix is configured.
     const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
     for (let entry of entries) {
@@ -866,150 +1085,97 @@ export async function sweepMergeableLabels({
       }
     }
 
-    // Task 17: after the label pass, dispatch resolution for the first
-    // eligible CONFLICTING PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastResolveAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // autoresolve is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
+    const enqueue = (request: RepairRequest): void => {
+      if (!repairs) return;
+      if (request.slug && isFeatureInFlight?.(request.slug)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (feature in flight)`);
+        return;
+      }
+      if (isRepairRunning?.(request.prUrl)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already running)`);
+        return;
+      }
+      if (!repairs.queue.enqueue(request)) {
+        log?.(`[mergeable-sweep] skipping repair for ${request.prUrl} (already queued)`);
+      }
+    };
+
+    // The sweep only selects and queues repair work. The daemon pool owns
+    // claim-time attempt accounting, adapter execution, and outcomes.
     if (autoresolve?.enabled) {
-      let dispatched = false;
       for (const { entry, state } of conflictingCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
-        const elig = await autoresolve.isEligible(entry, state);
-        if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-          continue;
-        }
-
-        dispatched = true;
-        const now = autoresolve.now ? autoresolve.now() : new Date();
-        const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
-          lastResolveAt: now.toISOString(),
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        const dispatchResult = await autoresolve.dispatch(updated);
-        if (dispatchResult?.kind === 'refreshed') {
-          survivors[idx] = { ...updated, resolveAttempts: 0 };
-        } else if (dispatchResult?.kind === 'escalated') {
-          survivors[idx] = { ...updated, escalationCause: 'conflict-resolution' };
-        } else if (dispatchResult?.kind === 'published-stack') {
-          // A stacked branch is intentionally escalated before any replay.
-          // That is not an exhausted resolution attempt, so preserve the
-          // counter which existed when this sweep began.
-          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-        } else if (dispatchResult?.kind === 'setup-stop') {
-          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
-          try {
-            await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-            await upsertComment(
-              entryGh,
-              entry.repoCwd,
-              entry.prUrl,
-              '<!-- conductor:rebase-setup -->',
-              '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-              log,
-            );
-          } catch (err) {
-            log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
-          }
-        }
+        const eligibility = await autoresolve.isEligible(entry, state);
+        if (!eligibility.eligible) continue;
+        const queuedAt = now().toISOString();
+        enqueue({
+          kind: 'autoresolve', prUrl: entry.prUrl, slug: entry.slug,
+          prCreatedAt: state.createdAt ?? queuedAt, queuedAt,
+          run: async (claimed) => (await autoresolve.dispatch(claimed)) ?? { kind: 'escalated' },
+        });
       }
     }
 
-    // Task 10: after the label pass, dispatch CI fix for the first
-    // eligible failed PR this tick; any further eligible PR is deferred
-    // (AC2). Attempt counter + lastCiFixAt are bumped on the survivor entry
-    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
-    // ciFix is absent or disabled, so the sweep stays byte-identical to
-    // today (AC4).
     if (ciFix?.enabled) {
-      let dispatched = false;
       for (const { entry, state } of failedCandidates) {
-        const entryGh = runnerForEntry(gh, entry, operations);
-        const elig = await ciFix.isEligible(entry, state);
-        if (!elig.eligible) continue;
-
-        if (dispatched) {
-          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
-          continue;
-        }
-
-        dispatched = true;
-        const now = ciFix.now ? ciFix.now() : new Date();
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
-        // The label pass may have set ciFailureDetected since this candidate
-        // was collected. Reserve from that current survivor so a later refund
-        // cannot discard the observed failure transition.
-        const current = idx >= 0 ? survivors[idx] : entry;
-        const updated: WatchEntry = {
-          ...current,
-          ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
-          lastCiFixAt: now.toISOString(),
-          ciFailureDetected: true,
-        };
-        if (idx >= 0) survivors[idx] = updated;
-
-        try {
-          const dispatchResult = await ciFix.dispatch(updated, state);
-          // Only an affirmative pre-provider refusal can restore the exact
-          // reservation. A local publication is not GitHub green; remote green
-          // is reconciled by the normal state transition on a later sweep.
-          if (dispatchResult?.kind === 'needs-human') {
-            survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
-            try {
-              await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
-              await upsertComment(
-                entryGh,
-                entry.repoCwd,
-                entry.prUrl,
-                '<!-- conductor:ci-fix-setup -->',
-                '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
-                log,
-              );
-            } catch (err) {
-              log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
+        const eligibility = await ciFix.isEligible(entry, state);
+        if (!eligibility.eligible) continue;
+        const queuedAt = now().toISOString();
+        enqueue({
+          kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug,
+          prCreatedAt: state.createdAt ?? queuedAt, queuedAt,
+          run: async (claimed): Promise<CiFixRepairOutcome> => {
+            const outcome = await ciFix.dispatch(claimed, state);
+            if (!outcome) return { kind: 'failed', stage: 'worktree' };
+            switch (outcome.kind) {
+              case 'green-verified':
+                return { kind: 'published' };
+              case 'needs-human':
+                return 'providerSetupExhaustion' in outcome
+                  ? { kind: 'needs-human', providerSetupExhaustion: outcome.providerSetupExhaustion }
+                  : { kind: 'failed', stage: 'provider' };
+              case 'not-started':
+              case 'noop':
+              case 'failed':
+              case 'published':
+              case 'branch-gone':
+                return outcome;
             }
-          } else if (dispatchResult?.kind === 'not-started' || dispatchResult?.kind === 'branch-gone') {
-            survivors[idx] = {
-              // Preserve the state transition from the label pass (notably a
-              // newly detected CI failure), while refunding only the fields
-              // this reservation changed.
-              ...current,
-              ciFixAttempts: entry.ciFixAttempts,
-              ...(entry.lastCiFixAt === undefined
-                ? { lastCiFixAt: undefined }
-                : { lastCiFixAt: entry.lastCiFixAt }),
-            };
-          }
-        } catch (err) {
-          // Task 11: dispatch error is logged but not propagated (AC1b)
-          // The bumped counter persists (already written to survivors[idx])
-          log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
-        }
+          },
+        });
       }
     }
 
-    // Task 1: cap the persisted registry so it cannot grow without bound.
-    // survivors is append-ordered oldest-first, so trim from the front.
-    const trimmed =
-      survivors.length > MAX_WATCH_ENTRIES ? survivors.slice(-MAX_WATCH_ENTRIES) : survivors;
-    if (trimmed !== survivors) {
-      const dropped = survivors.slice(0, survivors.length - MAX_WATCH_ENTRIES);
-      for (const entry of dropped) {
-        log?.(
-          `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
-        );
+    // Reconcile the sweep result against the lock-protected, current registry.
+    // A concurrent update can land while the asynchronous GitHub work above is
+    // in progress; retain its fields unless this sweep changed that same field.
+    const identity = (entry: WatchEntry): string => `${entry.repoCwd}\0${entry.prUrl}\0${entry.slug}`;
+    const before = new Map(entries.map((entry) => [identity(entry), entry]));
+    const after = new Map(survivors.map((entry) => [identity(entry), entry]));
+    await updateWatch(projectRoot, (freshEntries) => {
+      const currentSurvivors = freshEntries.flatMap((fresh) => {
+        const key = identity(fresh);
+        const original = before.get(key);
+        const updated = after.get(key);
+        // Entries enrolled after the sweep began were never observed by it, so
+        // they survive unchanged. Entries that were observed and omitted were
+        // deliberately pruned by this sweep.
+        if (!original) return [fresh];
+        if (!updated) return [];
+        return [mergeSweepEntry(original, updated, fresh)];
+      });
+      // Task 1: cap the fresh survivor set while holding the same update lock.
+      const trimmed = currentSurvivors.length > MAX_WATCH_ENTRIES
+        ? currentSurvivors.slice(-MAX_WATCH_ENTRIES)
+        : currentSurvivors;
+      if (trimmed.length !== currentSurvivors.length) {
+        for (const entry of currentSurvivors.slice(0, currentSurvivors.length - MAX_WATCH_ENTRIES)) {
+          log?.(
+            `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
+          );
+        }
       }
-    }
-    await rewriteWatch(projectRoot, trimmed);
+      return trimmed;
+    });
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted (FR-15).
     log?.(`[mergeable-sweep] sweep error: ${err}`);

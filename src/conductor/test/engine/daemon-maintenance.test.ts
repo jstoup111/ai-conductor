@@ -105,34 +105,18 @@ describe('engine/daemon-maintenance', () => {
       autoRestartOnStaleEngine: true,
     });
 
-    expect({ maintenance: maintenanceTrace.operations, trace }).toEqual({
-      maintenance: [
-        'rekick',
-        'sweep',
-        'refresh',
-        'rekick',
-        'restart-pending',
-        'stale-engine',
-        'sweep',
-        'episode-end-sweep',
-      ],
-      trace: [
-        'rekick:startup',
-        'sweep',
-        'local-discovery',
-        'refresh',
-        'rekick',
-        'restart-pending',
-        'stale-engine',
-        'sweep',
-        'episode-end-sweep',
-      ],
-    });
+    expect(maintenanceTrace.operations).toEqual([
+      'restart-pending', 'stale-engine', 'sweep', 'episode-end-sweep',
+    ]);
+    expect(trace).toEqual([
+      'refresh', 'rekick', 'restart-pending', 'stale-engine', 'episode-end-sweep', 'sweep',
+    ]);
   });
 
   it('refreshes into a free slot while another executor keeps its pinned order', async () => {
     let rootBase = 'base-s1';
     let localDiscoveries = 0;
+    let refreshes = 0;
     let firstRunning = false;
     let firstWorktreeHead: string | undefined;
     let releaseFirst: (() => void) | undefined;
@@ -172,11 +156,12 @@ describe('engine/daemon-maintenance', () => {
       {
         discoverBacklog: async ({ refresh }) => {
           if (refresh) {
+            refreshes++;
+            if (refreshes === 1) return [{ slug: 'first' }];
             rootBase = 'base-s2';
             return [{ slug: 'second' }];
           }
           localDiscoveries++;
-          if (localDiscoveries === 1) return [{ slug: 'first' }];
           return [];
         },
         runFeature: async () => {
@@ -192,7 +177,7 @@ describe('engine/daemon-maintenance', () => {
           }
         },
       },
-      { concurrency: 2, once: true },
+      { concurrency: 2, once: true, idlePollMs: 0 },
     );
 
     expect(secondObservedFirstPinned).toBe(true);

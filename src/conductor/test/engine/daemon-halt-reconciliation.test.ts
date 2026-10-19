@@ -17,7 +17,7 @@ function items(n: number): BacklogItem[] {
 // ── Task 7: startup orchestration (dashboard + first-run + downtime-advance) ──
 
 describe('runDaemon — startup halt-reconciliation (FR-1/FR-5)', () => {
-  it('renders the startup dashboard BEFORE any dispatch (FR-1)', async () => {
+  it('renders the startup dashboard after the first dispatch', async () => {
     const order: string[] = [];
     const deps: DaemonDeps = {
       discoverBacklog: async () => items(1),
@@ -30,9 +30,9 @@ describe('runDaemon — startup halt-reconciliation (FR-1/FR-5)', () => {
       },
     };
     await runDaemon(deps, { concurrency: 1, once: true });
-    expect(order[0]).toBe('dashboard');
+    expect(order[0]).toBe('dispatch:f0');
     expect(order).toContain('dispatch:f0');
-    expect(order.indexOf('dashboard')).toBeLessThan(order.indexOf('dispatch:f0'));
+    expect(order.indexOf('dashboard')).toBeGreaterThan(order.indexOf('dispatch:f0'));
   });
 
   it('first run (absent persisted SHA) initializes without re-kicking (FR-5)', async () => {
@@ -273,7 +273,7 @@ describe('runDaemon — reconcileHaltPrs injection (Task 18)', () => {
     const reconcileIdx = order.indexOf('reconcile');
     const firstDispatchIdx = order.findIndex((e) => e.startsWith('dispatch:'));
     expect(reconcileIdx).toBeGreaterThanOrEqual(0);
-    expect(reconcileIdx).toBeLessThan(firstDispatchIdx);
+    expect(reconcileIdx).toBeGreaterThan(firstDispatchIdx);
   });
 
   it('reconcileHaltPrs invoked once per idle poll tick', async () => {

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { reconcileHaltPrs } from '../../src/engine/halt-pr-reconciliation.js';
+import { reconcileHaltPrs, type PrSweepOutcome } from '../../src/engine/halt-pr-reconciliation.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type {
   GithubOperationRequest,
@@ -705,6 +705,85 @@ describe('reconcileHaltPrs (Task 15)', () => {
     const logs3: string[] = [];
     await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs3.push(m), cache: freshCache });
     expect(logs3.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(true);
+  });
+
+  // Covers: task:10
+  // An active feature owns its halt presentation until its claim releases.
+  it('(Task 10) skips an in-flight marked PR through the delta cache, then preserves reconciliation after release', async () => {
+    const inFlightSlug = 'in-flight-halt-pr';
+    const resolvedInFlightSlug = 'in-flight-resolved-halt-pr';
+    const inFlight = new Set([inFlightSlug, resolvedInFlightSlug]);
+    const activePr: FakeHeadPr = {
+      number: 410,
+      url: 'https://github.com/owner/repo/pull/410',
+      isDraft: false,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: `feat/daemon-${inFlightSlug}`,
+    };
+    const otherPr: FakeHeadPr = {
+      number: 411,
+      url: 'https://github.com/owner/repo/pull/411',
+      isDraft: false,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: 'feat/daemon-not-in-flight',
+    };
+    const resolvedActivePr: FakeHeadPr = {
+      number: 412,
+      url: 'https://github.com/owner/repo/pull/412',
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: `feat/daemon-${resolvedInFlightSlug}`,
+    };
+    const { gh, calls } = makeFakeGhForClearing([activePr, otherPr, resolvedActivePr]);
+    const { runGit } = makeFakeGit([
+      `feat/daemon-${resolvedInFlightSlug}:.docs/shipped/${resolvedInFlightSlug}.md`,
+    ]);
+    const cache = new Map<string, PrSweepOutcome>();
+    const isFeatureInFlight = (slug: string) => inFlight.has(slug);
+    const isMutationFor = (pr: FakeHeadPr) => (call: string[]) =>
+      (call[0] === 'pr' && call[1] !== 'list' && call.includes(pr.url)) ||
+      call.some((arg) => arg.includes(`/issues/${pr.number}/`));
+
+    const logs1: string[] = [];
+    await reconcileHaltPrs({
+      projectRoot: tempDir,
+      runGh: gh,
+      log: (message) => logs1.push(message),
+      cache,
+      isFeatureInFlight,
+      runGit,
+    });
+
+    expect(calls.filter(isMutationFor(activePr))).toHaveLength(0);
+    expect(calls.filter(isMutationFor(resolvedActivePr))).toHaveLength(0);
+    expect(activePr.isDraft).toBe(false);
+    expect(otherPr.isDraft).toBe(true);
+    expect(logs1.filter((message) => message.includes(`${activePr.url} skipped: feature ${inFlightSlug} is in flight`))).toHaveLength(1);
+    expect(cache.get(activePr.url)).toBe('in-flight');
+
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (message) => logs2.push(message), cache, isFeatureInFlight, runGit });
+    const logs3: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (message) => logs3.push(message), cache, isFeatureInFlight, runGit });
+    expect(logs2.some((message) => message.includes('is in flight'))).toBe(false);
+    expect(logs3.some((message) => message.includes('is in flight'))).toBe(false);
+
+    activePr.body = 'worker cleared the halt marker';
+    activePr.labels = [];
+    const callCountBeforeWorkerClearSweep = calls.length;
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, cache, isFeatureInFlight, runGit });
+    expect(calls).toHaveLength(callCountBeforeWorkerClearSweep + 1);
+    expect(calls.slice(callCountBeforeWorkerClearSweep).some((call) => call[0] === 'api' && call[2] === 'POST')).toBe(false);
+
+    activePr.body = `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`;
+    activePr.labels = ['needs-remediation'];
+    inFlight.delete(inFlightSlug);
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, cache, isFeatureInFlight, runGit });
+    expect(activePr.isDraft).toBe(true);
+    expect(cache.get(activePr.url)).toBe('healed');
   });
 });
 
