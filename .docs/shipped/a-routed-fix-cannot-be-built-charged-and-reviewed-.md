@@ -4,45 +4,26 @@ spec_hash: a07aa66bc3f8ed5fc762cff9c18bf7385c165f0ff3251d98e034e9d8ac88f307
 pr: https://github.com/jstoup111/ai-conductor/pull/3285
 shipped: 2026-10-19
 engine_version: 20261018T130307Z-2917a81aaac0
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "Neither edit is planned. Both align test fixtures with existing configuration or confine temporary files; no shipped behavior changes."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-2
-    summary: "Unplanned refactor, needed because the git guard now reaches routing state. Dispatch behavior is unchanged."
-    accepted: false
-    authority: engine
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-3
-    summary: "Not called out in the plan, but these changes make routed and flat settlement fail closed and keep progress evidence durable. Not user-visible."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
-input: 20119396
-output: 2400402
-cache_read: 426757908
+input: 20145860
+output: 2401199
+cache_read: 426871316
 cache_creation: 17609937
-cost_usd: 350.7079
-dispatches: 349
+cost_usd: 350.793
+dispatches: 350
 retries: 34
 halts: 37
 unmetered: count: 12, duration_ms: 0
 cost_unmetered: count: 0
 providers:
-  codex: input: 20118178, output: 1325002, cache_read: 350602624, cache_creation: 0, cost_usd: 173.0844, dispatches: 166, cost_unmetered: 0
+  codex: input: 20144642, output: 1325799, cache_read: 350716032, cache_creation: 0, cost_usd: 173.1696, dispatches: 167, cost_unmetered: 0
   claude: input: 1218, output: 1075400, cache_read: 76155284, cache_creation: 17609937, cost_usd: 177.6234, dispatches: 183, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","6c757752-837a-4ba2-9e0a-65633aa5c194","lifecycle-step","finish"]
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 22
