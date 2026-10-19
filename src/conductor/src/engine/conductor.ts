@@ -672,13 +672,6 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
-function manualTestExhaustionReason(count: number, evidence: string): string {
-  const rows = evidence.split('\n').filter(Boolean);
-  return `manual-test FAIL unresolved after ${count} build ` +
-    `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${rows[0] ?? 'no failure detail'}` +
-    (rows.length > 1 ? ` (+${rows.length - 1} more FAIL row(s))` : '');
-}
-
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
@@ -7117,7 +7110,7 @@ export class Conductor {
             // before this process-local mirror reaches its cap.  Keep the
             // established self-heal halt vocabulary for manual-test FAILs.
             const reason = routedAdmission.kind === 'exhausted'
-              ? manualTestExhaustionReason(manualTestSelfHeals, evidence)
+              ? this.manualTestExhaustionReason(manualTestSelfHeals, evidence)
               : routedAdmission.reason;
             await this.writeHaltMarker(reason + '\n', 'needs-human');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -7149,7 +7142,7 @@ export class Conductor {
         );
         return { action: 'continue', nextIndex: navigationIndex - 1 }; // for-loop i++ lands on build
       }
-      const reason = manualTestExhaustionReason(manualTestSelfHeals, failRows.join('\n'));
+      const reason = this.manualTestExhaustionReason(manualTestSelfHeals, failRows.join('\n'));
       await this.writeHaltMarker(reason + '\n', 'needs-human');
       await this.persistPendingStateChanges(state, 'persist conductor transition');
       const prUrl = await this.surfaceRemediationPr(reason);
@@ -14995,6 +14988,13 @@ export class Conductor {
     await this.fullSuiteVerifier.recordPreservation(inspection);
   }
 
+  private manualTestExhaustionReason(count: number, evidence: string): string {
+    const rows = evidence.split('\n').filter(Boolean);
+    return `manual-test FAIL unresolved after ${count} build ` +
+      `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${rows[0] ?? 'no failure detail'}` +
+      (rows.length > 1 ? ` (+${rows.length - 1} more FAIL row(s))` : '');
+  }
+
   /** Creates and admits one taskless round after its receipt-specific charge is durable. */
   private async admitRoutedTasklessKickback(
     state: ConductState,
@@ -15131,7 +15131,7 @@ export class Conductor {
         return capacity.kind === 'available'
           ? capacity
           : capacity.kind === 'exhausted'
-            ? { kind: 'exhausted', reason: manualTestExhaustionReason(capacity.count, evidence) }
+            ? { kind: 'exhausted', reason: this.manualTestExhaustionReason(capacity.count, evidence) }
             : capacity;
       },
       mutateReceipt: async ({ slug, roundId, routing }) => {
@@ -15139,7 +15139,7 @@ export class Conductor {
         return charged.kind === 'charged'
           ? { kind: 'charged' }
           : charged.kind === 'exhausted'
-            ? { kind: 'exhausted', reason: manualTestExhaustionReason(charged.count, evidence) }
+            ? { kind: 'exhausted', reason: this.manualTestExhaustionReason(charged.count, evidence) }
             : { kind: 'halted', reason: charged.reason };
       },
     });
