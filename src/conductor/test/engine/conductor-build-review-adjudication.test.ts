@@ -21,7 +21,9 @@ import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-a
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
+import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -305,7 +307,7 @@ async function fixture(options: FixtureOptions = {}) {
   events.on('loop_halt', (event) => { loopHalts.push(event); });
   for (const type of [
     'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
-    'remediation_effect_applied', 'remediation_case_reconciled',
+    'remediation_effect_applied', 'remediation_case_reconciled', 'build_review_disposition_carried',
   ] as const) {
     events.on(type, (event) => {
       lifecycle.push(event);
@@ -369,6 +371,49 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
+  it('replays #3211 through build_review: a re-raised finding bound to an accepted prior case passes without a second acceptance or HALT', async () => {
+    const originFinding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'security', contractVersion: 'v3', concernKind: 'injection',
+      anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'d'.repeat(64)}`, display: 'accepted eventSpine boundary' } },
+    });
+    if (!originFinding) throw new Error('fixture origin finding is invalid');
+    const priorSourceId = `security:${originFinding.id}`;
+    const run = await fixture({
+      judgement: {
+        ...actionJudgement(),
+        cases: [{ ...actionJudgement().cases[0]!, existingCaseId: 'case-accepted' }],
+      },
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const cases = new RemediationCaseStore(root, feature);
+        await cases.mutate(async (state) => ({ value: null, nextState: {
+          ...state,
+          cases: [{
+            id: 'case-accepted', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The lap-one eventSpine finding was accepted.', resolution: 'resolved',
+            sources: [{ sourceId: priorSourceId, outcome: 'acted', recordedAt: '2026-01-01T00:00:00.000Z' }],
+            effect: { id: 'effect-accepted', kind: 'action', status: 'failed', diagnostic: 'retired by operator acceptance' },
+          }],
+        } }));
+        await new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-02T00:00:00.000Z') }).append({
+          feature, finding: originFinding, sourceLapId: 'lap-one' as never,
+          summary: 'The original eventSpine risk is accepted.', rationale: 'Accepted for this feature.', operator: 'operator',
+        });
+      },
+    });
+
+    expect(run.dispatched).toEqual(['build_review', 'remediate']);
+    expect(run.kickbacks).toEqual([]);
+    expect(await run.haltMarker()).toBe('');
+    expect(run.lifecycle.filter((event) => event.type === 'build_review_disposition_carried')).toEqual([
+      expect.objectContaining({ findingId: FINDING_ID, caseId: 'case-accepted', originFindingId: originFinding.id, originLapId: 'lap-one' }),
+    ]);
+    await expect(run.readJson('.pipeline/remediation-cases.json')).resolves.toMatchObject({ cases: [expect.objectContaining({
+      id: 'case-accepted', effect: { id: 'effect-accepted', kind: 'action', status: 'failed', diagnostic: 'retired by operator acceptance' },
+      sources: [expect.objectContaining({ sourceId: priorSourceId }), expect.objectContaining({ sourceId: SOURCE_ID })],
+    })] });
+  });
+
   it('halts a rejected transition with trusted-history recovery guidance before BUILD dispatch', async () => {
     let persisted = '';
     const run = await fixture({

@@ -167,6 +167,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const sources = projectBuildReviewAggregateSources(input.aggregate);
   if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
   const carriedFindingIds = new Set<string>();
+  // A carried case keeps its durable autonomous state intact, but its current
+  // source is settled by operator authority. Do not make a sibling BUILD route
+  // republish that carried case as unfinished work.
+  const carriedCaseIds = new Set<string>();
   const operatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> =>
     new Set([
       ...(input.resolveOperatorResolvedFindingIds ? await input.resolveOperatorResolvedFindingIds() : input.operatorResolvedFindingIds),
@@ -413,7 +417,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         retirementTransitions.push({ caseId: record.id, ...(retiredEffect ? { retiredEffect } : {}) });
         return { ...record, resolution: 'resolved' as const, effect };
       });
-      const eligible = cases.filter(isBuildEligibleActionCase);
+      const eligible = cases.filter((record) => isBuildEligibleActionCase(record) && !carriedCaseIds.has(record.id));
       if (eligible.length === 0 || !options.republishWorkOrder) {
         return { value: { ok: true as const, cases, retirementTransitions }, nextState: { ...state, cases } };
       }
@@ -719,6 +723,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     for (const proposed of carried) {
       const caseId = proposed.case.existingCaseId!;
       const origin = acceptedOriginsByCaseId.get(caseId)!;
+      carriedCaseIds.add(caseId);
       const appended = await appendCarriedRemediationCaseSources(store, { caseId, sources: proposed.sources, recordedAt: carryRecordedAt });
       if (!appended.ok) return failStore('case store', appended);
       for (const source of proposed.sources) {

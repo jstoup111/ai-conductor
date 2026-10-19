@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
@@ -19,6 +20,7 @@ import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '
 import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -149,11 +151,11 @@ const mixedAggregate = joinBuildReviewRubricOutcomes({
       findings: [
         {
           concernKind: 'test-insensitive', summary: 'The first changed test is insensitive.', evidenceLocations: ['test/first.test.ts:1'],
-          anchor: { rubric: 'testQuality', locus: { path: 'test/first.test.ts', contentHash: 'sha256:first', display: 'first test' } },
+          anchor: { rubric: 'testQuality', locus: { path: 'test/first.test.ts', contentHash: `sha256:${'f'.repeat(64)}`, display: 'first test' } },
         },
         {
           concernKind: 'test-insensitive', summary: 'The second changed test is insensitive.', evidenceLocations: ['test/second.test.ts:1'],
-          anchor: { rubric: 'testQuality', locus: { path: 'test/second.test.ts', contentHash: 'sha256:second', display: 'second test' } },
+          anchor: { rubric: 'testQuality', locus: { path: 'test/second.test.ts', contentHash: `sha256:${'e'.repeat(64)}`, display: 'second test' } },
         },
       ],
     },
@@ -430,6 +432,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       readPlanContract: async () => ({ path: '.docs/plans/feature.md', pointers: ['Task 1: unrelated UI work'] }),
     });
 
+    if (!result.ok) throw new Error(result.detail);
     expect(result).toMatchObject({ ok: true, route: 'build' });
     expect(JSON.parse(await readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8'))).toMatchObject({
       cases: [{ priority: 'critical', tasks: [{ title: 'Parameterize the search query' }] }],
@@ -1178,7 +1181,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
   });
 
-  it('settles an accepted applied-case binding as carried without changing its case state', async () => {
+  it.each([
+    ['applied', { id: 'effect-carried', kind: 'action' as const, status: 'applied' as const, workOrderId: 'order-carried' }],
+    ['retired as failed', { id: 'effect-carried', kind: 'action' as const, status: 'failed' as const, diagnostic: 'retired by operator acceptance' }],
+  ])('settles an accepted case binding whose effect is %s as carried without changing its case state', async (_effectStatus, effect) => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     const originSourceId = securitySourceId;
@@ -1191,7 +1197,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       id: 'case-carried', domain: 'build_review' as const, disposition: 'act' as const, priority: 'critical' as const, confidence: 'high' as const,
       rationale: 'The accepted finding was previously repaired.', resolution: 'resolved' as const,
       sources: [{ sourceId: originSourceId, outcome: 'acted' as const, recordedAt: '2025-12-01T00:00:00.000Z' }],
-      effect: { id: 'effect-carried', kind: 'action' as const, status: 'applied' as const, workOrderId: 'order-carried' },
+      effect,
     };
     await seedCases(store, { version: 'v1', feature, cases: [original] });
     const accepted = await new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-01T00:00:00.000Z') }).append({
@@ -1222,6 +1228,93 @@ describe('coordinateBuildReviewAdjudication', () => {
     const settled = await store.read();
     expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
       ...original,
+      sources: [...original.sources, expect.objectContaining({ sourceId })],
+    })] } });
+  });
+
+  it('routes an unbound sibling while carrying its accepted binding with one charge', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const originFinding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: { rubric: 'testQuality', locus: { path: 'test/original.test.ts', contentHash: `sha256:${'d'.repeat(64)}`, display: 'original test' } },
+    });
+    if (!originFinding) throw new Error('fixture origin finding is invalid');
+    const carriedCase = {
+      id: 'case-carried', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+      rationale: 'The original finding was accepted.', resolution: 'open' as const,
+      sources: [{ sourceId: `testQuality:${originFinding.id}`, outcome: 'acted' as const, recordedAt: '2026-01-01T00:00:00.000Z' }],
+      effect: { id: 'effect-carried', kind: 'action' as const, status: 'applied' as const, workOrderId: 'order-carried' },
+    };
+    await seedCases(store, { version: 'v1', feature, cases: [carriedCase] });
+    await new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-02T00:00:00.000Z') }).append({
+      feature, finding: originFinding, sourceLapId: 'lap-origin' as never,
+      summary: 'The original risk is accepted.', rationale: 'Accepted for this feature.', operator: 'operator',
+    });
+    const judgement = mixedJudgement();
+    const bound = { ...judgement.cases[0]!, existingCaseId: carriedCase.id };
+    const charge = vi.fn(async () => ({ status: 'charged' as const, exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 } }));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => ({ ...judgement, cases: [bound, judgement.cases[1]!] })),
+      aggregate: mixedAggregate, chargeEffect: charge,
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(charge).toHaveBeenCalledTimes(1);
+    const order = JSON.parse(await readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')) as { cases: { caseId: string }[] };
+    expect(order.cases).toHaveLength(1);
+    expect(order.cases[0]!.caseId).not.toBe(carriedCase.id);
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [
+      expect.objectContaining({ id: carriedCase.id, effect: carriedCase.effect, sources: [...carriedCase.sources, expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(acceptedSource) })] }),
+      expect.objectContaining({ disposition: 'act', effect: expect.objectContaining({ status: 'applied' }) }),
+    ] } });
+  });
+
+  it('persists exactly one carried event when replay resumes after the append-and-emission crash boundary', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const originFinding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'security', contractVersion: 'v3', concernKind: 'injection',
+      anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
+    });
+    if (!originFinding) throw new Error('fixture origin finding is invalid');
+    const original = {
+      id: 'case-carried', domain: 'build_review' as const, disposition: 'act' as const, priority: 'critical' as const, confidence: 'high' as const,
+      rationale: 'The original finding was accepted.', resolution: 'resolved' as const,
+      sources: [{ sourceId: securitySourceId, outcome: 'acted' as const, recordedAt: '2026-01-01T00:00:00.000Z' }],
+      effect: { id: 'effect-carried', kind: 'action' as const, status: 'failed' as const, diagnostic: 'retired by operator acceptance' },
+    };
+    await seedCases(store, { version: 'v1', feature, cases: [original] });
+    await new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-02T00:00:00.000Z') }).append({
+      feature, finding: originFinding, sourceLapId: 'lap-security' as never,
+      summary: 'The original risk is accepted.', rationale: 'Accepted for this feature.', operator: 'operator',
+    });
+    const judgement = actionJudgement();
+    const bound: RemediationCaseJudgement = { ...judgement, cases: [{ ...judgement.cases[0]!, existingCaseId: original.id }] };
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => bound),
+      emit: async (event) => { await events.emit(event); throw new Error('simulated process crash after carry emission'); },
+      chargeEffect: async () => { throw new Error('carried finding must not charge'); },
+    })).rejects.toThrow('simulated process crash');
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => bound), emit: async (event) => { await events.emit(event); },
+      chargeEffect: async () => { throw new Error('carried finding must not charge'); },
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+    persister.stop();
+
+    const carried = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+      .map((line) => JSON.parse(line) as ConductorEvent)
+      .filter((event) => event.type === 'build_review_disposition_carried');
+    expect(carried).toEqual([expect.objectContaining({
+      feature: feature.feature, lapId: aggregate.lapId, findingId, caseId: original.id,
+      originFindingId: rawSecuritySource.findingId, originLapId: 'lap-security',
+    })]);
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      id: original.id, effect: original.effect,
       sources: [...original.sources, expect.objectContaining({ sourceId })],
     })] } });
   });
