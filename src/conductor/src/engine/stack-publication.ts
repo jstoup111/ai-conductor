@@ -1,4 +1,5 @@
 import { parseChildId, type ChildId } from './child-context.js';
+import { childBranchFor } from './feature-branch-identity.js';
 import type { ActiveChildResolution } from './child-cursor.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
@@ -8,6 +9,8 @@ import {
 import type { GhRunner } from './tracker-client.js';
 import type { GithubOperationRequest } from './github-operations.js';
 import type { PublicationRecord } from './stack-publication-record.js';
+import { executeRemoteGit, type RemoteGitOperationDependencies } from './remote-git-operations.js';
+import { pushedTipRef } from './push-lease.js';
 
 /** A stack operation payload is never trusted merely because it passed argv decoding. */
 export type StackPayloadValidation =
@@ -108,6 +111,119 @@ async function readSealedPositions(
   } catch {
     return 'unreadable';
   }
+}
+
+export interface StackPublicationChild {
+  readonly position: ChildId;
+  readonly branch: string;
+  readonly closure: string;
+}
+
+/** Read only the non-leaf members that own a durable closure. */
+export async function readStackPublicationChildren(
+  root: string,
+  slug: string,
+  dependencies: { readonly git?: GitRunner } = {},
+): Promise<readonly StackPublicationChild[] | 'unreadable'> {
+  const git = dependencies.git ?? makeGitRunner(root);
+  const positions = await readSealedPositions(slug, git);
+  if (positions === 'absent' || positions === 'unreadable' || positions.length < 2) return 'unreadable';
+  const children: StackPublicationChild[] = [];
+  for (const position of positions.slice(0, -1)) {
+    const branch = childBranchFor(slug, position);
+    if (!branch.ok) return 'unreadable';
+    try {
+      const closure = await git(['rev-parse', '--verify', `refs/conductor/${slug}/closed/c${position}`]);
+      const tip = closure.exitCode === 0 ? closure.stdout.trim() : '';
+      if (tip === '') return 'unreadable';
+      children.push({ position, branch: branch.branch, closure: tip });
+    } catch {
+      return 'unreadable';
+    }
+  }
+  return children;
+}
+
+export type ChildChainVerification = { readonly kind: 'valid' } | { readonly kind: 'broken'; readonly position: ChildId } | { readonly kind: 'unreadable' };
+
+/** Every later child must include the closure of its direct predecessor. */
+export async function verifyChildChain(
+  root: string,
+  children: readonly StackPublicationChild[],
+  dependencies: { readonly git?: GitRunner } = {},
+): Promise<ChildChainVerification> {
+  const git = dependencies.git ?? makeGitRunner(root);
+  for (let index = 1; index < children.length; index += 1) {
+    const predecessor = children[index - 1]!;
+    const next = children[index]!;
+    try {
+      const contains = await git(['merge-base', '--is-ancestor', predecessor.closure, `refs/heads/${next.branch}`]);
+      if (contains.exitCode !== 0) return { kind: 'broken', position: predecessor.position };
+    } catch {
+      return { kind: 'unreadable' };
+    }
+  }
+  return { kind: 'valid' };
+}
+
+export type PushChildClosureResult =
+  | { readonly kind: 'pushed'; readonly position: ChildId; readonly tip: string }
+  | { readonly kind: 'unchanged'; readonly position: ChildId; readonly tip: string }
+  | { readonly kind: 'diverged'; readonly position: ChildId }
+  | { readonly kind: 'read-failed'; readonly position: ChildId };
+
+export interface PushChildClosureDependencies {
+  readonly git?: GitRunner;
+  /** The canonical guarded write boundary. Required: no raw Git fallback exists. */
+  readonly remote?: Omit<RemoteGitOperationDependencies, 'cwd'>;
+  readonly remoteGit?: typeof executeRemoteGit;
+}
+
+function lsRemoteTip(stdout: string, ref: string): string | undefined {
+  const line = stdout.split('\n').find((candidate) => candidate.endsWith(`\t${ref}`));
+  return line?.split('\t', 1)[0]?.trim() || undefined;
+}
+
+/**
+ * Publish one immutable child closure.  A child branch is only ever created
+ * with a plain push; a pre-existing branch is accepted only when both the
+ * durable pushed-tip receipt and closure agree with the remote.
+ */
+export async function pushChildClosure(
+  root: string,
+  slug: string,
+  child: StackPublicationChild,
+  dependencies: PushChildClosureDependencies = {},
+): Promise<PushChildClosureResult> {
+  const git = dependencies.git ?? makeGitRunner(root);
+  const destination = `refs/heads/${child.branch}`;
+  let remote: Awaited<ReturnType<GitRunner>>;
+  let recorded: Awaited<ReturnType<GitRunner>>;
+  try {
+    [remote, recorded] = await Promise.all([
+      git(['ls-remote', '--heads', 'origin', destination]),
+      git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, child.branch)]),
+    ]);
+  } catch {
+    return { kind: 'read-failed', position: child.position };
+  }
+  if (remote.exitCode !== 0) return { kind: 'read-failed', position: child.position };
+  const remoteTip = lsRemoteTip(remote.stdout, destination);
+  const recordedTip = recorded.exitCode === 0 ? recorded.stdout.trim() : undefined;
+  if (remoteTip !== undefined) {
+    return remoteTip === child.closure && recordedTip === child.closure
+      ? { kind: 'unchanged', position: child.position, tip: child.closure }
+      : { kind: 'diverged', position: child.position };
+  }
+  if (!dependencies.remote) return { kind: 'read-failed', position: child.position };
+  const result = await (dependencies.remoteGit ?? executeRemoteGit)([
+    'push', 'origin', `${child.closure}:${destination}`,
+  ], { cwd: root, ...dependencies.remote });
+  return result.kind === 'executed'
+    ? { kind: 'pushed', position: child.position, tip: child.closure }
+    : result.kind === 'failed'
+      ? { kind: 'read-failed', position: child.position }
+      : { kind: 'diverged', position: child.position };
 }
 
 function recordHasEveryPosition(
