@@ -837,13 +837,8 @@ export async function dispatchCliEntry(input: {
 // --- Main ---
 
 async function dispatchCliCommand(): Promise<void> {
-  const subcommandHelp = routeSubcommandHelp(process.argv);
-  if (subcommandHelp !== null) {
-    process.stdout.write(subcommandHelp);
-    process.exitCode = 0;
-    return;
-  }
-
+  // Per-command help is answered by `main()` before the daemon-session guard,
+  // so it never reaches this dispatcher.
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
     process.argv,
     process.cwd(),
@@ -1333,8 +1328,8 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(0);
   }
 
-  // Per-command help is answered by routeSubcommandHelp at the start of
-  // dispatchCliCommand. engineer, halt-issues, daemon, and update own their help.
+  // Per-command help is answered by routeSubcommandHelp in main(), before the
+  // daemon-session guard. engineer, halt-issues, daemon, and update own their help.
   // Top-level `--help` / `-h`: print the FULL command surface — every subcommand
   // (register/create/engineer/daemon) included — not just the bare-pipeline
   // flags. parseArgs uses the base program (no subcommands, so a bare feature
