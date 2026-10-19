@@ -523,6 +523,7 @@ async function auditSource(
       reason: source.reason ?? 'canonical plan is unavailable',
     };
   }
+  const plan = source.plan;
 
   const associations = mergedPullRequests.map((pullRequest) => ({
     pullRequest,
@@ -541,18 +542,18 @@ async function auditSource(
   const nonChildren = associations.filter(({ association }) =>
     !(association.kind === 'not-applicable' && association.classification === 'stack-child'));
   const candidates = nonChildren.flatMap(({ pullRequest, association }) =>
-    association.kind === 'implementation' && association.slug === source.plan!.slug ? [pullRequest] : []);
+    association.kind === 'implementation' && association.slug === plan.slug ? [pullRequest] : []);
 
   const referencedByAmbiguousPr = nonChildren.some(({ pullRequest }) => {
     const stems = extractPlanStems(pullRequest.body).filter((candidate) => planStems.includes(candidate));
-    return stems.includes(source.plan!.slug) && new Set(stems).size > 1;
+    return stems.includes(plan.slug) && new Set(stems).size > 1;
   });
   if (referencedByAmbiguousPr) {
     return row(source, 'ambiguous', 'merged PR metadata references multiple canonical plans');
   }
 
   const unclassifiedPullRequest = nonChildren.find(({ pullRequest }) =>
-    !pullRequest.headRef && extractPlanStems(pullRequest.body).includes(source.plan!.slug));
+    !pullRequest.headRef && extractPlanStems(pullRequest.body).includes(plan.slug));
   if (unclassifiedPullRequest) {
     return row(
       source,
@@ -561,11 +562,11 @@ async function auditSource(
     );
   }
 
-  if (candidates.length === 1) return auditImplementationCandidate(options, source, candidates[0]!);
+  if (candidates.length === 1) return auditImplementationCandidate(options, source, plan, candidates[0]!);
 
   const stackChildPullRequest = associations.find(({ pullRequest, association }) =>
     association.kind === 'not-applicable' && association.classification === 'stack-child'
-      && extractPlanStems(pullRequest.body).includes(source.plan!.slug))?.pullRequest;
+      && extractPlanStems(pullRequest.body).includes(plan.slug))?.pullRequest;
   if (stackChildPullRequest) {
     return row(
       source,
@@ -583,6 +584,7 @@ async function auditSource(
 async function auditImplementationCandidate(
   options: ShipmentAuditOptions,
   source: AuditSource,
+  plan: { path: string; slug: string },
   implementationPr: MergedPullRequest,
 ): Promise<ShipmentAuditRow> {
   await ensureCommitAvailable(options, implementationPr.headSha);
@@ -592,7 +594,7 @@ async function auditImplementationCandidate(
     mergedAt: implementationPr.mergedAt,
     headSha: implementationPr.headSha,
   };
-  const historicalVerdict = await evaluateHistoricalRecord(options, source.plan, implementationPr);
+  const historicalVerdict = await evaluateHistoricalRecord(options, plan, implementationPr);
   if (historicalVerdict?.kind === 'valid') {
     return { ...row(source, 'aligned', 'valid durable record is committed after implementation merge'), implementationPr: pr, verdict: historicalVerdict };
   }
@@ -607,7 +609,7 @@ async function auditImplementationCandidate(
   const verdict = await evaluateEvidence(
     {
       repoDir: options.cwd,
-      slug: source.plan.slug,
+      slug: plan.slug,
       implementationPr: implementationPr.url,
       candidateCommit: implementationPr.headSha,
     },
@@ -620,7 +622,7 @@ async function auditImplementationCandidate(
   if (verdict.kind === 'refusal' && verdict.code === 'shipped-record-missing') {
     let proposal: { path: string; content: string };
     try {
-      proposal = await expectedProposal(options, source.plan, implementationPr);
+      proposal = await expectedProposal(options, plan, implementationPr);
     } catch (error) {
       return {
         ...row(source, 'unresolved', `implementation head cannot prove record proposal: ${errorMessage(error)}`),

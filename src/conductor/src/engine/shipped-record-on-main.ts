@@ -1,7 +1,7 @@
 type GitRunner = (
   args: string[],
   opts: { cwd: string },
-) => Promise<{ stdout: string; stderr: string }>;
+) => Promise<{ stdout: string }>;
 
 export async function shippedRecordOnMain(
   repoCwd: string,

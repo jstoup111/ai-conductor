@@ -622,7 +622,10 @@ export async function assembleStack(input: {
   // Native stack discovery is anchored at member 1, rather than the retained
   // leaf.  A leaf may already have been attached elsewhere; querying it first
   // would turn that conflict into a new stack creation or an unsafe add.
-  const discoverMember = stored.record.members[0]!;
+  // `writePhase` owns the sole earlier mutation of `stored`; take its now
+  // settled, non-optional record into the stack assembly flow.
+  let publication = stored;
+  const discoverMember = publication.record.members[0]!;
   const observeNativeStack = async (): Promise<{ number: number; members: readonly NativeStackMember[] } | undefined> => {
     const current = await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
@@ -645,7 +648,7 @@ export async function assembleStack(input: {
     // The validated read above binds the observation to the current record; keep
     // this local reference so a future refactor cannot turn it into a raw lookup.
     void current;
-    return { number: stack.number as number, members: members as number[] };
+    return { number: stack.number as number, members };
   };
 
   let native = await observeNativeStack();
@@ -654,7 +657,7 @@ export async function assembleStack(input: {
       root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
         operation: 'stack.create', repository: leaf.repository, resource: { kind: 'repository' },
-        context: { actor: 'finish-publication' }, payload: { pullRequests: stored.record.members.map((member) => member.pr) },
+        context: { actor: 'finish-publication' }, payload: { pullRequests: publication.record.members.map((member) => member.pr) },
       },
     });
     native = await observeNativeStack();
@@ -664,21 +667,22 @@ export async function assembleStack(input: {
   // An existing native stack is extendable only when it is the ordered prefix
   // of our immutable publication receipt.  Never "fill in" a foreign member
   // or reorder an existing stack by issuing stack.add.
-  const isOrderedPrefix = native.members.length <= stored.record.members.length
-    && native.members.every((member, index) => member.number === stored.record.members[index]?.pr);
+  const isOrderedPrefix = native.members.length <= publication.record.members.length
+    && native.members.every((member, index) => member.number === publication.record.members[index]?.pr);
   if (!isOrderedPrefix) {
     throw new StackPublicationHaltError('stack_tip_diverged', 'native stack belongs to another stack or is not an ordered publication prefix');
   }
 
-  if (stored.record.stack?.number !== native.number) {
-    const write = await writePublicationRecord(input.root, input.slug, stored, {
-      ...stored.record, stack: { number: native.number, verified: false },
+  if (publication.record.stack?.number !== native.number) {
+    const write = await writePublicationRecord(input.root, input.slug, publication, {
+      ...publication.record, stack: { number: native.number, verified: false },
     }, { git: input.git });
     if (write.kind !== 'updated') throw new StackPublicationHaltError('stack_publication_precondition_failed', 'could not record native stack number');
-    stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
-    if (!stored) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'written stack record is unreadable');
+    const reloaded = await activePublicationRecord(input.root, input.slug, { git: input.git });
+    if (!reloaded) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'written stack record is unreadable');
+    publication = reloaded;
   }
-  const missing = stored.record.members.map((member) => member.pr).filter((pr) => !native!.members.some((nativeMember) => nativeMember.number === pr));
+  const missing = publication.record.members.map((member) => member.pr).filter((pr) => !native!.members.some((nativeMember) => nativeMember.number === pr));
   if (missing.length > 0) {
     await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations, operationsForTarget: input.operationsForTarget,
@@ -689,11 +693,11 @@ export async function assembleStack(input: {
     });
     native = await observeNativeStack();
   }
-  if (!native || native.members.length !== stored.record.members.length
-    || native.members.some((member, index) => member.number !== stored.record.members[index]?.pr)) {
+  if (!native || native.members.length !== publication.record.members.length
+    || native.members.some((member, index) => member.number !== publication.record.members[index]?.pr)) {
     throw new StackPublicationHaltError('stack_tip_diverged', 'native stack membership or order diverged');
   }
-  for (const [index, member] of stored.record.members.entries()) {
+  for (const [index, member] of publication.record.members.entries()) {
     const pushed = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, member.branch)]);
     if (pushed.exitCode !== 0 || pushed.stdout.trim() !== native.members[index]!.head) {
       throw new StackPublicationHaltError('stack_tip_diverged', `native stack head diverged at position ${member.position}`);
@@ -710,13 +714,13 @@ export async function assembleStack(input: {
     const head = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as { headRefOid?: unknown }).headRefOid
       : undefined;
-    const expectedBase = index === 0 ? input.baseBranch : stored.record.members[index - 1]!.branch;
+    const expectedBase = index === 0 ? input.baseBranch : publication.record.members[index - 1]!.branch;
     if (base !== expectedBase || head !== pushed.stdout.trim()) {
       throw new StackPublicationHaltError('stack_tip_diverged', `native stack base or head diverged at position ${member.position}`);
     }
   }
-  const verified = await writePublicationRecord(input.root, input.slug, stored, {
-    ...stored.record, stack: { number: native.number, verified: true },
+  const verified = await writePublicationRecord(input.root, input.slug, publication, {
+    ...publication.record, stack: { number: native.number, verified: true },
   }, { git: input.git });
   if (verified.kind !== 'updated') throw new StackPublicationHaltError('stack_publication_precondition_failed', 'could not mark native stack verified');
   // Membership is final only now. Re-render the engine-owned navigation on
@@ -724,10 +728,10 @@ export async function assembleStack(input: {
   // child URL. Project-owned regions remain byte-identical because this helper
   // replaces only the ## Stack span.
   if (!input.refreshMemberBodies) {
-    await input.events?.emit({ type: 'stack_assembled', prs: stored.record.members.map((member) => member.pr) });
+    await input.events?.emit({ type: 'stack_assembled', prs: publication.record.members.map((member) => member.pr) });
     return;
   }
-  const members = stored.record.members;
+  const members = publication.record.members;
   const navigationMembers = members.map((member) => ({
     position: member.position,
     name: member.branch,
@@ -761,7 +765,7 @@ export async function assembleStack(input: {
       throw new StackPublicationHaltError('stack_publication_precondition_failed', `could not re-render stack member ${member.position}`);
     }
   }
-  await input.events?.emit({ type: 'stack_assembled', prs: stored.record.members.map((member) => member.pr) });
+  await input.events?.emit({ type: 'stack_assembled', prs: publication.record.members.map((member) => member.pr) });
 }
 
 /**
