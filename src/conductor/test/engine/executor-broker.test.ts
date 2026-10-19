@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:8, task:10
 import { describe, expect, it } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
