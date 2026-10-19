@@ -261,6 +261,8 @@ describe('engine/build-review verdict wiring contract', () => {
     })).resolves.toMatchObject({ done: true });
     expect(resolver).toHaveBeenCalledWith(dir, aggregate, {
       minConfidence: { testQuality: 0, security: 0, implementationQuality: 0 },
+      child: undefined,
+      adjudicationEnabled: true,
     });
   });
 

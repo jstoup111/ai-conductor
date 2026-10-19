@@ -5618,8 +5618,9 @@ Task 1 → Task 2
     });
 
     it('preserves a stamped PASS from a different HEAD when its code delta misses the gate surface', async () => {
-      const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
-      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({
+      const childVerdict = `.pipeline/children/1/${BUILD_REVIEW_VERDICT.slice('.pipeline/'.length)}`;
+      const verdictPath = join(dir, childVerdict);
+      await createFile(childVerdict, JSON.stringify({
         ...makeAggregate('lap-A', false),
         codeStamp: 'A',
       }));
@@ -5694,7 +5695,7 @@ Task 1 → Task 2
     });
 
     it('passes the active child and disabled adjudication to the rewritten aggregate predicate', async () => {
-      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-B', false)));
+      await createFile('.pipeline/children/1/build-review.json', JSON.stringify(makeAggregate('lap-B', false)));
       const effectiveResolver = vi.fn(async () => ({
         ok: true as const,
         feature: { version: 'v1' as const, repository: dir, feature: 'fixture' },
