@@ -1479,8 +1479,8 @@ Opts a project into stacked delivery of a sliced plan. Plan-slice grammar valida
 `true`. An admitted plan builds
 [child by child](#child-by-child-build). Child publication remains reserved for the stacked
 child-plans chain (#2945). Routing whole-feature fixes to the owning child is dark-launched behind
-`route_whole_feature_fixes`. Round admission is implemented; writing a round's tasks into its host
-plan, settlement, and the exit restack land with #3211–#3212.
+`route_whole_feature_fixes`. Round admission and the routed repair pass on the host are implemented;
+child revalidation and the exit restack land with #3212.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
@@ -1513,6 +1513,33 @@ a routed round instead of appended to the leaf plan:
   One transaction, fenced on the restack journal, then opens the round and writes the `repairing`
   marker. The engine persists `remediation_routed` and `routed_repair_phase`, records one kickback,
   and navigates back to `build`. No leaf plan append, budget receipt, or commit happens first.
+- **Host entry.** At BUILD-region entry the engine pins the host's base and tree, switches to the
+  host branch, writes the round's frozen `rem-*` task blocks into the host's plan in one commit with
+  a `Round: r<n>` trailer, binds each item's repair obligation to the host branch, and seeds task
+  status. Resume verifies that state and never re-appends. An entry with nothing left to build halts
+  `needs-human` with `routed host <k> entry derived already complete`; other failures halt with
+  `routed host <k> entry halted:` or `entry refused:` plus the detail. A `revalidate` round refuses
+  until #3212.
+- **Membership.** `prepare-commit-msg` stamps `Round: r<n>` on commits made on the current host
+  (hidden `ai-conductor round-stamp`). `ai-conductor task` and `task-membership-check` accept the
+  round's routed task ids on its host; task status stays feature-wide.
+- **Acceptance.** Closing a child with the setting on records its RED marker digest and run contract
+  at `refs/conductor/<slug>/red/c<k>`. A routed host's `acceptance_specs` re-runs that contract and
+  must pass, emitting `acceptance_red` with `mode: verify-green`, instead of authoring new RED
+  evidence.
+- **Charging.** A round is charged exactly once, at the host's BUILD dispatch, from its route-record
+  receipt under the kickback-ledger lease; a resumed dispatch never charges twice and kickback caps
+  still apply. A taskless `manual_test` round is charged on its receipt at admission and keeps the
+  self-heal cap.
+- **Review.** `build_review` and testQuality grade the host against the round's pinned base. The
+  round grants the host one routed-repair credit, consumed before the cumulative kickback bound
+  halts.
+- **Reroute.** A routed `build` may return a prerequisite claim naming paths or exported symbols the
+  host lacks. The engine verifies it against a higher child's tree (a closed child's closure, or the
+  leaf); a verified claim preserves the rejected host tip at `rejected/r<n>/<m>`, restores the host's
+  closure, moves the round to that child in one fenced transaction, and emits
+  `remediation_rerouted`. A malformed or unverified claim counts as an ordinary failed build
+  attempt; a failed move or worktree sync halts `needs-human`.
 - **Fallback.** A lap with any `halt` disposition, an unresolved target, or a target other than
   `build` takes the ordinary remediation path unchanged.
 - **Halts.** A routing refusal halts `needs-human` with its detail, for example

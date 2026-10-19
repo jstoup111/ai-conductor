@@ -60,6 +60,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
+import { readCommittedRemediationTaskChildren } from './routing/owner-derivation.js';
 import {
   parsePlanTaskStoryIds,
 } from './plan-task-parse.js';
@@ -788,6 +789,10 @@ export async function recordAppendedRemediationTaskIds(
   child?: ChildId,
 ): Promise<void> {
   if (ids.length === 0) return;
+  // The committed plan is the durable authority.  `engine-state.json` is
+  // disposable across worktree recreation, so refresh its cache from every
+  // rem task block whenever an append is recorded.
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot);
   const pipelineDir = join(projectRoot, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
   const engineStatePath = join(pipelineDir, 'engine-state.json');
@@ -796,24 +801,22 @@ export async function recordAppendedRemediationTaskIds(
       ? state.appendedRemediationTaskIds.filter((value): value is string => typeof value === 'string')
       : [];
     const appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
-    if (child === undefined) {
-      return {
-        ...state,
-        appendedRemediationTaskIds,
-      };
-    }
     const priorChildren = typeof state.appendedRemediationTaskChildren === 'object'
       && state.appendedRemediationTaskChildren !== null
       && !Array.isArray(state.appendedRemediationTaskChildren)
       ? state.appendedRemediationTaskChildren
       : {};
+    const appendedRemediationTaskChildren = {
+      ...priorChildren,
+      ...(child === undefined ? {} : Object.fromEntries(ids.map((id) => [id, child]))),
+      ...committedChildren,
+    };
     return {
       ...state,
       appendedRemediationTaskIds,
-      appendedRemediationTaskChildren: {
-        ...priorChildren,
-        ...Object.fromEntries(ids.map((id) => [id, child])),
-      },
+      ...(Object.keys(appendedRemediationTaskChildren).length > 0
+        ? { appendedRemediationTaskChildren }
+        : {}),
     };
   });
   if (!result.ok) {
@@ -1308,6 +1311,8 @@ export interface CompletionContext {
    * region; absent preserves the legacy feature-root evidence paths.
    */
   activeChild?: ChildId;
+  /** Routed verify-green has already captured the exact host tip; this keeps the predicate process-free. */
+  routedVerifyGreen?: { readonly roundId: string; readonly host: ChildId; readonly headSha: string };
   /**
    * Whether this BUILD lap has already spent its one retry for explicit
    * unverified Done-when closes. Task 9 persists and supplies this flag.
@@ -2234,6 +2239,13 @@ async function validatePriorChildGreenAttribution(
       done: false,
       acceptanceRedRefusalClass: 'shape',
       reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use parent child ${childBase.parent} closure tip ${childBase.sha}: it is not an ancestor of HEAD`,
+    };
+  }
+  if (childBase.kind === 'routed-repair') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use a routed repair's pinned base ${childBase.sha}`,
     };
   }
   if (attribution !== childBase.sha) {
@@ -3242,6 +3254,24 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // criterion below this layer and therefore must have no spec files or RED-run
   // contract. Both shapes are validated before completion.
   acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
+    if (ctx.routedVerifyGreen !== undefined) {
+      const expected = ctx.routedVerifyGreen;
+      try {
+        const recorded = JSON.parse(await readFile(
+          pipelinePathFor(dir, 'acceptance-verify-green.json', expected.host),
+          'utf-8',
+        )) as Record<string, unknown>;
+        if (
+          recorded.roundId === expected.roundId &&
+          recorded.host === expected.host &&
+          recorded.headSha === expected.headSha &&
+          recorded.done === true
+        ) return { done: true, viaException: false };
+      } catch {
+        // A missing/stale record is an ordinary failed routed verification.
+      }
+      return { done: false, reason: 'routed verify-green result is missing, stale, or belongs to another host/round' };
+    }
     // A stack-eligible child can own implementation tasks while owning no
     // stories.  Its acceptance gate is therefore already complete from the
     // sealed ownership baseline; asking the acceptance author to invent work

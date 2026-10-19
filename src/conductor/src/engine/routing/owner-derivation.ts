@@ -1,3 +1,6 @@
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { parseChildId, type ChildId } from '../child-context.js';
 import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
 import { parsePlanTaskBodies } from '../plan-task-parse.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
@@ -25,6 +28,91 @@ export function readRemTaskChildLine(planText: string, taskId: string): number |
   const body = parsePlanTaskBodies(planText).get(taskId);
   const child = body?.match(/^\s*\*\*Child:\*\*\s*(\d+)\s*$/m)?.[1];
   return child === undefined ? undefined : Number(child);
+}
+
+export type RemediationTaskChildResolution =
+  | { readonly kind: 'resolved'; readonly child: ChildId }
+  | { readonly kind: 'unreadable' };
+
+function parseCachedRemediationChild(value: unknown): ChildId | undefined {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? parseChildId(value) : undefined;
+  }
+  return typeof value === 'string' && /^(?:[1-9]\d*)$/.test(value)
+    ? parseChildId(value)
+    : undefined;
+}
+
+/**
+ * Reads this feature's committed plan without relying on a disposable cache.
+ * A repository may hold many plans, so recovery must never infer membership
+ * from an unscoped directory listing.
+ */
+async function readCommittedPlanText(projectRoot: string, featureSlug?: string): Promise<string | undefined> {
+  try {
+    // engine-state is a disposable cache.  Callers that already proved the
+    // feature identity from their durable envelope must be able to recover
+    // committed rem ownership after that cache is lost.
+    let slug: unknown = featureSlug;
+    if (slug === undefined) {
+      try {
+        const state = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8')) as Record<string, unknown>;
+        slug = state.feature_desc;
+      } catch {
+        // Handled by the unambiguous-plan fallback below.
+      }
+      if (typeof slug !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) {
+        // A legacy cache rebuild has no caller-proven slug.  It may use the
+        // plan directory only when it contains exactly one candidate; with
+        // siblings, refusing is the only safe ownership result.
+        const plans = (await readdir(join(projectRoot, '.docs', 'plans'))).filter((name) => name.endsWith('.md'));
+        if (plans.length !== 1) return undefined;
+        slug = plans[0]!.slice(0, -3);
+      }
+    }
+    if (typeof slug !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug)) return undefined;
+    return await readFile(join(projectRoot, '.docs', 'plans', `${slug}.md`), 'utf8');
+  } catch {
+    // A lost engine-state/plan pair is unreadable; guessing from another
+    // feature's plan would assign a remediation task to the wrong child.
+    return undefined;
+  }
+}
+
+/** Resolve a remediation task's committed Child assignment before its disposable cache. */
+export async function resolveRemediationTaskChild(
+  projectRoot: string,
+  taskId: string,
+  cachedChild: unknown,
+  featureSlug?: string,
+): Promise<RemediationTaskChildResolution> {
+  const planText = await readCommittedPlanText(projectRoot, featureSlug);
+  const committedChild = planText === undefined ? undefined : readRemTaskChildLine(planText, taskId);
+  const child = committedChild === undefined ? undefined : parseChildId(committedChild);
+  if (child !== undefined) return { kind: 'resolved', child };
+
+  const cached = parseCachedRemediationChild(cachedChild);
+  return cached === undefined ? { kind: 'unreadable' } : { kind: 'resolved', child: cached };
+}
+
+/**
+ * Returns every durable remediation-task membership declared by committed
+ * `Child:` lines. The engine-state mapping remains only a compatibility cache.
+ */
+export async function readCommittedRemediationTaskChildren(
+  projectRoot: string,
+  featureSlug?: string,
+): Promise<Record<string, number>> {
+  const planText = await readCommittedPlanText(projectRoot, featureSlug);
+  if (planText === undefined) return {};
+
+  return Object.fromEntries(
+    [...parsePlanTaskBodies(planText).keys()].flatMap((taskId): Array<[string, number]> => {
+      if (!isEngineAppendedRemediationTaskId(taskId)) return [];
+      const child = readRemTaskChildLine(planText, taskId);
+      return child === undefined ? [] : [[taskId, child]];
+    }),
+  );
 }
 
 /**

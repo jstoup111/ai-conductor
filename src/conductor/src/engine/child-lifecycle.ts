@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { parseChildId, type ChildId } from './child-context.js';
+import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
 import {
   COVERAGE_BINDING_COMPLETION_STATUSES,
@@ -10,6 +11,9 @@ import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { redRefFor } from './routing/routing-refs.js';
+import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, serializeRoutedRedRecord } from './routing/red-record.js';
+import { routingSettingOn } from './routing/route-types.js';
 
 export type StartChildGitRunner = GitRunner;
 
@@ -234,6 +238,52 @@ export async function closeChild(
   const resolved = await runGit(git, ['rev-parse', '--verify', `refs/heads/${child.branch}`]);
   const tip = resolved?.stdout.trim();
   if (!resolved || resolved.exitCode !== 0 || !tip) return refused(`cannot resolve child branch ${child.branch}`);
+
+  const config = await loadConfig(worktree);
+  if (config.ok && routingSettingOn(config.config)) {
+    const markerPath = pipelinePathFor(worktree, 'acceptance-specs-red.json', child.child);
+    let marker: string | undefined;
+    try {
+      marker = await readFile(markerPath, 'utf8');
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        return refused(`cannot read child ${child.child} RED marker`);
+      }
+    }
+    if (marker !== undefined) {
+      const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
+      let contract;
+      try {
+        contract = parseRoutedAcceptanceRunContract(JSON.parse(await readFile(
+          pipelinePathFor(worktree, 'acceptance-specs-run.json', child.child),
+          'utf8',
+        )));
+      } catch {
+        // Earlier child closures had no durable run contract.  Keep their
+        // digest-only red refs valid rather than making a close retry fail.
+      }
+      const blob = await runGit(git, ['hash-object', '-w', '--stdin'], serializeRoutedRedRecord(digest, contract));
+      const blobSha = blob?.stdout.trim();
+      if (!blob || blob.exitCode !== 0 || !blobSha) {
+        return refused(`cannot write child ${child.child} RED digest`);
+      }
+      const redRef = redRefFor(slug, child.child);
+      const recorded = await runGit(git, ['update-ref', redRef, blobSha, '']);
+      if (!recorded || recorded.exitCode !== 0) {
+        const existing = await runGit(git, ['rev-parse', '--verify', redRef]);
+        const existingBlob = existing && existing.exitCode === 0
+          ? await runGit(git, ['cat-file', '-p', existing.stdout.trim()])
+          : undefined;
+        const existingRecord = existingBlob && existingBlob.exitCode === 0
+          ? parseRoutedRedRecord(existingBlob.stdout)
+          : undefined;
+        if (existingRecord?.digest !== digest) {
+          return refused(`cannot record child ${child.child} RED digest at ${redRef}`);
+        }
+      }
+    }
+  }
+
   const ref = `refs/conductor/${slug}/closed/c${child.child}`;
   const written = await runGit(git, ['update-ref', ref, tip, '']);
   if (!written || written.exitCode !== 0) return refused(`cannot close child ${child.child} at ${ref}`);

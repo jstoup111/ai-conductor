@@ -114,10 +114,17 @@ describe('conductor serial step-in-flight ticker', () => {
   it('emits twice for an eleven-minute test_suite attempt and stops before terminal completion', async () => {
     await seed('test_suite');
     const suite = pending<FullSuiteVerifierResult>();
-    const started = events.waitFor('step_started');
-    const run = conductor({ ensure: async () => suite.promise }).run();
-    await started;
-    await vi.advanceTimersByTimeAsync(0);
+    const ensureEntered = pending<void>();
+    const run = conductor({
+      ensure: async () => {
+        ensureEntered.resolve();
+        return suite.promise;
+      },
+    }).run();
+    // `step_started` is emitted before the ticker starts. Waiting until the
+    // suite verifier has entered proves the interval is installed before fake
+    // time advances, rather than racing the conductor continuation.
+    await ensureEntered.promise;
 
     await vi.advanceTimersByTimeAsync(11 * 60_000);
     suite.resolve(PASS);

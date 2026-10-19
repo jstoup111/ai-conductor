@@ -85,6 +85,10 @@ export const SESSION_SANCTIONED_SUBCOMMANDS = [
   // git-hook-assets.ts — blocking child membership validation for a commit
   // authored inside the daemon-managed maker session.
   'task-membership-check',
+  // git-hook-assets.ts — the prepare-commit-msg hook adds the routed round's
+  // `Round:` trailer to the session's own commit message; it writes nothing
+  // but that message file.
+  'round-stamp',
   // engine/conductor.ts FINISH publication prompts + skills/pr/SKILL.md — the
   // author_pr_prose / repair passes submit PR edits as a guarded
   // `pull-request.edit` request. github-operations.ts enforces feature

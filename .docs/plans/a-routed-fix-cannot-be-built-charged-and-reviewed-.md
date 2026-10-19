@@ -478,6 +478,8 @@ routed-resume-fixtures-must-commit-config).
 - [test] the ordered spy log shows the receipt CAS before the flat ledger write, and the ledger write before the provider dispatch.
 - [test] in the conductor-level trace of a routed round from admission to settlement, for host 1 and for a leaf-only round, `bumpKickbackGateInLedger` records no `prd_audit` call, the ledger has no `pendingRepair` field, and the receipt settlement is the only change to the `prd_audit` lap count.
 
+> **Amended 2026-10-18 by #3211:** Operator DECIDE on the joined-round growth-ownership escalation (build_review lap-76692f06, case `c-joined-round-growth-ownership`). A routed round's growth stays one value charged once, as above; it is not split per gate. In the ledger's per-gate growth attribution, a joined round's growth belongs to the first charged gate in `WHOLE_FEATURE_BUDGET_GATES` order (`prd_audit` before `architecture_review_as_built`), never to the receipt's key order. This matches Task 64, which raises growth through `--gate prd_audit`. Added check: a joined round whose receipt lists `architecture_review_as_built` first still attributes its whole growth to `prd_audit`.
+
 **Files likely touched:**
 - `src/conductor/src/engine/routing/round-receipt.ts` — new: settlement and acknowledgement
 - `src/conductor/src/engine/conductor.ts` — route the BUILD settlement closure for routed passes
@@ -698,18 +700,21 @@ routed-resume-fixtures-must-commit-config).
 **Steps:**
 1. Write failing tests: `src/conductor/test/engine/routing/host-region-entry.obligation.test.ts` — an `existing-task` repair of `T1` hosted by child 1 with no FAIL rows; a mixed round's `existing-task` item on `T2` with `restage: false`; a restage failure; a recreated worktree with host 1 `repairing`; a build with no commit and an unchanged tree.
 2. Verify RED
-3. Implement: in `enterHostRegion`, after the frozen-block write, for each `existing-task` item call `admitRoutedObligation` with `{branch: feat/c<h>/<slug>, head: tip at entry, tree: entry.tree}`, and restage its `taskIds` through `restageExistingRemediationTaskStatuses` unless `restage` is `false`; a restage failure halts. Record each binding on the item in the `repairing` transaction (Task 49). The `repairing` resume arm rebuilds missing engine-state obligations from the record's bindings by admission key. Remove nothing from the N=1 path. Expose `hostNoOpEvidence(record, host, git)` returning whether the host branch moved and its tree differs from `entry.tree`, for #3212's exit.
+3. Implement: in `enterHostRegion`, after the frozen-block write, for each `existing-task` item call `admitRoutedObligation` with `{branch: feat/c<h>/<slug>, head: tip at entry, tree: entry.tree}`, and restage its `taskIds` through `restageExistingRemediationTaskStatuses` unless `restage` is `false`; a restage failure halts. Record each binding on the item in the `repairing` transaction (Task 49). The `repairing` resume arm rebuilds missing engine-state obligations from the record's bindings by admission key. Remove nothing from the N=1 path.
 4. Verify GREEN, commit.
+
+> **Amended 2026-10-18 by #3211:** Operator DECIDE on as-built finding `as-built:e24e3c51-779a-4d28-8b0b-3e6da0ab7519:2` defers the `hostNoOpEvidence` primitive to #3212, which owns its only consumer (the host-region exit). `entry.tree` stays recorded as the baseline that primitive will compare against. The superseded Step 3 sentence was: Expose `hostNoOpEvidence(record, host, git)` returning whether the host branch moved and its tree differs from `entry.tree`, for #3212's exit.
 
 **Done when:**
 - [test] region entry for an `existing-task` repair of `T1` hosted by child 1 writes an obligation with branch `feat/c1/demo`, head the tip at entry and the entry tree hash, and restages `T1` before the BUILD dispatch spy is called.
 - [test] for the mixed round's `existing-task` item on `T2` with `restage: false`, the obligation is admitted and the restage spy records no call for `T2`.
 - [test] a restage failure halts the feature, host 1 stays `admitted`, and the provider dispatch spy is never called.
 - [test] in a recreated worktree with no `engine-state.json` and host 1 `repairing`, resume rebuilds the obligation from `routes/r1` with the same branch, boundary and admission key.
-- [test] after a build with no commit, `hostNoOpEvidence` reports no head move and a tree equal to `entry.tree` for host 1.
+
+> **Amended 2026-10-18 by #3211:** The fifth `Done when` check is withdrawn with the deferred primitive and moves to #3212. The superseded check was: after a build with no commit, `hostNoOpEvidence` reports no head move and a tree equal to `entry.tree` for host 1.
 
 **Files likely touched:**
-- `src/conductor/src/engine/routing/host-region-entry.ts` — bindings, restage, rebuild, no-op evidence
+- `src/conductor/src/engine/routing/host-region-entry.ts` — bindings, restage, rebuild
 - `src/conductor/src/engine/routing/round-admission.ts` — `repairing` resume rebuild
 - `src/conductor/test/engine/routing/host-region-entry.obligation.test.ts` — obligation tests
 
@@ -1110,3 +1115,229 @@ Six APPROVED ADRs carry #3211 amendment notes in this change set, so each of the
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-rem-prd-audit-S3-4: host-region-entry.ts verifyGreenAcceptance: derive child run contract from committed artifacts when .pipeline run contract is absent, compare marker digest against red/c1 when both exist; add recreated-worktree test with run contract and RED marker removed
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside Task 207 (95%): the routed verify-green path refuses when the gitignored acceptance-specs-run.json is lost on recreation, and it never compares the marker digest with red/c1. The fix is code plus a recreation test, with no design decision needed.
+**Criterion:** S3.4
+**Parent task:** 207
+**Done when:**
+- [test] S3.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S3-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S3-7: conductor.ts/artifacts.ts: on routed pass, a refused verifyGreenAcceptance fails acceptance_specs for the host region (never falls through to RED lifecycle or self-heal); completionCtx always marks routed passes so the predicate requires a matching (roundId, host, tip) verify-green record; add conductor-level refusal test
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside Task 207 (95%): when verify-green is refused, the routed pass falls back to the ordinary RED lifecycle and can complete on stale RED evidence. The fix is to fail the routed acceptance_specs pass for the host region, with a conductor-level test.
+**Criterion:** S3.7
+**Parent task:** 207
+**Done when:**
+- [test] S3.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S3-7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S4-4: conductor.ts/round-receipt.ts: compute sealedAuthored once from the sealed plan (excluding rem- blocks) and carry the first record's value into later rounds and taskless records; add stacked fixture test asserting authored 12 after rem blocks exist on child 1's plan
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside Task 66 (95%): sealedAuthored is recounted from the current leaf plan, including rem blocks. It must come from the sealed plan (first record) and be reused, with a stacked fixture test.
+**Criterion:** S4.4
+**Parent task:** 66
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S4-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S4-5: kickback-ledger.ts readGrowthAccounting: apply pendingAllocationTaskIds exclusion on the sealedRoutedAuthored path; add test with unsettled routes/r1 holding rem-prd-audit-T1 on feat/daemon-demo, then settled returns []
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside Task 66 (95%): readGrowthAccounting returns before it excludes pendingAllocationTaskIds on the routed path. The fix is code plus the Task 66 stacked-route fixture.
+**Criterion:** S4.5
+**Parent task:** 66
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S4-5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S4-6: round-receipt.ts/conductor.ts: run rebuildLedgerFromReceipts on resume whenever route records exist, and seed the manual_test counter from receipt taskless charges; add recreated-after-settlement test asserting prd_audit laps, growth and manual_test counter rebuilt with no pendingRepair/effectiveLapCap/adjustments/convergenceCreditReceipts
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside Task 67 (93%): the rebuild runs only under hasDurableChildState, and the manual_test counter it rebuilds is never read. The fix is to wire the recovered count and add the planned recreation test.
+**Criterion:** S4.6
+**Parent task:** 67
+**Done when:**
+- [test] S4.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S4-6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S4-7: kickback-ledger.ts readPendingAsBuiltRemediationFindings: resolve slug from the branch/worktree identity rather than .pipeline/conduct-state.json; add recreated-worktree test reading pending findings from routes/r1 and an unreadable-record test returning the unreadable result
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside Task 67 (92%): reading pending as-built findings depends on gitignored conduct-state.json to get the slug. The fix is to resolve the slug durably and add the recreated-worktree test.
+**Criterion:** S4.7
+**Parent task:** 67
+**Done when:**
+- [test] S4.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S4-7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S4-13: Add end-to-end test: routed cap halt, kickback-budget raise --gate prd_audit (flat ledger written, child ledger byte-identical), resume settles same receipt with byte-identical frozen allocation and no new routes/ ref or rem id; plus growth-raise variant; fix any defect the test exposes
+**Gate:** prd-audit
+**Rationale:** Test coverage gap inside Task 64 (95%): the mechanism exists, but the end-to-end raise→resume→same-receipt behavior is unproven.
+**Criterion:** S4.13
+**Parent task:** 64
+**Done when:**
+- [test] S4.13 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S4-13 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S4-22: kickback-ledger.ts readGrowthAccounting: confine persist-on-first-read and fail-closed denominator to routed features; restore N=1 goldens (flag-off/flag-on-unsliced-fixable-lap kickback-ledger) and revert rewritten N=1 tests in kickback-ledger.test, remediation-caps, daemon-observe-cli and kickback-budget fixtures to their pre-change form
+**Gate:** prd-audit
+**Rationale:** Regression against Task 66's done-when (95%): the existing N=1 growth tests must pass unchanged, yet persisting growth on first read and failing closed now apply to every feature, and the N=1 goldens and tests were rewritten. The fix is to scope the new behavior to routed features and restore the N=1 fixtures.
+**Criterion:** S4.22
+**Parent task:** 66
+**Done when:**
+- [test] S4.22 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S4-22 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-3: conductor.ts scanKickbackVerdicts: select routing when the originating stepName is a custom step (including kickbacks to built-in gates such as build), pass stepName as the taskless identity and key receipt echo by stepName; keep bumpKickbackGateInLedger under the re-opened target; add lint-docs tests per Task 33 done-when
+**Gate:** prd-audit
+**Rationale:** Implementation defect inside Task 33 (95%): routing and the echo use the re-opened target, not the originating custom step. The ledger bump stays under the re-opened gate.
+**Criterion:** S5.3
+**Parent task:** 33
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-4: conductor.ts handleManualTestFailKickback/admitRoutedTasklessKickback: reorder to counter computation, then single kickback emission, then cap check, then record creation and charge; add ordered spy test asserting no kickback after admission returns
+**Gate:** prd-audit
+**Rationale:** Ordering defect inside Task 65 (95%): the approved order is counter → kickback event → cap check, but the cap check currently runs before the event. Add the ordered spy test.
+**Criterion:** S5.4
+**Parent task:** 65
+**Done when:**
+- [test] S5.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-6: conductor.ts: initialize manualTestSelfHeals from receipt-recovered taskless manual_test charges on routed resume; add recreated-worktree test asserting the recovered counter governs the cap
+**Gate:** prd-audit
+**Rationale:** Implementation gap inside Task 67 (93%): the recovered manual_test count is written but never consumed by the cap. This shares its fix with S4.6.
+**Criterion:** S5.6
+**Parent task:** 67
+**Done when:**
+- [test] S5.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-7: conductor.ts tasklessAdmissionCapacity: use MAX_KICKBACKS_PER_GATE and today's exhausted self-heal halt reason, sourced from the recovered counter; add exhausted-conductor test asserting the reason and no routes/ or repairing ref
+**Gate:** prd-audit
+**Rationale:** Defect inside Task 65 (95%): exhaustion must halt with today's self-heal reason at MAX_KICKBACKS_PER_GATE, not with a new hardcoded message and threshold.
+**Criterion:** S5.7
+**Parent task:** 65
+**Done when:**
+- [test] S5.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S8-11: prerequisite-claim.ts settleRoutedBuildClaim: load the admitted work order's prerequisite inputs and pass them as prerequisitePaths to verifyPrerequisiteClaim; add conductor-path test where a destination missing a non-claimed prerequisite is refused
+**Gate:** prd-audit
+**Rationale:** Wiring gap inside Task 206 (96%): the production caller never passes the work order's prerequisitePaths. This shares its fix with the decision 5 as-built finding.
+**Criterion:** S8.11
+**Parent task:** 206
+**Done when:**
+- [test] S8.11 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S8-11 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S9-3: Add routing-off three-child parity test: failing prd_audit leaves leaf plan, kickback-ledger.json (with flat pendingRepair) and task status equal to fixtures recorded from the pre-change path, with no refs/conductor/demo/routes/ ref; ensure readGrowthAccounting routing-only changes keep it passing
+**Gate:** prd-audit
+**Rationale:** Regression against Task 205 (95%): the growth-accounting changes affect routing-off features, and the routing-off three-child parity fixture is missing. Gate the behavior and add the fixture.
+**Criterion:** S9.3
+**Parent task:** 205
+**Done when:**
+- [test] S9.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S9-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-e24e-1: prerequisite-claim.ts: supply work-order prerequisitePaths from settleRoutedBuildClaim; check source absence only for claimed missing paths and destination presence for all prerequisites; add tests for both cases
+**Gate:** as-built
+**Rationale:** Conforming implementation drift from ADR decision 5 (99%): every prerequisite must exist at the destination, but only the claimed missing ones must be absent at the source. No architectural change is needed.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 5
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-e24e-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-e24e-3: conductor.ts admitRoutedTasklessKickback: replace execution.target.child shortcut with the residue-routing judgment for both manual_test and custom-step admission; add tests asserting the judged host is used
+**Gate:** as-built
+**Rationale:** Conforming drift from ADR decision 3 (95%): standalone taskless admission bypasses the residue-routing judgment the ADR requires. The routing judgment already exists for the residue path, so this is a wiring fix within Task 65 and Task 33 admission.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 3
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-e24e-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-e24e-4: conductor.ts custom-step kickback: route on originating custom stepName (including re-opened build), use stepName for finding identity and receipt echo, keep ledger bump under the re-opened target
+**Gate:** as-built
+**Rationale:** Conforming drift from ADR decision 10 (99%): custom-step taskless routing must select and identify by the originating step, while the ledger bump stays under the re-opened gate. Same fix as S5.3.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 10
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-e24e-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-e24e-5: conductor.ts: restore counter→kickback event→cap ordering for manual_test (:7029/:7048) and custom-step (:15117/:15157) admission, use today's exhaustion reason, and drive event count from the recovered counter; keep preflight preventing route creation when already exhausted
+**Gate:** as-built
+**Rationale:** Conforming drift from ADR decision 10 (98%): the counter → event → cap ordering and the existing exhaustion reason are approved, and recovered counts must drive the event and the cap. This covers both manual_test and custom-step admission. Same fix class as S5.4 and S5.7.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 10
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-e24e-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-e24e-6: conductor.ts/round-receipt.ts: stop recounting Task headings per round; stamp sealedAuthored on taskless records; remove authored-zero fallback (:206) and zero persistence (:415–433), failing closed when no record supplies sealedAuthored
+**Gate:** as-built
+**Rationale:** Conforming drift from ADR decision 10 (98%): the denominator must be sealed once and recovered, never recounted or zeroed. This shares its fix with S4.4.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 10
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-e24e-6 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-e24e-7: round-receipt.ts pendingAsBuiltFindingsFromRoutes: include findings from rounds whose lifecycle is still open (host repairing/admitted) regardless of receipt settlement; add recreated-worktree test with settled-but-open round
+**Gate:** as-built
+**Rationale:** Conforming drift from ADR decision 10 (98%): pending as-built findings must follow the round lifecycle (open until the round closes), not accounting settlement, which happens before BUILD.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 10
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-e24e-7 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-e24e-8: round-receipt.ts (:110–111): grant each new round its convergence-credit allowance without requiring the prior round's credit to be consumed; add test where previous round's credit is unused and new-round host entry succeeds
+**Gate:** as-built
+**Rationale:** Conforming drift from ADR decision 12 (98%): every new round receives its own credit allowance, whether or not the previous round used its credit.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 12
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 12 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-e24e-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-5ac42490-2: conductor.ts admitRoutedTasklessKickback: when routedSealedAuthored returns undefined (no prior route record), seal sealedAuthored from countAuthoredTaskHeadings on the authored plan, matching the audit path at :4771, instead of halting 'no sealed authored denominator'; keep the unreadable-record halt and never fall back to zero; update round-receipt.taskless.test so manual_test and lint-docs with no prior route create a record carrying the sealed count
+**Gate:** as-built
+**Rationale:** Verified 99%: conductor.ts:15069-15074 (admitRoutedTasklessKickback) halts when routedSealedAuthored returns undefined, which is what it returns when no earlier route record exists. The audit admission path at conductor.ts:4771-4772 already falls back to `priorSealed ?? countAuthoredTaskHeadings(planText)`. ADR decision 10 seals the denominator on the first record and reuses it after that; it does not require an earlier audit round. This is a conforming implementation regression from cd2b4408c2 and needs no design decision. The fix: when no prior receipt supplies sealedAuthored, seal it on the first taskless record from the authored-plan count, the same way the audit path does. Keep the halt for unreadable route records. Do not add an authored-zero fallback. Leave N=1 behaviour unchanged.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 10
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-5ac42490-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-1: conductor-routed-taskless-admission test: drop the routedSealedAuthored mock and assert a standalone manual_test FAIL routed to child 2 with no prior route record creates a record whose receipt holds taskless.manual_test 1 and sealedAuthored equal to the authored plan's task count, with no prd_audit or as-built charge
+**Gate:** prd-audit
+**Rationale:** Verified 99%: the standalone manual_test FAIL with no prior route halts at the sealed-denominator check (conductor.ts:15074). The only success test mocks routedSealedAuthored to 1, so Task 65's first done-when has no real evidence. The fix is in the as-built:2 task. This task replaces the mocked success test with one that runs a real first-round admission.
+**Criterion:** S5.1
+**Parent task:** 65
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-2: Add a test: a validation-group join whose only failure is manual_test, with no prior route record and routedSealedAuthored unmocked, creates a record charged taskless.manual_test 1, and host 2's stored retryHint contains the FAIL rows
+**Gate:** prd-audit
+**Rationale:** Verified 99%: the validation-group join whose only failure is manual_test goes through admitRoutedManualTestKickback, then admitRoutedTasklessKickback, and hits the same no-denominator halt. The as-built:2 task fixes it. This task adds unmocked first-round coverage for Task 65's second done-when.
+**Criterion:** S5.2
+**Parent task:** 65
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-3-2: Add a test: a lint-docs custom-step kickback with no prior route record and routedSealedAuthored unmocked, judge answering 1, creates a record with taskless item host 1, echo.lint-docs equal to the bumped count, no rem block, and exactly one bumpKickbackGateInLedger call for the re-opened gate
+**Gate:** prd-audit
+**Rationale:** Verified 99%: routing and echo keying on the originating step are now correct, but admitRoutedCustomStepKickback shares the taskless admission, so lint-docs halts on the no-denominator check when no route exists. round-receipt.taskless.test asserts that halt. The fix is in the as-built:2 task. This task restores Task 33's done-when coverage on a real first round.
+**Criterion:** S5.3
+**Parent task:** 33
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-3-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-5ac42490-1: routing/host-region-entry.ts + acceptance RED close path: persist child k's acceptance run contract (command, cwd) in existing durable routing state (the red/c<k> ref object or the route record) when the child's RED closes, and have verifyGreenAcceptance recover a missing worktree contract from that source instead of HEAD:.pipeline/...; add a recreated-worktree test (contract file deleted, no .pipeline blob at HEAD) asserting verify-green runs the recovered contract and completes with mode verify-green
+**Gate:** as-built
+**Rationale:** Verified 95%: host-region-entry.ts:93-104 recovers a lost contract only from `git show HEAD:.pipeline/children/<host>/acceptance-specs-run.json`. .pipeline is gitignored and nothing writes that blob, so a recreated worktree refuses before verify-green runs. Task 207 already requires recreated-worktree contract recovery; an earlier rem rationale (plan line 1121) recorded that no design decision is needed. The routing refs namespace (routing-refs.ts, e.g. red/c<k>, closed/c<k>) and the durable route record are existing stores for routing state. The fix is to persist the child run contract (command, cwd) there when the child's acceptance RED closes, then recover from it. That is conforming implementation work, so it goes to BUILD.
+**Parent task:** 207
+**Governing clause:** Task 207
+**Done when:**
+- Task 207 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-5ac42490-1 is committed and its targeted tests pass.

@@ -767,6 +767,7 @@ export function createProgram(): Command {
     'github-operation',
     'scope-check',
     'task-membership-check',
+    'round-stamp',
   ]) {
     program.command(command, { hidden: true });
   }

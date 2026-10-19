@@ -34,7 +34,7 @@ describe('guardDaemonSessionInvocation', () => {
   it('exports exactly the sanctioned worker subcommands and permits each one', () => {
     expect(SESSION_SANCTIONED_SUBCOMMANDS).toEqual([
       'scoped-run', 'task', 'overlap-scan', 'plan-protected-targets', 'manual-test-record',
-      'derive-feedback', 'scope-check', 'task-membership-check', 'github-operation',
+      'derive-feedback', 'scope-check', 'task-membership-check', 'round-stamp', 'github-operation',
     ]);
     for (const subcommand of SESSION_SANCTIONED_SUBCOMMANDS) {
       expect(guardDaemonSessionInvocation(argvFor(subcommand), markedEnv())).toEqual({ allowed: true });
@@ -51,6 +51,7 @@ describe('guardDaemonSessionInvocation', () => {
     ['derive-feedback', true],
     ['scope-check', true],
     ['task-membership-check', true],
+    ['round-stamp', true],
     ['github-operation', true],
     ['daemon', false],
     ['config', false],
@@ -126,6 +127,8 @@ describe('guardDaemonSessionInvocation', () => {
       // The same hook rejects cross-child task attribution before allowing
       // the commit to complete.
       argvFor('task-membership-check', '/worktree/.git/COMMIT_EDITMSG'),
+      // prepare-commit-msg stamps the routed round onto the session's own commit.
+      argvFor('round-stamp', '/worktree/.git/COMMIT_EDITMSG'),
       // FINISH publication prompts submit PR prose through the guarded operation.
       argvFor('github-operation', '--request-file', '/tmp/pr-prose-request.json'),
     ]) {

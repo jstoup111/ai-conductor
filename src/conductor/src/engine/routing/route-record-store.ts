@@ -9,6 +9,7 @@ import {
   parseRoundId,
   parseRevalidationQueueRecord,
   parseRouteRecord,
+  emptyUnsettledReceipt,
   type RepairMarker,
   type RevalidationQueueRecord,
   type RouteRecord,
@@ -25,13 +26,37 @@ export type WriteRouteRecordResult = { readonly kind: 'updated' } | { readonly k
 export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { readonly kind: 'unavailable' };
 
 const ZERO_SHA = '0'.repeat(40);
+
+function isFeatureBranchRef(ref: string): boolean {
+  return /^refs\/heads\/feat\/(?:c[1-9]\/|daemon-)[a-z0-9][a-z0-9-]*$/.test(ref);
+}
+
+function isRejectedPinRef(slug: string, ref: string): boolean {
+  const escapedSlug = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^refs/conductor/${escapedSlug}/rejected/r[1-9][0-9]*/[1-9][0-9]*$`).test(ref);
+}
+
+/** Reject malformed route records before their blob can be written or referenced. */
+function serializeRouteRecord(record: RouteRecord): string | undefined {
+  const serialized = JSON.stringify(record);
+  return parseRouteRecord(serialized) === undefined ? undefined : serialized;
+}
 export type RoutingTransactionOp =
   | { readonly kind: 'create-record'; readonly record: RouteRecord }
   | { readonly kind: 'update-record'; readonly previous: StoredRouteRecord; readonly record: RouteRecord }
   | { readonly kind: 'delete-record'; readonly previous: StoredRouteRecord }
-  | { readonly kind: 'create-marker'; readonly marker: RepairMarker };
+  | { readonly kind: 'create-marker'; readonly marker: RepairMarker }
+  | { readonly kind: 'replace-marker'; readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' }; readonly marker: RepairMarker }
+  | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
+  | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
+  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
+/** Every newly admitted route seals its authored-task denominator. */
+export type CreateRouteRecordInput = Pick<
+  RouteRecord,
+  'roundId' | 'kind' | 'items' | 'allocation' | 'pendingAsBuiltFindings'
+> & { readonly sealedAuthored: number; readonly receipt?: RouteRecord['receipt'] };
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
 export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'unavailable' };
 
@@ -114,7 +139,9 @@ export async function writeRoutingTransaction(
     for (const op of ops) {
       switch (op.kind) {
         case 'create-record': {
-          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(op.record) });
+          const serialized = serializeRouteRecord(op.record);
+          if (serialized === undefined) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
           const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
           if (!blob) return { kind: 'unavailable' };
           // `update … <zero>` is Git's CAS-create form.  Unlike the
@@ -125,7 +152,9 @@ export async function writeRoutingTransaction(
         }
         case 'update-record': {
           if (op.previous.slug !== slug || op.previous.record.roundId !== op.record.roundId) return { kind: 'unavailable' };
-          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(op.record) });
+          const serialized = serializeRouteRecord(op.record);
+          if (serialized === undefined) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: serialized });
           const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
           if (!blob) return { kind: 'unavailable' };
           lines.push(`update ${routeRecordRefFor(slug, op.record.roundId)} ${blob} ${op.previous.blob}`);
@@ -142,6 +171,25 @@ export async function writeRoutingTransaction(
           lines.push(`update ${repairMarkerRefFor(slug)} ${blob} ${ZERO_SHA}`);
           break;
         }
+        case 'replace-marker': {
+          if (op.previous.slug !== slug) return { kind: 'unavailable' };
+          const blobResult = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(op.marker) });
+          const blob = blobResult.exitCode === 0 ? parseCommitSha(blobResult.stdout.trim()) : undefined;
+          if (!blob) return { kind: 'unavailable' };
+          lines.push(`update ${repairMarkerRefFor(slug)} ${blob} ${op.previous.blob}`);
+          break;
+        }
+        case 'update-branch':
+          if (!isFeatureBranchRef(op.ref)) return { kind: 'unavailable' };
+          lines.push(`update ${op.ref} ${op.new} ${op.old}`);
+          break;
+        case 'create-pin':
+          if (!isRejectedPinRef(slug, op.ref)) return { kind: 'unavailable' };
+          lines.push(`update ${op.ref} ${op.new} ${ZERO_SHA}`);
+          break;
+        case 'update-marker':
+          lines.push(`update ${repairMarkerRefFor(slug)} ${op.new} ${op.old}`);
+          break;
       }
     }
     // Keep the ordinary record update first for compatibility with Git's
@@ -157,12 +205,12 @@ export async function writeRoutingTransaction(
 export async function createRouteRecord(
   worktree: string,
   slug: string,
-  input: Pick<RouteRecord, 'roundId' | 'kind' | 'items' | 'allocation'>,
+  input: CreateRouteRecordInput,
   dependencies: RouteRecordStoreDependencies = {},
 ): Promise<{ readonly kind: 'created'; readonly record: RouteRecord } | Exclude<WriteRouteRecordResult, { readonly kind: 'updated' }>> {
   const hosts = Object.keys(input.allocation).reduce((result, value) => ({ ...result, [value]: 'pending' as const }), {} as Record<string, RouteRecord['hosts'][keyof RouteRecord['hosts']]>);
   if (Object.keys(hosts).length === 0) return { kind: 'unavailable' };
-  const record: RouteRecord = { ...input, phase: 'prepared', hosts, currentHostIndex: 0, receipt: {}, outbox: [] };
+  const record: RouteRecord = { ...input, phase: 'prepared', hosts, currentHostIndex: 0, receipt: input.receipt ?? emptyUnsettledReceipt(), outbox: [] };
   const write = await writeRoutingTransaction(worktree, slug, [{ kind: 'create-record', record }], dependencies);
   return write.kind === 'updated' ? { kind: 'created', record } : write;
 }

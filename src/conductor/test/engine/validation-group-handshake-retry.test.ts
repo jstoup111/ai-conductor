@@ -1,8 +1,9 @@
-// Covers: task:2, task:3, task:4
+// Covers: task:2, task:3, task:4, task:rem-prd-audit-rem-prd-audit-S5-2
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunOptions } from '../../src/engine/conductor.js';
@@ -13,6 +14,9 @@ import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.j
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { readRouteRecord } from '../../src/engine/routing/route-record-store.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
@@ -85,7 +89,106 @@ async function writeAsBuiltPass(dir: string, options?: StepRunOptions): Promise<
   }, { attemptId: options?.runId ?? 'fixture-run', codeStamp: null, policy: AS_BUILT_POLICY });
 }
 
+async function seedRoutedTasklessFixture(dir: string): Promise<void> {
+  await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+  await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+  await writeFile(join(dir, 'README.md'), '# fixture\n');
+  await execa('git', ['add', 'README.md'], { cwd: dir });
+  await execa('git', ['commit', '-q', '-m', 'fixture: initialize'], { cwd: dir });
+  await Promise.all([
+    mkdir(join(dir, '.pipeline', 'children', '1'), { recursive: true }),
+    mkdir(join(dir, '.docs', 'plans'), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1,
+      slug: 'validation-group-handshake-retry',
+      runId: 'fixture',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: [] },
+    })),
+    writeFile(join(dir, '.docs', 'plans', 'validation-group-handshake-retry.md'), [
+      '### Task 1: Existing work',
+      '',
+      '### Task 2: Existing work',
+      '',
+    ].join('\n')),
+  ]);
+}
+
 describe('validation-group dispatch handshake retries', () => {
+  it('persists a taskless manual-test receipt and its FAIL rows on the routed host when the join is otherwise green', async () => {
+    const { dir, statePath } = await fixture();
+    await seedRoutedTasklessFixture(dir);
+    const roundId = parseRoundId('r1');
+    if (roundId === undefined) throw new Error('invalid fixture round');
+    const routedHost = parseChildId(2);
+    if (routedHost === undefined) throw new Error('invalid fixture child');
+    await expect(readRouteRecord(dir, 'validation-group-handshake-retry', roundId)).resolves.toEqual({ kind: 'absent' });
+
+    const failRows = '| Story | Result |\n|--|--|\n| s1 | FAIL |\n| s2 | FAIL |';
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        if (step === 'manual_test') {
+          await writeFile(join(dir, '.pipeline/manual-test-results.md'), `# Results\n\n${failRows}\n`);
+        } else if (step === 'prd_audit') {
+          await writePrdPass(dir, options);
+        } else if (step === 'architecture_review_as_built') {
+          await writeAsBuiltPass(dir, options);
+        } else if (step === 'build') {
+          return { success: false, output: 'stop after routed receipt observation' };
+        }
+        return { success: true };
+      }),
+      dispatchResidueRoutingJudgement: vi.fn(async (prompt) => {
+        const itemId = JSON.parse(prompt.split('\n\n').at(-1)!).items[0].itemId;
+        return {
+          success: true,
+          output: JSON.stringify({
+            version: 'v1',
+            items: [{ itemId, child: 2, candidates: [2], rationale: 'fixture routes to host 2' }],
+          }),
+        };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      config: {
+        gate_code_validity: { enabled: false },
+        defaults: { max_retries: 1 },
+        stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true },
+      },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active', child: 1, position: 1, isLeaf: true, branch: 'feat/validation-group-handshake-retry',
+        }) as never,
+      },
+    });
+
+    await conductor.run();
+
+    const stored = await readRouteRecord(dir, 'validation-group-handshake-retry', roundId);
+    if (stored.kind !== 'record') throw new Error('taskless route record was not created');
+    expect({
+      taskless: stored.record.receipt.taskless,
+      retryHint: stored.record.allocation[routedHost]?.retryHint,
+    }).toEqual({
+      taskless: { manual_test: 1 },
+      retryHint: expect.stringMatching(/\| s1 \| FAIL \|\n\| s2 \| FAIL \|/),
+    });
+    expect(runner.run).toHaveBeenCalledWith('prd_audit', expect.anything(), expect.anything());
+    expect(runner.run).toHaveBeenCalledWith('architecture_review_as_built', expect.anything(), expect.anything());
+  });
+
   it('retries only a stale prd_audit dispatch and completes the validation group after its fresh verdict', async () => {
     const { dir, statePath } = await fixture();
     const calls: StepName[] = [];

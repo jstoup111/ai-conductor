@@ -29,6 +29,7 @@ import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { readRouteRecord } from './routing/route-record-store.js';
+import { routedTaskIdsForHost } from './routing/round-router.js';
 
 export interface PlanGapInput {
   index: number;
@@ -222,7 +223,20 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     selectedChildId = child;
     if (cmd.kind !== 'status' && !isEngineAppendedRemediationTaskId(cmd.id)) {
       const membership = envelope.sliceMembership.taskSlices[cmd.id];
-      if (!projectChildOwnership(envelope, child).taskIds.includes(cmd.id)) {
+      const allowed = new Set(projectChildOwnership(envelope, child).taskIds);
+      if (execution.source === 'routed-host' && execution.target.child === child) {
+        if (execution.roundId === undefined) {
+          console.error('[task-cli] active routed task allocation is unavailable');
+          return 1;
+        }
+        const routed = await routedTaskIds(projectRoot, child, execution.roundId);
+        if (routed === undefined) {
+          console.error('[task-cli] active routed task allocation is unavailable');
+          return 1;
+        }
+        for (const id of routed) allowed.add(id);
+      }
+      if (!allowed.has(cmd.id)) {
         if (membership === undefined) {
           console.error(`[task-cli] task ${cmd.id} has no recorded slice membership`);
           return 1;
@@ -301,7 +315,7 @@ async function routedTaskIds(
     const slug = head.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
     if (!slug) return undefined;
     const record = await readRouteRecord(projectRoot, slug, roundId);
-    return record.kind === 'record' ? record.record.allocation[child]?.remTaskIds ?? [] : undefined;
+    return record.kind === 'record' ? routedTaskIdsForHost(record.record, child) : undefined;
   } catch {
     return undefined;
   }

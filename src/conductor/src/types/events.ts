@@ -1996,7 +1996,9 @@ type ConductorEventBody =
       step: StepName;
       reason?: string;
       failingTests?: Array<{ name: string; reason: string }>;
-      viaException: boolean;
+      viaException?: boolean;
+      /** A routed child re-ran its recorded contract rather than authoring RED evidence. */
+      mode?: 'verify-green';
     }
   // ── Per-child build region lifecycle ──────────────────────────────────────
   | {

@@ -7,13 +7,15 @@ import { describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import {
+  createRouteRecord,
   readRepairMarker,
   readRevalidationQueue,
   readRouteRecord,
   writeRouteRecord,
 } from '../../../src/engine/routing/route-record-store.js';
+import type { CreateRouteRecordInput } from '../../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 
@@ -24,15 +26,19 @@ if (!c1) throw new Error('1 must be a valid child id');
 
 const routeRecord: RouteRecord = {
   roundId,
+  sealedAuthored: 1,
   kind: 'audit',
   phase: 'open',
   items: [{ findingId: 'finding-1', kind: 'audit', owner: c1, host: c1, reason: 'task ownership', fallback: [] }],
   allocation: { [c1]: { remTaskIds: ['rem-4'], blockBodies: ['### Task rem-4\n'] } },
   hosts: { [c1]: 'repairing' },
   currentHostIndex: 0,
-  receipt: {},
+  receipt: emptyUnsettledReceipt(),
   outbox: [],
 };
+
+/** A round closes only once its last host finished in place (ADR decision 6). */
+const closedRouteRecord: RouteRecord = { ...routeRecord, phase: 'closed', hosts: { [c1]: 'done' } };
 
 
 function sha(raw: string): CommitSha {
@@ -101,7 +107,15 @@ describe('ref-backed route record store', () => {
         outbox: [],
       });
 
-      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({ kind: 'record', slug: 'demo', blob: storedBlob, record: routeRecord });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({
+        kind: 'record',
+        slug: 'demo',
+        blob: storedBlob,
+        record: {
+          ...routeRecord,
+          receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} },
+        },
+      });
       expect(await readRepairMarker(fixture.repo, 'demo')).toEqual({ kind: 'marker', slug: 'demo', blob: markerBlob, marker: { host: 1, roundId } });
       expect(await readRevalidationQueue(fixture.repo, 'demo')).toEqual({
         kind: 'queue',
@@ -131,7 +145,7 @@ describe('ref-backed route record store', () => {
         return realGit(args, options);
       };
 
-      const result = await writeRouteRecord(fixture.repo, stored, { ...routeRecord, phase: 'closed' }, { git });
+      const result = await writeRouteRecord(fixture.repo, stored, closedRouteRecord, { git });
 
       expect(result.kind).toBe('updated');
       const update = calls.find((call) => call.args[0] === 'update-ref');
@@ -151,7 +165,7 @@ describe('ref-backed route record store', () => {
       await routeFixture(fixture);
       const stored = await readRouteRecord(fixture.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('expected stored route record');
-      const concurrent = { ...routeRecord, phase: 'closed' as const };
+      const concurrent = closedRouteRecord;
       let replaced = false;
       const realGit = makeGitRunner(fixture.repo);
       const git: GitRunner = async (args, options) => {
@@ -162,8 +176,39 @@ describe('ref-backed route record store', () => {
         return realGit(args, options);
       };
 
-      expect(await writeRouteRecord(fixture.repo, stored, { ...routeRecord, phase: 'prepared' }, { git })).toEqual({ kind: 'cas-failed' });
+      expect(await writeRouteRecord(fixture.repo, stored, {
+        ...routeRecord,
+        phase: 'prepared',
+        hosts: { [c1]: 'pending' },
+      }, { git })).toEqual({ kind: 'cas-failed' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: concurrent });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses malformed route records before create or update can move a route ref', async () => {
+    const fixture = await createRepo();
+    try {
+      const malformedExistingTask = {
+        ...routeRecord,
+        items: [{ ...routeRecord.items[0]!, existingTask: true }],
+      } as unknown as RouteRecord;
+      const malformedLifecycle = {
+        ...routeRecord,
+        phase: 'closed' as const,
+        hosts: { [c1]: 'pending' as const },
+      };
+
+      expect(await createRouteRecord(fixture.repo, 'demo', malformedExistingTask as unknown as CreateRouteRecordInput)).toEqual({ kind: 'unavailable' });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({ kind: 'absent' });
+
+      await routeFixture(fixture);
+      const stored = await readRouteRecord(fixture.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('expected stored route record');
+      expect(await writeRouteRecord(fixture.repo, stored, malformedExistingTask)).toEqual({ kind: 'unavailable' });
+      expect(await writeRouteRecord(fixture.repo, stored, malformedLifecycle)).toEqual({ kind: 'unavailable' });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(stored);
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
@@ -177,11 +222,11 @@ describe('ref-backed route record store', () => {
       if (stored.kind !== 'record') throw new Error('expected stored route record');
       await journalFixture(fixture, 'moved');
 
-      expect(await writeRouteRecord(fixture.repo, stored, { ...routeRecord, phase: 'closed' })).toEqual({ kind: 'restack-journal-open' });
+      expect(await writeRouteRecord(fixture.repo, stored, closedRouteRecord)).toEqual({ kind: 'restack-journal-open' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(stored);
 
       await journalFixture(fixture, 'applied');
-      expect(await writeRouteRecord(fixture.repo, stored, { ...routeRecord, phase: 'closed' })).toMatchObject({ kind: 'updated' });
+      expect(await writeRouteRecord(fixture.repo, stored, closedRouteRecord)).toMatchObject({ kind: 'updated' });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }

@@ -167,7 +167,7 @@ park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them;
 started the session owns all conductor operations for it. The only exceptions are the
 session-sanctioned worker commands the harness's own skills and hooks require a session to run —
 `scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`,
-`derive-feedback`, `scope-check`, `task-membership-check`, `task` (`start`/`done`), and `github-operation` — which stay
+`derive-feedback`, `scope-check`, `task-membership-check`, `round-stamp`, `task` (`start`/`done`), and `github-operation` — which stay
 available under the marker. There is no config off-switch; enforcement lives in
 `src/conductor/src/execution/daemon-session.ts`. The same policy backs the instruction audit that
 keeps engine prompts and shipped skills from directing a managed session to a refused command — see

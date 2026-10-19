@@ -66,6 +66,38 @@ describe('routeAdmittedRound', () => {
     ]);
   });
 
+  // Covers: task:202
+  it('records canonical existing-task bindings without suppressing restage outside a mixed round', async () => {
+    const routed = await routeAdmittedRound({
+      ...input([{
+        id: 'existing-one', gap: gap('existing-one', 'T1'), gateSource: 'prd-audit',
+        ownerTaskIds: ['T1'], citedPaths: [], existingTask: true, provenance: { kind: 'task-bound' },
+      }]),
+    });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items).toEqual([
+      expect.objectContaining({ findingId: 'existing-one', taskIds: ['T1'] }),
+    ]);
+    expect(routed.items[0]).not.toHaveProperty('restage');
+  });
+
+  // Covers: task:202
+  it('records canonical existing-task bindings and suppresses restage in a mixed round', async () => {
+    const routed = await routeAdmittedRound({
+      ...input([{
+        id: 'existing-two', gap: gap('existing-two', 'T2'), gateSource: 'prd-audit',
+        ownerTaskIds: ['T2'], citedPaths: [], existingTask: true, provenance: { kind: 'task-bound' },
+      }]),
+      consolidatedManualTestFail: ['manual_test: FAIL row'],
+    });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(routed.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ findingId: 'existing-two', taskIds: ['T2'], restage: false }),
+    ]));
+  });
+
   it('halts before allocation when task ownership or a tree is unavailable', async () => {
     const missingBinding = await routeAdmittedRound({
       ...input([{ id: 'unbound', gap: gap('unbound', 'T1'), gateSource: 'prd-audit', citedPaths: [], provenance: { kind: 'task-bound' } }]),
@@ -98,6 +130,7 @@ describe('routeAdmittedRound', () => {
     expect(judge).toHaveBeenCalledTimes(2);
   });
 
+  // Covers: task:202
   it('makes a mixed FAIL obligation durable at the lowest task-owned host without allocating an existing-task block', async () => {
     const judge = vi.fn();
     const routed = await routeAdmittedRound({
@@ -110,9 +143,10 @@ describe('routeAdmittedRound', () => {
     if (routed.kind !== 'routed') throw new Error(routed.detail);
     expect(judge).not.toHaveBeenCalled();
     expect(routed.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ findingId: 'manual-test-fail', owner: 2, host: 2, reason: 'mixed-round', restage: false }),
-      expect.objectContaining({ findingId: 'three', owner: 3, host: 3, restage: false }),
+      expect.objectContaining({ findingId: 'manual-test-fail', owner: 2, host: 2, reason: 'mixed-round' }),
+      expect.objectContaining({ findingId: 'three', owner: 3, host: 3, taskIds: ['T3'], restage: false }),
     ]));
+    expect(routed.items.find(({ findingId }) => findingId === 'manual-test-fail')).not.toHaveProperty('restage');
     expect(routed.hostHints[2]).toContain('manual_test: FAIL row one');
     expect(routed.hostHints[3]).toContain('manual_test: FAIL row two');
     expect(routed.hostHints[3]).toContain('three rationale');
@@ -120,6 +154,7 @@ describe('routeAdmittedRound', () => {
     expect(routed.allocation[c3]).toMatchObject({ remTaskIds: [], blockBodies: [] });
   });
 
+  // Covers: task:202
   it('hosts mixed FAIL rows with task-bound work rather than a lower residue host', async () => {
     const judge = vi.fn(async () => ({
       success: true,
@@ -146,8 +181,9 @@ describe('routeAdmittedRound', () => {
 
     if (routed.kind !== 'routed') throw new Error(routed.detail);
     expect(routed.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ findingId: 'manual-test-fail', owner: 2, host: 2, reason: 'mixed-round', restage: false }),
+      expect.objectContaining({ findingId: 'manual-test-fail', owner: 2, host: 2, reason: 'mixed-round' }),
     ]));
+    expect(routed.items.find(({ findingId }) => findingId === 'manual-test-fail')).not.toHaveProperty('restage');
     for (const host of [1, 2]) {
       expect(routed.hostHints[host]).toContain(failRows[0]!);
       expect(routed.hostHints[host]).toContain(failRows[1]!);

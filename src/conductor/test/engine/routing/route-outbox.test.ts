@@ -10,7 +10,7 @@ import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { drainOutbox, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
-import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
@@ -53,7 +53,7 @@ describe('routing outbox delivery', () => {
       };
       const record: RouteRecord = {
         roundId, kind: 'audit', phase: 'open', items: [], allocation: {}, hosts: { [child]: 'repairing' },
-        currentHostIndex: 0, receipt: {},
+        currentHostIndex: 0, receipt: emptyUnsettledReceipt(),
         outbox: [{ eventId: event.eventId, occurredAt: event.occurredAt, event }],
       };
       await writeRouteRecord(subject, record);

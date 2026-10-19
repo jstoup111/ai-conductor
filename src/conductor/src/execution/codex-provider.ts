@@ -30,7 +30,6 @@ import {
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withGitGuardPath } from './child-environment.js';
-import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
@@ -41,6 +40,7 @@ import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schem
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { providerDescriptor } from './provider-catalog.js';
 import { buildCodexReadOnlyProducerRootPolicyArgs } from '../engine/build-review-read-only-capability.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 function codexDisplayName(): string {
   return providerDescriptor('codex').displayName;

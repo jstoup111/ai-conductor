@@ -86,7 +86,10 @@ import {
   type CoverageBindingEnvelopeFilesystem,
   type CoverageBindingSliceMembership,
 } from './coverage-binding-envelope.js';
-import { resolveActiveChild } from './child-cursor.js';
+import { resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { resolveExecutionChild } from './routing/execution-child.js';
+import { assertNever } from './routing/route-types.js';
+import { PREREQUISITE_CLAIM_SCHEMA } from './routing/prerequisite-claim.js';
 import { parseFeatureRef } from './feature-branch-identity.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { RESIDUE_ROUTING_CALL_MEMBER } from './routing/residue-routing-call.js';
@@ -111,6 +114,27 @@ import {
 type PositionImmutabilityCheck =
   | { readonly kind: 'clear' }
   | { readonly kind: 'refused'; readonly reason: string };
+
+/** The routed-host overlay, when present, owns build_review's child-local base. */
+export function resolveBuildReviewExecutionChild(
+  cursor: ActiveChildResolution,
+  slug: string,
+): { readonly childBase: NonNullable<BuildReviewInputOptions['childBase']>; readonly isLeaf: boolean } | undefined {
+  const execution = resolveExecutionChild(cursor, slug);
+  switch (execution.source) {
+    case 'cursor':
+    case 'routed-host':
+    case 'revalidating':
+      return {
+        childBase: { slug, child: execution.target.child },
+        isLeaf: execution.target.isLeaf,
+      };
+    case 'none':
+    case 'refused':
+      return undefined;
+  }
+  return assertNever(execution);
+}
 
 function recordedPositions(value: string): number[] | undefined {
   try {
@@ -1860,6 +1884,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(this.providerExecutionContext?.managedSessionContext
         ? { managedSessionContext: this.providerExecutionContext.managedSessionContext }
         : {}),
+      ...(step === 'build' && opts?.routedPrerequisiteClaim ? { nativeSchema: PREREQUISITE_CLAIM_SCHEMA } : {}),
     });
     const safety = this.candidateSafetyFor(step);
     try {
@@ -5276,11 +5301,12 @@ export class DefaultStepRunner implements StepRunner {
     try {
       let activeChildBase = this.buildReviewInputOptions?.childBase;
       if (activeChildBase === undefined && this.featureDesc !== '') {
-        const active = await resolveActiveChild(this.projectDir, this.featureDesc, { git: this.gitRunner });
-        if (active.kind === 'active') {
-          activeChildBase = { slug: this.featureDesc, child: active.child };
-          activeChildIsLeaf = active.isLeaf;
-          activeSuiteChild = { child: active.child, isLeaf: active.isLeaf };
+        const cursor = await resolveActiveChild(this.projectDir, this.featureDesc, { git: this.gitRunner });
+        const execution = resolveBuildReviewExecutionChild(cursor, this.featureDesc);
+        if (execution !== undefined) {
+          activeChildBase = execution.childBase;
+          activeChildIsLeaf = execution.isLeaf;
+          activeSuiteChild = { child: execution.childBase.child, isLeaf: execution.isLeaf };
         }
       }
       activeChild = activeChildBase?.child;

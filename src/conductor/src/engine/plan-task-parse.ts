@@ -328,6 +328,58 @@ export function planTaskDigests(text: string): Map<string, string> {
   return result;
 }
 
+/** A task heading and its committed body, both retaining authored line endings. */
+export interface ParsedPlanTaskBlock {
+  readonly heading: string;
+  readonly body: string;
+}
+
+/**
+ * Returns the heading and committed body for every recognized task.
+ *
+ * This is the one structural task-block parser: fenced code is illustration,
+ * and a task ends at the next Markdown heading at its level or above. Callers
+ * that need the complete stored block can therefore share the same boundaries
+ * as evidence, slicing, and title readers rather than re-deriving a narrower
+ * `### Task <id>:` expression.
+ */
+export function parsePlanTaskBlocks(text: string): Map<string, ParsedPlanTaskBlock> {
+  const result = new Map<string, ParsedPlanTaskBlock>();
+  let currentIds: string[] = [];
+  let currentLevel = 0;
+  let currentHeading = '';
+  let bodyLines: string[] = [];
+
+  const saveCurrentBlock = () => {
+    if (currentIds.length === 0) return;
+    const block = { heading: currentHeading, body: bodyLines.join('\n') };
+    for (const id of currentIds) result.set(id, block);
+    currentIds = [];
+  };
+
+  for (const { line, fenced } of linesWithFenceState(text)) {
+    const heading = fenced ? null : line.match(MARKDOWN_HEADING);
+    if (heading && currentIds.length > 0 && heading[1].length <= currentLevel) saveCurrentBlock();
+
+    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
+    if (headerMatch) {
+      saveCurrentBlock();
+      currentIds = expandTaskIds(
+        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+      );
+      currentLevel = line.match(MARKDOWN_HEADING)![1].length;
+      currentHeading = line;
+      bodyLines = [];
+      continue;
+    }
+
+    if (currentIds.length > 0) bodyLines.push(line);
+  }
+
+  saveCurrentBlock();
+  return result;
+}
+
 /**
  * Returns the committed body text for every recognized task heading.
  *
@@ -340,38 +392,7 @@ export function planTaskDigests(text: string): Map<string, string> {
  * context's per-contract text bound.
  */
 export function parsePlanTaskBodies(text: string): Map<string, string> {
-  const result = new Map<string, string>();
-  let currentIds: string[] = [];
-  let currentLevel = 0;
-  let bodyLines: string[] = [];
-
-  const saveCurrentBody = () => {
-    if (currentIds.length === 0) return;
-    const body = bodyLines.join('\n');
-    for (const id of currentIds) result.set(id, body);
-    currentIds = [];
-  };
-
-  for (const { line, fenced } of linesWithFenceState(text)) {
-    const heading = fenced ? null : line.match(MARKDOWN_HEADING);
-    if (heading && currentIds.length > 0 && heading[1].length <= currentLevel) saveCurrentBody();
-
-    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
-    if (headerMatch) {
-      saveCurrentBody();
-      currentIds = expandTaskIds(
-        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
-      );
-      currentLevel = line.match(MARKDOWN_HEADING)![1].length;
-      bodyLines = [];
-      continue;
-    }
-
-    if (currentIds.length > 0) bodyLines.push(line);
-  }
-
-  saveCurrentBody();
-  return result;
+  return new Map([...parsePlanTaskBlocks(text)].map(([id, block]) => [id, block.body]));
 }
 
 /**

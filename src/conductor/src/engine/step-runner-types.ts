@@ -228,6 +228,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** A routed BUILD host alone requests the closed prerequisite-claim result. */
+  routedPrerequisiteClaim?: true;
   /** Per-dispatch cancellation authority for the provider invocation. */
   abortSignal?: AbortSignal;
   /** Configured skill path for a concurrent-group branch dispatch. */

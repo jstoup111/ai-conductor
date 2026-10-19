@@ -38,7 +38,10 @@ if [ ! -f "$CHECKER" ]; then
 fi
 
 before_hash=$(sha256sum "$HOOK" | awk '{print $1}')
-OUT=$("$BASH_BIN" "$CHECKER" 2>&1)
+# The checker owns a deliberately corrupted copy. Keep even that nested
+# fixture beneath this test's root so a killed checker cannot strand it in the
+# real tmpdir while the outer test still cleans up deterministically.
+OUT=$(TMPDIR="$fixture_dir" "$BASH_BIN" "$CHECKER" 2>&1)
 CODE=$?
 after_hash=$(sha256sum "$HOOK" | awk '{print $1}')
 hook_status=$(git -C "$HARNESS_DIR" status --porcelain hooks/claude/docs-guard.sh)
@@ -68,6 +71,7 @@ interrupt_checker() {
   local signal=$1 generator=$2 output=$3 ready=$4
   HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR="$generator" \
     HARNESS_INTEGRITY_TEST_STUB_READY="$ready" \
+    TMPDIR="$fixture_dir" \
     "$BASH_BIN" "$CHECKER" > "$output" 2>&1 &
   local checker_pid=$!
   local attempt=0

@@ -7,7 +7,7 @@ import type { GitRunner } from '../rebase.js';
 import { classifyCitedPaths, selectHost } from './cannot-host.js';
 import { deriveTaskBoundOwner } from './owner-derivation.js';
 import { resolveResidueOwner, runResidueRoutingCall, type ResidueRoutingJudge } from './residue-routing-call.js';
-import type { FrozenAllocation, RoutedItem, RoundId } from './route-types.js';
+import type { ExistingTaskRoutedItem, FrozenAllocation, RoutedItem, RoundId } from './route-types.js';
 
 /**
  * The authority that admitted an item.  Proposed remediation tasks describe
@@ -70,6 +70,21 @@ export function hostOrder(hosts: Iterable<number> | Readonly<Record<number, unkn
   return [...new Set(raw)].sort((a, b) => a - b) as ChildId[];
 }
 
+/**
+ * The task ids a routed host may execute.  A round's immutable allocation
+ * owns its new remediation tasks; existing authored tasks remain in the
+ * route record's item bindings.  Keep this projection here so the hook and
+ * task CLI cannot diverge over the same durable record.
+ */
+export function routedTaskIdsForHost(record: Pick<RoutedRound, 'items' | 'allocation'> | import('./route-types.js').RouteRecord, host: ChildId): readonly string[] {
+  const ids = new Set<string>(record.allocation[host]?.remTaskIds ?? []);
+  for (const item of record.items) {
+    if (item.host !== host) continue;
+    for (const taskId of item.taskIds ?? []) ids.add(taskId);
+  }
+  return [...ids];
+}
+
 function isResidue(item: AdmittedRoutingItem): boolean {
   switch (item.provenance.kind) {
     case 'refusal-rework':
@@ -105,6 +120,15 @@ function hintFor(gap: CriterionBoundRemediationGap): string {
   return [gap.rationale, gap.criterion].filter((value): value is string => typeof value === 'string' && value !== '').join('\n');
 }
 
+function existingTaskFields(source: AdmittedRoutingItem, mixedRound: boolean): Pick<ExistingTaskRoutedItem, 'existingTask' | 'taskIds' | 'restage'> | undefined {
+  if (!source.existingTask) return undefined;
+  return {
+    existingTask: true,
+    taskIds: [...source.ownerTaskIds!].sort() as [string, ...string[]],
+    ...(mixedRound ? { restage: false } : {}),
+  };
+}
+
 /**
  * Places admitted work without mutating refs.  Callers may safely map every
  * halt to a feature halt because no allocation/write happens before ownership
@@ -113,7 +137,14 @@ function hintFor(gap: CriterionBoundRemediationGap): string {
 export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promise<RoutedRound | RoutedRoundHalt> {
   const resolved: Array<{ source: AdmittedRoutingItem; item: RoutedItem }> = [];
   const residue: AdmittedRoutingItem[] = [];
+  const mixedRound = (input.consolidatedManualTestFail?.length ?? 0) > 0;
   for (const source of input.admitted) {
+    if (source.existingTask && (source.ownerTaskIds === undefined || source.ownerTaskIds.length === 0)) {
+      return {
+        kind: 'halt', haltClass: 'needs-human',
+        detail: `Existing-task work ${source.id} has no admitted owner-task binding`,
+      };
+    }
     if (isResidue(source)) { residue.push(source); continue; }
     if (source.ownerTaskIds === undefined || source.ownerTaskIds.length === 0) {
       return {
@@ -130,7 +161,10 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: ownership.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: ownership.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : ownership.reason, fallback: [], ...(source.existingTask ? { restage: false } : {}) } });
+    const base = { findingId: source.id, kind: 'audit' as const, owner: ownership.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : ownership.reason, fallback: [], ...(paths.inputs.length === 0 ? {} : { prerequisitePaths: paths.inputs }) };
+    const existingTask = existingTaskFields(source, mixedRound);
+    const item: RoutedItem = existingTask === undefined ? base : { ...base, ...existingTask };
+    resolved.push({ source, item });
   }
 
   const judged = await runResidueRoutingCall({ items: residue.map(residueJudgeItem), declaredPositions: input.declaredPositions, judge: input.judge });
@@ -142,7 +176,10 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
     if ('kind' in paths) return { kind: 'halt', haltClass: 'needs-human', detail: paths.detail };
     const host = await selectHost({ owner: owner.owner as ChildId, inputs: paths.inputs, positions: input.declaredPositions, leafTip: input.leafTip, git: input.git });
     if ('kind' in host) return { kind: 'halt', haltClass: 'needs-human', detail: host.detail };
-    resolved.push({ source, item: { findingId: source.id, kind: 'audit', owner: owner.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : owner.reason, rationale: owner.rationale, fallback: [], ...(source.existingTask ? { restage: false } : {}) } });
+    const base = { findingId: source.id, kind: 'audit' as const, owner: owner.owner as ChildId, host: host.host, reason: host.reason === 'prerequisite-paths' ? host.reason : owner.reason, rationale: owner.rationale, fallback: [], ...(paths.inputs.length === 0 ? {} : { prerequisitePaths: paths.inputs }) };
+    const existingTask = existingTaskFields(source, mixedRound);
+    const item: RoutedItem = existingTask === undefined ? base : { ...base, ...existingTask };
+    resolved.push({ source, item });
   }
 
   if (resolved.length === 0) return { kind: 'halt', haltClass: 'needs-human', detail: 'No admitted work can be routed' };
@@ -161,7 +198,7 @@ export async function routeAdmittedRound(input: RouteAdmittedRoundInput): Promis
   const failHost = residue.length > 0 && taskBoundHosts.length > 0 ? taskBoundHosts[0]! : hosts[0]!;
   const mixedFailItem: RoutedItem | undefined = failRows.length === 0 ? undefined : {
     findingId: 'manual-test-fail', kind: 'audit', owner: failHost, host: failHost,
-    reason: 'mixed-round', fallback: [], restage: false,
+    reason: 'mixed-round', fallback: [],
   };
   const hints: Record<number, string> = {};
   for (const host of hosts) {

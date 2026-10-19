@@ -25,7 +25,7 @@ import { withholdCost } from './token-usage.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
-import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 export type PiSubprocessFactory = (
   file: string,

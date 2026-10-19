@@ -8,6 +8,66 @@ import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import { createRepairObligationStore, type RepairObligation } from './repair-obligations.js';
 import { countResolvedTasks } from './task-progress.js';
 import { seedTaskStatus } from './task-seed.js';
+import { parseRoundId, type RoundId } from './routing/route-types.js';
+
+export interface AdmitRoutedObligationInput {
+  projectRoot: string;
+  planPath: string;
+  roundId: RoundId;
+  findingId: string;
+  taskIds: readonly string[];
+  branch: string;
+  head: string;
+  tree: string;
+}
+
+export type AdmitRoutedObligationResult =
+  | { kind: 'admitted'; admissionKey: string; obligation: RepairObligation; replayed: boolean }
+  | { kind: 'failed'; detail: string };
+
+/**
+ * Project the route record's authoritative obligation into engine state.
+ *
+ * The round-owned key deliberately excludes mutable checkout and plan details,
+ * so re-entry after a restack or plan rewrite replays the same obligation.
+ */
+export async function admitRoutedObligation(
+  input: AdmitRoutedObligationInput,
+): Promise<AdmitRoutedObligationResult> {
+  // This API is normally reached from a parsed route record. Re-parse at the
+  // persistence boundary as well so an unsafe caller cannot derive an
+  // admission key in an invalid routing namespace.
+  const roundId = parseRoundId(input.roundId);
+  if (!roundId) return { kind: 'failed', detail: 'routed admission requires a valid round id' };
+  const taskIds = [...new Set(input.taskIds.map(canonicalTaskId))].sort();
+  const admissionKey = createHash('sha256').update(JSON.stringify({
+    roundId,
+    findingId: input.findingId,
+    taskIds,
+  })).digest('hex');
+  const repairs = createRepairObligationStore(
+    input.projectRoot,
+    join(input.projectRoot, '.pipeline', 'engine-state.json'),
+  );
+  const admission = await repairs.admitOrReplay(admissionKey, {
+    id: `routed-${admissionKey.slice(0, 16)}`,
+    planPath: input.planPath,
+    taskIds,
+    source: {
+      findingId: input.findingId,
+      authority: 'routed_repair',
+      instruction: 'Repair the routed finding on its host branch.',
+    },
+    baseline: {
+      branch: input.branch,
+      head: input.head,
+      tree: input.tree,
+      resolvedTaskIds: [],
+    },
+  });
+  if (!admission.ok) return { kind: 'failed', detail: `could not persist routed admission: ${admission.message}` };
+  return { kind: 'admitted', admissionKey, obligation: admission.obligation, replayed: admission.replayed };
+}
 
 export interface AdmitAndRestageRepairInput {
   projectRoot: string;
@@ -126,7 +186,8 @@ export async function admitAndRestageRepair(
   return { kind: 'restaged', obligation: admission.obligation, replayed: admission.replayed, baseline };
 }
 
-async function restageExistingRemediationTaskStatuses(
+/** Reopen an already-authored task without admitting or charging a new repair. */
+export async function restageExistingRemediationTaskStatuses(
   projectRoot: string,
   planPath: string,
   boundIds: ReadonlySet<string>,

@@ -14,6 +14,7 @@ const SOURCE = join(ROOT, 'src');
 // worktree and the journal code writes the word "commit" to update-ref stdin.
 const COMMIT_CALL_ALLOWLIST: Record<string, string> = {
   'engine/conductor.ts': 'plan-amendment site selects the guarded helper for durable child state',
+  'engine/remediation-append.ts': 'routed frozen blocks select the guarded helper for durable child state',
   'engine/finish-publication-production.ts': 'shipped-record findings site selects the guarded helper',
   'engine/halt-record.ts': 'halt-record site selects the guarded helper',
   'engine/setup-triage.ts': 'three setup-triage sites select the guarded helper',

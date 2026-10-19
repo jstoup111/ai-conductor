@@ -689,6 +689,10 @@ evidence telemetry.
 explicit trailer is already present. A leading `T` before a digit is folded, so `Task: T3` and `Task: 3`
 are the same id.
 
+**`Round: r<n>`** is stamped by `prepare-commit-msg` on commits made on the current host of a
+[routed repair](configuration.md#stacked_prs). Routing reads it, not the Task/Evidence parser: a
+`Round:` line on a closed child other than the host halts with `routing foreign-round commit`.
+
 `Task:` trailers are **partly** telemetry and **partly** load-bearing. The distinction matters:
 
 | Consumer | Gate or telemetry? |

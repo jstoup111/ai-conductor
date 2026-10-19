@@ -436,7 +436,9 @@ async function translateRepairBoundary(projectRoot: string, boundary: string): P
 export async function listCommitsWithTrailersAfterRepairBoundary(
   projectRoot: string,
   boundary: string,
+  branch?: string,
 ): Promise<StrictEvidenceRangeResult> {
+  const tip = branch ?? 'HEAD';
   const commit = await execa('git', ['rev-parse', '--verify', `${boundary}^{commit}`], {
     cwd: projectRoot,
     reject: false,
@@ -445,7 +447,7 @@ export async function listCommitsWithTrailersAfterRepairBoundary(
     return { kind: 'unavailable', reason: `repair boundary ${boundary} is unavailable` };
   }
   let verifiedBoundary = commit.stdout.trim();
-  const ancestor = await execa('git', ['merge-base', '--is-ancestor', verifiedBoundary, 'HEAD'], {
+  const ancestor = await execa('git', ['merge-base', '--is-ancestor', verifiedBoundary, tip], {
     cwd: projectRoot,
     reject: false,
   });
@@ -459,13 +461,13 @@ export async function listCommitsWithTrailersAfterRepairBoundary(
     const rewritten = await translateRepairBoundary(projectRoot, verifiedBoundary);
     const rewrittenAncestor = rewritten === null
       ? null
-      : await execa('git', ['merge-base', '--is-ancestor', rewritten, 'HEAD'], { cwd: projectRoot, reject: false });
+      : await execa('git', ['merge-base', '--is-ancestor', rewritten, tip], { cwd: projectRoot, reject: false });
     if (rewritten === null || rewrittenAncestor === null || rewrittenAncestor.exitCode !== 0) {
-      return { kind: 'unavailable', reason: `repair boundary ${verifiedBoundary} is not an ancestor of HEAD` };
+      return { kind: 'unavailable', reason: `repair boundary ${verifiedBoundary} is not an ancestor of ${tip}` };
     }
     verifiedBoundary = rewritten;
   }
-  const log = await execa('git', ['log', `--format=${COMMIT_RECORD_FORMAT}`, `${verifiedBoundary}..HEAD`], {
+  const log = await execa('git', ['log', `--format=${COMMIT_RECORD_FORMAT}`, `${verifiedBoundary}..${tip}`], {
     cwd: projectRoot,
     reject: false,
   });

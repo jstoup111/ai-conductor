@@ -29,7 +29,6 @@ import {
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
 import { withGitGuardPath } from './child-environment.js';
-import { ensureGitGuardForDispatch } from '../engine/git-guard.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
@@ -41,6 +40,7 @@ import {
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 function claudeDisplayName(): string {
   return providerDescriptor('claude').displayName;
