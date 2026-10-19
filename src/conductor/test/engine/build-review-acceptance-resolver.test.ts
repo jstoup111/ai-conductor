@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:rem-as-built-6b, task:rem-as-built-6c
 import { describe, expect, it } from 'vitest';
 
 import { resolveBuildReviewAcceptance } from '../../src/engine/build-review-acceptance-resolver.js';

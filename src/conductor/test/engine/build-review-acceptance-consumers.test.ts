@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:11, task:rem-prd-audit-11a
 import { readdir, readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 

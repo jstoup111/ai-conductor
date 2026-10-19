@@ -1,4 +1,4 @@
-// Covers: task:3, task:5, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-prd-audit-5a, task:rem-prd-audit-5e, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:3, task:5, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-prd-audit-5a, task:rem-prd-audit-5b, task:rem-prd-audit-6a, task:rem-prd-audit-12a, task:rem-prd-audit-12b, task:rem-prd-audit-5d, task:rem-prd-audit-5e, task:rem-prd-audit-5f, task:rem-prd-audit-7a, task:rem-prd-audit-7b, task:rem-prd-audit-7c, task:rem-prd-audit-7d, task:rem-prd-audit-5g, task:rem-as-built-5h, task:rem-as-built-5i, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

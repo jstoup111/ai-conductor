@@ -752,7 +752,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(covered.remediateDispatches()).toBe(0);
   });
 
-  // Covers: task:5
+// Covers: task:5, task:rem-prd-audit-5c
   it('keeps an uncovered infrastructure branch in the mechanical lane without a semantic kickback', async () => {
     const uncovered = await fixture({ infrastructure: 'uncovered' });
 
