@@ -28,6 +28,8 @@ export interface ExecutorChildDeps {
 /** The child receives replicas of every dispatcher-owned coordination service. */
 export interface ExecutorChildBaseRunInput {
   order: WorkOrder;
+  /** Supervisor pool width from the IPC envelope; retained for legacy guard parity. */
+  effectiveConcurrency?: number;
   events: ConductorEventEmitter;
   signal: AbortSignal;
 }
@@ -110,6 +112,10 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
       if (parsed.kind !== 'ok' || parsed.message.kind !== 'work-order' || started) return;
       started = true;
       const order = parsed.message.order;
+      // New supervisors provide this in the protocol envelope. Retain the
+      // WorkOrder fallback so a new child remains compatible with a
+      // supervisor that predates the envelope field.
+      const effectiveConcurrency = parsed.message.effectiveConcurrency ?? order.effectiveConcurrency;
       void (async () => {
         try {
           const worktree = await deps.createWorktree(order);
@@ -129,7 +135,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
           });
           const outcome = controller.signal.aborted
             ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
-            : await deps.run({ order, events, signal: controller.signal });
+            : await deps.run({ order, effectiveConcurrency, events, signal: controller.signal });
           persister.stop();
           sendOutcome(outcome);
         } catch (error) {

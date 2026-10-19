@@ -1,11 +1,15 @@
-// Covers: task:14, task:15
+// Covers: task:14, task:15, task:16
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ConductState } from '../../src/types/index.js';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { runExecutorChild, withExecutorBrokerProxies } from '../../src/engine/executor-child.js';
 import { EXECUTOR_PROTOCOL_VERSION } from '../../src/engine/executor-protocol.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
+import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 
 const VERSION = '20261019T120000Z-aaaaaaaaaaaa' as WorkOrder['engineVersionId'];
 const order: WorkOrder = {
@@ -17,6 +21,9 @@ const order: WorkOrder = {
   supervisorEngineVersionId: '20261019T120001Z-bbbbbbbbbbbb' as WorkOrder['engineVersionId'],
   manifest: [],
 };
+
+const LEGACY_CONCURRENCY_REFUSAL =
+  'LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL: legacy no-providerExecution dispatch mutates process-global provider environment and cannot run with effective daemon concurrency 2 (requires 1).';
 
 class FakePort {
   readonly sent: unknown[] = [];
@@ -32,10 +39,76 @@ class FakePort {
   disconnect(): void { for (const listener of this.listeners.get('disconnect') ?? []) listener(); }
 }
 
+function legacyGuardrails(): SelfHostGuardrails {
+  return {
+    resolveHarnessRoot: vi.fn(async () => root!),
+    resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: root! })),
+    relink: vi.fn(async () => {}),
+    provisionSandbox: vi.fn(async () => ({
+      configDir: '/tmp/executor-child-legacy-provider-env',
+      childEnv: () => ({ ...process.env }),
+      teardown: vi.fn(async () => {}),
+    })),
+    versionGate: vi.fn(async () => ({ ok: true as const })),
+    releaseGate: vi.fn(async () => ({ ok: true as const })),
+  };
+}
+
 let root: string | undefined;
 afterEach(async () => { if (root) await rm(root, { recursive: true, force: true }); root = undefined; });
 
 describe('executor child entrypoint', () => {
+  it('forwards envelope concurrency to the existing legacy no-providerExecution refusal', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-'));
+    const port = new FakePort();
+    const runner: StepRunner = {
+      selfHostRunId: () => 'executor-child-legacy-guard',
+      run: vi.fn(async () => ({ success: true })),
+    };
+    const done = runExecutorChild(port, {
+      engineVersionId: VERSION,
+      createWorktree: async () => ({ path: root! }),
+      run: async ({ effectiveConcurrency }) => {
+        const conductor = new Conductor({
+          stateFilePath: join(root!, 'conduct-state.json'),
+          stepRunner: runner,
+          events: new ConductorEventEmitter(),
+          projectRoot: root!,
+          daemon: true,
+          selfHost: true,
+          featureSlug: 'feature',
+          selfHostGuardrails: legacyGuardrails(),
+          config: {
+            daemon_concurrency: 1,
+            llm_provider: 'claude',
+            harness_self_host: { build_auth: { mode: 'api-key' } },
+          },
+          effectiveDaemonConcurrency: effectiveConcurrency,
+        });
+        const result = await (conductor as unknown as {
+          runSelfBuildDispatch: (step: 'build', state: ConductState) => Promise<{ success: boolean; output?: string }>;
+        }).runSelfBuildDispatch('build', { feature_desc: 'feature' } as ConductState);
+        return result.success
+          ? { slug: 'feature', status: 'done' as const }
+          : { slug: 'feature', status: 'error' as const, reason: result.output };
+      },
+    });
+
+    // The IPC value is authoritative over the compatibility copy in the
+    // WorkOrder, proving the child preserves the supervisor's pool width.
+    port.dispatch({
+      kind: 'work-order',
+      order: { ...order, effectiveConcurrency: 1 },
+      effectiveConcurrency: 2,
+    });
+    await done;
+
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
+      { kind: 'outcome', outcome: { slug: 'feature', status: 'error', reason: LEGACY_CONCURRENCY_REFUSAL } },
+    ]);
+  });
+
   it('waits for the order, then persists its own started event and one outcome through broker proxies', async () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-'));
     const port = new FakePort();

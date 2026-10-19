@@ -95,7 +95,9 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     config,
     modelPolicy: runtime.policy,
     providerExecution,
-    effectiveDaemonConcurrency: order.effectiveConcurrency,
+    // The supervisor's pool width is an IPC concern: keep the existing
+    // legacy no-providerExecution refusal effective in a child executor.
+    effectiveDaemonConcurrency: input.effectiveConcurrency ?? order.effectiveConcurrency,
     projectRoot: worktree.path,
     acceptanceRedExec: createProductionAcceptanceRedExec(),
     finishPublication: createProductionFinishPublicationCoordinator({

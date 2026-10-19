@@ -15,6 +15,11 @@ export type ExecutorMessage =
   | {
       kind: 'work-order';
       order: WorkOrder;
+      /**
+       * Supervisor pool width, carried independently of the order so a child
+       * can preserve the legacy provider-environment concurrency guard.
+       */
+      effectiveConcurrency?: number;
     }
   | {
       kind: 'event';
@@ -86,7 +91,22 @@ export function parseExecutorMessage(raw: unknown): ParsedExecutorMessage {
     }
     case 'work-order':
       if (!isRecord(raw.order)) return malformed('work-order order must be an object');
-      return { kind: 'ok', message: { kind, order: raw.order as unknown as WorkOrder } };
+      if (
+        raw.effectiveConcurrency !== undefined &&
+        (typeof raw.effectiveConcurrency !== 'number' ||
+          !Number.isSafeInteger(raw.effectiveConcurrency) ||
+          raw.effectiveConcurrency < 1)
+      ) {
+        return malformed('work-order effectiveConcurrency must be a positive integer when provided');
+      }
+      return {
+        kind: 'ok',
+        message: {
+          kind,
+          order: raw.order as unknown as WorkOrder,
+          ...(raw.effectiveConcurrency === undefined ? {} : { effectiveConcurrency: raw.effectiveConcurrency }),
+        },
+      };
     case 'event': {
       const scope = raw.scope;
       if (scope !== 'feature' && scope !== 'root') {

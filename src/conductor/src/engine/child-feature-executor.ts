@@ -105,7 +105,13 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         handshake = 'accepted';
         void writeExecutorRecord(deps.projectRoot, order.slug, {
           pid: child.pid ?? -1, engineDir, engineVersionId: launchedOrder.engineVersionId, startedAt: new Date().toISOString(),
-        }).then(() => child.send({ kind: 'work-order', order: launchedOrder } satisfies ExecutorMessage));
+        }).then(() => child.send({
+          kind: 'work-order',
+          order: launchedOrder,
+          ...(launchedOrder.effectiveConcurrency === undefined
+            ? {}
+            : { effectiveConcurrency: launchedOrder.effectiveConcurrency }),
+        } satisfies ExecutorMessage));
         return;
       }
       if (message.kind === 'outcome') {
