@@ -13190,6 +13190,8 @@ export class Conductor {
                     {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+                      ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
                     },
                   );
                   // Old raw aggregate fixtures (and pre-adjudication callers)
@@ -13241,6 +13243,8 @@ export class Conductor {
                       {
                         emit: async (event) => { await this.events.emit(event); },
                         minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                        adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+                        ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
                       },
                     );
                     if (!latest.ok) throw new Error(latest.reason);
@@ -13447,6 +13451,8 @@ export class Conductor {
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+                      ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {

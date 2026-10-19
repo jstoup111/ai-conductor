@@ -1,4 +1,4 @@
-// Covers: task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
+// Covers: task:3, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -202,6 +202,71 @@ describe('live build-review effective resolver', () => {
     });
     expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [] } });
     expect(raw.verdict).toBe('FAIL');
+  });
+
+  it('passes a lap whose only finding is carried from an accepted case', async () => {
+    const raw = aggregate();
+    const current = canonicalizeBuildReviewFindingIdentity({ ...testQualityFinding, rubric: 'testQuality', contractVersion: currentContractVersion })!;
+    const origin = canonicalizeBuildReviewFindingIdentity({
+      ...testQualityFinding, rubric: 'testQuality', contractVersion: currentContractVersion,
+      anchor: { ...testQualityFinding.anchor, locus: { ...testQualityFinding.anchor.locus, contentHash: `sha256:${'d'.repeat(64)}` } },
+    })!;
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({
+        list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: origin, sourceLapId: parseBuildReviewLapId('lap-origin')!, summary: 'accepted origin', rationale: 'known risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }),
+        listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+      }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { cases: [{
+        id: 'case-1', domain: 'build_review', disposition: 'act', resolution: 'resolved', effect: { kind: 'none' },
+        sources: [
+          { sourceId: `testQuality:${origin.id}`, outcome: 'acted', recordedAt: '2026-08-14T00:00:01.000Z' },
+          { sourceId: `testQuality:${current.id}`, outcome: 'acted', recordedAt: '2026-08-14T00:00:02.000Z' },
+        ],
+      }] } } as never) }),
+    });
+
+    expect(result).toMatchObject({ ok: true, effective: {
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [current.id], unresolvedFindingIds: [],
+    } });
+  });
+
+  it('reads only the active child case store for carried acceptance', async () => {
+    const raw = aggregate();
+    const current = canonicalizeBuildReviewFindingIdentity({ ...testQualityFinding, rubric: 'testQuality', contractVersion: currentContractVersion })!;
+    const origin = canonicalizeBuildReviewFindingIdentity({
+      ...testQualityFinding, rubric: 'testQuality', contractVersion: currentContractVersion,
+      anchor: { ...testQualityFinding.anchor, locus: { ...testQualityFinding.anchor.locus, contentHash: `sha256:${'d'.repeat(64)}` } },
+    })!;
+    const calls: unknown[] = [];
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      child: 'child-a' as never,
+      createStore: () => ({
+        list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: origin, sourceLapId: parseBuildReviewLapId('lap-origin')!, summary: 'accepted origin', rationale: 'known risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }),
+        listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+      }),
+      createCaseStore: (_root, _feature, options) => {
+        calls.push(options);
+        return { read: async () => ({ ok: true as const, state: { cases: [] } } as never) };
+      },
+    });
+
+    expect({ result, calls }).toMatchObject({
+      result: { ok: true, effective: { verdict: 'FAIL', unresolvedFindingIds: [current.id] } },
+      calls: [{ child: 'child-a' }],
+    });
+  });
+
+  it('does not open the case store when adjudication is disabled', async () => {
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, aggregate(), {
+      ...identityDeps,
+      adjudicationEnabled: false,
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
+      createCaseStore: () => { throw new Error('case store must not be opened'); },
+    });
+
+    expect(result).toMatchObject({ ok: true, effective: { verdict: 'FAIL', acceptedFindingIds: [] } });
   });
 
   it('keeps a zero-judged review blocking while rendering current reduced-coverage evidence', async () => {

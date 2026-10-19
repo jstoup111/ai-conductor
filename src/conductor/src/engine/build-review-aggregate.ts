@@ -22,6 +22,8 @@ import {
   type BuildReviewReducedCoverageDispositionRecord,
 } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import { resolveBuildReviewAcceptance } from './build-review-acceptance-resolver.js';
+import type { RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import {
   parseBuildReviewCustomArtifactMember,
   type BuildReviewCustomArtifactMember,
@@ -571,6 +573,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
+  caseInput: RemediationCaseStoreReadResult = { ok: true, state: { version: 'v1', cases: [] } },
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -583,7 +586,8 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
         rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
       });
       if (!identity) return undefined;
-      if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
+      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput);
+      if (acceptance.kind === 'direct' || acceptance.kind === 'carried') acceptedIds.add(identity.id);
     }
   }
   // Dynamic members are not part of the closed built-in registry, but their
@@ -597,7 +601,8 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
         : undefined;
       const identity = rehydrateBuildReviewAcceptedRiskFinding(payload);
       if (!identity) return undefined;
-      if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
+      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput);
+      if (acceptance.kind === 'direct' || acceptance.kind === 'carried') acceptedIds.add(identity.id);
     }
   }
   return deriveEffectiveBuildReviewVerdict(
