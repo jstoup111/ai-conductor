@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:14
+// Covers: task:3, task:11, task:12, task:14
 import { describe, expect, it, vi } from 'vitest';
 import {
   DaemonMaintenance,
@@ -8,8 +8,10 @@ import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import { rekickSweep } from '../../src/engine/daemon-rekick.js';
 import type { WorkClaims } from '../../src/engine/work-claims.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
 
 const maintenanceTrace = vi.hoisted(() => ({ operations: [] as DaemonMaintenanceOperation[] }));
+const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
 
 function trackedClaims(attempts: string[]): WorkClaims {
   const active = new Set<string>();
@@ -149,6 +151,8 @@ describe('engine/daemon-maintenance', () => {
       repository: 'owner/repo',
       slug: item.slug,
       baseSha: rootBase,
+      engineVersionId: ENGINE_VERSION_ID,
+      schemaVersion: 1,
       manifest: [],
     });
 

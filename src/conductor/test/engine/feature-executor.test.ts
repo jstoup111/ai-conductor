@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:3, task:8
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,12 +7,17 @@ import {
   type FeatureExecutionOutcome,
 } from '../../src/engine/feature-executor.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
+
+const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
 
 describe('engine/feature-executor', () => {
   const order: WorkOrder = {
     repository: 'jstoup/ai-conductor',
     slug: 'parallel-dispatch',
     baseSha: 'a'.repeat(40),
+    engineVersionId: ENGINE_VERSION_ID,
+    schemaVersion: 1,
     manifest: [{ ref: '.docs/plans/parallel-dispatch.md', contentHash: 'sha256:plan' }],
   };
 

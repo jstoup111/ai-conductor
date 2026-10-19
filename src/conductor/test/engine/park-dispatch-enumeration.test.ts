@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:3, task:5
 import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -11,9 +11,11 @@ import {
 import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import type { WorkClaims } from '../../src/engine/work-claims.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON_SRC = join(__dirname, '../../src/engine/daemon.ts');
+const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
 
 const item: BacklogItem = {
   slug: 'parked-claim',
@@ -56,6 +58,8 @@ describe('Task 5 — park guard covers the claim path', () => {
       repository: 'test/repository',
       slug: item.slug,
       baseSha: 'deadbeef',
+      engineVersionId: ENGINE_VERSION_ID,
+      schemaVersion: 1,
       manifest: [],
     }));
     const executor: FeatureExecutor = {

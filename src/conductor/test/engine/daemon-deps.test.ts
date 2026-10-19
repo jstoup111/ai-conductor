@@ -1,4 +1,4 @@
-// Covers: task:4, task:6
+// Covers: task:3, task:4, task:6
 import { execFile } from 'node:child_process';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, lstat } from 'fs/promises';
@@ -56,8 +56,10 @@ import { leafBranchFor } from '../../src/engine/feature-branch-identity.js';
 import { buildWorkOrder } from '../../src/engine/work-order.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { resolveHarnessRoot } from '../../src/engine/install-freshness.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
 
 const execFileAsync = promisify(execFile);
+const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
 
 describe('engine/daemon-deps', () => {
   let dir: string;
@@ -350,6 +352,8 @@ describe('engine/daemon-deps', () => {
       repository: 'owner/repository',
       slug: 'feature',
       baseSha: 'dispatched-pin',
+      engineVersionId: ENGINE_VERSION_ID,
+      schemaVersion: 1,
       manifest: [],
     };
 
@@ -445,6 +449,11 @@ describe('engine/daemon-deps', () => {
             repository: 'owner/repository',
             slug: 'pinned-feature',
             baseSha: s1,
+            enginePin: {
+              engineVersionId: ENGINE_VERSION_ID,
+              engineDir: `/engine/dist-versions/${ENGINE_VERSION_ID}`,
+              fallbackReason: undefined,
+            },
             documentRefs: [documentRef],
           },
           async (args) => {

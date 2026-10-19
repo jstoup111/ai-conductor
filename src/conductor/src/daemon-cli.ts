@@ -170,6 +170,8 @@ import {
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
+import { resolveEnginePin } from './engine/engine-pin.js';
+import { resolveEngineStoreRoot } from './engine/engine-store.js';
 import { createDaemonOrderingReaders } from './engine/daemon-ordering-readers.js';
 import { cleanupHaltPresentation, parseIssueRef, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { createStaleEngineChecker } from './engine/engine-identity.js';
@@ -2233,11 +2235,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
+    const conductorRoot = dirname(__dirname);
+    const enginePin = await resolveEnginePin({
+      conductorRoot,
+      storeRoot: resolveEngineStoreRoot({ conductorRoot }),
+      ownEngineDir: join(__dirname, 'engine'),
+    });
     return buildWorkOrder(
       {
         repository: basename(projectRoot),
         slug: item.slug,
         baseSha,
+        enginePin,
         documentRefs: [
           item.storiesPath ?? `.docs/stories/${item.slug}.md`,
           item.planPath ?? `.docs/plans/${item.slug}.md`,
