@@ -213,7 +213,7 @@ describe('executor child entrypoint', () => {
       },
       run: async ({ signal }) => {
         started();
-        await new Promise<void>((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
         return { slug: 'feature', status: 'parked', reason: String(signal.reason) };
       },
       exit: (code) => { exitCode = code; },
