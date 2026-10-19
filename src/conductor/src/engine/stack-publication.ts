@@ -8,7 +8,7 @@ import {
 } from './stack-publication-record.js';
 import type { GhRunner } from './tracker-client.js';
 import type { GithubOperationRequest } from './github-operations.js';
-import type { PublicationRecord } from './stack-publication-record.js';
+import type { PublicationMember, PublicationRecord } from './stack-publication-record.js';
 import { executeRemoteGit, type RemoteGitOperationDependencies } from './remote-git-operations.js';
 import { pushedTipRef } from './push-lease.js';
 import { writeHaltMarker } from './halt-marker.js';
@@ -27,6 +27,72 @@ export async function publishedStackRefusal(
 ): Promise<boolean> {
   const publication = await activePublicationRecord(root, slug, dependencies);
   return publication !== undefined && publication.record.members.length > 0;
+}
+
+/**
+ * The post-ship proof for a published stack.  A shipped record remains the
+ * ship/reap gate; this proof is deliberately narrower and protects only later
+ * child-branch cleanup.  GitHub's merge commit is the squash commit in this
+ * repository, so requiring it to be an ancestor of origin/main proves that
+ * every reviewed member reached the shipped tree.
+ */
+export type MemberReachabilityResult =
+  | { readonly kind: 'reachable' }
+  | { readonly kind: 'unreachable'; readonly member: PublicationMember }
+  | { readonly kind: 'indeterminate' };
+
+export interface MemberReachabilityDependencies {
+  readonly git?: GitRunner;
+  readonly gh?: GhRunner;
+  /** Canonical owner/repository name used for member-number GitHub reads. */
+  readonly repository?: string;
+}
+
+type MemberMergeObservation = { readonly state?: unknown; readonly mergeCommit?: { readonly oid?: unknown } };
+
+/**
+ * Prove every recorded member is merged and its GitHub merge commit is on
+ * origin/main.  A malformed or unavailable observation never becomes an
+ * unreachable verdict: callers retry it without deleting any child state.
+ */
+export async function verifyMemberReachability(
+  root: string,
+  record: PublicationRecord,
+  dependencies: MemberReachabilityDependencies = {},
+): Promise<MemberReachabilityResult> {
+  const gh = dependencies.gh;
+  const repository = dependencies.repository;
+  if (!gh || !repository) return { kind: 'indeterminate' };
+  const git = dependencies.git ?? makeGitRunner(root);
+
+  for (const member of record.members) {
+    let observation: MemberMergeObservation;
+    try {
+      const response = await gh(
+        ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state,mergeCommit'],
+        { cwd: root },
+      );
+      const parsed: unknown = JSON.parse(response.stdout);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'indeterminate' };
+      observation = parsed as MemberMergeObservation;
+    } catch {
+      return { kind: 'indeterminate' };
+    }
+
+    if (observation.state !== 'MERGED') return { kind: 'unreachable', member };
+    const mergeCommit = observation.mergeCommit?.oid;
+    if (typeof mergeCommit !== 'string' || mergeCommit.length === 0) return { kind: 'indeterminate' };
+
+    try {
+      const ancestry = await git(['merge-base', '--is-ancestor', mergeCommit, 'origin/main']);
+      if (ancestry.exitCode === 1) return { kind: 'unreachable', member };
+      if (ancestry.exitCode !== 0) return { kind: 'indeterminate' };
+    } catch {
+      return { kind: 'indeterminate' };
+    }
+  }
+
+  return { kind: 'reachable' };
 }
 
 /** A stack operation payload is never trusted merely because it passed argv decoding. */

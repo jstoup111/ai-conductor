@@ -38,6 +38,9 @@ import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner } from './rebase.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
+import { parseGithubUrl } from './github-target.js';
+import { activePublicationRecord, type PublicationRecordDependencies } from './stack-publication-record.js';
+import { verifyMemberReachability } from './stack-publication.js';
 import {
   classifyShippedReadiness,
   routeShippedReadiness,
@@ -476,6 +479,8 @@ export interface SweepOpts {
    * Omitted preserves the standalone sweep's existing behavior.
    */
   canRemoveWorktree?: (slug: string) => boolean | Promise<boolean>;
+  /** Test seam for the ref-backed publication receipt read. */
+  publicationRecordDependencies?: PublicationRecordDependencies;
   /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
   onEvent?: (event: ConductorEvent) => void;
 }
@@ -652,6 +657,7 @@ export async function sweepMergeableLabels({
   teardownWorktree,
   shippedRecordProbe,
   canRemoveWorktree,
+  publicationRecordDependencies,
   onEvent,
   now = () => new Date(),
 }: SweepOpts): Promise<void> {
@@ -739,6 +745,32 @@ export async function sweepMergeableLabels({
                 },
                 false,
               );
+              const publication = await activePublicationRecord(
+                entry.repoCwd,
+                entry.slug,
+                publicationRecordDependencies,
+              );
+              // A one-member publication is the ordinary leaf path.  Stack
+              // lifecycle and child cleanup apply only once a second member
+              // makes the receipt a real chained stack.
+              if ((publication?.record.members.length ?? 0) > 1) {
+                const repository = parseGithubUrl(entry.prUrl)?.repository;
+                const reachability = await verifyMemberReachability(entry.repoCwd, publication.record, {
+                  gh,
+                  repository,
+                });
+                // Child branches and the durable publication receipt must live
+                // until the dedicated stack teardown path consumes this proof.
+                // This sweep still reaps the feature worktree immediately once
+                // the ordinary shipped-record gate passes.
+                survivors.push(entry);
+                if (reachability.kind !== 'reachable') {
+                  log?.(
+                    `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
+                  );
+                }
+                continue;
+              }
               // Teardown has established all of its own shipped-record and
               // worktree safety gates. Ref cleanup is best-effort and must not
               // turn a successful reap into a retained watch entry.

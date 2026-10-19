@@ -245,7 +245,11 @@ export async function publishHaltRecord(
 }
 
 function haltRecordRemoteFailure(result: HaltRecordPublicationResult): string {
-  if (result.kind === 'failed') return result.error;
+  if (result.kind === 'failed') {
+    return result.error === 'published stack tip mismatch'
+      ? 'stack-tip-mismatch'
+      : result.error;
+  }
   if (result.kind === 'refused') return result.reason;
   return 'remote Git operation did not execute';
 }

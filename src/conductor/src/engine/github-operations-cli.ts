@@ -18,6 +18,7 @@ import { executeRemoteGit, resolveFeatureRemoteMutation, type RemoteGitCommandRu
 import { makeProductionGit, type GitRunner } from './pr-labels.js';
 import { parseFeatureBranch, LEAF_PREFIX, SPEC_PREFIX } from './feature-branch-identity.js';
 import { leafRefExists } from './daemon-halt-pr-operations.js';
+import { activePublicationRecord } from './stack-publication-record.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   createGuardedGithubOperationRunner,
@@ -29,7 +30,7 @@ import {
 type FeatureMutationResolution =
   | { readonly kind: 'resolved'; readonly mutation: GithubMutationExecutionContext }
   | { readonly kind: 'unavailable' }
-  | { readonly kind: 'refused'; readonly reason: 'invalid-target' };
+  | { readonly kind: 'refused'; readonly reason: 'invalid-target' | 'unrecorded-stack-child' };
 
 export interface GithubOperationCliCommand {
   readonly requestFile: string;
@@ -104,6 +105,25 @@ async function featureMutationForRequest(
     const leaf = await leafRefExists(gitForCwd, identity.slug);
     if (leaf !== 'present') {
       return { kind: 'refused', reason: 'invalid-target' };
+    }
+    const published = await activePublicationRecord(input.cwd, identity.slug, {
+      git: async (args) => {
+        try {
+          const result = await git(args, { cwd: input.cwd });
+          return { exitCode: 0, stdout: result.stdout, stderr: '' };
+        } catch (error) {
+          return {
+            exitCode: typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 1 ? 1 : 128,
+            stdout: '',
+            stderr: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+    });
+    if (published !== undefined && !published.record.members.some(
+      (member) => member.position === identity.child && member.branch === branch,
+    )) {
+      return { kind: 'refused', reason: 'unrecorded-stack-child' };
     }
     slug = identity.slug;
   } else {
@@ -236,6 +256,8 @@ export async function dispatchGithubOperationCommand(
     );
     const output: GithubOperationCliResult = result.kind === 'executed'
       ? { kind: 'executed', operation: decoded.request.operation, target: decoded.request.target }
+      : result.kind === 'failed' && result.error === 'published stack tip mismatch'
+        ? { kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: 'stack-tip-mismatch' }
       : result.kind === 'refused'
         ? { kind: 'refused', operation: decoded.request.operation, target: decoded.request.target, reason: result.reason }
         : { kind: 'failed', operation: decoded.request.operation, target: decoded.request.target, error: result.kind === 'failed' ? result.error : 'not a remote write' };

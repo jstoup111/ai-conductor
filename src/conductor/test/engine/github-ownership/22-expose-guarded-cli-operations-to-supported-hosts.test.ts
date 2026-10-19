@@ -517,6 +517,7 @@ describe('github-operation CLI', () => {
     expect(gitCalls).toEqual([
       ['branch', '--show-current'],
       ['show-ref', '--verify', '--quiet', 'refs/heads/feat/daemon-x'],
+      ['rev-parse', '-q', '--verify', 'refs/conductor/x/publication'],
     ]);
     expect(gh).not.toHaveBeenCalled();
     expect(remoteGit).not.toHaveBeenCalled();
@@ -555,6 +556,78 @@ describe('github-operation CLI', () => {
     ]);
     expect(gh).not.toHaveBeenCalled();
     expect(remoteGit).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:22
+  it('refuses an agent child push or PR operation absent from the published stack before either write boundary', async () => {
+    const record = JSON.stringify({
+      version: 1,
+      members: [{ position: 1, branch: 'feat/c1/x', pr: 101 }],
+    });
+    const git = vi.fn(async (args: string[]) => {
+      const joined = args.join(' ');
+      if (joined === 'branch --show-current') return { stdout: 'feat/c3/x\n' };
+      if (joined === 'show-ref --verify --quiet refs/heads/feat/daemon-x') return { stdout: '' };
+      if (joined === 'rev-parse -q --verify refs/conductor/x/publication') return { stdout: `${'a'.repeat(40)}\n` };
+      if (joined === `cat-file -p ${'a'.repeat(40)}`) return { stdout: record };
+      throw new Error(`unexpected git command: ${joined}`);
+    });
+    const gh = vi.fn();
+    const remoteGit = vi.fn(async () => ({ kind: 'executed' as const, targets: [] }));
+    const requests = [
+      {
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/c3/x' },
+        context: { actor: 'alice', feature: 'x' },
+      },
+      {
+        operation: 'pull-request.edit', repository: 'acme/widgets',
+        resource: { kind: 'pull-request', number: 103 },
+        context: { actor: 'alice', feature: 'x' }, payload: { body: 'child bind' },
+      },
+    ];
+
+    for (const request of requests) {
+      const write = vi.fn();
+      await expect(dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+        cwd: '/fixture', readRequest: readRequest(request), git, gh, remoteGit, write,
+      })).resolves.toBe(1);
+      expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({
+        kind: 'refused', reason: 'unrecorded-stack-child',
+      });
+    }
+
+    expect(gh).not.toHaveBeenCalled();
+    expect(remoteGit).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:22
+  it('maps a stack tip guard mismatch to an agent-visible refusal', async () => {
+    const git = vi.fn(async (args: string[]) => {
+      const joined = args.join(' ');
+      if (joined === 'branch --show-current') return { stdout: 'feat/daemon-x\n' };
+      if (joined === 'remote get-url --push origin') return { stdout: 'git@github.com:acme/widgets.git\n' };
+      if (joined === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
+      throw new Error(`unexpected git command: ${joined}`);
+    });
+    const gh = vi.fn();
+    const remoteGit = vi.fn(async () => ({ kind: 'failed' as const, error: 'published stack tip mismatch', targets: [] }));
+    const write = vi.fn();
+
+    await expect(dispatchGithubOperationCommand({ requestFile: '/request.json' }, {
+      cwd: '/fixture',
+      readRequest: readRequest({
+        operation: 'remote-ref.push', repository: 'acme/widgets',
+        resource: { kind: 'remote-ref', ref: 'refs/heads/feat/daemon-x' },
+        context: { actor: 'alice', feature: 'x' },
+      }),
+      git, gh, remoteGit, write,
+    })).resolves.toBe(1);
+
+    expect(JSON.parse(write.mock.calls[0]?.[0] ?? '')).toMatchObject({
+      kind: 'refused', reason: 'stack-tip-mismatch',
+    });
+    expect(gh).not.toHaveBeenCalled();
   });
 
   it('refuses an owner-mismatched child branch exactly as its leaf branch', async () => {

@@ -97,6 +97,10 @@ export async function refreshPostFinishShippedRecord({
         events,
       });
     } catch (pushError) {
+      if (isStackTipMismatch(pushError)) {
+        log('post-finish shipped-record refresh skipped: stack-tip-mismatch');
+        return;
+      }
       let recoveryHead = preRefreshHead;
       let upstreamHead: string | undefined;
       try {
@@ -171,4 +175,8 @@ export function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit
   if (result.kind === 'failed') return result.error;
   if (result.kind === 'refused') return result.reason;
   return 'remote Git operation did not execute';
+}
+
+function isStackTipMismatch(error: unknown): boolean {
+  return error instanceof Error && error.message === 'published stack tip mismatch';
 }
