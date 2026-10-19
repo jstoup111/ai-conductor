@@ -181,6 +181,40 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   A `refute` case whose deferral effect is `reserved` or `failed` does not satisfy the predicate,
 >   exactly as D5.2 prescribes for every other unfinished effect.
 
+> **Amended 2026-10-19 by #3292:** Source ownership is scoped to open cases, and an unbound
+> re-raise of resolved history is admitted. The predecessor's D5 store kept one case per source id
+> across all history, and its D7 says a resolved case that reappears halts as a regression. In
+> practice the judge proposes an unbound new case for a source that only a resolved case owns, and
+> the store refused that transition as `source-linked-by-multiple-cases`. Two features halted
+> needs-human on 2026-10-18. This amendment adds the decision below and narrows the predecessor
+> sentence it contradicts.
+>
+> - **D5.4 — At most one open case per source.** The build_review case store refuses a proposed
+>   state only when two cases with `resolution: open` link the same source id. A source that
+>   resolved cases link may also be linked by one new case. Resolved rows are never rewritten by
+>   that link, and the persisted schema and store version are unchanged. Duplicate case ids,
+>   duplicate effect ids and a repeated source within one case stay refused.
+> - **D5.5 — One link per source is authoritative.** Every build_review reader that maps a source
+>   back to a case or an outcome reads it through one shared store-module selector. The selector
+>   returns, per source id, the open case's link when one exists. Otherwise it returns the link
+>   with the latest `recordedAt`, ties broken by store order. The reducer's coverage consistency
+>   check and the D5.1 settled predicate read through it, and readers already restricted to open
+>   cases are unchanged. A store with no shared sources therefore reads exactly as before.
+> - **D5.6 — An unbound re-raise is a new, charged case.** When a judgement proposes a case
+>   without `existingCaseId` for a source owned only by resolved cases, reconciliation admits it as
+>   a new case of any disposition. A new `act` case reserves a fresh action effect, which the
+>   existing kickback budget charges like any first action, so the cumulative cap is the bound. An
+>   explicit `existingCaseId` rebind of a resolved action case still halts as a regression under
+>   predecessor D7. Equivalence across a re-raise stays the judge's call, and nothing infers it
+>   from prose.
+> - **D5.7 — Decision stops share the contract.** A decision or consistency stop over a source owned
+>   only by resolved cases persists as a new open stop. A stop whose case id, owner, disposition and
+>   source ids and outcomes match an open stop is that stop: it converges as already persisted
+>   whatever the link timestamps. An unbound stop converges on the open stop with the same owner and
+>   source set. Every rejected case-store transition, the decision-stop path included, reaches the
+>   operator with its invariant, case ids and source ids on the existing
+>   `remediation_adjudication_failed` event and the HALT text.
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced
