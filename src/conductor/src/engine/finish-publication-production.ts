@@ -56,6 +56,7 @@ import {
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
+import { pushedTipRef } from './push-lease.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
@@ -265,8 +266,94 @@ async function executeValidatedStackOperation(input: {
   return stored;
 }
 
-/** Ready the dependent child PRs from top to bottom before the retained leaf. */
-async function readyStackChildren(input: {
+type NativeStackMember = {
+  readonly number: number;
+  readonly head: string;
+};
+
+function parseNativeStackMembers(value: unknown): readonly NativeStackMember[] | undefined {
+  const stack = Array.isArray(value) ? value[0] : value;
+  if (!stack || typeof stack !== 'object' || Array.isArray(stack)) return undefined;
+  const rawMembers = (stack as { pull_requests?: unknown; pullRequests?: unknown }).pull_requests
+    ?? (stack as { pullRequests?: unknown }).pullRequests;
+  if (!Array.isArray(rawMembers)) return undefined;
+  const members = rawMembers.map((member) => {
+    if (!member || typeof member !== 'object' || Array.isArray(member)) return undefined;
+    const candidate = member as {
+      number?: unknown;
+      head?: { sha?: unknown };
+      headRefOid?: unknown;
+      head_sha?: unknown;
+    };
+    const head = typeof candidate.head?.sha === 'string'
+      ? candidate.head.sha
+      : typeof candidate.headRefOid === 'string'
+        ? candidate.headRefOid
+        : typeof candidate.head_sha === 'string'
+          ? candidate.head_sha
+          : undefined;
+    return Number.isInteger(candidate.number) && (candidate.number as number) > 0 && head && head.length > 0
+      ? { number: candidate.number as number, head }
+      : undefined;
+  });
+  return members.some((member) => member === undefined) ? undefined : members as NativeStackMember[];
+}
+
+/**
+ * Re-read the native stack immediately before a ready flip. The durable record
+ * supplies the required order while pushed-tip refs bind each native PR head to
+ * the immutable closure that FINISH previously published.
+ */
+async function verifyStackBeforeReadyFlip(input: {
+  root: string;
+  slug: string;
+  leaf: { readonly repository: string; readonly number: number };
+  git: PublicationRecordGitRunner;
+  gh: GhRunner;
+  operations: GithubOperationRunner;
+  events?: Parameters<typeof haltStackTipDiverged>[2];
+  position: number;
+}): Promise<void> {
+  const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  if (!stored || stored.record.stack?.verified !== true) {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'verified stack publication record is missing');
+  }
+  await executeValidatedStackOperation({
+    root: input.root, slug: input.slug, git: input.git, operations: input.operations,
+    request: {
+      operation: 'stack.read', repository: input.leaf.repository, resource: { kind: 'repository' },
+      context: { actor: 'finish-publication' }, payload: { pullRequest: input.leaf.number },
+    },
+  });
+  let members: readonly NativeStackMember[] | undefined;
+  try {
+    const stdout = await runTrackerRepositoryRead(
+      input.gh, input.root, 'repository.read', input.leaf.repository, { kind: 'repository' },
+      ['api', `repos/${input.leaf.repository}/stacks?pull_request=${input.leaf.number}`],
+    );
+    members = parseNativeStackMembers(JSON.parse(stdout));
+  } catch {
+    members = undefined;
+  }
+  const expected = stored.record.members;
+  const matchesMembers = members !== undefined
+    && members.length === expected.length
+    && members.every((member, index) => member.number === expected[index]?.pr);
+  if (!matchesMembers || members === undefined) {
+    await haltStackTipDiverged(input.root, expected, input.events, `published stack tip diverged before position ${input.position}`);
+    throw new StackPublicationHaltError('stack_tip_diverged', `native stack membership diverged before position ${input.position}`);
+  }
+  for (const [index, member] of expected.entries()) {
+    const expectedTip = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, member.branch)]);
+    if (expectedTip.exitCode !== 0 || expectedTip.stdout.trim() !== members[index]!.head) {
+      await haltStackTipDiverged(input.root, [member], input.events, `published stack tip diverged at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `native stack head diverged at position ${member.position}`);
+    }
+  }
+}
+
+/** Ready dependent child PRs from top to bottom, after the retained leaf. */
+export async function readyStackChildren(input: {
   root: string;
   slug: string;
   leafUrl: string;
@@ -274,6 +361,9 @@ async function readyStackChildren(input: {
   git: PublicationRecordGitRunner;
   gh: GhRunner;
   operations?: GithubOperationRunner;
+  /** Each child ready write needs its own exact pull-request provenance target. */
+  operationsForPullRequest?: (pr: number) => Promise<GithubOperationRunner | undefined>;
+  events?: Parameters<typeof haltStackTipDiverged>[2];
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
   if (!leaf) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'retained leaf URL is invalid');
@@ -281,14 +371,9 @@ async function readyStackChildren(input: {
   if (!stored || stored.record.stack?.verified !== true) return;
   if (!input.operations) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'stack child ready boundary unavailable');
   for (const member of [...stored.record.members].slice(0, -1).reverse()) {
-    // Re-read immediately before every flip so a changed native stack cannot
-    // turn a stale local record into a ready child.
-    await executeValidatedStackOperation({
-      root: input.root, slug: input.slug, git: input.git, operations: input.operations,
-      request: {
-        operation: 'stack.read', repository: leaf.repository, resource: { kind: 'repository' },
-        context: { actor: 'finish-publication' }, payload: { pullRequest: leaf.number },
-      },
+    await verifyStackBeforeReadyFlip({
+      root: input.root, slug: input.slug, leaf, git: input.git, gh: input.gh,
+      operations: input.operations, events: input.events, position: member.position,
     });
     const stdout = await runTrackerRepositoryRead(
       input.gh, input.root, 'pull-request.read', leaf.repository, { kind: 'pull-request', number: member.pr },
@@ -302,16 +387,20 @@ async function readyStackChildren(input: {
     const draft = (current as { isDraft?: unknown }).isDraft;
     const state = (current as { state?: unknown }).state;
     if (state !== 'OPEN' || typeof draft !== 'boolean' || typeof body !== 'string') {
-      await haltStackTipDiverged(input.root, stored.record.members, undefined, `published stack tip diverged at position ${member.position}`);
+      await haltStackTipDiverged(input.root, stored.record.members, input.events, `published stack tip diverged at position ${member.position}`);
       throw new StackPublicationHaltError('stack_tip_diverged', `child position ${member.position} is no longer an open draft`);
     }
     if (!draft) continue;
     const postcondition = checkChildBodyPostconditions(body, input.template, member.branch);
     if (!postcondition.ok) throw new StackPublicationHaltError('stack_publication_precondition_failed', postcondition.reason);
+    const memberOperations = await input.operationsForPullRequest?.(member.pr) ?? input.operations;
+    if (!memberOperations) {
+      throw new StackPublicationHaltError('stack_publication_precondition_failed', `child ready boundary unavailable at position ${member.position}`);
+    }
     const flip = await executeGithubOperation({
       operation: 'pull-request.ready', repository: leaf.repository,
       resource: { kind: 'pull-request', number: member.pr }, context: { actor: 'finish-publication' },
-    }, input.operations);
+    }, memberOperations);
     if (flip.kind !== 'executed') throw new StackPublicationHaltError('stack_publication_precondition_failed', `could not ready child position ${member.position}`);
     const verified = await runTrackerRepositoryRead(
       input.gh, input.root, 'pull-request.read', leaf.repository, { kind: 'pull-request', number: member.pr },
@@ -322,6 +411,33 @@ async function readyStackChildren(input: {
       || (observed as { isDraft?: unknown }).isDraft !== false) {
       throw new StackPublicationHaltError('stack_publication_precondition_failed', `child ready flip was not observed at position ${member.position}`);
     }
+  }
+}
+
+/** A verified stack is ready only after every still-open member is non-draft. */
+export async function allStackMembersReady(input: {
+  root: string;
+  slug: string;
+  repository: string;
+  git: PublicationRecordGitRunner;
+  gh: GhRunner;
+}): Promise<boolean> {
+  const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  if (!stored || stored.record.stack?.verified !== true) return false;
+  try {
+    for (const member of stored.record.members) {
+      const stdout = await runTrackerRepositoryRead(
+        input.gh, input.root, 'pull-request.read', input.repository, { kind: 'pull-request', number: member.pr },
+        ['pr', 'view', String(member.pr), '-R', input.repository, '--json', 'isDraft,state'],
+      );
+      const value: unknown = JSON.parse(stdout);
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+        || (value as { state?: unknown }).state !== 'OPEN'
+        || (value as { isDraft?: unknown }).isDraft !== false) return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1014,6 +1130,21 @@ export function createProductionFinishPublicationCoordinator(
           : await resolveActiveChild(deps.projectRoot, state.feature_desc);
         return activeChildForObservation;
       };
+      const observeStackReadiness = async (prUrl: string, leafReady: boolean): Promise<boolean> => {
+        if (!leafReady) return false;
+        const cursor = await resolveObservationChild();
+        if (cursor.kind === 'no-child') return true;
+        if (!state.feature_desc) return false;
+        const leaf = repositoryAndNumber(prUrl);
+        if (!leaf) return false;
+        return allStackMembersReady({
+          root: deps.projectRoot,
+          slug: state.feature_desc,
+          repository: leaf.repository,
+          git: publicationRecordGit(deps.git, deps.projectRoot),
+          gh: deps.gh,
+        });
+      };
       const observationInput = {
         mode: intent.authority.kind === 'operator_confirmed' ? 'interactive' : intent.authority.mode,
         intent,
@@ -1071,6 +1202,7 @@ export function createProductionFinishPublicationCoordinator(
                   labels?: unknown;
                 };
                 if (typeof pr.url === 'string') {
+                  const ready = await observeStackReadiness(pr.url, pr.isDraft === false);
                   const halted = prHaltState(pr.title, pr.body, pr.labels);
                   // The declaration is mechanically maintained shipment
                   // metadata, not reader-facing prose. Its append/replacement
@@ -1130,7 +1262,7 @@ export function createProductionFinishPublicationCoordinator(
                       prose,
                       ...(halted ? { halted: true as const } : {}),
                       ...(revisionGuidance === undefined ? {} : { revisionGuidance }),
-                      ready: !pr.isDraft,
+                      ready,
                     };
                 }
                 return { state: 'malformed' as const };
@@ -1331,15 +1463,32 @@ export function createProductionFinishPublicationCoordinator(
             if (!state.pr_url) throw new Error('missing PR identity');
             const prOperations = await retainedOperations(state.pr_url);
             if (!state.feature_desc) throw new Error('missing stack publication identity');
-            await readyStackChildren({
-              root: deps.projectRoot,
-              slug: state.feature_desc,
-              leafUrl: state.pr_url,
-              template: deps.prTemplateBytes,
-              git: publicationRecordGit(deps.git, deps.projectRoot),
-              gh: deps.gh,
-              operations: prOperations,
-            });
+            const leaf = repositoryAndNumber(state.pr_url);
+            if (!leaf) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'retained leaf URL is invalid');
+            const stackGit = publicationRecordGit(deps.git, deps.projectRoot);
+            const publicationRecord = await activePublicationRecord(deps.projectRoot, state.feature_desc, { git: stackGit });
+            if (publicationRecord?.record.stack?.verified === true) {
+              if (!prOperations) {
+                throw new StackPublicationHaltError('stack_publication_precondition_failed', 'stack leaf ready boundary unavailable');
+              }
+              const leafMember = publicationRecord.record.members.at(-1);
+              if (!leafMember || leafMember.pr !== leaf.number) {
+                throw new StackPublicationHaltError('stack_publication_precondition_failed', 'stack publication record has no retained leaf tail');
+              }
+              await verifyStackBeforeReadyFlip({
+                root: deps.projectRoot,
+                slug: state.feature_desc,
+                leaf,
+                git: stackGit,
+                gh: deps.gh,
+                operations: prOperations,
+                events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
+                position: leafMember.position,
+              });
+            }
+            // The leaf retains the existing presentation repair, including its
+            // release metadata and risk projections. Child-only work begins
+            // only after that leaf flip has completed.
             await projectAcceptedRiskToRetainedPr(state.pr_url, prOperations);
             if (deps.repairPresentation) {
               await deps.repairPresentation({ prUrl: state.pr_url, state });
@@ -1351,6 +1500,17 @@ export function createProductionFinishPublicationCoordinator(
               });
               if (!mutation.ok) throw new Error(mutation.message);
             }
+            await readyStackChildren({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              leafUrl: state.pr_url,
+              template: deps.prTemplateBytes,
+              git: stackGit,
+              gh: deps.gh,
+              operations: prOperations,
+              operationsForPullRequest: async (pr) => retainedOperations(`https://github.com/${leaf.repository}/pull/${pr}`),
+              events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
+            });
             if (!state.feature_desc) throw new Error('missing shipment identity');
             await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc, prOperations);
           },
