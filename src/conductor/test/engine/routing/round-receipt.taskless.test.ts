@@ -29,6 +29,13 @@ async function fixture({ route = true }: { readonly route?: boolean } = {}) {
   await git(['config', 'user.email', 'receipt@example.test']);
   await git(['config', 'user.name', 'Receipt']);
   await writeFile(join(root, 'base.txt'), 'base\n');
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(root, '.docs', 'plans', 'demo.md'), [
+    '### Task T1: First authored task',
+    '',
+    '### Task T2: Second authored task',
+    '',
+  ].join('\n'));
   await git(['add', 'base.txt']);
   await git(['commit', '-qm', 'base']);
   if (route) {
@@ -50,9 +57,9 @@ async function admit(root: string, git: ReturnType<typeof makeGitRunner>) {
 
 describe('taskless routed admission receipts', () => {
   it.each([
-    ['manual_test'],
-    ['custom-step'],
-  ])('halts %s admission before creating routing refs when no receipt supplies a sealed denominator', async (kind) => {
+    ['manual_test', { taskless: { manual_test: 1 } }],
+    ['custom-step', { echo: { 'lint-docs': 1 } }],
+  ])('seals the authored denominator for first-round %s admission', async (kind, receipt) => {
     const subject = await fixture({ route: false });
     await mkdir(join(subject.root, '.pipeline', 'children', '1'), { recursive: true });
     await writeFile(join(subject.root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
@@ -83,11 +90,12 @@ describe('taskless routed admission receipts', () => {
     const admission = kind === 'manual_test'
       ? (conductor as any).admitRoutedManualTestKickback(state, 'manual-test evidence')
       : (conductor as any).admitRoutedCustomStepKickback(state, 'lint-docs', 1);
-    await expect(admission).resolves.toMatchObject({ kind: 'halted', reason: expect.stringMatching(/no sealed authored denominator in a route receipt/) });
+    await expect(admission).resolves.toEqual({ kind: 'admitted' });
 
-    const refs = await subject.git(['show-ref']);
-    expect(refs.stdout).not.toContain('refs/conductor/demo/routes/');
-    expect(refs.stdout).not.toContain('refs/conductor/demo/repairing');
+    await expect(readRouteRecord(subject.root, 'demo', roundId, { git: subject.git })).resolves.toMatchObject({
+      kind: 'record',
+      record: { sealedAuthored: 2, receipt },
+    });
   });
 
   it('persists a complete unsettled manual_test charge before admitting the routed FAIL', async () => {

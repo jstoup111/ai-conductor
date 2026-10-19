@@ -15071,7 +15071,17 @@ export class Conductor {
       return { kind: 'halted', reason: `routing round ${roundId} sealed authored denominator is unreadable: ${error instanceof Error ? error.message : String(error)}` };
     }
     if (sealedAuthored === undefined) {
-      return { kind: 'halted', reason: `routing round ${roundId} has no sealed authored denominator in a route receipt` };
+      let planText: string;
+      try {
+        const planPath = await resolveFeaturePlanPath(this.projectRoot, slug);
+        if (planPath === undefined) {
+          return { kind: 'halted', reason: `routing round ${roundId} has no authored plan from which to seal its authored denominator` };
+        }
+        planText = await readFile(planPath, 'utf8');
+      } catch (error) {
+        return { kind: 'halted', reason: `routing round ${roundId} authored plan is unreadable for sealed denominator: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      sealedAuthored = countAuthoredTaskHeadings(planText);
     }
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
