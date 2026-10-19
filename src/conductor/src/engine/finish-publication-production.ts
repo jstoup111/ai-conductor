@@ -29,6 +29,7 @@ import {
   verifyChildChain,
 } from './stack-publication.js';
 import { activePublicationRecord, writePublicationRecord } from './stack-publication-record.js';
+import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { checkChildBodyPostconditions, renderChildBody } from './stack-member-body.js';
 import { gateSatisfied } from './selector.js';
@@ -211,6 +212,100 @@ type ChildPullRequest = {
 function repositoryAndNumber(prUrl: string): { repository: string; number: number } | undefined {
   const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
   return match === null ? undefined : { repository: match[1]!, number: Number(match[2]) };
+}
+
+type PullRequestBase = { readonly baseRefName?: unknown };
+
+/**
+ * Retarget the retained leaf only after recording the intended move.  The
+ * durable record is the receipt for an interrupted GitHub mutation: every
+ * retry reads the PR before it writes, so a base that already reached the
+ * child is observed rather than retargeted a second time.
+ *
+ * Stack creation deliberately does not live here yet.  It follows this
+ * journaled phase and can rely on the leaf's recorded, observed base.
+ */
+export async function assembleStack(input: {
+  root: string;
+  slug: string;
+  leafUrl: string;
+  baseBranch: string;
+  git: PublicationRecordGitRunner;
+  gh: GhRunner;
+  operations?: GithubOperationRunner;
+}): Promise<void> {
+  const leaf = repositoryAndNumber(input.leafUrl);
+  if (!leaf || !input.operations) throw new Error('stack leaf retarget boundary unavailable');
+
+  const readLeafBase = async (): Promise<string> => {
+    const stdout = await runTrackerRepositoryRead(
+      input.gh,
+      input.root,
+      'pull-request.read',
+      leaf.repository,
+      { kind: 'pull-request', number: leaf.number },
+      ['pr', 'view', String(leaf.number), '-R', leaf.repository, '--json', 'baseRefName'],
+    );
+    const parsed: unknown = JSON.parse(stdout);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('retained leaf pull request is unreadable');
+    const base = (parsed as PullRequestBase).baseRefName;
+    if (typeof base !== 'string' || base.length === 0) throw new Error('retained leaf pull request base is unreadable');
+    return base;
+  };
+
+  // Always observe before consulting the journal.  In particular, a crash
+  // after GitHub accepted the retarget but before our observed CAS must never
+  // repeat the mutation.
+  const actualBase = await readLeafBase();
+  let stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  if (!stored) throw new Error('stack publication record is missing');
+
+  const leafIndex = stored.record.members.findIndex((member) => member.pr === leaf.number);
+  if (leafIndex < 1 || leafIndex !== stored.record.members.length - 1) {
+    throw new Error('stack publication record has no retained leaf tail');
+  }
+  const topChild = stored.record.members[leafIndex - 1]!;
+  const existing = stored.record.retarget;
+  if (existing && (existing.from !== input.baseBranch || existing.to !== topChild.branch)) {
+    throw new Error('stack publication retarget journal diverged');
+  }
+
+  const writePhase = async (phase: 'intended' | 'observed'): Promise<void> => {
+    const write = await writePublicationRecord(input.root, input.slug, stored, {
+      ...stored.record,
+      retarget: { from: input.baseBranch, to: topChild.branch, phase },
+    }, { git: input.git });
+    if (write.kind !== 'updated') throw new Error(`could not record stack leaf retarget as ${phase}`);
+    stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+    if (!stored) throw new Error('written stack publication record is unreadable');
+  };
+
+  if (actualBase === topChild.branch) {
+    if (stored.record.retarget?.phase !== 'observed') await writePhase('observed');
+    return;
+  }
+
+  if (actualBase !== input.baseBranch) {
+    throw new Error(`retained leaf pull request base diverged: expected ${input.baseBranch} or ${topChild.branch}, got ${actualBase}`);
+  }
+
+  if (stored.record.retarget === undefined) await writePhase('intended');
+  if (stored.record.retarget?.phase === 'observed') {
+    throw new Error('observed stack leaf retarget does not match the retained leaf base');
+  }
+
+  const retarget = await executeGithubOperation({
+    operation: 'pull-request.retarget',
+    repository: leaf.repository,
+    resource: { kind: 'pull-request', number: leaf.number },
+    context: { actor: 'finish-publication' },
+    payload: { base: topChild.branch },
+  }, input.operations);
+  if (retarget.kind !== 'executed') throw new Error('could not retarget retained leaf pull request');
+
+  const observedBase = await readLeafBase();
+  if (observedBase !== topChild.branch) throw new Error('retained leaf retarget was not observed');
+  await writePhase('observed');
 }
 
 /**
