@@ -138,7 +138,7 @@ async function publicationTransitionDimension(transition: PublicationTransition)
 }
 
 type AdvancedPublicationTransition = (
-  emit: undefined,
+  emit: ((event: unknown) => void) | undefined,
   transition: PublicationTransition,
   before: PublicationSnapshot,
   after: PublicationSnapshot,
@@ -151,6 +151,7 @@ async function advancedPublicationTransition(
   transition: PublicationTransition,
   before: PublicationSnapshot,
   after: PublicationSnapshot,
+  emit?: (event: unknown) => void,
 ) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
   const advance = mod.advancedPublicationTransition;
@@ -159,7 +160,7 @@ async function advancedPublicationTransition(
       'expected export "advancedPublicationTransition" to compare pre- and post-effect publication observations (not yet implemented)',
     );
   }
-  return (advance as AdvancedPublicationTransition)(undefined, transition, before, after);
+  return (advance as AdvancedPublicationTransition)(emit, transition, before, after);
 }
 
 type PublicationCondition =
@@ -332,6 +333,17 @@ function readyPublicationSnapshot(
     ...overrides,
     pr: overrides.pr ?? base.pr,
   } as PublicationSnapshot;
+}
+
+async function publicationProgressAllowance(snapshot: PublicationSnapshot): Promise<number> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const allowance = mod.publicationProgressAllowance;
+  if (typeof allowance !== 'function') {
+    throw new Error(
+      'expected export "publicationProgressAllowance" to calculate the per-feature FINISH allowance (not yet implemented)',
+    );
+  }
+  return (allowance as (input: PublicationSnapshot) => number)(snapshot);
 }
 
 function observerPorts(overrides: Partial<{
@@ -694,6 +706,84 @@ describe('finish-publication domain types', () => {
     ) => typeof expected;
 
     expect(nextFinishPublicationTransition(snapshot)).toBe(expected);
+  });
+
+  it('inserts stack publication transitions before readiness for a stacked snapshot', async () => {
+    const module = await import('../../src/engine/finish-publication.js');
+    const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (
+      snapshot: PublicationSnapshot,
+    ) => PublicationTransition;
+    const acceptedDraft = {
+      identity: 'one' as const,
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'accepted' as const,
+      ready: false,
+    };
+
+    expect(nextFinishPublicationTransition({
+      ...readyPublicationSnapshot({ pr: acceptedDraft }),
+      stack: 'members-missing',
+    } as PublicationSnapshot)).toBe('establish_child_prs');
+    expect(nextFinishPublicationTransition({
+      ...readyPublicationSnapshot({ pr: acceptedDraft }),
+      stack: 'unassembled',
+    } as PublicationSnapshot)).toBe('assemble_stack');
+    expect(nextFinishPublicationTransition({
+      ...readyPublicationSnapshot({ pr: acceptedDraft }),
+      stack: 'valid',
+    } as PublicationSnapshot)).toBe('ready_pr');
+  });
+
+  it('preserves the N=1 seven-transition selection sequence and its allowance', async () => {
+    const module = await import('../../src/engine/finish-publication.js');
+    const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (
+      snapshot: PublicationSnapshot,
+    ) => PublicationTransition;
+    const accepted = {
+      identity: 'one' as const,
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'accepted' as const,
+      ready: false,
+    };
+
+    const transitions = [
+      nextFinishPublicationTransition(readyPublicationSnapshot({ pr: { identity: 'none' } })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({ releaseReadiness: 'missing' })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        pr: { ...accepted, prose: 'placeholder' },
+      })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        pr: { ...accepted, prose: 'stale' },
+      })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        shippedRecord: 'missing',
+        pr: { ...accepted, ready: true },
+      })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({ pr: accepted })),
+      nextFinishPublicationTransition(readyPublicationSnapshot({
+        pr: { ...accepted, ready: true },
+      })),
+    ];
+
+    expect(transitions).toEqual([
+      'establish_pr',
+      'verify_release_readiness',
+      'author_pr_prose',
+      'judge_pr_prose',
+      'write_shipped_record',
+      'ready_pr',
+      'record_outcome',
+    ]);
+    expect(transitions).not.toContain('establish_child_prs');
+    expect(transitions).not.toContain('assemble_stack');
+    await expect(publicationProgressAllowance(readyPublicationSnapshot())).resolves.toBe(2 * 7);
+  });
+
+  it('doubles the nine stacked publication transitions for its allowance', async () => {
+    await expect(publicationProgressAllowance({
+      ...readyPublicationSnapshot(),
+      stack: 'members-missing',
+    } as PublicationSnapshot)).resolves.toBe(2 * 9);
   });
 
   it('routes revision-required prose to authoring without constructing a judgment request', async () => {
@@ -1345,6 +1435,17 @@ describe('advancedPublicationTransition', () => {
       }),
     ],
     [
+      'establish_child_prs',
+      {
+        ...readyPublicationSnapshot(),
+        stack: 'members-missing',
+      } as PublicationSnapshot,
+      {
+        ...readyPublicationSnapshot(),
+        stack: 'unassembled',
+      } as PublicationSnapshot,
+    ],
+    [
       'ready_pr',
       readyPublicationSnapshot({
         pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
@@ -1393,6 +1494,53 @@ describe('advancedPublicationTransition', () => {
         }),
       ),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+  });
+
+  it('emits only the seven N=1 publication transitions and no stack event', async () => {
+    const events: unknown[] = [];
+    const acceptedDraft = {
+      identity: 'one' as const,
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'accepted' as const,
+      ready: false,
+    };
+    const transitions = [
+      ['establish_pr',
+        readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }),
+        readyPublicationSnapshot({ pr: acceptedDraft, branchPushed: 'valid' })],
+      ['verify_release_readiness',
+        readyPublicationSnapshot({ releaseReadiness: 'missing' }),
+        readyPublicationSnapshot()],
+      ['author_pr_prose',
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, prose: 'placeholder' } }),
+        readyPublicationSnapshot({ pr: acceptedDraft })],
+      ['judge_pr_prose',
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, prose: 'stale' } }),
+        readyPublicationSnapshot({ pr: acceptedDraft })],
+      ['write_shipped_record',
+        readyPublicationSnapshot({ shippedRecord: 'missing' }),
+        readyPublicationSnapshot()],
+      ['ready_pr',
+        readyPublicationSnapshot({ pr: acceptedDraft }),
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, ready: true } })],
+      ['record_outcome',
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, ready: true } }),
+        readyPublicationSnapshot({ pr: { ...acceptedDraft, ready: true }, outcomeRecord: 'valid' })],
+    ] as const satisfies readonly [PublicationTransition, PublicationSnapshot, PublicationSnapshot][];
+
+    for (const [transition, before, after] of transitions) {
+      await expect(advancedPublicationTransition(transition, before, after, (event) => {
+        events.push(event);
+      })).resolves.toEqual({ kind: 'advanced', transition });
+    }
+
+    expect(events).toEqual(transitions.map(([transition]) => ({
+      type: 'finish_publication_transition', phase: 'completed', transition,
+    })));
+    expect(events.filter((event) => (
+      typeof event === 'object' && event !== null &&
+      'type' in event && typeof event.type === 'string' && event.type.startsWith('stack_')
+    ))).toHaveLength(0);
   });
 
   it('exhausts the existing FINISH retry budget for repeated indeterminate post-effect observations', async () => {

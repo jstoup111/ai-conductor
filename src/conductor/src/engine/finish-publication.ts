@@ -7,6 +7,7 @@ import type {
   FinishPublicationTransition,
 } from '../types/events.js';
 import { isRegionRestoreError } from './region-restore-error.js';
+import type { StackDimension } from './stack-publication.js';
 
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
@@ -84,6 +85,8 @@ type PublicationEvidence = {
   branchPushed: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   shippedRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   outcomeRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
+  /** Stack state is absent until the production observer is wired. */
+  stack?: StackDimension;
   pr: PublicationPullRequest;
 };
 
@@ -425,6 +428,11 @@ export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions 
  */
 export const FINISH_PUBLICATION_PROGRESS_ALLOWANCE = 2 * 7;
 
+/** The bounded progress budget is derived from the selected feature shape. */
+export function publicationProgressAllowance(snapshot: PublicationSnapshot): number {
+  return 2 * (stackDimension(snapshot) === 'not-applicable' ? 7 : 9);
+}
+
 type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise<void>;
 
 /**
@@ -444,6 +452,10 @@ export function nextFinishPublicationTransition(
 
   if (snapshot.pr.identity !== 'one' || snapshot.branchPushed !== 'valid') {
     return 'establish_pr';
+  }
+
+  if (stackDimension(snapshot) === 'members-missing') {
+    return 'establish_child_prs';
   }
 
   if (snapshot.releaseReadiness !== 'valid') {
@@ -471,6 +483,10 @@ export function nextFinishPublicationTransition(
   // re-dispatched to fix the prose the halt was asking a human about.
   if (snapshot.shippedRecord !== 'valid') {
     return 'write_shipped_record';
+  }
+
+  if (stackDimension(snapshot) !== 'not-applicable' && stackDimension(snapshot) !== 'valid') {
+    return 'assemble_stack';
   }
 
   if (!snapshot.pr.ready) {
@@ -1518,6 +1534,7 @@ function hasIndeterminatePublicationEvidence(snapshot: PublicationSnapshot): boo
     snapshot.branchPushed === 'indeterminate' ||
     snapshot.shippedRecord === 'indeterminate' ||
     snapshot.outcomeRecord === 'indeterminate' ||
+    stackDimension(snapshot) === 'indeterminate' ||
     snapshot.pr.identity === 'indeterminate' ||
     (snapshot.pr.identity === 'one' && snapshot.pr.prose === 'indeterminate');
 }
@@ -1629,14 +1646,17 @@ function publicationTransitionDimensionValue(
     case 'shippedRecord':
       return snapshot.shippedRecord === 'indeterminate' ? undefined : snapshot.shippedRecord;
     // Task 5 introduces the authoritative stack observation. These transitions
-    // are not selectable until then, so the interim value must not claim movement.
     case 'stack':
-      return undefined;
+      return stackDimension(snapshot) === 'indeterminate' ? undefined : stackDimension(snapshot);
     case 'pr.ready':
       return publicationPrReady(snapshot);
     case 'outcomeRecord':
       return snapshot.outcomeRecord === 'indeterminate' ? undefined : snapshot.outcomeRecord;
   }
+}
+
+function stackDimension(snapshot: PublicationSnapshot): StackDimension {
+  return snapshot.stack ?? 'not-applicable';
 }
 
 function publicationPrProse(snapshot: PublicationSnapshot):

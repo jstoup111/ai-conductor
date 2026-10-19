@@ -70,6 +70,7 @@ export interface PullRequestEvidenceMetadata {
   url: string;
   body: string;
   changedPaths: string[];
+  headRef: string;
   headRefOid: string;
 }
 
@@ -141,6 +142,7 @@ export async function dispatchShipmentEvidence(
     const association = classifyShipmentAssociation({
       planStems,
       pr: {
+        headRef: metadata.headRef,
         metadataPlanStems: cmd.kind === 'check'
           ? extractShipmentPlanDeclarations(metadata.body)
           : extractPlanStems(metadata.body),
@@ -706,6 +708,7 @@ async function readPullRequestEvidenceMetadata(
         return typeof path === 'string' ? [path] : [];
       })
       : [],
+    headRef: '',
     headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : '',
   };
 }
@@ -731,13 +734,17 @@ async function readPullRequestEventMetadata(
       html_url?: unknown;
       body?: unknown;
       base?: { sha?: unknown };
-      head?: { sha?: unknown };
+      head?: { ref?: unknown; sha?: unknown };
     };
   };
   const pullRequest = event.pull_request;
   const url = typeof pullRequest?.html_url === 'string' ? pullRequest.html_url : '';
   const baseSha = typeof pullRequest?.base?.sha === 'string' ? pullRequest.base.sha : '';
+  const headRef = typeof pullRequest?.head?.ref === 'string' ? pullRequest.head.ref : '';
   const headRefOid = typeof pullRequest?.head?.sha === 'string' ? pullRequest.head.sha : '';
+  if (!headRef) {
+    throw new Error(`pull-request event lacks head ref: ${eventPath}`);
+  }
   if (!url || !baseSha || !headRefOid) {
     throw new Error(`pull-request event lacks URL or commit identity: ${eventPath}`);
   }
@@ -748,6 +755,7 @@ async function readPullRequestEventMetadata(
     url,
     body: typeof pullRequest?.body === 'string' ? pullRequest.body : '',
     changedPaths,
+    headRef,
     headRefOid,
   };
 }
