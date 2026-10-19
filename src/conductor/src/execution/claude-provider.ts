@@ -40,16 +40,10 @@ import {
 import { validateSpawnPermit } from './spawn-permit.js';
 import { providerDescriptor } from './provider-catalog.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 function claudeDisplayName(): string {
   return providerDescriptor('claude').displayName;
-}
-
-// The catalog constructs adapters, while the guard reaches routing state. Keep
-// that guard behind the actual dispatch boundary so catalog loading stays pure.
-async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
-  const guard = await import('../engine/git-guard.js');
-  return guard.ensureGitGuardForDispatch(cwd);
 }
 
 function abortedInvocationResult(): InvokeResult {

@@ -25,6 +25,7 @@ import { withholdCost } from './token-usage.js';
 import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 export type PiSubprocessFactory = (
   file: string,
@@ -61,13 +62,6 @@ const defaultPiEnvironment: PiEnvironment = {
   homeDir: homedir,
   cwd: process.cwd,
 };
-
-// The catalog constructs adapters, while the guard reaches routing state. Keep
-// that guard behind the actual dispatch boundary so catalog loading stays pure.
-async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
-  const guard = await import('../engine/git-guard.js');
-  return guard.ensureGitGuardForDispatch(cwd);
-}
 
 async function isFile(path: string, environment: PiEnvironment): Promise<boolean> {
   try {

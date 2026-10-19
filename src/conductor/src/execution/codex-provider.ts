@@ -40,16 +40,10 @@ import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schem
 import { ProviderStreamAssembler } from './provider-stream.js';
 import { providerDescriptor } from './provider-catalog.js';
 import { buildCodexReadOnlyProducerRootPolicyArgs } from '../engine/build-review-read-only-capability.js';
+import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
 
 function codexDisplayName(): string {
   return providerDescriptor('codex').displayName;
-}
-
-// The catalog constructs adapters, while the guard reaches routing state. Keep
-// that guard behind the actual dispatch boundary so catalog loading stays pure.
-async function ensureGitGuardForDispatch(cwd: string | undefined): Promise<string | null> {
-  const guard = await import('../engine/git-guard.js');
-  return guard.ensureGitGuardForDispatch(cwd);
 }
 
 function abortedInvocationResult(): InvokeResult {
