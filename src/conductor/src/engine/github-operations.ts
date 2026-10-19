@@ -293,7 +293,9 @@ export const GITHUB_OPERATION_REGISTRY = {
   // its initial lookup and creation at repository scope.  These operations
   // therefore need the same committed-owner decision as the member writes;
   // the publication-record validator binds their payload before transport.
-  'stack.read': { access: 'feature-write', targetKinds: ['repository'], payload: 'stack-read' },
+  // Once a native stack exists, callers bind its read to the stack number
+  // rather than widening back to repository authority.
+  'stack.read': { access: 'feature-write', targetKinds: ['repository', 'stack'], payload: 'stack-read' },
   'stack.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'stack-members' },
   'stack.add': { access: 'feature-write', targetKinds: ['stack'], payload: 'stack-members' },
   'label-definition.create': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
