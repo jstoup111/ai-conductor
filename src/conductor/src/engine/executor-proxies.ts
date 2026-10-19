@@ -7,6 +7,7 @@ export interface ExecutorIpcPort {
   send(message: unknown): boolean | void;
   on(event: 'message' | 'disconnect', listener: (message?: unknown) => void): unknown;
   off?(event: 'message' | 'disconnect', listener: (message?: unknown) => void): unknown;
+  disconnect?(): void;
   connected?: boolean;
 }
 
@@ -46,8 +47,9 @@ export function createExecutorRequestClient(port: ExecutorIpcPort): ExecutorRequ
       for (const listener of stateListeners) listener(message as State);
     }
   };
+  const onDisconnect = () => rejectPending(new Error('executor supervisor channel disconnected'));
   port.on('message', onMessage);
-  port.on('disconnect', () => rejectPending(new Error('executor supervisor channel disconnected')));
+  port.on('disconnect', onDisconnect);
   return {
     request(method, params, signal) {
       if (closed) return Promise.reject(closed);
@@ -63,7 +65,11 @@ export function createExecutorRequestClient(port: ExecutorIpcPort): ExecutorRequ
         port.send({ kind: 'request', requestId, method, params });
       });
     },
-    close(reason = 'executor request client closed') { rejectPending(new Error(reason)); },
+    close(reason = 'executor request client closed') {
+      rejectPending(new Error(reason));
+      port.off?.('message', onMessage);
+      port.off?.('disconnect', onDisconnect);
+    },
     onState(listener) { stateListeners.add(listener); },
   };
 }

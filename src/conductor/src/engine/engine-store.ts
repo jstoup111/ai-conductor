@@ -30,7 +30,7 @@
 // than a plain "file absent"), aborts the entire GC pass with zero
 // deletions — prefer never deleting over deleting on incomplete information.
 
-import { readdir, lstat, readlink, readFile, symlink, rename, unlink, rm } from 'node:fs/promises';
+import { readdir, lstat, readlink, realpath, readFile, symlink, rename, unlink, rm } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { join, basename, dirname, relative } from 'node:path';
 import { readRegistry, resolveRegistryPath, type ProjectRecord } from './registry.js';
@@ -218,6 +218,14 @@ export async function currentTarget(conductorRoot: string): Promise<EngineVersio
   let target: string;
   try {
     target = await readlink(distPath);
+  } catch {
+    return undefined;
+  }
+
+  // A basename alone is not authority: a dangling `dist` link can retain a
+  // syntactically valid version id after its directory has been collected.
+  try {
+    await realpath(distPath);
   } catch {
     return undefined;
   }

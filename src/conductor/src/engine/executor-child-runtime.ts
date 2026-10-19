@@ -154,7 +154,25 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     await beginShutdown();
     return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
   }
+  // A park can arrive through the root marker between conductor admissions;
+  // it is semantically distinct from a gate halt even though neither has a
+  // PR URL. Preserve it for supervisor collection and future unpark.
+  if (await isOperatorParked(projectRoot, order.slug)) {
+    return { slug: order.slug, status: 'parked', reason: 'operator parked' };
+  }
   const state = await readState(stateFilePath);
-  if (state.ok && state.value.pr_url) return { slug: order.slug, status: 'done', prUrl: state.value.pr_url };
-  return { slug: order.slug, status: 'halted' };
+  // Root-owned effects travel back as declarative terminal effects and are
+  // applied by daemon collection, exactly as in-process deferred execution.
+  // The child must never write root ledgers or watch state itself.
+  if (state.ok && state.value.pr_url) {
+    return {
+      slug: order.slug, status: 'done', prUrl: state.value.pr_url,
+      terminalEffects: {
+        markProcessed: { prUrl: state.value.pr_url },
+        enrollWatch: { prUrl: state.value.pr_url },
+        sweep: true,
+      },
+    };
+  }
+  return { slug: order.slug, status: 'halted', terminalEffects: { sweep: true } };
 }

@@ -660,7 +660,9 @@ describe('engine/daemon-observe-cli', () => {
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
       // One status line plus capability, GATED, BLOCKED, and SHIPPED PRS section lines per repo
       // repo whose path exists (path-missing repos skip snapshot reads entirely).
-      expect(out.length).toBe(11);
+      // Each live supervisor now has an explicit engine row in addition to
+      // its status line, so a stale version can be compared to current.
+      expect(out.length).toBe(13);
     });
 
     it('prints a friendly message for an empty registry', async () => {

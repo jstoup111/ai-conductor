@@ -10,6 +10,8 @@ export interface ProviderAvailability {
 
   /** Returns whether a provider may be invoked at the injected current time. */
   isAvailable(provider: string): boolean;
+  /** Current authoritative suppression windows, for child-process replicas. */
+  snapshot?(): Record<string, number>;
 }
 
 interface SuppressionWindow {
@@ -86,6 +88,16 @@ export function createProviderAvailability({
       // a later exhaustion cycle and no operator-triggered clearing is needed.
       suppressedUntil.delete(provider);
       return true;
+    },
+    snapshot(): Record<string, number> {
+      const currentMs = now();
+      const result: Record<string, number> = {};
+      for (const [provider, window] of suppressedUntil) {
+        if (currentMs >= window.openedAtMs && currentMs < Math.min(window.untilMs, window.openedAtMs + MAX_PROVIDER_SUPPRESSION_MS)) {
+          result[provider] = window.untilMs;
+        }
+      }
+      return result;
     },
   };
 }

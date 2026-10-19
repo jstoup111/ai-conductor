@@ -21,7 +21,7 @@ export interface ChildFeatureExecutorDeps {
   engineDirForOrder: (order: WorkOrder, useSupervisorBuild: boolean) => string;
   supervisorEngineVersionId: string;
   rootEvents: ConductorEventEmitter;
-  attachBroker: (slug: string, port: ExecutorIpcPort) => ExecutorBrokerAttachment;
+  attachBroker: (slug: string, port: ExecutorIpcPort, engineVersionId?: string) => ExecutorBrokerAttachment;
   fork?: (modulePath: string, args: string[], options: { silent: true; execArgv?: string[] }) => ForkedExecutor;
   dispatchStartTimeoutMs?: number;
   teardownTimeoutMs?: number;
@@ -62,7 +62,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     };
     const modulePath = join(engineDir, 'index.js');
     const child = fork(modulePath, ['executor-child'], { silent: true });
-    const attachment = deps.attachBroker(order.slug, child);
+    const attachment = deps.attachBroker(order.slug, child, launchedOrder.engineVersionId);
     const entry: RunningChild = { child, order: launchedOrder, attachment };
     running.add(entry);
     // Publish the pin immediately after fork, before waiting for the child's
@@ -85,10 +85,20 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     let protocolMismatchEvent: Promise<void> | undefined;
     let workOrderSent = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let terminationTimer: ReturnType<typeof setTimeout> | undefined;
+    const requestTermination = () => {
+      child.kill('SIGTERM');
+      // SIGTERM is cooperative. Never wait indefinitely for a wedged child
+      // before releasing its durable record and admitting a successor.
+      terminationTimer ??= setTimeout(() => {
+        if (!ended) child.kill('SIGKILL');
+      }, teardownTimeoutMs);
+    };
     const finish = async (result: FeatureExecutionOutcome): Promise<FeatureExecutionOutcome> => {
       if (ended) return outcome ?? result;
       ended = true; outcome = result;
       if (timer) clearTimeout(timer);
+      if (terminationTimer) clearTimeout(terminationTimer);
       attachment.close(); running.delete(entry);
       // A record write started at fork may complete after an early child exit.
       // Serialize removal after it so records only disappear following the
@@ -120,13 +130,13 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         reason,
         restartRequested,
       });
-      child.kill('SIGTERM');
+      requestTermination();
     };
     timer = setTimeout(() => {
       if (handshake === undefined) {
         handshake = 'missing';
         handshakeFailure = 'executor missing startup handshake';
-        child.kill('SIGTERM');
+        requestTermination();
       }
     }, startTimeoutMs);
     child.on('message', (raw?: unknown) => {
@@ -168,7 +178,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         outcome = message.outcome;
         // The child may stay connected due to a leaked handle. Preserve its
         // terminal result but bound the supervisor resource lifetime.
-        void delay(teardownTimeoutMs).then(() => { if (!ended) child.kill('SIGTERM'); });
+        void delay(teardownTimeoutMs).then(() => { if (!ended) requestTermination(); });
       }
     });
     const result = await done;

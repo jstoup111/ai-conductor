@@ -1866,6 +1866,32 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       stop,
     };
   };
+  // Child feature events arrive on a proxy bus rather than beginFeatureRun's
+  // in-process bus. Attach the same visualizer there, but use the immutable
+  // WorkOrder pin rather than this supervisor's loaded engine version.
+  const attachChildFeatureOtelVisualizer = (
+    slug: string,
+    engineVersionId: string,
+    featureEvents: ConductorEventEmitter,
+  ): (() => void) => {
+    const visualizer = daemonOtel?.spoolRuntime
+      ? wireOtelVisualizer(config ?? {}, {
+          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
+          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
+          metrics: false, harnessVersion: 'unknown',
+        }, featureEvents, daemonOtel.spoolRuntime)
+      : wireOtelVisualizer(config ?? {}, {
+          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
+          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
+          metrics: false, harnessVersion: 'unknown',
+        }, featureEvents);
+    if (visualizer) activeDispatchVisualizers.add(visualizer);
+    return () => {
+      if (!visualizer) return;
+      activeDispatchVisualizers.delete(visualizer);
+      void visualizer.stop();
+    };
+  };
   // Resolve the active memory provider once at run start so all steps see the
   // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
   // bounded and no module-level state is mutated (resolver is pure over config).
@@ -2337,6 +2363,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     rootEvents: events,
     featureLogFor,
     attachFeatureEventRenderer,
+    attachFeatureOtelVisualizer: attachChildFeatureOtelVisualizer,
     log,
   });
   const childExecutor = createChildProcessFeatureExecutor({
@@ -2877,7 +2904,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             recordEngineSourceRefresh = () => throttle.markRan();
             const warner = createStalenessWarner(log);
             return async (refreshOpts?: { force?: boolean }) => {
-              if (!refreshOpts?.force && !throttle.shouldRun()) return;
+              // This outcome gates the entire maintenance sequence in
+              // runDaemon. Returning undefined looked like a successful
+              // refresh and rebuilt on every idle poll inside the interval.
+              if (!refreshOpts?.force && !throttle.shouldRun()) return { status: 'skipped' as const };
               throttle.markRan();
               const outcome = await coordinatedRootMutation(
                 () => fastForwardRoot(projectRoot, log),

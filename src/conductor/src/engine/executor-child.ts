@@ -145,5 +145,8 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
     };
     port.on('message', receive);
   });
+  // The work order has one terminal response. Leaving IPC open retains the
+  // child and its broker listeners after a completed feature.
+  port.disconnect?.();
   deps.exit?.(0);
 }

@@ -90,19 +90,20 @@ describe('executor reference records', () => {
     await expect(listExecutorRecords(repoRoot)).resolves.toEqual([]);
   });
 
-  it('retains a matching live record until the terminated executor is confirmed dead', async () => {
+  it('escalates successor takeover and refuses scheduling while a predecessor survives', async () => {
     await writeExecutorRecord(repoRoot, 'slow-exit', executorRecord(404));
     const isPidAlive = vi.fn(() => true);
     const kill = vi.fn(async () => {});
 
-    await sweepExecutorRecordsOnBoot(repoRoot, {
+    await expect(sweepExecutorRecordsOnBoot(repoRoot, {
       isPidAlive,
       readCommandLine: async () => `node ${engineDir}/index.js executor-child`,
       kill,
-    });
+      wait: async () => {},
+    })).rejects.toThrow(/survived successor takeover/);
 
     expect(kill).toHaveBeenCalledWith(404, 'SIGTERM');
-    expect(isPidAlive).toHaveBeenCalledTimes(2);
+    expect(kill).toHaveBeenCalledWith(404, 'SIGKILL');
     await expect(listExecutorRecords(repoRoot)).resolves.toEqual([
       { kind: 'record', slug: 'slow-exit', record: executorRecord(404) },
     ]);

@@ -30,7 +30,11 @@ export interface ExecutorRecordProcessBoundaries {
   isPidAlive(pid: number): boolean | Promise<boolean>;
   readCommandLine(pid: number): string | Promise<string>;
   kill(pid: number, signal: NodeJS.Signals): void | Promise<void>;
+  /** Injectable bounded wait so tests never sleep on a real clock. */
+  wait?(ms: number): Promise<void>;
 }
+
+const TAKEOVER_GRACE_MS = 250;
 
 function executorsDirectory(repoRoot: string): string {
   return join(repoRoot, '.daemon', EXECUTORS_DIRECTORY);
@@ -78,6 +82,7 @@ const defaultProcessBoundaries: ExecutorRecordProcessBoundaries = {
   isPidAlive: defaultIsPidAlive,
   readCommandLine: defaultReadCommandLine,
   kill: defaultKill,
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
 /** Atomically replace the named executor's current durable reference record. */
@@ -182,11 +187,19 @@ export async function sweepExecutorRecordsOnBoot(
       continue;
     }
 
-    // SIGTERM only requests exit. Keep the durable pin if the child is still
-    // alive: GC must not discard its engine build, and a later successor can
-    // retry the takeover rather than dispatching through a false absence.
-    if (!await processBoundaries.isPidAlive(entry.record.pid)) {
-      await removeExecutorRecord(repoRoot, entry.slug);
+    // A successor must not race a predecessor. Confirm its exit, escalating
+    // once after a bounded grace period; if it still survives, retain the
+    // record *and fail boot* rather than letting the scheduler overlap a slug.
+    if (await processBoundaries.isPidAlive(entry.record.pid)) {
+      await (processBoundaries.wait ?? defaultProcessBoundaries.wait!)(TAKEOVER_GRACE_MS);
     }
+    if (await processBoundaries.isPidAlive(entry.record.pid)) {
+      await processBoundaries.kill(entry.record.pid, 'SIGKILL');
+      await (processBoundaries.wait ?? defaultProcessBoundaries.wait!)(TAKEOVER_GRACE_MS);
+    }
+    if (await processBoundaries.isPidAlive(entry.record.pid)) {
+      throw new Error(`executor ${entry.slug} (pid ${entry.record.pid}) survived successor takeover`);
+    }
+    await removeExecutorRecord(repoRoot, entry.slug);
   }
 }

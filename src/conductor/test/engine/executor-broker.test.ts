@@ -80,6 +80,19 @@ function brokerFixture() {
 }
 
 describe('executor broker', () => {
+  it('replays authoritative state after hello for the production attach ordering', () => {
+    const fixture = brokerFixture();
+    fixture.episode.enter(2_000);
+    const channel = pair();
+    // attach occurs at fork, before child composition registers a subscriber.
+    fixture.broker.attach('late', channel.supervisor);
+    channel.flush();
+    const proxy = createRateLimitEpisodeProxy(createExecutorRequestClient(channel.child), () => 1_000);
+    channel.child.send({ kind: 'hello', protocolVersion: 1, engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' });
+    channel.flush();
+    expect(proxy.active()).toBe(true);
+  });
+
   it('replicates the one supervisor rate-limit episode to child synchronous views', async () => {
     const fixture = brokerFixture();
     const a = pair();

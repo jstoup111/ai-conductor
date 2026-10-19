@@ -1534,8 +1534,11 @@ export async function runDaemon(
     await maintenanceJob.settled();
     await refreshJob;
     const result = await deps.requestRestart({ fromIdentity, targetIdentity });
-    if (!result.fired && !deps.shouldStop?.() && !maintenance.isDraining()) {
+    if (!result.fired && !deps.shouldStop?.()) {
       restartPending = false;
+      // A forced drain owns the same claim gate. A failed handoff must give it
+      // back, otherwise this generation remains permanently unable to claim.
+      maintenance.endDrain();
       maintenanceJob.reopen();
     }
     return result.fired;

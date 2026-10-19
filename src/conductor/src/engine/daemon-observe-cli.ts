@@ -12,7 +12,8 @@
 // re-encode the pidfile path or write anything.
 
 import { open, readFile, stat } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
 import { tailDaemonLog, followDaemonLog, daemonLogPath } from './daemon-log.js';
@@ -52,6 +53,13 @@ import type { HarnessConfig } from '../types/config.js';
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
 const VERSION_UNKNOWN = 'version-unknown';
+const OWN_ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
+
+function installedConductorRoot(): string {
+  return basename(dirname(dirname(OWN_ENGINE_DIR))) === 'dist-versions'
+    ? dirname(dirname(dirname(OWN_ENGINE_DIR)))
+    : dirname(dirname(OWN_ENGINE_DIR));
+}
 /** Chunk size for reverse event-log scans.  Capability events are emitted at
  * startup and can be much older than ordinary daemon telemetry. */
 const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
@@ -826,10 +834,28 @@ export async function renderInFlightSection(
 
 /** Render child executor pins from their durable supervisor-owned records. */
 export async function renderExecutorVersionsSection(repoPath: string, out: (line: string) => void): Promise<void> {
-  const current = await currentTarget(join(repoPath, 'src', 'conductor')).catch(() => undefined);
+  // Status observes the installed engine which is actually running, not a
+  // source tree which consumer repositories do not possess.
+  const current = await currentTarget(installedConductorRoot()).catch(() => undefined);
+  const supervisor = await readPidRecord(repoPath).catch(() => null);
   const entries = await listExecutorRecords(repoPath).catch(() => []);
-  if (entries.length === 0) return;
+  const dispatches = await readFile(join(repoPath, '.daemon', 'events.jsonl'), 'utf8')
+    .then((content) => content.split('\n').flatMap((line) => {
+      try {
+        const event = JSON.parse(line) as { type?: unknown; slug?: unknown; engineVersionId?: unknown };
+        return event.type === 'feature_dispatch_started' && typeof event.slug === 'string'
+          ? [{ slug: event.slug, version: typeof event.engineVersionId === 'string' ? event.engineVersionId : 'unknown' }]
+          : [];
+      } catch { return []; }
+    }))
+    .catch(() => [] as Array<{ slug: string; version: string }>);
+  if (entries.length === 0 && !supervisor && dispatches.length === 0) return;
   out(`  EXECUTOR ENGINE CURRENT: ${current ?? 'unknown'}`);
+  if (supervisor) {
+    const version = versionIdFromEngineDir(supervisor.engineDir);
+    const older = current !== undefined && version !== VERSION_UNKNOWN && version !== current ? ' (older than current)' : '';
+    out(`  SUPERVISOR ENGINE: ${version}${older}`);
+  }
   for (const entry of entries) {
     if (entry.kind === 'unreadable') {
       out(`  EXECUTOR [${entry.slug}]: version unknown — record unreadable`);
@@ -838,6 +864,9 @@ export async function renderExecutorVersionsSection(repoPath: string, out: (line
     const older = current !== undefined && entry.record.engineVersionId !== current ? ' (older than current)' : '';
     out(`  EXECUTOR [${entry.slug}]: ${entry.record.engineVersionId}${older}`);
   }
+  // Legacy dispatch records predate engineVersionId. Render their absence as
+  // an explicit unknown instead of silently pretending they were current.
+  for (const dispatch of dispatches) out(`  DISPATCH [${dispatch.slug}]: engine ${dispatch.version}`);
 }
 
 /**

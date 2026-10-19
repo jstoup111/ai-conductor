@@ -160,6 +160,11 @@ export class DaemonMaintenance {
     return this.drainState;
   }
 
+  /** A failed restart handoff leaves this generation authoritative. */
+  endDrain(): void {
+    this.drainState = undefined;
+  }
+
   async startup(rekick: () => Promise<void>, sweep: () => Promise<void>): Promise<void> {
     await this.run('rekick', rekick);
     await this.run('sweep', sweep);

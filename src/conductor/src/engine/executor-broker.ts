@@ -18,6 +18,8 @@ export interface ExecutorBrokerDeps {
   featureLogFor: (slug: string) => (line: string) => void;
   /** Attaches supervisor-owned non-persistence feature subscribers. */
   attachFeatureEventRenderer?: (slug: string, events: ConductorEventEmitter) => () => void;
+  /** Child proxy-bus visualizer; its engine identity is the WorkOrder pin. */
+  attachFeatureOtelVisualizer?: (slug: string, engineVersionId: string, events: ConductorEventEmitter) => () => void;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -32,7 +34,7 @@ export interface ExecutorBrokerAttachment {
  * spine events; feature ledger persistence remains in the executor process.
  */
 export function createExecutorBroker(deps: ExecutorBrokerDeps): {
-  attach(slug: string, port: ExecutorIpcPort): ExecutorBrokerAttachment;
+  attach(slug: string, port: ExecutorIpcPort, engineVersionId?: string): ExecutorBrokerAttachment;
   abortAll(): void;
 } {
   const now = deps.now ?? (() => Date.now());
@@ -46,14 +48,19 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
     for (const port of ports) port.send({ kind: 'state', name, value });
   };
   const rateSnapshot = () => deps.rateLimitEpisode.snapshot?.() ?? ({ deadline: rateDeadline, escalationCounter });
-  const providerSnapshot = () => Object.fromEntries([...providerWindows].filter(([, until]) => until > now()));
+  // The supervisor availability service is authoritative. The local map is
+  // retained only for implementations predating snapshot(), never as a second
+  // source of truth for a newly attached child.
+  const providerSnapshot = () => deps.providerAvailability.snapshot?.()
+    ?? Object.fromEntries([...providerWindows].filter(([, until]) => until > now()));
   const broadcastState = () => { broadcast('rate-limit', rateSnapshot()); broadcast('provider', providerSnapshot()); };
 
   return {
-    attach(slug, port) {
+    attach(slug, port, engineVersionId) {
       ports.add(port);
       const windows = new Map<string, LiveBoundaryWindow>();
       const pendingRateLimitClears = new Map<string, AbortController>();
+      const pendingLiveOpens = new Set<string>();
       // A child can have one request holding the queue while another is still
       // queued behind a supervisor sweep. Track them independently: closing a
       // channel must release the holder *and* make a late queued admission a
@@ -66,6 +73,9 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       // ephemeral subscribers (currently the slug-aware daemon renderer) to
       // the proxy bus before it forwards to the root spine.
       const detachFeatureEventRenderer = deps.attachFeatureEventRenderer?.(slug, featureEvents);
+      const detachFeatureOtelVisualizer = engineVersionId === undefined
+        ? undefined
+        : deps.attachFeatureOtelVisualizer?.(slug, engineVersionId, featureEvents);
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
       const release = () => {
         for (const window of windows.values()) window.close();
@@ -75,6 +85,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       };
       const request = async (requestId: string, method: string, params: unknown) => {
         try {
+          if (closed) { respond(requestId, { error: 'executor broker closed' }); return; }
           if (method === 'rate-limit.enter') {
             const untilMs = (params as { untilMs?: unknown })?.untilMs;
             if (typeof untilMs === 'number') {
@@ -119,10 +130,12 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           }
           if (method === 'live.open') {
             if (!deps.liveBoundaryCoordinator) { respond(requestId, { ok: undefined }); return; }
+            pendingLiveOpens.add(requestId);
             const window = await deps.liveBoundaryCoordinator.openWindow({ contained: false, reason: 'executor proxy' });
             // A disconnect may occur while openWindow waits behind a root
             // mutation. Never retain the late grant: its channel is gone and
             // it would otherwise block every later mutation forever.
+            pendingLiveOpens.delete(requestId);
             if (closed) { window.close(); return; }
             const id = `${slug}-${++nextLiveBoundaryWindowId}`;
             windows.set(id, window); respond(requestId, { ok: id }); return;
@@ -168,7 +181,16 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         const parsed = parseExecutorMessage(raw);
         if (parsed.kind === 'malformed') { deps.log?.(`[executor ${slug}] malformed message: ${parsed.reason}`); return; }
         const message = parsed.message;
-        if (message.kind === 'request') void request(message.requestId, message.method, message.params);
+        if (closed) {
+          if (message.kind === 'request') void request(message.requestId, message.method, message.params);
+          return;
+        }
+        if (message.kind === 'hello') {
+          // attach happens before the forked process has registered its proxy
+          // listeners. The accepted hello is the admission point at which a
+          // snapshot can be observed synchronously by that composition.
+          broadcastState();
+        } else if (message.kind === 'request') void request(message.requestId, message.method, message.params);
         else if (message.kind === 'event') {
           // Dispatch lifecycle is supervisor-owned once per claim. Never let
           // a child replay or duplicate these root events during a relaunch.
@@ -187,6 +209,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           abort.abort();
         }
         pendingRateLimitClears.clear();
+        for (const requestId of pendingLiveOpens) respond(requestId, { error: reason });
+        pendingLiveOpens.clear();
         for (const [requestId, pending] of pendingWorktreeAcquires) {
           pending.cancelled = true;
           respond(requestId, { error: reason });
@@ -194,6 +218,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         pendingWorktreeAcquires.clear();
         release();
         detachFeatureEventRenderer?.();
+        detachFeatureOtelVisualizer?.();
         ports.delete(port);
         attachments.delete(close);
       };
