@@ -186,6 +186,10 @@ export interface PublicationObservationPorts {
   releaseReadiness: {
     observeReleaseReadiness(): Promise<ReleaseReadinessObservation>;
   };
+  /** Optional while N=1 callers retain their byte-for-byte publication path. */
+  stack?: {
+    observeStackDimension(): Promise<StackDimension>;
+  };
 }
 
 export type PublicationObservationContext =
@@ -213,6 +217,7 @@ export async function observePublicationSnapshot(
     github,
     shippedRecord,
     releaseReadiness,
+    stack,
   } = input.ports;
 
   const implementationEvidence = mapImplementationEvidence(
@@ -226,6 +231,9 @@ export async function observePublicationSnapshot(
   const readiness = mapReleaseReadiness(
     await safelyObserve(releaseReadiness.observeReleaseReadiness),
   );
+  const stackDimension = stack === undefined
+    ? undefined
+    : await safelyObserve(stack.observeStackDimension);
 
   return {
     mode: input.mode,
@@ -237,6 +245,9 @@ export async function observePublicationSnapshot(
     pr,
     shippedRecord: shipped,
     outcomeRecord,
+    ...(stackDimension === undefined || stackDimension === 'unavailable'
+      ? {}
+      : { stack: stackDimension }),
   } as PublicationSnapshot;
 }
 

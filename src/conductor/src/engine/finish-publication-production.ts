@@ -22,6 +22,7 @@ import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js'
 import { readState, replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import { readAllVerdicts, readVerdict } from './gate-verdicts.js';
 import { resolveActiveChild } from './child-cursor.js';
+import { observeStackDimension } from './stack-publication.js';
 import { gateSatisfied } from './selector.js';
 import {
   dispatchFinishRecord,
@@ -732,6 +733,24 @@ export function createProductionFinishPublicationCoordinator(
             observeReleaseReadiness: async () => {
               if (deps.observeReleaseReadiness === undefined) throw new Error('release-readiness observer unavailable');
               return deps.observeReleaseReadiness(state);
+            },
+          },
+          stack: {
+            observeStackDimension: async () => {
+              if (!state.feature_desc) return 'not-applicable';
+              const cursor = await resolveActiveChild(deps.projectRoot, state.feature_desc);
+              // The leaf URL is the authoritative repository binding. Before
+              // the ordinary establish-PR transition finishes, the stack is
+              // deliberately indeterminate rather than guessed from cwd.
+              const match = state.pr_url === undefined
+                ? undefined
+                : /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/[1-9]\d*$/.exec(state.pr_url);
+              if (!match) return cursor.kind === 'no-child' ? 'not-applicable' : 'indeterminate';
+              return observeStackDimension(deps.projectRoot, state.feature_desc, cursor, {
+                git: deps.git,
+                gh: deps.gh,
+                repository: match[1],
+              });
             },
           },
         },
