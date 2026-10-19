@@ -1,6 +1,6 @@
 // Covers: task:2
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -66,6 +66,8 @@ async function dispatch(selfHost: boolean): Promise<void> {
   fixture.selfHost = selfHost;
   fixture.worktreePath = join(projectRoot, '.worktrees', 'feature');
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
+  await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+  await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
   await runDaemonMode({
     projectRoot,
     concurrency: 1,

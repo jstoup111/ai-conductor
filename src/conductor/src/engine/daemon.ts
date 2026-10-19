@@ -1246,6 +1246,16 @@ export async function runDaemon(
     if (restartPending || maintenance.isDraining() || refreshJob || !maintenance.refreshStartable()) return refreshJob;
     const job = (async () => {
       try {
+        // The source refresh is the root-mutating half of this maintenance
+        // pass.  Discovery alone refreshes the backlog view, but cannot adopt
+        // a merged engine change into the checkout that rebuildEngine reads.
+        // A skipped/failed fast-forward deliberately suppresses the rebuild:
+        // building a dirty or diverged root would publish an untrustworthy
+        // engine version for later children.
+        const sourceRefresh = staleGatesArmed && deps.refreshEngineSource
+          ? await deps.refreshEngineSource()
+          : undefined;
+        if (sourceRefresh?.status === 'skipped') return;
         const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({ refresh: true }));
         if (refreshed !== undefined) {
           refreshedBacklog = refreshed;

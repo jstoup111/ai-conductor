@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -92,6 +92,8 @@ describe('daemon-mode feature log integration', () => {
     dirs.push(repo);
     fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
     await mkdir(fixture.worktreePath, { recursive: true });
+    await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
 
     const consoleLines: string[] = [];
     const originalConsoleLog = console.log;

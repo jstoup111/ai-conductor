@@ -3480,6 +3480,9 @@ function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): st
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'executor_protocol_mismatch':
+      log(`${dot} executor ${event.slug} protocol mismatch: ${event.reason}${event.restartRequested ? ' (restart requested)' : ''}`);
+      break;
     case 'executor_started':
       log(`${dot} executor ${event.slug} started on ${event.engineVersionId} (protocol ${event.protocolVersion}; supervisor ${event.supervisorEngineVersionId})`);
       break;

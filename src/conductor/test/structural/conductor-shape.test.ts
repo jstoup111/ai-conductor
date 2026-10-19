@@ -33,7 +33,10 @@ const ALLOWED_TUNABLES = [
   'LOOP_HALT_MARKER',
 ];
 
-const ALLOWED_IMPORTERS = new Set(['index.ts', 'daemon-cli.ts']);
+// The hidden executor-child command is a third process entry point.  It owns
+// a feature-local conductor in the isolated child, while the two public entry
+// points continue to own interactive and supervisor conductors.
+const ALLOWED_IMPORTERS = new Set(['index.ts', 'daemon-cli.ts', 'engine/executor-child-runtime.ts']);
 const SOURCE_ROOT = join(CONDUCTOR_ROOT, 'src');
 const DIRECT_IMPORTERS = [
   'engine/step-runners.ts',
@@ -258,7 +261,7 @@ describe('structural: conductor shape guard', () => {
     }, ALLOWED_IMPORTERS)).toEqual([]);
   });
 
-  it('allows only the two public entry points to import the conductor facade', async () => {
+  it('allows only process entry points to import the conductor facade', async () => {
     const files = Object.fromEntries(await Promise.all((await sourceModules()).map(async (path) => [
       relative(SOURCE_ROOT, path),
       await readFile(path, 'utf8'),

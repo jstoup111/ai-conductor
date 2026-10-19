@@ -42,6 +42,20 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders executor protocol mismatches with the restart disposition', () => {
+    expect(lines({
+      type: 'executor_protocol_mismatch',
+      slug: 'feature-a',
+      engineVersionId: '20261019T120000Z-abcdef123456',
+      expectedProtocolVersion: 2,
+      actualProtocolVersion: 1,
+      reason: 'executor protocol mismatch: expected 2, received 1',
+      restartRequested: true,
+    })).toEqual([
+      '· executor feature-a protocol mismatch: executor protocol mismatch: expected 2, received 1 (restart requested)',
+    ]);
+  });
+
   it('renders build tree witnesses without changing legacy or non-build lines', () => {
     expect(lines({ type: 'step_completed', step: 'build', status: 'done', treeBefore: 'abc123456', treeAfter: 'abc123456' }))
       .toEqual(['·   build ✓ done (tree abc1234 unchanged)']);

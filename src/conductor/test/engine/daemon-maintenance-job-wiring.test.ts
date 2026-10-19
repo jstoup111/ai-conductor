@@ -254,7 +254,9 @@ describe('daemon maintenance job wiring', () => {
 
     await runDaemon(depsFor(calls, [], {
       staleEngineChecker: {
-        check: () => ++staleChecks === 1 ? 'stale' : 'current',
+        // The idle boundary first records the stale observation, then asks
+        // restartStaleSupervisor to re-verify it before requesting restart.
+        check: () => ++staleChecks <= 2 ? 'stale' : 'current',
         targetIdentity: () => 'target',
         capturedIdentity: () => 'captured',
       },

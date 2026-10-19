@@ -293,7 +293,7 @@ describe('engine/daemon-maintenance', () => {
     expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['first', 'second']);
   });
 
-  it('drains two stale-engine workers before rebuilding and restarting exactly once', async () => {
+  it('keeps claiming on ordinary staleness and restarts once at natural idle', async () => {
     const claimAttempts: string[] = [];
     const started: string[] = [];
     const logs: string[] = [];
@@ -359,12 +359,12 @@ describe('engine/daemon-maintenance', () => {
       stopReason: result.stoppedReason,
       drainLogs: logs.filter((line) => line.startsWith('[daemon] drain started:')),
     }).toEqual({
-      started: ['first', 'second'],
+      started: ['first', 'second', 'later'],
       restarts: 1,
       stopReason: 'engine_restart',
-      claimAttempts: ['first', 'second'],
-      events: ['finished:first', 'finished:second', 'rebuild', 'restart'],
-      drainLogs: ['[daemon] drain started: stale-engine'],
+      claimAttempts: ['first', 'second', 'later'],
+      events: ['finished:first', 'finished:second', 'restart'],
+      drainLogs: [],
     });
   });
 
@@ -473,6 +473,7 @@ describe('engine/daemon-maintenance', () => {
           recordRootMutation('restart');
           return { fired: true };
         },
+        protocolMismatchPending: () => true,
         log: (line) => {
           logs.push(line);
           if (line === '[daemon] drain started: stale-engine') {
@@ -509,7 +510,7 @@ describe('engine/daemon-maintenance', () => {
     }
 
     expect({ rootMutationsAfterDrain, logs }).toEqual({
-      rootMutationsAfterDrain: ['refresh', 'rebuild', 'relink', 'restart'],
+      rootMutationsAfterDrain: ['relink', 'restart'],
       logs: expect.arrayContaining(['[daemon] drain started: stale-engine']),
     });
   });

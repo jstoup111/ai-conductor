@@ -1,6 +1,6 @@
 // Covers: task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeState } from '../../src/engine/state.js';
@@ -117,6 +117,8 @@ describe('daemon skipped-to-stale refusal event wiring', () => {
     directories.push(projectRoot);
     fixture.worktreePath = join(projectRoot, '.worktrees', 'feature-a');
     await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
+    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
     await writeState(
       join(fixture.worktreePath, '.pipeline', 'conduct-state.json'),
       { manual_test: 'skipped' },
