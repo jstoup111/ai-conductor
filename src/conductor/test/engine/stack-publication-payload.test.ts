@@ -1,3 +1,4 @@
+// Covers: task:7
 import { describe, expect, it, vi } from 'vitest';
 
 import { decodeGithubOperationRequest } from '../../src/engine/github-operations.js';
