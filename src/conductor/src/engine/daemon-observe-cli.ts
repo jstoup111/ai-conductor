@@ -19,7 +19,8 @@ import { tailDaemonLog, followDaemonLog, daemonLogPath } from './daemon-log.js';
 import { hasSession, isPaneDead, sessionNameForRepo } from './daemon-tmux.js';
 import { isPaused, readPauseMetadata } from './pause-marker.js';
 import { readRestartPending, type RestartIntent } from './restart-marker.js';
-import { isEngineVersionId } from './engine-store.js';
+import { currentTarget, isEngineVersionId } from './engine-store.js';
+import { listExecutorRecords } from './executor-records.js';
 import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock } from './gated-snapshot.js';
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
@@ -823,6 +824,22 @@ export async function renderInFlightSection(
   }
 }
 
+/** Render child executor pins from their durable supervisor-owned records. */
+export async function renderExecutorVersionsSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  const current = await currentTarget(join(repoPath, 'src', 'conductor')).catch(() => undefined);
+  const entries = await listExecutorRecords(repoPath).catch(() => []);
+  if (entries.length === 0) return;
+  out(`  EXECUTOR ENGINE CURRENT: ${current ?? 'unknown'}`);
+  for (const entry of entries) {
+    if (entry.kind === 'unreadable') {
+      out(`  EXECUTOR [${entry.slug}]: version unknown — record unreadable`);
+      continue;
+    }
+    const older = current !== undefined && entry.record.engineVersionId !== current ? ' (older than current)' : '';
+    out(`  EXECUTOR [${entry.slug}]: ${entry.record.engineVersionId}${older}`);
+  }
+}
+
 /**
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
@@ -875,6 +892,7 @@ export async function runDaemonStatus(
       if (row.liveness === 'running') {
         await renderRootRefreshSection(record.path, out);
         await renderInFlightSection(record.path, out, clock);
+        await renderExecutorVersionsSection(record.path, out);
       }
       await renderPlanGrowthSection(record.path, out);
     }

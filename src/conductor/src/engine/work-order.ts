@@ -29,6 +29,8 @@ export interface WorkOrder {
   baseSha: string;
   /** Immutable engine build selected for this individual dispatch. */
   engineVersionId: EngineVersionId;
+  /** Supervisor pool width, retained for child-mode legacy safety guards. */
+  effectiveConcurrency?: number;
   manifest: ManifestEntry[];
   /** Executor inputs formerly recovered from dispatcher-local bookkeeping. */
   tier?: ComplexityTier;

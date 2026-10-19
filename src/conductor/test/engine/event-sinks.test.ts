@@ -271,6 +271,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'daemon_memory_sample',
   'daemon_heap_dump_written',
   'daemon_exited',
+  'executor_started',
   'feature_dispatch_started',
   'feature_dispatch_ended',
   'feature_shipped',
@@ -1796,6 +1797,7 @@ describe('event sink subscriptions', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
       'build_active_stall',
+      'executor_started',
       'tracker_backend_unavailable',
       'halt_marker_write_failed',
       'halt_record_written',

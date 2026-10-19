@@ -1247,6 +1247,17 @@ export async function runDaemon(
           // and a held wake signal would cost it a spurious idle poll.
           wakeBusyPoll?.();
         }
+        // A pinned child does not share the supervisor's loaded modules, so a
+        // rebuild may safely publish a new `dist` while executors are busy.
+        // This stays inside the existing single-flight refresh job; no second
+        // timer or maintenance lane is introduced.
+        if (refreshed !== undefined && staleGatesArmed && deps.rebuildEngine) {
+          try {
+            await deps.rebuildEngine();
+          } catch (err) {
+            log(`[daemon] background engine rebuild failed (${err instanceof Error ? err.message : String(err)}); a later pass will retry`);
+          }
+        }
       } catch (err) {
         log(
           `[daemon] background root refresh failed (${err instanceof Error ? err.message : String(err)}); a later pass will retry`,

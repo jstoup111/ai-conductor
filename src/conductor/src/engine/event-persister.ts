@@ -344,6 +344,18 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
   }
 }
 
+/**
+ * A feature-scoped bus for an executor that writes its own feature ledger.
+ * The supervisor deliberately owns no persister for this bus: forwarding only
+ * reuses renderer, OTel, memory and root-bus subscribers.
+ */
+export function createForwardingFeatureEventEmitter(
+  globalEvents: ConductorEventEmitter,
+  slug: string,
+): ConductorEventEmitter {
+  return new ForwardingEventEmitter(globalEvents, slug);
+}
+
 function cloneForwardedEvent(event: ConductorEvent): ConductorEvent {
   if (!('executionContext' in event) || event.executionContext === undefined) {
     return { ...event };
@@ -437,7 +449,7 @@ export function startFeatureEventPersistence(
   globalEvents: ConductorEventEmitter,
   slug?: string,
 ): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void> } {
-  const featureEvents = new ForwardingEventEmitter(globalEvents, slug ?? basename(worktreePath));
+  const featureEvents = createForwardingFeatureEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, FEATURE_EVENT_LOG_PATH),
     featureEvents,

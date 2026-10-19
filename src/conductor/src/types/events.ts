@@ -523,7 +523,23 @@ type ConductorEventBody =
     }
   /** Duration and result of a daemon maintenance occurrence on the canonical event spine. */
   | DaemonMaintenancePhaseEvent
-  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
+  | {
+      type: 'feature_dispatch_started';
+      slug: string;
+      kind: DispatchKind;
+      tier?: ComplexityTier;
+      /** Immutable executor build selected at claim time (absent in legacy ledgers). */
+      engineVersionId?: string;
+      /** Why this dispatch used the supervisor build rather than `dist`. */
+      pinFallbackReason?: string;
+    }
+  | {
+      type: 'executor_started';
+      slug: string;
+      engineVersionId: string;
+      protocolVersion: number;
+      supervisorEngineVersionId: string;
+    }
   | {
       type: 'feature_dispatch_ended';
       slug: string;

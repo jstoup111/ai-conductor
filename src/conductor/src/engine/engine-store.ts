@@ -35,6 +35,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { join, basename, dirname, relative } from 'node:path';
 import { readRegistry, resolveRegistryPath, type ProjectRecord } from './registry.js';
 import { getPidfilePath } from './daemon-lock.js';
+import { listExecutorRecords } from './executor-records.js';
 import { isEngineVersionId, versionIdFromEngineDir, type EngineVersionId } from './engine-version-id.js';
 
 // Re-exported so existing importers of the version-id grammar keep working;
@@ -360,34 +361,49 @@ async function readLiveReferencedVersionIds(
   for (const record of records) {
     const pidfilePath = getPidfilePath(record.path);
 
-    let raw: string;
+    let raw: string | undefined;
     try {
       raw = await readFile(pidfilePath, 'utf-8');
     } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') continue; // no pidfile: fine
-      throw new Error(
-        `gcVersions: cannot read pidfile at ${pidfilePath}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        throw new Error(
+          `gcVersions: cannot read pidfile at ${pidfilePath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      throw new Error(
-        `gcVersions: pidfile at ${pidfilePath} is corrupt (invalid JSON): ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+    if (raw !== undefined) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        throw new Error(
+          `gcVersions: pidfile at ${pidfilePath} is corrupt (invalid JSON): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+
+      const engineDir = (parsed as { engineDir?: unknown })?.engineDir;
+      if (typeof engineDir === 'string') {
+        const versionId = versionIdFromEngineDir(engineDir);
+        if (versionId) referenced.add(versionId);
+      }
     }
 
-    const engineDir = (parsed as { engineDir?: unknown })?.engineDir;
-    if (typeof engineDir !== 'string') continue; // older pidfile shape: references nothing knowable
-
-    const versionId = versionIdFromEngineDir(engineDir);
-    if (versionId) referenced.add(versionId);
+    // Executor records are durable current-state authority for child
+    // dispatches.  Do not treat a corrupt record as absence: a partially
+    // readable fleet must protect every version for this pass.
+    const executors = await listExecutorRecords(record.path);
+    for (const executor of executors) {
+      if (executor.kind === 'unreadable') {
+        throw new Error(`gcVersions: executor record for ${executor.slug} in ${record.path} is unreadable`);
+      }
+      const executorVersion = versionIdFromEngineDir(executor.record.engineVersionId);
+      if (executorVersion) referenced.add(executorVersion);
+    }
   }
 
   return referenced;

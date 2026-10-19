@@ -837,6 +837,20 @@ export async function dispatchCliEntry(input: {
 // --- Main ---
 
 async function dispatchCliCommand(): Promise<void> {
+  // Private child entrypoint. It intentionally is not registered in the
+  // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
+  // argv can never satisfy the daemon supervisor process matcher.
+  if (process.argv[2] === 'executor-child') {
+    const { runExecutorChild } = await import('./engine/executor-child.js');
+    const { resolveEngineVersion } = await import('./engine/shipped-record.js');
+    await runExecutorChild(process as never, {
+      engineVersionId: resolveEngineVersion(__dirname),
+      createWorktree: async () => { throw new Error('executor child was launched without dispatcher worktree wiring'); },
+      run: async ({ order }) => ({ slug: order.slug, status: 'error', reason: 'executor child was launched without dispatcher runner wiring' }),
+      exit: (code) => { process.exitCode = code; },
+    });
+    return;
+  }
   // Per-command help is answered by `main()` before the daemon-session guard,
   // so it never reaches this dispatcher.
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
