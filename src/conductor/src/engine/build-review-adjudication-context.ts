@@ -2,6 +2,8 @@ import { BUILD_REVIEW_FINDING_VOCABULARIES } from './build-review-domain.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewAggregate, BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { projectBuildReviewAggregateSources } from './build-review-aggregate.js';
+import { resolveBuildReviewAcceptance } from './build-review-acceptance-resolver.js';
+import type { BuildReviewDispositionRecord, BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink, RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 import type {
   RemediationCaseDisposition,
@@ -40,6 +42,11 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly escalation?: RemediationCaseRecord['escalation'];
   /** The blocked consistency verdict a persisted `escalate` stop retains. */
   readonly consistencyStop?: RemediationCaseRecord['consistencyStop'];
+  /** Direct acceptance origins only; operator identity and rationale stay private. */
+  readonly operatorAccepted?: {
+    readonly originFindingIds: readonly string[];
+    readonly originLapIds: readonly string[];
+  };
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -116,6 +123,9 @@ export interface BuildReviewAdjudicationContext {
 export interface AssembleBuildReviewAdjudicationContextInput {
   readonly aggregate: BuildReviewAggregate;
   readonly priorCases: readonly RemediationCaseRecord[];
+  /** Feature-scoped operator acceptances used only to label prior case history. */
+  readonly feature?: BuildReviewFeatureIdentity;
+  readonly dispositions?: readonly BuildReviewDispositionRecord[];
   /** Exact accepted-risk identities only; no summary or rubric-wide matching. */
   readonly operatorResolvedFindingIds?: ReadonlySet<string>;
   /** Exact source identities settled from finalized durable case history. */
@@ -387,7 +397,37 @@ function effectPointerFor(caseRecord: RemediationCaseRecord, attempted: Readonly
   return `case ${caseRecord.id}: ${effect.kind} effect ${effect.id} ${effect.status}${reference}${attempt}`;
 }
 
-function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationPriorCase {
+function operatorAcceptedOrigins(
+  caseRecord: RemediationCaseRecord,
+  feature: BuildReviewFeatureIdentity | undefined,
+  dispositions: readonly BuildReviewDispositionRecord[],
+  cases: readonly RemediationCaseRecord[],
+): BuildReviewAdjudicationPriorCase['operatorAccepted'] | undefined {
+  if (!feature) return undefined;
+  const caseInput = {
+    ok: true as const,
+    state: { version: 'v2' as const, feature, cases, prdWideningCases: [], suppressions: [] },
+  };
+  const origins = dispositions.flatMap((disposition) => {
+    const resolution = resolveBuildReviewAcceptance(feature, disposition.finding, { ok: true, records: dispositions }, caseInput);
+    return resolution.kind === 'direct' && caseRecord.sources.some((source) => source.sourceId === buildReviewAdjudicationSourceId({
+      rubric: disposition.finding.canonicalPayload.rubric,
+      findingId: disposition.finding.id,
+    }))
+      ? [disposition]
+      : [];
+  });
+  if (origins.length === 0) return undefined;
+  return Object.freeze({
+    originFindingIds: Object.freeze([...new Set(origins.map((origin) => origin.finding.id))].sort()),
+    originLapIds: Object.freeze([...new Set(origins.map((origin) => origin.sourceLapId))].sort()),
+  });
+}
+
+function freezePriorCase(
+  caseRecord: RemediationCaseRecord,
+  operatorAccepted: BuildReviewAdjudicationPriorCase['operatorAccepted'],
+): BuildReviewAdjudicationPriorCase {
   const sources = [...caseRecord.sources].sort((left, right) =>
     `${left.recordedAt}\u0000${left.sourceId}`.localeCompare(`${right.recordedAt}\u0000${right.sourceId}`),
   ).map((source) => Object.freeze({ ...source }));
@@ -408,6 +448,7 @@ function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudica
         rationale: caseRecord.consistencyStop.rationale,
       }),
     }),
+    ...(operatorAccepted === undefined ? {} : { operatorAccepted }),
   });
 }
 
@@ -487,7 +528,12 @@ export function assembleBuildReviewAdjudicationContext(
     if (stop) return { ok: false, stop };
     if (caseIds.has(caseRecord.id)) return { ok: false, stop: { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'duplicate-id' } };
     caseIds.add(caseRecord.id);
-    priorCases.push(freezePriorCase(caseRecord));
+    priorCases.push(freezePriorCase(caseRecord, operatorAcceptedOrigins(
+      caseRecord,
+      input.feature,
+      input.dispositions ?? [],
+      input.priorCases,
+    )));
   }
   priorCases.sort((left, right) => left.id.localeCompare(right.id));
 

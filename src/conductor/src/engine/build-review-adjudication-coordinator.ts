@@ -24,7 +24,7 @@ import { resolveRefutationEvidence } from './remediation-refutation-evidence.js'
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
 import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
-import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from './tracker-client.js';
 import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.js';
@@ -558,6 +558,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   let currentSources = sources.filter((source) => !resolved.has(source.findingId));
   const prior = await store.read();
   if (!prior.ok) return failStore('case store', prior);
+  const dispositionRead = await new BuildReviewDispositionStore(input.projectRoot).list(input.feature);
+  if (!dispositionRead.ok) return fail('operator disposition state is unavailable');
   // An exact source bound to a refutation with unfinished durable follow-up
   // is not new content for the judge. The reducer names that effect and
   // blocks PASS below.
@@ -593,7 +595,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
   const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
+    aggregate: input.aggregate, priorCases: prior.state.cases, feature: input.feature, dispositions: dispositionRead.records,
+    suppressions: suppressionHistory.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
@@ -625,8 +628,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
+  const refreshedDispositionRead = await new BuildReviewDispositionStore(input.projectRoot).list(input.feature);
+  if (!refreshedDispositionRead.ok) return fail('operator disposition state is unavailable');
   const freshContext = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
+    aggregate: input.aggregate, priorCases: prior.state.cases, feature: input.feature, dispositions: refreshedDispositionRead.records,
+    suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });

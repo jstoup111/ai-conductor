@@ -9,12 +9,15 @@ import {
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 const snapshotDigest = 'sha256:snapshot';
 const HASH = `sha256:${'a'.repeat(64)}`;
 const POLICY_DIGEST = `sha256:${'c'.repeat(64)}`;
+const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 
 function finding(name: string): BuildReviewFinding {
   return {
@@ -128,6 +131,21 @@ function priorCase(id: string): RemediationCaseRecord {
     resolution: 'open',
     sources: [{ sourceId: `testQuality:${id}`, outcome: 'acted', recordedAt: '2026-08-30T12:00:00.000Z' }],
     effect: { id: `effect-${id}`, kind: 'action', status: 'applied', workOrderId: `work-order-${id}` },
+  };
+}
+
+function acceptedFinding(name: string) {
+  return canonicalizeBuildReviewFindingIdentity({
+    rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+    anchor: { rubric: 'testQuality', locus: { path: `test/${name}.test.ts`, contentHash: HASH, display: `${name} behavior` } },
+  })!;
+}
+
+function acceptedDisposition(name: string): BuildReviewDispositionRecord {
+  return {
+    version: 'v1', feature, finding: acceptedFinding(name), sourceLapId: parseBuildReviewLapId('lap-origin')!,
+    summary: 'Accepted risk summary', rationale: 'Operator-only rationale must not reach the adjudicator.',
+    operator: 'operator-secret', acceptedAt: '2026-10-19T10:00:00.000Z',
   };
 }
 
@@ -261,6 +279,37 @@ describe('build-review adjudication context', () => {
     expect(result.context.priorCases.map((caseRecord) => caseRecord.id)).toEqual(['case-first', 'case-middle', 'case-oldest']);
   });
 
+  it('marks only cases with directly operator-accepted sources without exposing acceptance prose', () => {
+    const accepted = acceptedDisposition('accepted-origin');
+    const acceptedCase: RemediationCaseRecord = {
+      ...priorCase('case-accepted'),
+      sources: [{
+        sourceId: `testQuality:${accepted.finding.id}`,
+        outcome: 'acted', recordedAt: '2026-10-19T09:00:00.000Z',
+      }],
+    };
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      feature,
+      dispositions: [accepted],
+      priorCases: [acceptedCase, priorCase('case-unaccepted')],
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      priorCases: [
+        expect.objectContaining({
+          id: 'case-accepted',
+          operatorAccepted: { originFindingIds: [accepted.finding.id], originLapIds: ['lap-origin'] },
+        }),
+        expect.objectContaining({ id: 'case-unaccepted' }),
+      ],
+    } });
+    if (!result.ok) return;
+    expect(result.context.priorCases[1]).not.toHaveProperty('operatorAccepted');
+    expect(JSON.stringify(result.context)).not.toContain(accepted.operator);
+    expect(JSON.stringify(result.context)).not.toContain(accepted.rationale);
+  });
+
   it('omits only exact operator-resolved sources and emits no synthetic prior case for empty history', () => {
     const current = aggregate(finding('accepted'), finding('unresolved'));
     const all = assembleBuildReviewAdjudicationContext({ aggregate: current, priorCases: [] });
@@ -389,6 +438,28 @@ describe('build-review adjudication context', () => {
       aggregate: current,
       priorCases: Array.from({ length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxPriorCases }, (_value, index) => ({
         ...priorCase(`case-${index.toString().padStart(3, '0')}`),
+        rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes),
+      })),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      stop: expect.objectContaining({
+        code: 'serialized-byte-overflow',
+        limit: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxSerializedBytes,
+      }),
+    });
+  });
+
+  it('keeps the serialized-byte overflow stop when accepted-case markers are present', () => {
+    const accepted = acceptedDisposition('accepted-overflow');
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      feature,
+      dispositions: [accepted],
+      priorCases: Array.from({ length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxPriorCases }, (_value, index) => ({
+        ...priorCase(`case-${index.toString().padStart(3, '0')}`),
+        sources: [{ sourceId: `testQuality:${accepted.finding.id}`, outcome: 'acted' as const, recordedAt: '2026-10-19T09:00:00.000Z' }],
         rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes),
       })),
     });
