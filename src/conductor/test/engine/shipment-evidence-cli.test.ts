@@ -208,6 +208,73 @@ describe('shipment-evidence CLI', () => {
     }
   });
 
+  it('does not repair a merged child whose metadata declares a plan', async () => {
+    const pr = 'https://github.com/org/repo/pull/1';
+    const reports: string[] = [];
+    const runGh = vi.fn(async () => ({
+      stdout: JSON.stringify({
+        url: pr,
+        body: 'Plan: `.docs/plans/feature.md`',
+        files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+        headRefOid: 'a'.repeat(40),
+        headRefName: 'feat/c3/feature',
+      }),
+    }));
+    const runGit = vi.fn(async () => {
+      throw new Error('a stack child must not reach record-repair git operations');
+    });
+
+    const code = await dispatchShipmentEvidence(
+      { kind: 'reconcile', pr, shipped: '2026-10-19' },
+      '/repo',
+      { runGh, runGit, listPlanStems: async () => ['feature'], report: (message) => reports.push(message) },
+    );
+
+    expect({
+      code,
+      argv: runGh.mock.calls[0]?.[0],
+      gitCalls: runGit.mock.calls,
+      reports,
+    }).toEqual({
+      code: 0,
+      argv: ['pr', 'view', pr, '--json', 'url,body,files,headRefOid,headRefName'],
+      gitCalls: [],
+      reports: ['shipped-record: not applicable (stack-child)'],
+    });
+  });
+
+  it('reports a merged PR with no readable head ref as unclassified without repair', async () => {
+    const pr = 'https://github.com/org/repo/pull/1';
+    const reports: string[] = [];
+    const runGit = vi.fn(async () => {
+      throw new Error('an unclassified PR must not reach record-repair git operations');
+    });
+
+    const code = await dispatchShipmentEvidence(
+      { kind: 'reconcile', pr, shipped: '2026-10-19' },
+      '/repo',
+      {
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({
+            url: pr,
+            body: 'Plan: `.docs/plans/feature.md`',
+            files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+            headRefOid: 'a'.repeat(40),
+          }),
+        })),
+        runGit,
+        listPlanStems: async () => ['feature'],
+        report: (message) => reports.push(message),
+      },
+    );
+
+    expect({ code, gitCalls: runGit.mock.calls, reports }).toEqual({
+      code: 0,
+      gitCalls: [],
+      reports: ['shipped-record: unclassified (head ref unavailable)'],
+    });
+  });
+
   it('does not bind a quoted corrected body after the same immutable event identity previously bound a plan', async () => {
     const pr = 'https://github.com/org/repo/pull/1';
     const base = 'b'.repeat(40);

@@ -149,6 +149,10 @@ export async function dispatchShipmentEvidence(
         changedPaths: metadata.changedPaths,
       },
     });
+    if (cmd.kind === 'reconcile' && !metadata.headRef) {
+      report('shipped-record: unclassified (head ref unavailable)');
+      return 0;
+    }
     if (association.kind === 'not-applicable') {
       report(`shipped-record: not applicable (${association.classification})`);
       return 0;
@@ -330,10 +334,15 @@ export function makeRecordRepairRequester(
       const association = classifyShipmentAssociation({
         planStems,
         pr: {
+          headRef: metadata.headRef,
           metadataPlanStems: extractPlanStems(metadata.body),
           changedPaths: metadata.changedPaths,
         },
       });
+      if (!metadata.headRef) {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} is unclassified (head ref unavailable); no repair requested`);
+        return;
+      }
       if (association.kind !== 'implementation') {
         log(`[shipped-record-repair] ${slug}: ${prUrl} is ${association.classification}; no repair requested`);
         return;
@@ -685,7 +694,7 @@ async function readPullRequestEvidenceMetadata(
   try {
     stdout = await runTrackerRead(
       runGh, cwd, 'pull-request.read', repositoryForPullRequest(pr), { kind: 'repository' },
-      ['pr', 'view', pr, '--json', 'url,body,files,headRefOid'],
+      ['pr', 'view', pr, '--json', 'url,body,files,headRefOid,headRefName'],
     );
   } catch (error) {
     // Preserve the caller's established error wording while the read itself
@@ -698,6 +707,7 @@ async function readPullRequestEvidenceMetadata(
     body?: unknown;
     files?: unknown;
     headRefOid?: unknown;
+    headRefName?: unknown;
   };
   return {
     url: typeof value.url === 'string' ? value.url : '',
@@ -708,7 +718,7 @@ async function readPullRequestEvidenceMetadata(
         return typeof path === 'string' ? [path] : [];
       })
       : [],
-    headRef: '',
+    headRef: typeof value.headRefName === 'string' ? value.headRefName.trim() : '',
     headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : '',
   };
 }

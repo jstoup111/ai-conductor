@@ -76,6 +76,7 @@ interface MergedPullRequest {
   body: string;
   changedPaths: string[];
   headSha: string;
+  headRef: string;
   mergedAt: string;
 }
 
@@ -260,6 +261,7 @@ async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promi
         body: pullRequest.body,
         changedPaths: pullRequest.changedPaths,
         headSha: pullRequest.headSha,
+        headRef: pullRequest.headRef,
         mergedAt: pullRequest.mergedAt,
       });
     }
@@ -320,6 +322,7 @@ interface MergedPullRequestNode {
   url: string;
   body: string;
   headSha: string;
+  headRef: string;
   mergedAt: string;
   changedPaths: string[];
   filesPageInfo: GraphqlPageInfo;
@@ -335,6 +338,7 @@ query($owner: String!, $name: String!, $endCursor: String) {
         body
         mergedAt
         headRefOid
+        headRefName
         files(first: 100) {
           nodes { path }
           pageInfo { hasNextPage endCursor }
@@ -450,6 +454,10 @@ function mergedPullRequestFromNode(node: unknown): MergedPullRequestNode {
     url: requiredString(value.url, 'merged PR URL'),
     body: typeof value.body === 'string' ? value.body : '',
     headSha: requiredString(value.headRefOid, 'merged PR head SHA'),
+    // A historical API response without the head ref is not a transport
+    // failure. It is an unclassified association and must not authorize a
+    // record proposal.
+    headRef: typeof value.headRefName === 'string' ? value.headRefName.trim() : '',
     mergedAt: requiredString(value.mergedAt, 'merged PR merge timestamp'),
     changedPaths: requiredArray(files.nodes, 'merged PR changed-file nodes').map((file) =>
       requiredString(object(file, 'merged PR changed-file node').path, 'merged PR changed-file path')),
@@ -524,10 +532,41 @@ async function auditSource(
     return row(source, 'ambiguous', 'merged PR metadata references multiple canonical plans');
   }
 
+  const unclassifiedPullRequest = mergedPullRequests.find((pullRequest) =>
+    !pullRequest.headRef && extractPlanStems(pullRequest.body).includes(source.plan!.slug));
+  if (unclassifiedPullRequest) {
+    return row(
+      source,
+      'unresolved',
+      `merged PR #${unclassifiedPullRequest.number} is unclassified: head ref is unavailable`,
+    );
+  }
+
+  const stackChildPullRequest = mergedPullRequests.find((pullRequest) => {
+    const association = classifyShipmentAssociation({
+      planStems,
+      pr: {
+        headRef: pullRequest.headRef,
+        metadataPlanStems: extractPlanStems(pullRequest.body),
+        changedPaths: pullRequest.changedPaths,
+      },
+    });
+    return association.kind === 'not-applicable' && association.classification === 'stack-child' &&
+      extractPlanStems(pullRequest.body).includes(source.plan!.slug);
+  });
+  if (stackChildPullRequest) {
+    return row(
+      source,
+      'absent',
+      `merged PR #${stackChildPullRequest.number} is not applicable (stack-child)`,
+    );
+  }
+
   const candidates = mergedPullRequests.filter((pullRequest) => {
     const association = classifyShipmentAssociation({
       planStems,
       pr: {
+        headRef: pullRequest.headRef,
         metadataPlanStems: extractPlanStems(pullRequest.body),
         changedPaths: pullRequest.changedPaths,
       },
