@@ -188,7 +188,7 @@ Option A. Each decision below states how it extends the existing suppression arc
 - **Effects.** An advisory case routes no BUILD and charges nothing.
 - **Older engines.** An older engine that reads a persisted `advisory` disposition fails closed as
   an unknown disposition.
-- **Carried acceptance first.** A finding the judgement binds to a case holding an
+- **Carried acceptance first.** In a validated judgement, a finding bound to a case holding an
   operator-accepted source is carried acceptance whatever disposition the judgement proposed,
   `advisory` included (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1). The bound
   case keeps its disposition, and the finding is listed as accepted risk, never as advisory.

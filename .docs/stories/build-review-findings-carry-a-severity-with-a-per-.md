@@ -219,7 +219,7 @@ As an operator, I want the adjudicator to mark a finding advisory when the plan 
 - Given an advisory case with an empty rationale, when the judgement is validated, then it is rejected as invalid.
 - Given an advisory case carrying an action effect, when the judgement is validated, then it is rejected, because an advisory case's effect must be none.
 - Given a case whose adjudicated severity is higher than the reviewer's severity, when the judgement is validated, then it is rejected, because the adjudicator cannot raise severity.
-- Given a live finding that the remediate judgement binds to a case holding an operator-accepted source while proposing advisory, when the lap is adjudicated, then the finding resolves as carried operator acceptance, the bound case's disposition is unchanged, and the finding is not listed among advisory findings.
+- Given min_severity major and a live major finding that the remediate judgement binds to a case holding an operator-accepted source while proposing an otherwise valid advisory case, when the lap is adjudicated, then the finding resolves as carried operator acceptance, the bound case's disposition is unchanged, and the finding is not listed among advisory findings.
 
 ### Done When
 - [ ] The remediate judgement parser and validator admit an advisory disposition only when the context declares a threshold for every source's rubric, with an adjudicated severity strictly below each threshold and not above the reviewer's severity, a non-empty rationale and effect none.

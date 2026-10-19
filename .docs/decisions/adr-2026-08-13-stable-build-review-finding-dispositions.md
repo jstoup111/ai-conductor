@@ -93,8 +93,8 @@ meaning. Pure wording changes retain the version and identity.
 > not change. Contract version is still an identity input, so every built-in finding id re-keys once
 > at upgrade and stored `v3` dispositions stop matching by exact identity; the operator accepted
 > that cost over a dual-version parse path. Custom finding ids do not re-key: the custom identity
-> grammar pins its own version. A re-keyed finding that `remediate` binds to the case holding the
-> accepted `v3` source is carried acceptance
+> grammar pins its own version. Where adjudication is enabled, a re-keyed finding that `remediate`
+> binds to the case holding the accepted `v3` source is carried acceptance
 > (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.3); any other must be
 > re-accepted (adr-2026-10-19-build-review-finding-severity-advisory-threshold D1, D2).
 
