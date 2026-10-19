@@ -7,6 +7,7 @@ import { joinBuildReviewRubricOutcomes, type BuildReviewAggregateInput } from '.
 import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
+import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
@@ -152,6 +153,62 @@ describe('build-review findings CLI', () => {
       }],
       acceptedDispositions: [expect.objectContaining({ disposition: expect.objectContaining({ rationale: 'operator risk' }) })],
     });
+  });
+
+  it('lists a carried finding with its origin in human and JSON output, but not a pre-acceptance link', async () => {
+    const carriedIdentity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const originIdentity = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: { rubric: 'testQuality', locus: {
+        path: 'test/origin.test.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'origin fixture',
+      } },
+    })!;
+    const disposition = {
+      version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' },
+      finding: originIdentity, sourceLapId: parseBuildReviewLapId('lap-origin')!, summary: 'origin finding',
+      rationale: 'operator accepted the original risk', operator: 'james', acceptedAt: '2026-10-19T10:00:00.000Z',
+    };
+    const source = (identity: typeof carriedIdentity, recordedAt: string) => ({
+      sourceId: buildReviewAdjudicationSourceId({ rubric: 'testQuality', findingId: identity.id }), outcome: 'acted' as const, recordedAt,
+    });
+    const caseState = {
+      version: 'v2' as const, feature: disposition.feature,
+      cases: [{
+        id: 'case-carried', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const,
+        rationale: 'same substance', confidence: 'high' as const, resolution: 'open' as const,
+        sources: [source(originIdentity, '2026-10-19T09:00:00.000Z'), source(carriedIdentity, '2026-10-19T11:00:00.000Z')], effect: { kind: 'none' as const },
+      }], prdWideningCases: [], suppressions: [],
+    };
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => ({ list: async () => ({ ok: true as const, records: [disposition] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }), readMechanicalFaults: async () => 0,
+    };
+    const human = vi.fn();
+    const json = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, { ...deps, print: human })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, { ...deps, print: json })).resolves.toBe(0);
+
+    expect(human).toHaveBeenCalledWith(expect.stringContaining(
+      `Carried finding: ${carriedIdentity.id} (carried from ${originIdentity.id} (lap lap-origin); operator james; rationale: operator accepted the original risk)`,
+    ));
+    expect(JSON.parse(json.mock.calls[0]![0] as string)).toMatchObject({
+      acceptedDispositions: [{ findingId: carriedIdentity.id, carried: {
+        originFindingId: originIdentity.id, originLapId: 'lap-origin', operator: 'james',
+        rationale: 'operator accepted the original risk', caseId: 'case-carried',
+      } }],
+    });
+
+    const preAcceptance = {
+      ...caseState,
+      cases: [{ ...caseState.cases[0], sources: [source(originIdentity, '2026-10-19T09:00:00.000Z'), source(carriedIdentity, '2026-10-19T09:30:00.000Z')] }],
+    };
+    const preAcceptancePrint = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      ...deps, createCaseStore: () => ({ read: async () => ({ ok: true as const, state: preAcceptance }) }), print: preAcceptancePrint,
+    })).resolves.toBe(0);
+    expect(JSON.parse(preAcceptancePrint.mock.calls[0]![0] as string).acceptedDispositions).toEqual([]);
   });
 
   // Covers: task:12

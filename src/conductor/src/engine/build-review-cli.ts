@@ -9,6 +9,7 @@ import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type Buil
 import { buildReviewConfidenceFloors, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
 import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { resolveBuildReviewAcceptance, type BuildReviewAcceptanceResolution } from './build-review-acceptance-resolver.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
@@ -91,8 +92,10 @@ function isBuildReviewRubricId(value: string): value is BuildReviewRubricId {
 
 type AcceptedDisposition = {
   readonly findingId: string;
-  readonly disposition: BuildReviewDispositionRecord;
-};
+} & (
+  | { readonly disposition: BuildReviewDispositionRecord }
+  | { readonly carried: Omit<Extract<BuildReviewAcceptanceResolution, { readonly kind: 'carried' }>, 'kind'> }
+);
 
 type ExhaustedMechanicalFault = {
   readonly rubric: string;
@@ -190,6 +193,7 @@ function acceptedDispositions(
   feature: BuildReviewFeatureIdentity,
   effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>,
   records: readonly BuildReviewDispositionRecord[],
+  caseInput: RemediationCaseStoreReadResult,
 ): readonly AcceptedDisposition[] {
   const identities = new Map<string, NonNullable<ReturnType<typeof rehydrateBuildReviewAcceptedRiskFinding>>>();
   for (const result of Object.values(aggregate.results)) {
@@ -212,11 +216,18 @@ function acceptedDispositions(
   }
   return effective.acceptedFindingIds.flatMap((findingId) => {
     const identity = identities.get(findingId);
-    const disposition = identity && records.find((record) =>
-      record.feature.version === feature.version && record.feature.repository === feature.repository && record.feature.feature === feature.feature &&
-      record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson,
-    );
-    return disposition ? [{ findingId, disposition }] : [];
+    if (!identity) return [];
+    const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records }, caseInput);
+    if (acceptance.kind === 'direct') {
+      const disposition = records.find((record) =>
+        record.feature.version === feature.version && record.feature.repository === feature.repository && record.feature.feature === feature.feature &&
+        record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson,
+      );
+      return disposition ? [{ findingId, disposition }] : [];
+    }
+    if (acceptance.kind !== 'carried') return [];
+    const { kind: _kind, ...carried } = acceptance;
+    return [{ findingId, carried }];
   });
 }
 
@@ -237,7 +248,9 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Effective verdict: ${effective.verdict}`,
     `Accepted findings: ${effective.acceptedFindingIds.join(', ') || 'none'}`,
     `Operator dispositions: ${accepted.length === 0 ? 'none' : ''}`,
-    ...accepted.map(({ findingId, disposition }) => `Accepted disposition: ${findingId} (lap ${disposition.sourceLapId}; operator ${disposition.operator}; rationale: ${disposition.rationale})`),
+    ...accepted.map((entry) => 'disposition' in entry
+      ? `Accepted disposition: ${entry.findingId} (lap ${entry.disposition.sourceLapId}; operator ${entry.disposition.operator}; rationale: ${entry.disposition.rationale})`
+      : `Carried finding: ${entry.findingId} (carried from ${entry.carried.originFindingId} (lap ${entry.carried.originLapId}); operator ${entry.carried.operator}; rationale: ${entry.carried.rationale})`),
     `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
     ...cases.map(renderCase),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
@@ -328,9 +341,9 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
           return ledger.gates.build_review;
         })();
     // The same composed reducer the live gate uses, over the full record list.
-    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence, finalizedBuildReviewSourceIds(cases));
+    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence, finalizedBuildReviewSourceIds(cases), caseRead);
     if (!effective) throw new Error('current findings are invalid');
-    const accepted = acceptedDispositions(aggregate, feature, effective, records);
+    const accepted = acceptedDispositions(aggregate, feature, effective, records, caseRead);
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
     // Uncovered coverage projections are engine-routing-only. The operator
     // already sees coverage through the rendered failures and reduced-coverage
