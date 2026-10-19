@@ -1,3 +1,4 @@
+// Covers: task:8
 import { describe, expect, it, vi } from 'vitest';
 
 import {
