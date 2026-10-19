@@ -1,0 +1,9 @@
+Waives: outcome-17, outcome-18, outcome-19
+
+Rationale: On 2026-10-17, during this DECIDE pass, the operator narrowed jstoup111/ai-conductor#2945 to its ship-path slice so stacked delivery can be used now. The operator merges a stack as one unit. The deferred work was split into its own intake issues, each blocked by #2945, so no outcome is dropped:
+
+- **outcome-17** (a server-side rebase after a bottom merge is accepted only after it is verified): jstoup111/ai-conductor#3268. Until it lands, any such rewrite is refused by the tip guard and halts once with `stack-tip-diverged` (story-10, `adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
+- **outcome-18** (any other mismatch halts with a dedicated, sweep-skipped halt class and a documented recovery command, and never re-kicks in a loop): this spec delivers the dedicated class `stack-tip-diverged`, its sweep skip and the absence of re-kick loops (story-10). The recovery command `conduct stack adopt` is #3268. The runbook section documenting the interim manual recovery is #3273, a documentation hotfix after this spec merges.
+- **outcome-19** (a routed fix to a published child leaves a PR comment, and red CI on an intermediate member is surfaced for a human decision): the PR comment is #3269, which also waits on #3211 and #3212. Red intermediate CI surfacing is #3270. In this spec a published stack is frozen: routed rounds, restacks and ci-fix are refused on it (story-10), so no routed fix can reach a published child.
+
+The dedicated release and shipment contracts that the filer proposed (`Release-Disposition: bundled`, `Stack-Child:`) were deliberately replaced by approach B and are filed as #3267. Every outcome they served is still covered here: outcome-5 through story-7, and outcome-13 through story-3.

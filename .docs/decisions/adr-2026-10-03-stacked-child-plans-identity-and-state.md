@@ -145,6 +145,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
      - **Teardown, worktree creation and the shipped-record probe** use `leafBranchFor`.
    - Leak triage, the dashboard and `ensureWorktree` need no change.
 
+> **Amended 2026-10-17 by #2945:** `finish-record`'s child refusal is kept, not lifted. Child PRs are recorded in the publication record, and only the leaf PR is the feature's `pr_url` and ship. Stack teardown is defined by `adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12. Park still never deletes a child branch.
+
 3. **Attribution is not authority.**
    - A structural parse only attributes a branch to a feature.
    - A side effect still needs that consumer's existing gate: the committed owner check
@@ -379,6 +381,7 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 - [ ] #2942: offer `kickback-budget raise`/`reset --child`.
 - [ ] #2945: lift finish-record's child refusal, add the child→PR map, and remove child branches at
       teardown and reclaim only after the leaf merges.
+  > **Amended 2026-10-17 by #2945:** `finish-record`'s child refusal is kept, not lifted (decision 2 note). The child-to-PR map lives in the publication record, and child teardown is defined by `adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 12.
 - [ ] #2943/#2944: amend the remaining ADRs listed in the #2940 design §6 when their behavior lands.
 
 > **Amended 2026-10-10 by #2943:** The #2943 follow-up (restack) is delivered by a journaled off-worktree replay. Re-validating closed children moved by a restack, re-validating a repaired closed child, and the closed-child rewind move to #2944 (`adr-2026-10-10-stacked-restack-journaled-replay`).
