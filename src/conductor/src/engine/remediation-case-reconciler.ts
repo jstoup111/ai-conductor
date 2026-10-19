@@ -3,6 +3,7 @@ import { hasReservedOrFailedRemediationEffect } from './remediation-case-effects
 import {
   type RemediationCaseEffect,
   type RemediationCaseRecord,
+  type RemediationCaseSourceLink,
   type RemediationCaseStoreFailureReason,
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
@@ -68,6 +69,43 @@ export function classifyRemediationCaseReuse(
   if (record.disposition !== 'act') return 'reuse';
   if (record.resolution === 'resolved') return 'halt-regression';
   return attemptedCaseIds.has(record.id) ? 'halt-repeat' : 'resume';
+}
+
+/** Append later sources to an accepted case without changing its autonomous state. */
+export async function appendCarriedRemediationCaseSources(
+  store: RemediationCaseStore,
+  input: {
+    readonly caseId: string;
+    readonly sources: readonly Pick<RemediationCaseSourceLink, 'sourceId' | 'outcome'>[];
+    readonly recordedAt: string;
+  },
+): Promise<
+  | { readonly ok: true; readonly appended: readonly RemediationCaseSourceLink[] }
+  | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason; readonly violation?: RemediationCaseTransitionViolation }
+> {
+  const mutation = await store.mutate(async (state) => {
+    const record = state.cases.find((candidate) => candidate.id === input.caseId);
+    if (!record) return { value: { ok: true as const, appended: [] as readonly RemediationCaseSourceLink[] } };
+    const existing = new Set(record.sources.map((source) => source.sourceId));
+    const appended = input.sources.filter((source) => !existing.has(source.sourceId))
+      .map((source) => ({ ...source, recordedAt: input.recordedAt }));
+    if (appended.length === 0) return { value: { ok: true as const, appended } };
+    return {
+      value: { ok: true as const, appended },
+      nextState: {
+        ...state,
+        cases: state.cases.map((candidate) => candidate.id === input.caseId
+          ? { ...candidate, sources: [...candidate.sources, ...appended] }
+          : candidate),
+      },
+    };
+  });
+  if (!mutation.ok) return {
+    ok: false,
+    reason: mutation.reason,
+    ...(mutation.reason === 'rejected-transition' && mutation.violation ? { violation: mutation.violation } : {}),
+  };
+  return mutation.value;
 }
 
 type Reconciliation =

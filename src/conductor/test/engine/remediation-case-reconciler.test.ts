@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import { appendCarriedRemediationCaseSources, classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import type {
   RemediationCasePrdWideningRecord,
   RemediationCaseRecord,
@@ -92,6 +92,34 @@ afterEach(async () => {
 });
 
 describe('remediation case reconciler', () => {
+  it('appends a carried source idempotently without changing the accepted case state', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const original = durableAction({
+      resolution: 'resolved',
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'retired by operator acceptance' },
+    });
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [original] } }));
+
+    const input = {
+      caseId: original.id,
+      sources: [{ sourceId: 'testQuality:carried-finding', outcome: 'acted' as const }],
+      recordedAt: '2026-10-19T12:00:00.000Z',
+    };
+    expect(await appendCarriedRemediationCaseSources(store, input)).toEqual({
+      ok: true,
+      appended: [{ ...input.sources[0], recordedAt: input.recordedAt }],
+    });
+    expect(await appendCarriedRemediationCaseSources(store, input)).toEqual({ ok: true, appended: [] });
+
+    const after = await store.read();
+    if (!after.ok) throw new Error(`unexpected store failure: ${after.reason}`);
+    expect(after.state.cases).toEqual([{
+      ...original,
+      sources: [...original.sources, { ...input.sources[0], recordedAt: input.recordedAt }],
+    }]);
+  });
+
   it('carries a rejected source-link transition and leaves the valid store bytes unchanged', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
