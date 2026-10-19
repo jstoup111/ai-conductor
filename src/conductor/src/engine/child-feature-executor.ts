@@ -8,6 +8,7 @@ import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage }
 import type { ExecutorIpcPort } from './executor-proxies.js';
 import type { ExecutorBrokerAttachment } from './executor-broker.js';
 import { removeExecutorRecord, writeExecutorRecord } from './executor-records.js';
+import { versionIdFromEngineDir } from './engine-version-id.js';
 
 export interface ForkedExecutor extends ExecutorIpcPort {
   pid?: number;
@@ -48,14 +49,23 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
 
   const launch = async (order: WorkOrder, useSupervisorBuild: boolean, priorFailure?: string): Promise<FeatureExecutionOutcome> => {
     const engineDir = deps.engineDirForOrder(order, useSupervisorBuild);
+    // A fallback child executes the supervisor build, not the original failed
+    // pin.  Publish that actual identity into its work order and durable
+    // record, otherwise status and shipped telemetry lie about the executor.
+    const launchedOrder: WorkOrder = useSupervisorBuild
+      ? {
+          ...order,
+          engineVersionId: versionIdFromEngineDir(engineDir) ?? order.engineVersionId,
+        }
+      : order;
     const modulePath = join(engineDir, 'index.js');
     const child = fork(modulePath, ['executor-child'], { silent: true });
     const attachment = deps.attachBroker(order.slug, child);
-    const entry: RunningChild = { child, order, attachment };
+    const entry: RunningChild = { child, order: launchedOrder, attachment };
     running.add(entry);
     let ended = false;
     let outcome: FeatureExecutionOutcome | undefined;
-    let handshake: 'accepted' | 'failed' | undefined;
+    let handshake: 'accepted' | 'failed' | 'missing' | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = async (result: FeatureExecutionOutcome): Promise<FeatureExecutionOutcome> => {
       if (ended) return outcome ?? result;
@@ -63,24 +73,31 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       if (timer) clearTimeout(timer);
       attachment.close(); running.delete(entry);
       await removeExecutorRecord(deps.projectRoot, order.slug).catch(() => {});
-      await deps.rootEvents.emit({ type: 'feature_dispatch_ended', slug: order.slug, outcome: result.status === 'done' ? 'complete' : result.status === 'halted' || result.status === 'parked' ? 'halted' : 'terminated' });
       return result;
     };
     const done = new Promise<FeatureExecutionOutcome>((resolve) => {
       child.once('exit', (code, signal) => {
-        const reason = outcome?.reason ?? (code === 134 ? 'executor exited from V8 heap exhaustion' : `executor exited before outcome (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
+        const reason = outcome?.reason ?? (code === 134 || signal === 'SIGABRT' ? 'executor exited from V8 heap exhaustion' : `executor exited before outcome (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
         void finish(outcome ?? errorOutcome(order, reason)).then(resolve);
       });
     });
     timer = setTimeout(() => {
       if (handshake === undefined) {
-        handshake = 'failed';
+        handshake = 'missing';
         child.kill('SIGTERM');
       }
     }, startTimeoutMs);
     child.on('message', (raw?: unknown) => {
       const parsed = parseExecutorMessage(raw);
-      if (parsed.kind === 'malformed') { deps.log?.(`[executor ${order.slug}] malformed child message: ${parsed.reason}`); return; }
+      if (parsed.kind === 'malformed') {
+        deps.log?.(`[executor ${order.slug}] malformed child message: ${parsed.reason}`);
+        if (handshake === undefined) {
+          handshake = 'failed';
+          deps.onProtocolMismatch?.();
+          child.kill('SIGTERM');
+        }
+        return;
+      }
       const message = parsed.message;
       if (message.kind === 'hello' && handshake === undefined) {
         if (message.protocolVersion !== EXECUTOR_PROTOCOL_VERSION) {
@@ -88,8 +105,8 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         }
         handshake = 'accepted';
         void writeExecutorRecord(deps.projectRoot, order.slug, {
-          pid: child.pid ?? -1, engineDir, engineVersionId: order.engineVersionId, startedAt: new Date().toISOString(),
-        }).then(() => child.send({ kind: 'work-order', order } satisfies ExecutorMessage));
+          pid: child.pid ?? -1, engineDir, engineVersionId: launchedOrder.engineVersionId, startedAt: new Date().toISOString(),
+        }).then(() => child.send({ kind: 'work-order', order: launchedOrder } satisfies ExecutorMessage));
         return;
       }
       if (message.kind === 'outcome') {
@@ -100,18 +117,33 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         void delay(teardownTimeoutMs).then(() => { if (!ended) child.kill('SIGTERM'); });
       }
     });
-    await deps.rootEvents.emit({ type: 'feature_dispatch_started', slug: order.slug, kind: 'initial', engineVersionId: order.engineVersionId });
     const result = await done;
     if (handshake === 'failed' && !useSupervisorBuild) {
       const reason = priorFailure ?? 'executor protocol handshake failed';
       return launch(order, true, reason);
     }
     if (handshake === 'failed' && useSupervisorBuild) return errorOutcome(order, `${priorFailure ?? 'executor handshake failed'}; supervisor-build relaunch handshake failed`);
+    if (handshake === 'missing') return errorOutcome(order, 'executor missing startup handshake');
     return result;
   };
 
   return {
-    execute: (order) => launch(order, false),
+    async execute(order) {
+      // Dispatch lifecycle belongs to the claim, not a particular fork. A
+      // protocol fallback may launch twice, but the durable daemon ledger must
+      // still contain exactly one start/end pair for that claim.
+      await deps.rootEvents.emit({
+        type: 'feature_dispatch_started', slug: order.slug, kind: 'initial',
+        engineVersionId: order.engineVersionId,
+        ...(order.pinFallbackReason === undefined ? {} : { pinFallbackReason: order.pinFallbackReason }),
+      });
+      const result = await launch(order, false);
+      await deps.rootEvents.emit({
+        type: 'feature_dispatch_ended', slug: order.slug,
+        outcome: result.status === 'done' ? 'complete' : result.status === 'halted' || result.status === 'parked' ? 'halted' : 'terminated',
+      });
+      return result;
+    },
     async stopAll() {
       const children = [...running];
       for (const entry of children) entry.child.send({ kind: 'stop', reason: 'supervisor shutdown' });

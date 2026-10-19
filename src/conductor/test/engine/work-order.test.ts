@@ -117,6 +117,23 @@ describe('engine/work-order', () => {
     )).rejects.toThrow(/engineVersionId/);
   });
 
+  it('carries a pin fallback reason across the dispatcher-to-executor boundary', async () => {
+    const order = await buildWorkOrder({
+      repository: 'jstoup/ai-conductor',
+      slug: 'fallback-dispatch',
+      baseSha: 'a'.repeat(40),
+      enginePin: { ...ENGINE_PIN, fallbackReason: 'publish-incomplete' },
+      effectiveConcurrency: 2,
+      documentRefs: [],
+    }, async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+
+    expect(JSON.parse(JSON.stringify(order))).toMatchObject({
+      engineVersionId: ENGINE_VERSION_ID,
+      pinFallbackReason: 'publish-incomplete',
+      effectiveConcurrency: 2,
+    });
+  });
+
   it.each(['/outside/spec.md', 'C:\\outside\\spec.md'])(
     'rejects absolute document ref %s before resolving it from Git',
     async (ref) => {

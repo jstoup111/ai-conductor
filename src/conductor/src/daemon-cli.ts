@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { access, mkdir, readFile, readlink, unlink as unlinkFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -169,6 +169,9 @@ import {
 } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
+import { createChildProcessFeatureExecutor } from './engine/child-feature-executor.js';
+import { createExecutorBroker } from './engine/executor-broker.js';
+import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
 import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
 import { resolveEnginePin } from './engine/engine-pin.js';
 import { resolveEngineStoreRoot } from './engine/engine-store.js';
@@ -460,6 +463,17 @@ async function rebuildEngineFromSource(conductorRoot: string): Promise<void> {
  */
 export function engineEntryPathForRepo(projectRoot: string): string {
   return join(projectRoot, 'src', 'conductor', 'dist', 'index.js');
+}
+
+/**
+ * Development engines run from `<conductor>/dist`; installed engines run from
+ * `<conductor>/dist-versions/<id>`. Only the latter needs the extra parent
+ * traversal to find the package-owned floating `dist` link.
+ */
+export function conductorRootForModuleDir(moduleDir: string): string {
+  return basename(dirname(moduleDir)) === 'dist-versions'
+    ? dirname(dirname(moduleDir))
+    : dirname(moduleDir);
 }
 
 /** Sidecar filename stamped by `publish-engine.mjs` at finalize (Task 4). */
@@ -1416,6 +1430,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // every live worker through the one dispatch seam.
   let activeExecutorCount = 0;
   let shutdownRequested = false;
+  // Assigned when child isolation is selected below.  Keep the signal handler
+  // independent from adapter construction order while still stopping children
+  // before the scheduler begins its drain and before the daemon lock releases.
+  let stopChildExecutors: (() => Promise<void>) | undefined;
+  let abortChildBroker: (() => void) | undefined;
 
   // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
   // lock is released — force-exiting on SIGTERM (the old behavior) let a
@@ -1452,6 +1471,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     for (const controller of allWaitSignals) {
       controller.abort();
     }
+    abortChildBroker?.();
+    await stopChildExecutors?.();
     // Daemon conductors intentionally have no per-conductor SIGTERM listener.
     // Close their real lifecycle ledgers before the scheduler drain can release
     // this process; each closure joins an in-flight terminal if one exists.
@@ -2235,11 +2256,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
-    const conductorRoot = dirname(__dirname);
+    const conductorRoot = conductorRootForModuleDir(__dirname);
     const enginePin = await resolveEnginePin({
       conductorRoot,
       storeRoot: resolveEngineStoreRoot({ conductorRoot }),
-      ownEngineDir: join(__dirname, 'engine'),
+      // A versioned install has its forkable index.js directly in __dirname.
+      ownEngineDir: __dirname,
     });
     return buildWorkOrder(
       {
@@ -2247,6 +2269,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         slug: item.slug,
         baseSha,
         enginePin,
+        effectiveConcurrency: daemonConcurrency.concurrency,
         documentRefs: [
           item.storiesPath ?? `.docs/stories/${item.slug}.md`,
           item.planPath ?? `.docs/plans/${item.slug}.md`,
@@ -2263,7 +2286,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       workOrderGit,
     );
   };
-  const executor = createInProcessFeatureExecutor({
+  const inProcessExecutor = createInProcessFeatureExecutor({
     withFeatureOwnership: withDaemonLogFeatureOwnership,
     run: async (order) => {
       const item = workOrderToBacklogItem(order);
@@ -2291,6 +2314,44 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       })(item);
     },
   });
+  const conductorRoot = conductorRootForModuleDir(__dirname);
+  const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot });
+  const executorBroker = createExecutorBroker({
+    rateLimitEpisode,
+    providerAvailability,
+    liveBoundaryCoordinator,
+    worktreeLifecycle,
+    rootEvents: events,
+    featureLogFor,
+    log,
+  });
+  const childExecutor = createChildProcessFeatureExecutor({
+    projectRoot,
+    // The order carries only a stable version id. Resolve it from the immutable
+    // store at fork time, never through the floating dist link.
+    engineDirForOrder: (order, useSupervisorBuild) => useSupervisorBuild
+      ? __dirname
+      : realpathSync(join(engineStoreRoot, order.engineVersionId)),
+    supervisorEngineVersionId: resolveEngineVersion(__dirname),
+    rootEvents: events,
+    attachBroker: executorBroker.attach,
+    dispatchStartTimeoutMs: resolveDispatchStartTimeoutSeconds(config) * 1_000,
+    teardownTimeoutMs: resolveTeardownTimeoutSeconds(config) * 1_000,
+    onProtocolMismatch: () => log('[daemon] executor protocol mismatch; supervisor-build failover requested'),
+    log,
+  });
+  const childMode = (config?.executor_isolation ?? 'child') === 'child';
+  const executor = childMode ? childExecutor : inProcessExecutor;
+  if (childMode) {
+    stopChildExecutors = () => childExecutor.stopAll();
+    abortChildBroker = () => executorBroker.abortAll();
+  } else {
+    log('[daemon] executor isolation: in-process; per-dispatch engine pinning is disabled');
+  }
+  // Reap a predecessor's durable child references before the scheduler can
+  // claim work. This makes successor takeover deterministic rather than
+  // allowing a new claim to overlap a still-running old executor.
+  await sweepExecutorRecordsOnBoot(projectRoot);
   const executeFeature = opts.runFeature ?? makeRunFeature(deps);
   const runFeature = (item: BacklogItem): Promise<FeatureOutcome> => executeFeature(item);
 

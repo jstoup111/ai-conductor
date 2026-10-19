@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { posix, win32 } from 'node:path';
 import type { ComplexityTier, Track } from '../types/steps.js';
 import type { FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored } from '../types/state.js';
-import type { EnginePin } from './engine-pin.js';
+import type { EnginePin, EnginePinFallbackReason } from './engine-pin.js';
 import { versionIdFromEngineDir, type EngineVersionId } from './engine-version-id.js';
 
 /** Increment when the serializable dispatcher-to-executor contract changes. */
@@ -29,6 +29,8 @@ export interface WorkOrder {
   baseSha: string;
   /** Immutable engine build selected for this individual dispatch. */
   engineVersionId: EngineVersionId;
+  /** Why this order uses the supervisor build rather than the floating dist link. */
+  pinFallbackReason?: EnginePinFallbackReason;
   /** Supervisor pool width, retained for child-mode legacy safety guards. */
   effectiveConcurrency?: number;
   manifest: ManifestEntry[];
@@ -72,6 +74,8 @@ export interface BuildWorkOrderInput {
   baseSha: string;
   /** Immutable engine selected at claim time; its path stays dispatcher-local. */
   enginePin: EnginePin;
+  /** Supervisor pool width retained for child-mode legacy safety guards. */
+  effectiveConcurrency?: number;
   documentRefs: readonly string[];
   tier?: ComplexityTier;
   sourceRef?: string;
@@ -114,6 +118,8 @@ export async function buildWorkOrder(
     slug: input.slug,
     baseSha: input.baseSha,
     engineVersionId: input.enginePin.engineVersionId,
+    ...(input.enginePin.fallbackReason === undefined ? {} : { pinFallbackReason: input.enginePin.fallbackReason }),
+    ...(input.effectiveConcurrency === undefined ? {} : { effectiveConcurrency: input.effectiveConcurrency }),
     manifest,
     ...(input.tier ? { tier: input.tier } : {}),
     ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),
