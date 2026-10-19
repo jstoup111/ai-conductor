@@ -308,6 +308,8 @@ The decisions below incorporate the fixes.
 > execution child. The closed-child `rewind` refusal now names #3203, which owns manual landing and
 > closed-child rewind (`adr-2026-10-12-routed-whole-feature-repair` decision 8).
 
+> **Amended 2026-10-17 by #2945:** A child branch is pushed only by FINISH's `establish_child_prs`, after every gate has passed, through `executeRemoteGit`, as a plain push of its closure SHA after an `ls-remote` shows the branch absent. Halt records are still never pushed to a child (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 4).
+
 12. **Rebase guards until #2943.**
     - While the active child is not the leaf, `resumeRebaseFirst` and the base-advance re-kick
       rebase are skipped. The stack stays on its pinned base, and an event records the skip.

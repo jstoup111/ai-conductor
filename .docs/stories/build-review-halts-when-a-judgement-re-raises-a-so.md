@@ -81,7 +81,7 @@ remains the bound.
 
 #### Negative Paths
 - Given N's new action effect and an exhausted cumulative kickback cap, when the effect stage runs, then the lap halts with the existing kickback-cap halt naming N's effect and no case-store invariant appears in the halt or the event.
-- Given R is an action case, failed or applied, and the judgement binds the current finding to R by `existingCaseId` with disposition `act`, when the lap runs, then it halts `semantic remediation case regression R` and persists no new case.
+- Given R is an action case, failed or applied, that holds no operator-accepted source, and the judgement binds the current finding to R by `existingCaseId` with disposition `act`, when the lap runs, then it halts `semantic remediation case regression R` and persists no new case.
 - Given O is an open action case on S and the judgement proposes an unbound action case on S with a different source set, when the lap reconciles, then it halts with a rejected transition naming `source-linked-by-multiple-cases`, O, the proposed case id and S, and the store is byte-identical.
 
 ### Done When
@@ -101,7 +101,7 @@ decision instead of clearing a store failure.
 
 #### Happy Path
 - Given R is an action case with an `applied` effect and the judgement escalates S to architecture as an unbound case, when the lap runs, then a new open decision stop is persisted, R is byte-identical, and the feature halts with the existing decision-stop halt naming the architecture owner, the new case id and S.
-- Given the judgement names R as `existingCaseId` on an escalation whose sources differ from R's, when the stop is persisted, then a new open stop with a fresh case id is written and R is byte-identical.
+- Given R holds no operator-accepted source and the judgement names R as `existingCaseId` on an escalation whose sources differ from R's, when the stop is persisted, then a new open stop with a fresh case id is written and R is byte-identical.
 - Given an open decision stop D on S from an earlier lap, when a later lap's judgement escalates the same sources with the same owner, disposition and outcomes bound to D's id but with fresh link timestamps, then persistence reports already-persisted and writes nothing.
 - Given an open decision stop D on S from an earlier lap, when a later lap escalates the same source set to the same owner as an unbound case, then persistence converges on D, writes nothing, and the halt names D.
 

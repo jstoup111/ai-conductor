@@ -23,11 +23,15 @@ The operator approved document-aware invalidation on 2026-09-10 and reaffirmed i
 > **Amended 2026-10-07 by #2942:** For a stacked feature whose active child is not the leaf, the play-forward rebase is skipped and recorded as `rebase_skipped_for_stack` until #2943 provides restack; at the leaf it applies to the leaf only (`adr-2026-10-07-per-child-build-region` decision 12).
 
 > **Amended 2026-10-10 by #2943:** For a stacked feature the mandatory play-forward is the whole-stack `base-refresh` restack at any active child; it never skips silently (`adr-2026-10-10-stacked-restack-journaled-replay` decision 9).
+> **Amended 2026-10-17 by #2945:** Once a stacked feature's publication record has a member and is not torn down, re-kick's play-forward is refused with `restack_refused` reason `published-stack`. Re-kick then retries its gate on the current base, because refreshing a published stack is #3268's (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
+
 6. Keep the existing lifecycle step name and placement. Normal finish requires the branch to be current or prospectively mergeable without unresolved changes to active review inputs; publication still requires current passing evidence. Re-kick retains the rebased-onto-advanced-base contract.
 
 > **Amended 2026-10-07 by #2942:** For a stacked feature whose active child is not the leaf, re-kick does not rebase onto the advanced base until #2943 provides restack; the contract applies at the leaf (`adr-2026-10-07-per-child-build-region` decision 12).
 
 > **Amended 2026-10-10 by #2943:** The deferral above is lifted: re-kick on a stacked feature restores the rebased-onto-advanced-base contract by running the whole-stack `base-refresh` restack at any active child (`adr-2026-10-10-stacked-restack-journaled-replay` decision 9).
+
+> **Amended 2026-10-17 by #2945:** For a feature with published stack members (a publication record that is not torn down), normal finish proceeds past a refused base refresh to its next step, and publication still requires current passing evidence (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11).
 
 7. Coverage binding remains non-tree-attesting under `adr-2026-08-31-coverage-binding-judge-step`. This decision does not introduce a durable coverage resume-validity stamp or authorize a test-only validity branch. The existing post-rebase classification owns invalidation for its active input surface.
 
