@@ -37,6 +37,26 @@ const ACTIVE_STALL_EVENT: ConductorEvent = {
   resolvedAfter: 2,
 };
 
+it('declares one persistent sink row for each stack event', () => {
+  const stackEventTypes = [
+    'stack_member_published',
+    'stack_member_redrafted',
+    'stack_assembled',
+    'stack_member_lifecycle',
+    'stack_members_unreachable',
+    'stack_tip_diverged',
+  ] as const;
+
+  for (const type of stackEventTypes) {
+    expect(EVENT_SINKS).toHaveProperty(type, {
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  }
+});
+
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
   (<Value>() => Value extends Right ? 1 : 2)
@@ -349,6 +369,12 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'child_started',
   'child_closed',
   'child_switched',
+  'stack_member_published',
+  'stack_member_redrafted',
+  'stack_assembled',
+  'stack_member_lifecycle',
+  'stack_members_unreachable',
+  'stack_tip_diverged',
   'rebase_skipped_for_stack',
   'restack_planned',
   'restack_applied',

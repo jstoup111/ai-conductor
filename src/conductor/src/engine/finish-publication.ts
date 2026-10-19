@@ -402,16 +402,19 @@ export type PublicationTransitionDimensions = Record<
   | 'releaseReadiness'
   | 'pr.prose'
   | 'shippedRecord'
+  | 'stack'
   | 'pr.ready'
   | 'outcomeRecord'
 >;
 
 export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions = {
   establish_pr: 'pr.identity + branchPushed',
+  establish_child_prs: 'stack',
   verify_release_readiness: 'releaseReadiness',
   author_pr_prose: 'pr.prose',
   judge_pr_prose: 'pr.prose',
   write_shipped_record: 'shippedRecord',
+  assemble_stack: 'stack',
   ready_pr: 'pr.ready',
   record_outcome: 'outcomeRecord',
 };
@@ -647,6 +650,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'pr_url_persistence_failed',
     'pr_identity_not_verified_after_establish',
   ],
+  establish_child_prs: ['publication_transition_indeterminate'],
   verify_release_readiness: ['publication_transition_indeterminate'],
   author_pr_prose: [
     'publication_transition_indeterminate',
@@ -660,6 +664,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'shipped_record_write_failed',
     'shipped_record_not_verified_after_write',
   ],
+  assemble_stack: ['publication_transition_indeterminate'],
   judge_pr_prose: [
     'publication_transition_indeterminate',
     'judgment_timed_out',
@@ -876,8 +881,10 @@ function isExactDisposition(
 function isPublicationTransition(value: unknown): value is PublicationTransition {
   return (
     value === 'establish_pr' ||
+    value === 'establish_child_prs' ||
     value === 'verify_release_readiness' ||
     value === 'write_shipped_record' ||
+    value === 'assemble_stack' ||
     value === 'author_pr_prose' ||
     value === 'judge_pr_prose' ||
     value === 'ready_pr' ||
@@ -1621,6 +1628,10 @@ function publicationTransitionDimensionValue(
       return publicationPrProse(snapshot);
     case 'shippedRecord':
       return snapshot.shippedRecord === 'indeterminate' ? undefined : snapshot.shippedRecord;
+    // Task 5 introduces the authoritative stack observation. These transitions
+    // are not selectable until then, so the interim value must not claim movement.
+    case 'stack':
+      return undefined;
     case 'pr.ready':
       return publicationPrReady(snapshot);
     case 'outcomeRecord':

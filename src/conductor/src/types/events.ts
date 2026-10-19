@@ -171,10 +171,12 @@ type ScratchCleanupAttempt = number | 'unknown';
 /** Closed, credential-safe FINISH publication observability vocabulary. */
 export type FinishPublicationTransition =
   | 'establish_pr'
+  | 'establish_child_prs'
   | 'verify_release_readiness'
   | 'author_pr_prose'
   | 'judge_pr_prose'
   | 'write_shipped_record'
+  | 'assemble_stack'
   | 'ready_pr'
   | 'record_outcome';
 
@@ -209,6 +211,22 @@ export type FinishPublicationEvent =
       type: 'finish_publication_disposition';
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
     };
+
+/** Stack-publication occurrences remain on the canonical conductor event spine. */
+export type StackPublicationEvent =
+  | { type: 'stack_member_published'; child: ChildId; pr: number }
+  | { type: 'stack_member_redrafted'; child: ChildId; pr: number }
+  | { type: 'stack_assembled'; prs: readonly number[] }
+  | {
+      type: 'stack_member_lifecycle';
+      child: ChildId;
+      pr: number;
+      state: 'merged' | 'closed' | 'reverted';
+      /** Deterministic identity makes at-least-once sweep delivery replay-safe. */
+      eventId: string;
+    }
+  | { type: 'stack_members_unreachable'; child: ChildId; pr: number }
+  | { type: 'stack_tip_diverged'; prs: readonly number[] };
 
 /** Closed, non-diagnostic context for credential-park progress telemetry. */
 export type CredentialParkProgressDegradation =
@@ -1245,6 +1263,7 @@ type ConductorEventBody =
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
+  | StackPublicationEvent
   | {
       type: 'feature_complete';
       prUrl?: string;
