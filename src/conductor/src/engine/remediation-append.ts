@@ -30,6 +30,7 @@ import { isAbsolute, join } from 'node:path';
 import type { RemediationGap } from './artifacts.js';
 import { parseChildId, type ChildId } from './child-context.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
+import { parsePlanTaskBlocks } from './plan-task-parse.js';
 import type { GitRunner } from './rebase.js';
 import type { FrozenAllocation, FrozenHostAllocation } from './routing/route-types.js';
 
@@ -249,22 +250,15 @@ function appendRouteLines(block: string, host: number, roundId: string): string 
   return `${block.replace(/\n$/, '')}\n**Child:** ${host}\n**Round:** ${roundId}\n`;
 }
 
-const TASK_BLOCK_HEADER = /^### Task ([A-Za-z0-9._-]+):.*$/gm;
-
 function canonicalFrozenBlock(block: string): string {
   return block.replace(/\r\n/g, '\n').replace(/\n+$/, '\n');
 }
 
 function planTaskBlocks(planText: string): Map<string, string> {
-  const headers = [...planText.matchAll(TASK_BLOCK_HEADER)];
-  const blocks = new Map<string, string>();
-  for (const [index, header] of headers.entries()) {
-    const id = header[1]!;
-    const start = header.index!;
-    const end = headers[index + 1]?.index ?? planText.length;
-    blocks.set(id, canonicalFrozenBlock(planText.slice(start, end)));
-  }
-  return blocks;
+  return new Map([...parsePlanTaskBlocks(planText)].map(([id, block]) => [
+    id,
+    canonicalFrozenBlock(`${block.heading}\n${block.body}`),
+  ]));
 }
 
 /**
@@ -275,12 +269,12 @@ function planTaskBlocks(planText: string): Map<string, string> {
 export async function writeFrozenBlocks(input: WriteFrozenBlocksInput): Promise<WriteFrozenBlocksResult> {
   const bodies = new Map<string, string>();
   for (const body of input.allocation.blockBodies) {
-    const match = /^### Task ([A-Za-z0-9._-]+):/m.exec(body);
-    const id = match?.[1];
-    if (!id || !input.allocation.remTaskIds.includes(id) || bodies.has(id)) {
+    const parsed = parsePlanTaskBlocks(body);
+    const [[id, block]] = [...parsed];
+    if (parsed.size !== 1 || !id || !input.allocation.remTaskIds.includes(id) || bodies.has(id)) {
       return { kind: 'refused', detail: `frozen remediation block ${id ?? '(unreadable)'} is absent from host ${input.host}'s allocation` };
     }
-    bodies.set(id, body);
+    bodies.set(id, canonicalFrozenBlock(`${block.heading}\n${block.body}`));
   }
   if (bodies.size !== input.allocation.remTaskIds.length || input.allocation.remTaskIds.some((id) => !bodies.has(id))) {
     return { kind: 'refused', detail: `frozen remediation allocation for host ${input.host} has unreadable task ids` };

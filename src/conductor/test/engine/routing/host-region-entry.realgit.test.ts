@@ -245,6 +245,49 @@ describe('routed host region entry (real local Git)', () => {
     })).resolves.toMatchObject({ kind: 'refused', detail: expect.stringContaining('rem-prd-audit-other') });
   });
 
+  // Covers: task:49, task:50
+  it.each([
+    [
+      'a task-shaped line inside fenced code',
+      [
+        '### Task rem-prd-audit-T1: Repair routed task',
+        '```md',
+        '### Task rem-prd-audit-T1: illustration only',
+        '```',
+        '**Child:** 1',
+        '**Round:** r1',
+        '',
+      ].join('\n'),
+    ],
+    [
+      'a supported heading variant',
+      [
+        '## Task rem-prd-audit-T1 — Repair routed task',
+        '**Child:** 1',
+        '**Round:** r1',
+        '',
+      ].join('\n'),
+    ],
+  ])('replays a frozen block containing %s without appending or committing, and halts on a different body', async (_caseName, block) => {
+    const subject = await fixture();
+    await writeFile(join(subject.repo, planPath), `### Task T1: Existing work\n\n${block}`);
+    await subject.git(['add', planPath]);
+    await subject.git(['commit', '-qm', 'seed stored frozen block']);
+    const head = (await subject.git(['rev-parse', 'HEAD'])).stdout;
+    const allocation = { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [block] };
+
+    await expect(writeFrozenBlocks({ worktree: subject.repo, planPath, roundId, host: child, allocation, slug: 'demo', git: subject.git }))
+      .resolves.toEqual({ kind: 'noop' });
+    await expect(subject.git(['rev-parse', 'HEAD'])).resolves.toMatchObject({ stdout: head });
+
+    const different = block.replace('Repair routed task', 'Different routed task');
+    await expect(writeFrozenBlocks({
+      worktree: subject.repo, planPath, roundId, host: child, slug: 'demo', git: subject.git,
+      allocation: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [different] },
+    })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('rem-prd-audit-T1') });
+    await expect(subject.git(['rev-parse', 'HEAD'])).resolves.toMatchObject({ stdout: head });
+  });
+
   // Covers: task:49
   it('restores the plan when the guarded append is refused by a moving restack journal', async () => {
     const subject = await fixture();

@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parsePlanTaskBodies,
+  parsePlanTaskBlocks,
   planTaskDigests,
   parsePlanTaskPaths,
   parsePlanTaskDoneWhen,
@@ -186,6 +187,24 @@ This prose quotes ### Task 2: but is not a heading.
         ['1', 'This prose quotes ### Task 2: but is not a heading.\n'],
       ]));
       expect(result.get('2')).toBeUndefined();
+    });
+  });
+
+  describe('parsePlanTaskBlocks', () => {
+    it('keeps supported heading variants and excludes task-like fenced code from the stored block boundary', () => {
+      const plan = [
+        '## Task rem-prd-audit-T1 — Repair routed task',
+        '```md',
+        '### Task rem-prd-audit-T1: illustration only',
+        '```',
+        'Still part of the routed task.',
+        '## Notes',
+      ].join('\n');
+
+      expect(parsePlanTaskBlocks(plan).get('rem-prd-audit-T1')).toEqual({
+        heading: '## Task rem-prd-audit-T1 — Repair routed task',
+        body: '```md\n### Task rem-prd-audit-T1: illustration only\n```\nStill part of the routed task.',
+      });
     });
   });
 
