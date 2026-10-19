@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:9, task:12
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -168,6 +168,40 @@ describe('executor event forwarding', () => {
     const ledger = await readFile(join(root, '.daemon', 'events.jsonl'), 'utf8');
     const types = ledger.trim().split('\n').map((line) => (JSON.parse(line) as { type: string }).type);
     expect(types).toEqual(['feature_shipped']);
+
+    daemonPersistence.stop();
+  });
+
+  it('persists one child provider-suppressed callback at the root, while the broker itself emits none', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'executor-event-forwarding-'));
+    temporaryRoots.push(root);
+    const rootEvents = new ConductorEventEmitter();
+    const daemonPersistence = startDaemonEventPersistence(root, rootEvents);
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode(),
+      providerAvailability: createProviderAvailability({ now: () => Date.now() }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents,
+      featureLogFor: () => () => {},
+    });
+    const port = new Port();
+    broker.attach('feature-a', port);
+
+    // This is the executor's onProviderSuppressed callback event. Its root
+    // scope keeps daemon persistence owned by the existing event spine; the
+    // broker's provider.suppress request handler has no event side effect.
+    port.receive({
+      kind: 'event', scope: 'root', payload: {
+        type: 'provider_suppressed', provider: 'codex', deadline: 2_000,
+      },
+    });
+    await settleForwarding();
+
+    const ledger = await readFile(join(root, '.daemon', 'events.jsonl'), 'utf8');
+    const suppressions = ledger.trim().split('\n')
+      .map((line) => JSON.parse(line) as { type: string; provider?: string; deadline?: number })
+      .filter((event) => event.type === 'provider_suppressed');
+    expect(suppressions).toEqual([{ type: 'provider_suppressed', provider: 'codex', deadline: 2_000, ts: expect.any(String) }]);
 
     daemonPersistence.stop();
   });

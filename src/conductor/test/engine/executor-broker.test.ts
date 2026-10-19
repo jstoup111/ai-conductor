@@ -1,4 +1,4 @@
-// Covers: task:8, task:10, task:11
+// Covers: task:8, task:9, task:10, task:11
 import { describe, expect, it } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
@@ -162,20 +162,45 @@ describe('executor broker', () => {
 
   it('replicates provider suppression without making isAvailable asynchronous', async () => {
     let now = 1_000;
+    const availability = createProviderAvailability({ now: () => now });
+    const rootEvents = new ConductorEventEmitter();
+    const brokerEvents: unknown[] = [];
+    rootEvents.on('provider_suppressed', (event) => { brokerEvents.push(event); });
     const broker = createExecutorBroker({
       rateLimitEpisode: createRateLimitEpisode({ now: () => now }),
-      providerAvailability: createProviderAvailability({ now: () => now }),
-      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {}, now: () => now,
+      providerAvailability: availability,
+      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents, featureLogFor: () => () => {}, now: () => now,
     });
-    const channel = pair();
-    const proxy = createProviderAvailabilityProxy(createExecutorRequestClient(channel.child), () => now);
-    broker.attach('a', channel.supervisor);
-    channel.flush();
-    proxy.suppress('codex', 2_000);
-    channel.flush();
-    expect(proxy.isAvailable('codex')).toBe(false);
+    const a = pair();
+    const b = pair();
+    const proxyA = createProviderAvailabilityProxy(createExecutorRequestClient(a.child), () => now);
+    const proxyB = createProviderAvailabilityProxy(createExecutorRequestClient(b.child), () => now);
+    broker.attach('a', a.supervisor);
+    broker.attach('b', b.supervisor);
+    a.flush();
+    b.flush();
+
+    proxyA.suppress('codex', 2_000);
+    // The suppressing executor does not wait for IPC to make its next
+    // provider admission synchronous and safe.
+    expect(proxyA.isAvailable('codex')).toBe(false);
+    await flushAsync(a);
+    await flushAsync(b);
+    expect(availability.isAvailable('codex')).toBe(false);
+    expect(proxyB.isAvailable('codex')).toBe(false);
+    // The broker owns only shared state. The child callback is the one root
+    // event producer, so this request itself cannot duplicate persistence.
+    expect(brokerEvents).toEqual([]);
+
+    const late = pair();
+    const proxyLate = createProviderAvailabilityProxy(createExecutorRequestClient(late.child), () => now);
+    broker.attach('late', late.supervisor);
+    late.flush();
+    expect(proxyLate.isAvailable('codex')).toBe(false);
+
     now = 2_001;
-    expect(proxy.isAvailable('codex')).toBe(true);
+    expect(proxyB.isAvailable('codex')).toBe(true);
+    expect(proxyLate.isAvailable('codex')).toBe(true);
   });
 
   it('holds a root mutation behind a child live-boundary window', async () => {
