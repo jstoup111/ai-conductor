@@ -524,7 +524,26 @@ async function auditSource(
     };
   }
 
-  const referencedByAmbiguousPr = mergedPullRequests.some((pullRequest) => {
+  const associations = mergedPullRequests.map((pullRequest) => ({
+    pullRequest,
+    association: classifyShipmentAssociation({
+      planStems,
+      pr: {
+        headRef: pullRequest.headRef,
+        metadataPlanStems: extractPlanStems(pullRequest.body),
+        changedPaths: pullRequest.changedPaths,
+      },
+    }),
+  }));
+  // Stack children intentionally carry the leaf's declaration. Filter them
+  // before any plan-level classification so a child mention cannot eclipse a
+  // legitimate leaf implementation candidate.
+  const nonChildren = associations.filter(({ association }) =>
+    !(association.kind === 'not-applicable' && association.classification === 'stack-child'));
+  const candidates = nonChildren.flatMap(({ pullRequest, association }) =>
+    association.kind === 'implementation' && association.slug === source.plan!.slug ? [pullRequest] : []);
+
+  const referencedByAmbiguousPr = nonChildren.some(({ pullRequest }) => {
     const stems = extractPlanStems(pullRequest.body).filter((candidate) => planStems.includes(candidate));
     return stems.includes(source.plan!.slug) && new Set(stems).size > 1;
   });
@@ -532,28 +551,21 @@ async function auditSource(
     return row(source, 'ambiguous', 'merged PR metadata references multiple canonical plans');
   }
 
-  const unclassifiedPullRequest = mergedPullRequests.find((pullRequest) =>
+  const unclassifiedPullRequest = nonChildren.find(({ pullRequest }) =>
     !pullRequest.headRef && extractPlanStems(pullRequest.body).includes(source.plan!.slug));
   if (unclassifiedPullRequest) {
     return row(
       source,
       'unresolved',
-      `merged PR #${unclassifiedPullRequest.number} is unclassified: head ref is unavailable`,
+      `merged PR #${unclassifiedPullRequest.pullRequest.number} is unclassified: head ref is unavailable`,
     );
   }
 
-  const stackChildPullRequest = mergedPullRequests.find((pullRequest) => {
-    const association = classifyShipmentAssociation({
-      planStems,
-      pr: {
-        headRef: pullRequest.headRef,
-        metadataPlanStems: extractPlanStems(pullRequest.body),
-        changedPaths: pullRequest.changedPaths,
-      },
-    });
-    return association.kind === 'not-applicable' && association.classification === 'stack-child' &&
-      extractPlanStems(pullRequest.body).includes(source.plan!.slug);
-  });
+  if (candidates.length === 1) return auditImplementationCandidate(options, source, candidates[0]!);
+
+  const stackChildPullRequest = associations.find(({ pullRequest, association }) =>
+    association.kind === 'not-applicable' && association.classification === 'stack-child'
+      && extractPlanStems(pullRequest.body).includes(source.plan!.slug))?.pullRequest;
   if (stackChildPullRequest) {
     return row(
       source,
@@ -562,22 +574,17 @@ async function auditSource(
     );
   }
 
-  const candidates = mergedPullRequests.filter((pullRequest) => {
-    const association = classifyShipmentAssociation({
-      planStems,
-      pr: {
-        headRef: pullRequest.headRef,
-        metadataPlanStems: extractPlanStems(pullRequest.body),
-        changedPaths: pullRequest.changedPaths,
-      },
-    });
-    return association.kind === 'implementation' && association.slug === source.plan!.slug;
-  });
-
   if (candidates.length === 0) return row(source, 'absent', 'no exact associated merged implementation PR');
   if (candidates.length > 1) return row(source, 'ambiguous', 'multiple exact associated merged implementation PRs');
 
-  const implementationPr = candidates[0];
+  return row(source, 'absent', 'no exact associated merged implementation PR');
+}
+
+async function auditImplementationCandidate(
+  options: ShipmentAuditOptions,
+  source: AuditSource,
+  implementationPr: MergedPullRequest,
+): Promise<ShipmentAuditRow> {
   await ensureCommitAvailable(options, implementationPr.headSha);
   const pr = {
     number: implementationPr.number,

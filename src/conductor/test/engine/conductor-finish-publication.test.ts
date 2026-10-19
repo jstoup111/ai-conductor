@@ -1410,7 +1410,9 @@ describe('Conductor FINISH publication routing', () => {
       baseBranch: 'main',
       git: async (args) => args[0] === 'rev-parse'
         ? { stdout: 'refs/remotes/origin/feat/finish-publication\n' }
-        : { stdout: '' },
+        : args[0] === 'cat-file'
+          ? { stdout: '', exitCode: 1 }
+          : { stdout: '' },
       gh: async (args) => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
         if (args[0] === 'pr' && args[1] === 'edit') {
@@ -1518,6 +1520,8 @@ describe('Conductor FINISH publication routing', () => {
       baseBranch: 'main',
       git: async (args) => args[0] === 'rev-parse'
         ? { stdout: 'refs/remotes/origin/feat/finish-publication\n' }
+        : args[0] === 'cat-file'
+          ? { stdout: '', exitCode: 1 }
         : { stdout: '' },
       gh: async (args) => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };

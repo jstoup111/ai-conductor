@@ -52,7 +52,8 @@ function lifecycleGh(states: Record<number, 'OPEN' | 'MERGED' | 'CLOSED'>, rever
     if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ state: states[Number(args[2])] }) };
     if (args[0] === 'pr' && args[1] === 'list') {
       const number = Number((args[args.indexOf('--search') + 1] ?? '').match(/#(\d+)/)?.[1]);
-      return { stdout: JSON.stringify(reverted.includes(number) ? [{ number: 777 }] : []) };
+      const member = Number.isNaN(number) ? 101 : number;
+      return { stdout: JSON.stringify(reverted.includes(member) ? [{ number: 777, body: `Reverts ${repo}#${member}` }] : []) };
     }
     throw new Error(`unexpected gh argv: ${args.join(' ')}`);
   });

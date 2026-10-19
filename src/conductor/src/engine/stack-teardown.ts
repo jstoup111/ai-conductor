@@ -75,12 +75,17 @@ export async function deleteStackChildren(
         dependencies.git(['merge-base', '--is-ancestor', merge, 'origin/main']),
         dependencies.git(['rev-parse', '--verify', `refs/heads/${branch.branch}`]),
       ]);
-      if (onMain.exitCode !== 0 || local.exitCode !== 0 || local.stdout.trim() !== head) {
+      // A missing local branch is an already-completed delete. A failed probe
+      // is not evidence to keep it: stop and retry rather than recording a
+      // terminal teardown receipt.
+      if (onMain.exitCode !== 0 || local.exitCode > 1) return { kind: 'failed' };
+      if (local.exitCode === 1) continue;
+      if (local.stdout.trim() !== head) {
         kept = true;
         continue;
       }
       const deleted = await dependencies.git(['update-ref', '-d', `refs/heads/${branch.branch}`, head]);
-      if (deleted.exitCode !== 0) return { kind: 'failed' };
+      if (deleted.exitCode > 1) return { kind: 'failed' };
     } catch {
       return { kind: 'failed' };
     }

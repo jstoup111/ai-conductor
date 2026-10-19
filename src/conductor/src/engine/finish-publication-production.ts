@@ -60,6 +60,7 @@ import { createShipDraftPublicationDependencies, createTargetBoundGithubOperatio
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import { pushedTipRef } from './push-lease.js';
+import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
@@ -417,10 +418,12 @@ export async function readyStackChildren(input: {
   operationsForPullRequest?: (pr: number) => Promise<GithubOperationRunner | undefined>;
   events?: Parameters<typeof haltStackTipDiverged>[2];
 }): Promise<void> {
+  const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
+  // N=1 and non-stacked FINISH never need a publication-ref-dependent URL
+  // parse or a stack read. Gate on durable child state first.
+  if (!stored || stored.record.stack?.verified !== true) return;
   const leaf = repositoryAndNumber(input.leafUrl);
   if (!leaf) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'retained leaf URL is invalid');
-  const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
-  if (!stored || stored.record.stack?.verified !== true) return;
   if (!input.operations) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'stack child ready boundary unavailable');
   for (const member of [...stored.record.members].slice(0, -1).reverse()) {
     await verifyStackBeforeReadyFlip({
@@ -513,7 +516,7 @@ export async function assembleStack(input: {
   operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
   /** Production FINISH enables the post-membership body projection. */
   refreshMemberBodies?: boolean;
-  events?: { emit(event: { type: 'stack_assembled'; prs: readonly number[] }): Promise<void> };
+  events?: { emit(event: unknown): Promise<void> };
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
   if (!leaf || !input.operations) throw new Error('stack leaf retarget boundary unavailable');
@@ -573,6 +576,35 @@ export async function assembleStack(input: {
     throw new Error('observed stack leaf retarget does not match the retained leaf base');
     }
 
+    // Retarget is a GitHub write, not a push, so it does not cross
+    // executeRemoteGit. Apply the same all-member remote-tip fence here
+    // before changing the leaf's base.
+    const leafTip = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, leafBranchFor(input.slug))]);
+    if (leafTip.exitCode !== 0) {
+      throw new StackPublicationHaltError('stack_publication_precondition_failed', 'retarget tip receipt is unreadable');
+    }
+    const guard = await guardPublishedStackWrite({
+      cwd: input.root,
+      remote: 'origin',
+      slug: input.slug,
+      destination: `refs/heads/${leafBranchFor(input.slug)}`,
+      source: leafTip.stdout.trim(),
+      git: async (args, inputText) => {
+        const result = await input.git([...args], inputText === undefined ? undefined : { input: inputText });
+        return { stdout: result.stdout, exitCode: result.exitCode };
+      },
+      lsRemote: async (args) => {
+        const result = await input.git([...args]);
+        if (result.exitCode !== 0) throw new Error('could not read published stack tips');
+        return { stdout: result.stdout };
+      },
+    });
+    if (guard.kind === 'refuse') {
+      await haltStackTipDiverged(input.root, guard.members, input.events as Parameters<typeof haltStackTipDiverged>[2],
+        `published stack tip diverged at positions: ${guard.members.map((member) => member.position).join(', ')}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', 'published stack tip diverged before leaf retarget');
+    }
+
     await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
@@ -587,7 +619,7 @@ export async function assembleStack(input: {
     await writePhase('observed');
   }
 
-  const observeNativeStack = async (): Promise<{ number: number; members: readonly number[] } | undefined> => {
+  const observeNativeStack = async (): Promise<{ number: number; members: readonly NativeStackMember[] } | undefined> => {
     const current = await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
@@ -604,14 +636,8 @@ export async function assembleStack(input: {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
     const stack = value as { number?: unknown; pull_requests?: unknown; pullRequests?: unknown };
     if (!Number.isInteger(stack.number) || (stack.number as number) <= 0) return undefined;
-    const rawMembers = Array.isArray(stack.pull_requests) ? stack.pull_requests : stack.pullRequests;
-    if (!Array.isArray(rawMembers)) return undefined;
-    const members = rawMembers.map((member) => typeof member === 'number'
-      ? member
-      : member && typeof member === 'object' && Number.isInteger((member as { number?: unknown }).number)
-        ? (member as { number: number }).number
-        : undefined);
-    if (members.some((member) => member === undefined)) return undefined;
+    const members = parseNativeStackMembers(stack);
+    if (members === undefined) return undefined;
     // The validated read above binds the observation to the current record; keep
     // this local reference so a future refactor cannot turn it into a raw lookup.
     void current;
@@ -639,7 +665,7 @@ export async function assembleStack(input: {
     stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
     if (!stored) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'written stack record is unreadable');
   }
-  const missing = stored.record.members.map((member) => member.pr).filter((pr) => !native!.members.includes(pr));
+  const missing = stored.record.members.map((member) => member.pr).filter((pr) => !native!.members.some((nativeMember) => nativeMember.number === pr));
   if (missing.length > 0) {
     await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations, operationsForTarget: input.operationsForTarget,
@@ -650,8 +676,15 @@ export async function assembleStack(input: {
     });
     native = await observeNativeStack();
   }
-  if (!native || native.members.join(',') !== stored.record.members.map((member) => member.pr).join(',')) {
+  if (!native || native.members.length !== stored.record.members.length
+    || native.members.some((member, index) => member.number !== stored.record.members[index]?.pr)) {
     throw new StackPublicationHaltError('stack_tip_diverged', 'native stack membership or order diverged');
+  }
+  for (const [index, member] of stored.record.members.entries()) {
+    const pushed = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, member.branch)]);
+    if (pushed.exitCode !== 0 || pushed.stdout.trim() !== native.members[index]!.head) {
+      throw new StackPublicationHaltError('stack_tip_diverged', `native stack head diverged at position ${member.position}`);
+    }
   }
   const verified = await writePublicationRecord(input.root, input.slug, stored, {
     ...stored.record, stack: { number: native.number, verified: true },
@@ -1454,6 +1487,12 @@ export function createProductionFinishPublicationCoordinator(
                 git: publicationRecordGit(deps.git, deps.projectRoot),
                 gh: deps.gh,
                 repository: match[1],
+                onDiverged: async (members, detail) => haltStackTipDiverged(
+                  deps.projectRoot,
+                  members,
+                  deps.events as Parameters<typeof haltStackTipDiverged>[2],
+                  detail,
+                ),
               });
             },
           },
@@ -1603,11 +1642,13 @@ export function createProductionFinishPublicationCoordinator(
             if (!state.pr_url) throw new Error('missing PR identity');
             const prOperations = await retainedOperations(state.pr_url);
             if (!state.feature_desc) throw new Error('missing stack publication identity');
-            const leaf = repositoryAndNumber(state.pr_url);
-            if (!leaf) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'retained leaf URL is invalid');
             const stackGit = publicationRecordGit(deps.git, deps.projectRoot);
             const publicationRecord = await activePublicationRecord(deps.projectRoot, state.feature_desc, { git: stackGit });
+            const leaf = publicationRecord?.record.stack?.verified === true
+              ? repositoryAndNumber(state.pr_url)
+              : undefined;
             if (publicationRecord?.record.stack?.verified === true) {
+              if (!leaf) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'retained leaf URL is invalid');
               if (!prOperations) {
                 throw new StackPublicationHaltError('stack_publication_precondition_failed', 'stack leaf ready boundary unavailable');
               }
@@ -1648,7 +1689,9 @@ export function createProductionFinishPublicationCoordinator(
               git: stackGit,
               gh: deps.gh,
               operations: prOperations,
-              operationsForPullRequest: async (pr) => retainedOperations(`https://github.com/${leaf.repository}/pull/${pr}`),
+              operationsForPullRequest: async (pr) => leaf === undefined
+                ? undefined
+                : retainedOperations(`https://github.com/${leaf.repository}/pull/${pr}`),
               events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
             });
             if (!state.feature_desc) throw new Error('missing shipment identity');

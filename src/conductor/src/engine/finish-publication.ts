@@ -1782,6 +1782,12 @@ async function advanceFinishPublicationUnreconciled(
     return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
   }
 
+  // A changed native stack is terminal. Never route it through assembly,
+  // which could turn an external change into another stack mutation.
+  if (stackDimension(snapshot) === 'diverged') {
+    return { kind: 'human_required', reason: 'stack_tip_diverged' };
+  }
+
   if (nextFinishPublicationTransition(snapshot) === 'establish_pr') {
     return coalescePublicationEffect(input.effects, 'establish_pr', async () => {
       if (!input.effects.establishPr) {

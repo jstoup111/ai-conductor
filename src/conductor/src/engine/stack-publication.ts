@@ -201,6 +201,8 @@ export interface ObserveStackDimensionDependencies extends PublicationRecordDepe
   readonly gh?: GhRunner;
   /** Canonical repository for the registered read-only PR and stack queries. */
   readonly repository?: string;
+  /** Production FINISH persists a confirmed observation as an operator halt. */
+  readonly onDiverged?: (members: readonly PublicationMember[], detail: string) => Promise<void>;
 }
 
 function hasDurableChildState(cursor: ActiveChildResolution): boolean {
@@ -373,17 +375,20 @@ function recordHasEveryPosition(
 
 async function observeMembers(
   root: string,
+  slug: string,
   repository: string,
   gh: GhRunner,
-  members: readonly { readonly pr: number; readonly lastSeen?: string }[],
+  members: readonly PublicationMember[],
+  record: PublicationRecord,
+  git: GitRunner,
   requireDraft: boolean,
 ): Promise<'healthy' | 'diverged' | 'indeterminate'> {
-  for (const member of members) {
+  for (const [index, member] of members.entries()) {
     if (member.lastSeen !== undefined) return 'diverged';
     try {
       const stdout = await runTrackerRepositoryRead(
         gh, root, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
-        ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state,isDraft'],
+        ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state,isDraft,baseRefName,headRefOid'],
       );
       const parsed: unknown = JSON.parse(stdout);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'indeterminate';
@@ -392,6 +397,18 @@ async function observeMembers(
       const isDraft = (parsed as { isDraft?: unknown }).isDraft;
       if (typeof isDraft !== 'boolean') return 'indeterminate';
       if (requireDraft && !isDraft) return 'diverged';
+      if (!requireDraft) {
+        const base = (parsed as { baseRefName?: unknown }).baseRefName;
+        const head = (parsed as { headRefOid?: unknown }).headRefOid;
+        // The first child is rooted at the journaled pre-stack base; every
+        // later member is rooted at its immediate predecessor.
+        const expectedBase = index === 0 ? record.retarget?.from : members[index - 1]!.branch;
+        if (typeof head !== 'string') return 'indeterminate';
+        if (expectedBase !== undefined && (typeof base !== 'string' || base !== expectedBase)) return 'diverged';
+        const pushed = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, member.branch)]);
+        if (pushed.exitCode !== 0) return 'indeterminate';
+        if (pushed.stdout.trim() !== head) return 'diverged';
+      }
     } catch {
       return 'indeterminate';
     }
@@ -401,16 +418,36 @@ async function observeMembers(
 
 async function observeVerifiedStack(
   root: string,
+  slug: string,
   repository: string,
   gh: GhRunner,
-  pullRequest: number,
-): Promise<'valid' | 'indeterminate'> {
+  record: PublicationRecord,
+  git: GitRunner,
+): Promise<'valid' | 'diverged' | 'indeterminate'> {
   try {
     const stdout = await runTrackerRepositoryRead(
       gh, root, 'repository.read', repository, { kind: 'repository' },
-      ['api', `repos/${repository}/stacks?pull_request=${pullRequest}`],
+      ['api', `repos/${repository}/stacks?pull_request=${record.members[0]!.pr}`],
     );
-    JSON.parse(stdout);
+    const parsed: unknown = JSON.parse(stdout);
+    const stack = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (!stack || typeof stack !== 'object' || Array.isArray(stack)) return 'indeterminate';
+    const rawMembers = (stack as { pull_requests?: unknown; pullRequests?: unknown }).pull_requests
+      ?? (stack as { pullRequests?: unknown }).pullRequests;
+    if (!Array.isArray(rawMembers) || rawMembers.length !== record.members.length) return 'diverged';
+    for (const [index, expected] of record.members.entries()) {
+      const value = rawMembers[index];
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return 'indeterminate';
+      const member = value as { number?: unknown; head?: { sha?: unknown }; headRefOid?: unknown; head_sha?: unknown };
+      const head = typeof member.head?.sha === 'string' ? member.head.sha
+        : typeof member.headRefOid === 'string' ? member.headRefOid
+          : typeof member.head_sha === 'string' ? member.head_sha : undefined;
+      if (member.number !== expected.pr) return 'diverged';
+      if (typeof head !== 'string' || head.length === 0) return 'indeterminate';
+      const pushed = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, expected.branch)]);
+      if (pushed.exitCode !== 0) return 'indeterminate';
+      if (pushed.stdout.trim() !== head) return 'diverged';
+    }
     return 'valid';
   } catch {
     return 'indeterminate';
@@ -441,8 +478,15 @@ export async function observeStackDimension(
 
   const { gh, repository } = dependencies;
   if (gh === undefined || repository === undefined) return 'indeterminate';
-  const members = await observeMembers(root, repository, gh, stored.record.members, stored.record.stack?.verified !== true);
-  if (members !== 'healthy') return members;
+  const members = await observeMembers(
+    root, slug, repository, gh, stored.record.members, stored.record, git, stored.record.stack?.verified !== true,
+  );
+  if (members !== 'healthy') {
+    if (members === 'diverged') await dependencies.onDiverged?.(stored.record.members, 'published stack member diverged');
+    return members;
+  }
   if (stored.record.stack?.verified !== true) return 'unassembled';
-  return observeVerifiedStack(root, repository, gh, stored.record.members[0]!.pr);
+  const observed = await observeVerifiedStack(root, slug, repository, gh, stored.record, git);
+  if (observed === 'diverged') await dependencies.onDiverged?.(stored.record.members, 'published stack membership or tip diverged');
+  return observed;
 }

@@ -32,6 +32,17 @@ async function git(args: string[], options?: Parameters<GitRunner>[1]) {
 }
 
 async function writeRecord(record: PublicationRecord): Promise<void> {
+  const origin = join(root, 'origin.git');
+  const remote = await git(['config', '--get', 'remote.origin.url']);
+  if (remote.exitCode !== 0) {
+    await git(['init', '--bare', '-q', origin]);
+    await git(['remote', 'add', 'origin', origin]);
+  }
+  const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  for (const member of record.members) {
+    await git(['push', '-q', 'origin', `HEAD:refs/heads/${member.branch}`]);
+    await git(['update-ref', `refs/conductor/demo/pushed/${member.branch}`, head]);
+  }
   await expect(writePublicationRecord(root, 'demo', undefined, record, { git })).resolves.toEqual({ kind: 'updated' });
 }
 
@@ -42,7 +53,7 @@ async function record(): Promise<PublicationRecord> {
 }
 
 function fixture(base: string, trace: string[]) {
-  let stack: { number: number; pull_requests: readonly { number: number }[] } | undefined;
+  let stack: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] } | undefined;
   const gh: GhRunner = async (args) => {
     trace.push(`read:${args.join(' ')}`);
     if (args[0] === 'api' && args[1]?.includes('/stacks?pull_request=')) {
@@ -56,7 +67,8 @@ function fixture(base: string, trace: string[]) {
         trace.push(`retarget:${(request.payload as { base: string }).base}`);
         base = (request.payload as { base: string }).base;
       } else if (request.operation === 'stack.create') {
-        stack = { number: 44, pull_requests: (request.payload as { pullRequests: readonly number[] }).pullRequests.map((number) => ({ number })) };
+        const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+        stack = { number: 44, pull_requests: (request.payload as { pullRequests: readonly number[] }).pullRequests.map((number) => ({ number, head: { sha: head } })) };
         trace.push('stack:create');
       } else if (request.operation !== 'stack.read') {
         throw new Error(`unexpected operation ${request.operation}`);

@@ -260,11 +260,14 @@ async function observeStackMemberLifecycle(
       if (state === 'MERGED') {
         const reverted = await runTrackerRepositoryRead(
           gh, entry.repoCwd, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
-          ['pr', 'list', '-R', repository, '--state', 'merged', '--search', `Reverts ${repository}#${member.pr} in:body`, '--json', 'number'],
+          ['pr', 'list', '-R', repository, '--state', 'merged', '--base', 'main', '--json', 'number,body'],
         );
         const matches: unknown = JSON.parse(reverted);
+        const revertLine = new RegExp(`(^|\\n)Reverts ${repository.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}#${member.pr}(?:\\s|$)`);
         lifecycle = Array.isArray(matches) && matches.some((candidate) =>
-          candidate !== null && typeof candidate === 'object' && typeof (candidate as { number?: unknown }).number === 'number',
+          candidate !== null && typeof candidate === 'object'
+            && typeof (candidate as { body?: unknown }).body === 'string'
+            && revertLine.test((candidate as { body: string }).body),
         ) ? 'reverted' : 'merged';
       }
     } catch {
@@ -827,15 +830,18 @@ export async function sweepMergeableLabels({
           );
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
-            // Task 26's unreachable receipt is terminal for reaping: retain
-            // it so a later sweep cannot reinterpret the stack as an ordinary
-            // leaf-only feature and erase the evidence or its child branches.
+            // An unreachable-member receipt is the one terminal teardown
+            // outcome: it preserves the member and its operator evidence.
+            // A plain tornDown receipt, by contrast, is an incomplete cleanup
+            // checkpoint and must be retried on the next sweep.
             const storedPublication = await readPublicationRecord(
               entry.repoCwd,
               entry.slug,
               publicationRecordDependencies,
             );
-            if (storedPublication.kind === 'record' && storedPublication.record.tornDown === true) {
+            if (storedPublication.kind === 'record'
+              && storedPublication.record.tornDown === true
+              && storedPublication.record.unreachableReported === true) {
               survivors.push(entry);
               continue;
             }
@@ -872,7 +878,6 @@ export async function sweepMergeableLabels({
                 // until the dedicated stack teardown path consumes this proof.
                 // This sweep still reaps the feature worktree immediately once
                 // the ordinary shipped-record gate passes.
-                survivors.push(entry);
                 if (reachability.kind === 'unreachable') {
                   if (publication.record.unreachableReported !== true) {
                     emitEvent({
@@ -889,10 +894,12 @@ export async function sweepMergeableLabels({
                   log?.(
                     `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-unreachable`,
                   );
+                  survivors.push(entry);
                 } else if (reachability.kind === 'indeterminate') {
                   log?.(
                     `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
                   );
+                  survivors.push(entry);
                 }
                 if (reachability.kind === 'reachable' && repository) {
                   const result = await deleteStackChildren(entry.repoCwd, entry.slug, publication.record, {

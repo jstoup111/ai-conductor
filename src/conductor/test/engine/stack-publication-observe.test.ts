@@ -20,6 +20,11 @@ const members = [
   { position: c3, branch: 'feat/c3/demo', pr: 103 },
   { position: c5, branch: 'feat/daemon-demo', pr: 500 },
 ] as const;
+const tips: Record<string, string> = {
+  'feat/c1/demo': '1'.repeat(40),
+  'feat/c3/demo': '3'.repeat(40),
+  'feat/daemon-demo': '5'.repeat(40),
+};
 
 interface Fixture {
   readonly gitArgs: string[][];
@@ -47,6 +52,10 @@ function fixture(options: {
     if (args[0] === 'rev-parse' && args.at(-1) === 'refs/conductor/demo/publication') {
       return record === undefined ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `${publicationBlob}\n` };
     }
+    if (args[0] === 'rev-parse' && args.at(-1)?.startsWith('refs/conductor/demo/pushed/')) {
+      const branch = args.at(-1)!.replace('refs/conductor/demo/pushed/', '');
+      return tips[branch] ? { exitCode: 0, stdout: `${tips[branch]}\n` } : { exitCode: 1, stdout: '' };
+    }
     if (args[0] === 'cat-file' && args[2] === publicationBlob) {
       return { exitCode: 0, stdout: JSON.stringify(record) };
     }
@@ -58,11 +67,20 @@ function fixture(options: {
       const number = Number(args[2]);
       const state = options.memberStates?.[number] ?? 'OPEN';
       const isDraft = options.memberDrafts?.[number] ?? true;
-      return { stdout: JSON.stringify({ state, isDraft }) };
+      const member = members.find((candidate) => candidate.pr === number)!;
+      const index = members.indexOf(member);
+      return { stdout: JSON.stringify({
+        state,
+        isDraft,
+        headRefOid: tips[member.branch],
+        ...(index === 0 ? {} : { baseRefName: members[index - 1]!.branch }),
+      }) };
     }
     if (args[0] === 'api') {
       if (options.stackRead === 'timeout') throw new Error('timed out');
-      return { stdout: JSON.stringify([{ number: record?.stack?.number, pull_requests: members }]) };
+      return { stdout: JSON.stringify([{ number: record?.stack?.number, pull_requests: members.map((member) => ({
+        number: member.pr, head: { sha: tips[member.branch] },
+      })) }]) };
     }
     throw new Error(`unexpected gh argv: ${args.join(' ')}`);
   };
