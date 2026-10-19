@@ -24,6 +24,8 @@ export interface ReconcileRemediationCasesInput {
   readonly resolveAbsentOpenNonActionCases?: boolean;
   /** Case identities known by the caller to belong to another feature/domain. */
   readonly foreignCaseIds?: readonly string[];
+  /** Existing cases handled outside the admitted graph (for example, carry). */
+  readonly referencedCaseIds?: readonly string[];
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -190,7 +192,10 @@ function reconcileState(
     if (record.effect.kind !== 'none') usedIds.add(record.effect.id);
   }
 
-  const referencedExisting = new Set<string>();
+  // A carried proposal has already appended its source before this
+  // reconciliation. Its omission from the admitted graph is intentional, not
+  // evidence that an open case disappeared from the lap.
+  const referencedExisting = new Set(input.referencedCaseIds ?? []);
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
   const caseIdsByRef = new Map<string, string>();

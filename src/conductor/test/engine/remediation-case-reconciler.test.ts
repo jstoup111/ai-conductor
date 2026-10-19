@@ -120,6 +120,31 @@ describe('remediation case reconciler', () => {
     }]);
   });
 
+  it('does not settle an open carried case merely because the reduced graph omits it', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const original = durableAction({
+      id: 'case-carried',
+      resolution: 'open',
+      effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'order-carried' },
+    });
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [original] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: { sourceOutcomes: [], cases: [] } as RemediationCaseGraph,
+      recordedAt: RECORDED_AT,
+      generateId: generatedIds('unused-case', 'unused-effect'),
+      attemptedCaseIds: ['case-carried'],
+      referencedCaseIds: ['case-carried'],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      resolvedAbsentCaseIds: [],
+      state: { cases: [original] },
+    });
+  });
+
   it('carries a rejected source-link transition and leaves the valid store bytes unchanged', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);

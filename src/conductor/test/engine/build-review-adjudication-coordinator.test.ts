@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:3, task:5, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-prd-audit-5a, task:rem-prd-audit-5e, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,9 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
 import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
-import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
@@ -1175,6 +1176,54 @@ describe('coordinateBuildReviewAdjudication', () => {
       type: 'remediation_effect_failed', caseId: 'case-durable', effectId: 'effect-durable', effectKind: 'deferral',
       reason: 'deferred intake failed: tracker unavailable',
     }));
+  });
+
+  it('settles an accepted applied-case binding as carried without changing its case state', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const originSourceId = securitySourceId;
+    const originFinding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'security', contractVersion: 'v3', concernKind: 'injection',
+      anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
+    });
+    if (!originFinding) throw new Error('fixture origin finding is invalid');
+    const original = {
+      id: 'case-carried', domain: 'build_review' as const, disposition: 'act' as const, priority: 'critical' as const, confidence: 'high' as const,
+      rationale: 'The accepted finding was previously repaired.', resolution: 'resolved' as const,
+      sources: [{ sourceId: originSourceId, outcome: 'acted' as const, recordedAt: '2025-12-01T00:00:00.000Z' }],
+      effect: { id: 'effect-carried', kind: 'action' as const, status: 'applied' as const, workOrderId: 'order-carried' },
+    };
+    await seedCases(store, { version: 'v1', feature, cases: [original] });
+    const accepted = await new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-01T00:00:00.000Z') }).append({
+      feature, finding: originFinding, sourceLapId: 'lap-security' as never,
+      summary: 'The original finding is accepted risk.', rationale: 'Accepted for this feature.', operator: 'operator',
+    });
+    expect(accepted).toMatchObject({ ok: true });
+    expect(originFinding.id).toBe(rawSecuritySource.findingId);
+    const action = actionJudgement();
+    const judgement: RemediationCaseJudgement = {
+      ...action,
+      cases: [{ ...action.cases[0]!, existingCaseId: original.id }],
+    };
+    const events: ConductorEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement),
+      emit: async (event) => { events.push(event); },
+      chargeEffect: async () => { throw new Error('carried finding must not charge'); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(events.filter((event) => event.type === 'remediation_semantic_repeat_halt')).toEqual([]);
+    expect(events.filter((event) => event.type === 'build_review_disposition_carried')).toEqual([
+      expect.objectContaining({ findingId, caseId: original.id, originFindingId: rawSecuritySource.findingId, originLapId: 'lap-security' }),
+    ]);
+    await expect(readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')).rejects.toThrow();
+    const settled = await store.read();
+    expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      ...original,
+      sources: [...original.sources, expect.objectContaining({ sourceId })],
+    })] } });
   });
 
   it('re-reads authority before a semantic-repeat halt and leaves an unaccepted sibling fail-closed', async () => {

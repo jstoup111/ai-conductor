@@ -834,6 +834,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const reconciled = await reconcileRemediationCases(store, {
     graph: { ...graph.graph, cases: ordinaryCases }, recordedAt, generateId,
     attemptedCaseIds,
+    // Carry appends its source under the store lease before the ordinary graph
+    // is reconciled. Keep those cases referenced so absence from this reduced
+    // graph cannot resolve an otherwise-open carried case.
+    referencedCaseIds: carried.map((proposed) => proposed.case.existingCaseId!),
     // A mechanically complete lap saw every finding this join could report, so a
     // prior open non-action case absent from it is decided by that absence — the
     // same evidence the exit paths settle on. Leaving it open let stale history
