@@ -13,6 +13,7 @@ import {
 } from '../../src/engine/work-order.js';
 import type { EnginePin } from '../../src/engine/engine-pin.js';
 import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
+import type { WorkOrder } from '../../src/engine/work-order.js';
 
 const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
 const ENGINE_PIN: EnginePin = {
@@ -107,7 +108,7 @@ describe('engine/work-order', () => {
       throw new Error('work-order identity must be checked before Git');
     };
     await expect(verifyWorkOrder(
-      { ...order, schemaVersion: WORK_ORDER_SCHEMA_VERSION + 1 },
+      { ...order, schemaVersion: WORK_ORDER_SCHEMA_VERSION + 1 } as WorkOrder,
       gitMustNotRun,
     )).rejects.toThrow(/schemaVersion/);
     await expect(verifyWorkOrder(
@@ -166,7 +167,7 @@ describe('engine/work-order', () => {
           contentHash: `sha256:${createHash('sha256').update(expectedContents).digest('hex')}`,
         },
       ],
-    };
+    } satisfies WorkOrder;
 
     try {
       let caught: unknown;
@@ -212,7 +213,7 @@ describe('engine/work-order', () => {
           contentHash: `sha256:${createHash('sha256').update('# Irrelevant').digest('hex')}`,
         },
       ],
-    };
+    } satisfies WorkOrder;
 
     try {
       let caught: unknown;

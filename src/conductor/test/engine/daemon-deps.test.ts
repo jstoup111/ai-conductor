@@ -57,6 +57,7 @@ import { buildWorkOrder } from '../../src/engine/work-order.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { resolveHarnessRoot } from '../../src/engine/install-freshness.js';
 import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
+import type { WorkOrder } from '../../src/engine/work-order.js';
 
 const execFileAsync = promisify(execFile);
 const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
@@ -355,7 +356,7 @@ describe('engine/daemon-deps', () => {
       engineVersionId: ENGINE_VERSION_ID,
       schemaVersion: 1,
       manifest: [],
-    };
+    } satisfies WorkOrder;
 
     await d.prepareWorktree!(
       { path: join(dir, 'feature'), branch: 'feat/feature' },

@@ -617,6 +617,18 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     chalk.level = 0;
   });
 
+  it('renders an executor start with its pinned and supervisor engine versions', () => {
+    expect(lines({
+      type: 'executor_started',
+      slug: 'pinned-feature',
+      engineVersionId: 'engine-v2',
+      protocolVersion: 1,
+      supervisorEngineVersionId: 'engine-v1',
+    })).toEqual([
+      '· executor pinned-feature started on engine-v2 (protocol 1; supervisor engine-v1)',
+    ]);
+  });
+
   it('keeps kickback and navigation_back (BACK) lines textually distinct', () => {
     const [kickbackLine] = lines({
       type: 'kickback',
