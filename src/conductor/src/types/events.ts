@@ -877,6 +877,15 @@ type ConductorEventBody =
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
   | {
+      type: 'build_review_disposition_carried';
+      feature: string;
+      lapId: string;
+      findingId: string;
+      caseId: string;
+      originFindingId: string;
+      originLapId: string;
+    }
+  | {
       type: 'build_review_outer_verdict';
       lapId: string;
       rawVerdict: 'PASS' | 'FAIL';

@@ -248,6 +248,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_infrastructure_failure',
   'build_review_mechanical_allowance_exhausted',
   'build_review_disposition_version_invalidated',
+  'build_review_disposition_carried',
   'build_review_outer_verdict',
   'remediation_adjudication_completed',
   'remediation_case_refuted',
@@ -1604,6 +1605,12 @@ describe('event sink subscriptions', () => {
     });
   });
 
+  it('persists and audits carried build-review dispositions', () => {
+    expect(EVENT_SINKS.build_review_disposition_carried).toEqual({
+      render: false, persist: true, audit: true, otel: false,
+    });
+  });
+
   it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
     const boundaries = [
       { kind: 'step', name: 'memory' },
@@ -1785,6 +1792,7 @@ describe('event sink subscriptions', () => {
       'halt_record_push_failed',
       'shipment_evidence_refused',
       'build_review_disposition_version_invalidated',
+      'build_review_disposition_carried',
       'build_review_cache_discarded',
       'remediation_case_refuted',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
