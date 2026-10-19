@@ -19,6 +19,7 @@ import { grantRoutedRepairCredit } from './round-receipt.js';
 import { readRouteRecord, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
+import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, type RoutedAcceptanceRunContract } from './red-record.js';
 import { assertNever, type RouteKind, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
 import type { ConductState } from '../../types/state.js';
 
@@ -73,9 +74,21 @@ async function redMarkerDigestRefusal(
   if (!Array.isArray(parsed.failingTests) || typeof parsed.intentRationale !== 'string') return undefined;
   const blob = await git(['cat-file', '-p', refSha.trim()]);
   const digest = createHash('sha256').update(marker, 'utf8').digest('hex');
-  return blob.exitCode === 0 && blob.stdout.trim() === digest
+  return blob.exitCode === 0 && parseRoutedRedRecord(blob.stdout)?.digest === digest
     ? undefined
     : `child ${host} RED marker digest differs from ${ref}`;
+}
+
+async function durableRedContract(
+  git: GitRunner,
+  slug: string,
+  host: ChildId,
+): Promise<RoutedAcceptanceRunContract | undefined> {
+  const ref = redRefFor(slug, host);
+  const resolved = await git(['rev-parse', '-q', '--verify', ref]);
+  if (resolved.exitCode !== 0) return undefined;
+  const blob = await git(['cat-file', '-p', resolved.stdout.trim()]);
+  return blob.exitCode === 0 ? parseRoutedRedRecord(blob.stdout)?.contract : undefined;
 }
 
 /**
@@ -88,23 +101,19 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   const git = input.git ?? makeGitRunner(input.worktree);
   const childDir = join(input.worktree, '.pipeline', 'children', String(input.host));
   const recordPath = join(childDir, VERIFY_GREEN_RECORD);
-  let contract: { command?: unknown; cwd?: unknown };
+  let contract: RoutedAcceptanceRunContract | undefined;
   try {
-    contract = JSON.parse(await readFile(join(childDir, 'acceptance-specs-run.json'), 'utf8')) as { command?: unknown; cwd?: unknown };
+    contract = parseRoutedAcceptanceRunContract(JSON.parse(await readFile(join(childDir, 'acceptance-specs-run.json'), 'utf8')));
   } catch {
-    // The worktree overlay is disposable.  A recreated checkout can recover
-    // the child contract from the committed host branch instead of treating a
-    // successful routed repair as an invitation to regenerate RED evidence.
-    try {
-      const path = `.pipeline/children/${input.host}/acceptance-specs-run.json`;
-      const committed = await git(['show', `HEAD:${path}`]);
-      if (committed.exitCode !== 0) return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing or invalid` };
-      contract = JSON.parse(committed.stdout) as { command?: unknown; cwd?: unknown };
-    } catch {
+    // The worktree overlay is disposable; the close-time red ref retains the
+    // executable pair needed after recreation.
+  }
+  if (contract === undefined) {
+    try { contract = await durableRedContract(git, input.slug, input.host); } catch {
       return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing or invalid` };
     }
   }
-  if (typeof contract.command !== 'string' || contract.command === '' || typeof contract.cwd !== 'string' || contract.cwd === '') {
+  if (contract === undefined) {
     return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing command or cwd` };
   }
   let observed: Record<string, unknown>;
