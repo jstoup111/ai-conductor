@@ -1297,3 +1297,47 @@ Six APPROVED ADRs carry #3211 amendment notes in this change set, so each of the
 **Done when:**
 - adr-2026-10-12-routed-whole-feature-repair decision 12 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-e24e-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-5ac42490-2: conductor.ts admitRoutedTasklessKickback: when routedSealedAuthored returns undefined (no prior route record), seal sealedAuthored from countAuthoredTaskHeadings on the authored plan, matching the audit path at :4771, instead of halting 'no sealed authored denominator'; keep the unreadable-record halt and never fall back to zero; update round-receipt.taskless.test so manual_test and lint-docs with no prior route create a record carrying the sealed count
+**Gate:** as-built
+**Rationale:** Verified 99%: conductor.ts:15069-15074 (admitRoutedTasklessKickback) halts when routedSealedAuthored returns undefined, which is what it returns when no earlier route record exists. The audit admission path at conductor.ts:4771-4772 already falls back to `priorSealed ?? countAuthoredTaskHeadings(planText)`. ADR decision 10 seals the denominator on the first record and reuses it after that; it does not require an earlier audit round. This is a conforming implementation regression from cd2b4408c2 and needs no design decision. The fix: when no prior receipt supplies sealedAuthored, seal it on the first taskless record from the authored-plan count, the same way the audit path does. Keep the halt for unreadable route records. Do not add an authored-zero fallback. Leave N=1 behaviour unchanged.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 10
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-5ac42490-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-1: conductor-routed-taskless-admission test: drop the routedSealedAuthored mock and assert a standalone manual_test FAIL routed to child 2 with no prior route record creates a record whose receipt holds taskless.manual_test 1 and sealedAuthored equal to the authored plan's task count, with no prd_audit or as-built charge
+**Gate:** prd-audit
+**Rationale:** Verified 99%: the standalone manual_test FAIL with no prior route halts at the sealed-denominator check (conductor.ts:15074). The only success test mocks routedSealedAuthored to 1, so Task 65's first done-when has no real evidence. The fix is in the as-built:2 task. This task replaces the mocked success test with one that runs a real first-round admission.
+**Criterion:** S5.1
+**Parent task:** 65
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-2: Add a test: a validation-group join whose only failure is manual_test, with no prior route record and routedSealedAuthored unmocked, creates a record charged taskless.manual_test 1, and host 2's stored retryHint contains the FAIL rows
+**Gate:** prd-audit
+**Rationale:** Verified 99%: the validation-group join whose only failure is manual_test goes through admitRoutedManualTestKickback, then admitRoutedTasklessKickback, and hits the same no-denominator halt. The as-built:2 task fixes it. This task adds unmocked first-round coverage for Task 65's second done-when.
+**Criterion:** S5.2
+**Parent task:** 65
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-S5-3-2: Add a test: a lint-docs custom-step kickback with no prior route record and routedSealedAuthored unmocked, judge answering 1, creates a record with taskless item host 1, echo.lint-docs equal to the bumped count, no rem block, and exactly one bumpKickbackGateInLedger call for the re-opened gate
+**Gate:** prd-audit
+**Rationale:** Verified 99%: routing and echo keying on the originating step are now correct, but admitRoutedCustomStepKickback shares the taskless admission, so lint-docs halts on the no-denominator check when no route exists. round-receipt.taskless.test asserts that halt. The fix is in the as-built:2 task. This task restores Task 33's done-when coverage on a real first round.
+**Criterion:** S5.3
+**Parent task:** 33
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-S5-3-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-5ac42490-1: routing/host-region-entry.ts + acceptance RED close path: persist child k's acceptance run contract (command, cwd) in existing durable routing state (the red/c<k> ref object or the route record) when the child's RED closes, and have verifyGreenAcceptance recover a missing worktree contract from that source instead of HEAD:.pipeline/...; add a recreated-worktree test (contract file deleted, no .pipeline blob at HEAD) asserting verify-green runs the recovered contract and completes with mode verify-green
+**Gate:** as-built
+**Rationale:** Verified 95%: host-region-entry.ts:93-104 recovers a lost contract only from `git show HEAD:.pipeline/children/<host>/acceptance-specs-run.json`. .pipeline is gitignored and nothing writes that blob, so a recreated worktree refuses before verify-green runs. Task 207 already requires recreated-worktree contract recovery; an earlier rem rationale (plan line 1121) recorded that no design decision is needed. The routing refs namespace (routing-refs.ts, e.g. red/c<k>, closed/c<k>) and the durable route record are existing stores for routing state. The fix is to persist the child run contract (command, cwd) there when the child's acceptance RED closes, then recover from it. That is conforming implementation work, so it goes to BUILD.
+**Parent task:** 207
+**Governing clause:** Task 207
+**Done when:**
+- Task 207 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-5ac42490-1 is committed and its targeted tests pass.
