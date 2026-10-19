@@ -54,7 +54,9 @@ import {
   type AutoresolveOutcome,
   type CiFixRepairOutcome,
 } from './repair-queue.js';
-import type { CiFixOutcome } from './ci-fix.js';
+import { PUBLISHED_STACK_CI_FIX_REASON, type CiFixOutcome } from './ci-fix.js';
+import { escalate, logOutcome } from './autoresolve.js';
+import { emitRestackRefused } from './restack/restack-events.js';
 export type { WatchEntry } from './repair-queue.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
@@ -1150,7 +1152,22 @@ export async function sweepMergeableLabels({
     if (ciFix?.enabled) {
       for (const { entry, state } of failedCandidates) {
         const eligibility = await ciFix.isEligible(entry, state);
-        if (!eligibility.eligible) continue;
+        if (!eligibility.eligible) {
+          // Keep the published-stack stop on the same human-escalation path
+          // used by autoresolve. It runs before a repair request exists, so
+          // no attempt is claimed or ci-fix dispatcher is invoked.
+          if (eligibility.reason === PUBLISHED_STACK_CI_FIX_REASON) {
+            const reason = 'published stacked feature requires manual resolution (#2945)';
+            await emitEvent(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));
+            await escalate(entry.prUrl, 'published-stack', reason, {
+              runGh: runnerForEntry(gh, entry, operations),
+              cwd: entry.repoCwd,
+              log,
+            });
+            logOutcome(log ?? (() => {}), entry.prUrl, 'published-stack', 'escalated');
+          }
+          continue;
+        }
         const queuedAt = now().toISOString();
         enqueue({
           kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug,
