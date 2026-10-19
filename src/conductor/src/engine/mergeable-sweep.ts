@@ -207,6 +207,93 @@ function logDisposition(
   if (recordDisposition(log, entry, disposition)) log?.(message);
 }
 
+// ── Task 27: published-stack lower-member lifecycle ────────────────────────
+
+/**
+ * The leaf's watch entry is the sole lifecycle observer.  It deliberately
+ * observes only lower members: the leaf was just read by the normal sweep and
+ * its state belongs to the ordinary ship/reap path below.
+ */
+async function observeStackMemberLifecycle(
+  entry: WatchEntry,
+  leafState: PrMergeState,
+  gh: GhRunner,
+  dependencies: PublicationRecordDependencies | undefined,
+  emit: (event: ConductorEvent) => void,
+): Promise<void> {
+  if (leafState.state !== 'OPEN') return;
+  const stored = await activePublicationRecord(entry.repoCwd, entry.slug, dependencies);
+  if (!stored || stored.record.members.length < 2) return;
+
+  const target = parseGithubUrl(entry.prUrl);
+  if (!target) return;
+  const repository = target.repository;
+  const leaf = stored.record.members.at(-1);
+  if (!leaf) return;
+
+  // This is both an existence observation and a deliberately bounded stack
+  // API read: exactly one per open stacked leaf, before any member reads.
+  try {
+    const response = await gh(
+      ['api', `repos/${repository}/stacks?pull_request=${leaf.pr}`],
+      { cwd: entry.repoCwd },
+    );
+    JSON.parse(response.stdout);
+  } catch {
+    return;
+  }
+
+  let current: StoredPublicationRecord = stored;
+  for (const member of stored.record.members.slice(0, -1)) {
+    let lifecycle: PublicationMemberLifecycle | undefined;
+    try {
+      const response = await gh(
+        ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state'],
+        { cwd: entry.repoCwd },
+      );
+      const observed: unknown = JSON.parse(response.stdout);
+      const state = observed && typeof observed === 'object' && !Array.isArray(observed)
+        ? (observed as { state?: unknown }).state
+        : undefined;
+      if (state === 'CLOSED') lifecycle = 'closed';
+      if (state === 'MERGED') {
+        const reverted = await gh(
+          ['pr', 'list', '-R', repository, '--state', 'merged', '--search', `Reverts ${repository}#${member.pr} in:body`, '--json', 'number'],
+          { cwd: entry.repoCwd },
+        );
+        const matches: unknown = JSON.parse(reverted.stdout);
+        lifecycle = Array.isArray(matches) && matches.some((candidate) =>
+          candidate !== null && typeof candidate === 'object' && typeof (candidate as { number?: unknown }).number === 'number',
+        ) ? 'reverted' : 'merged';
+      }
+    } catch {
+      // This is an observation only. A transient read leaves lastSeen intact
+      // so a later sweep can make the same at-least-once observation.
+      continue;
+    }
+    if (!lifecycle || member.lastSeen === lifecycle) continue;
+
+    emit({
+      type: 'stack_member_lifecycle',
+      child: member.position,
+      pr: member.pr,
+      state: lifecycle,
+      eventId: `${entry.slug}:${member.position}:${lifecycle}`,
+    });
+    const next = {
+      ...current.record,
+      members: current.record.members.map((candidate) => candidate.position === member.position
+        ? { ...candidate, lastSeen: lifecycle }
+        : candidate),
+    };
+    const written = await writePublicationRecord(entry.repoCwd, entry.slug, current, next, dependencies);
+    if (written.kind !== 'updated') return;
+    const refreshed = await activePublicationRecord(entry.repoCwd, entry.slug, dependencies);
+    if (!refreshed) return;
+    current = refreshed;
+  }
+}
+
 // ── Registry helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -870,6 +957,17 @@ export async function sweepMergeableLabels({
           continue;
         }
 
+        // A published stack stays open at its leaf while lower members may be
+        // merged, closed, or reverted by a human.  This observation is
+        // intentionally before all label/repair work and cannot change it.
+        await observeStackMemberLifecycle(
+          entry,
+          state,
+          gh,
+          publicationRecordDependencies,
+          emitEvent,
+        );
+
         // The timestamp begins with the first observation of a head and is
         // reset only when that SHA changes. Do this before classification so
         // the first tick for a new head receives a full grace period.
@@ -1189,7 +1287,7 @@ export async function sweepMergeableLabels({
         const eligibility = await ciFix.isEligible(entry, state);
         if (!eligibility.eligible) {
           // Keep the published-stack stop on the same human-escalation path
-          // used by autoresolve. It runs before a repair request exists, so
+          // used by autoresolve.  It runs before a repair request exists, so
           // no attempt is claimed or ci-fix dispatcher is invoked.
           if (eligibility.reason === PUBLISHED_STACK_CI_FIX_REASON) {
             const reason = 'published stacked feature requires manual resolution (#2945)';
