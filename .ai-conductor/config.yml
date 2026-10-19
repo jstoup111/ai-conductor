@@ -89,7 +89,12 @@ build_review:
     # Findings the reviewer scores below 40 are suppressed, not kicked back:
     # an open-ended quality rubric over a large diff otherwise surfaces
     # low-confidence nits every lap and the feature never converges.
+    # Disabled 2026-10-19 (operator order): without memory of settled findings
+    # it raises new findings on every lap over the whole diff and features never
+    # converge (#3294, #3298). Re-enable once those land. testQuality and
+    # security remain enforcing.
     implementationQuality:
+      enabled: false
       min_confidence: 40
     testQuality:
       enabled: true
