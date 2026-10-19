@@ -1,6 +1,6 @@
 // Covers: tasks:33,65
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -57,6 +57,14 @@ vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal)
       if (seams.admission === 'refused') return { kind: 'refused' as const, detail: 'admission refused' };
       return { kind: 'admitted' as const, record: {} as never };
     }),
+  };
+});
+
+vi.mock('../../../src/engine/kickback-ledger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/kickback-ledger.js')>();
+  return {
+    ...actual,
+    bumpKickbackGateInLedger: vi.fn(async () => ({ entry: { count: 1 }, exhausted: false, before: undefined })),
   };
 });
 
@@ -128,7 +136,7 @@ async function subject(judgedChild = 1) {
       }) as never,
     },
   });
-  return { conductor, events };
+  return { conductor, events, root };
 }
 
 describe('routed taskless admission failures', () => {
@@ -200,5 +208,33 @@ describe('routed taskless admission failures', () => {
     expect(seams.createdRecord.receipt).toEqual({
       laps: {}, growth: 0, taskless: { manual_test: 1 }, echo: {}, acks: {},
     });
+  });
+
+  // Covers: task:rem-prd-audit-rem-prd-audit-S5-3-2
+  it('routes a first-round lint-docs kickback to child 1 and echoes its ledger charge', async () => {
+    const { conductor, root } = await subject(1);
+    const routes = await import('../../../src/engine/routing/route-record-store.js');
+    const ledger = await import('../../../src/engine/kickback-ledger.js');
+    vi.mocked(routes.createRouteRecord).mockClear();
+    vi.mocked(ledger.bumpKickbackGateInLedger).mockClear();
+
+    await expect((conductor as any).scanKickbackVerdicts(
+      'lint-docs',
+      { feature_desc: 'demo' },
+      { build: { satisfied: false, checkedAt: Date.now(), kickback: { from: 'lint-docs', evidence: 'lint failed' } } },
+      [],
+      { navigate: false },
+    )).resolves.toBe('kicked');
+
+    expect(ledger.bumpKickbackGateInLedger).toHaveBeenCalledOnce();
+    expect(ledger.bumpKickbackGateInLedger).toHaveBeenCalledWith(root, 'build', expect.anything(), undefined);
+    expect(routes.createRouteRecord).toHaveBeenCalledWith(expect.any(String), 'demo', expect.objectContaining({
+      sealedAuthored: 2,
+      items: [expect.objectContaining({ host: 1, owner: 1, findingId: 'custom-lint-docs' })],
+    }));
+    expect(seams.createdRecord.receipt).toEqual({
+      laps: {}, growth: 0, taskless: {}, echo: { 'lint-docs': 1 }, acks: {},
+    });
+    await expect(readFile(join(root, '.docs', 'plans', 'demo.md'), 'utf8')).resolves.not.toContain('### Task rem-');
   });
 });
