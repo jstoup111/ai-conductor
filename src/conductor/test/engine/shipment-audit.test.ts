@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:19, task:rem-as-built-R16
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -107,6 +107,52 @@ describe('shipment audit', () => {
       expect(report.rows[0]).toMatchObject({
         classification: 'absent',
         reason: 'merged PR #503 is not applicable (stack-child)',
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a plan-bearing child before selecting the shipped leaf candidate', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-audit-child-before-leaf-'));
+    const runGh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'acme/conductor' }) };
+      return {
+        stdout: JSON.stringify({
+          data: { repository: { pullRequests: { nodes: [
+            {
+              number: 503, url: 'https://github.com/acme/conductor/pull/503',
+              body: 'Plan: `.docs/plans/demo.md`', mergedAt: '2026-10-19T00:00:00Z',
+              headRefOid: 'b'.repeat(40), headRefName: 'feat/c3/demo',
+              files: { nodes: [{ path: 'src/conductor/src/engine/demo.ts' }], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+            {
+              number: 500, url: 'https://github.com/acme/conductor/pull/500',
+              body: 'Plan: `.docs/plans/demo.md`', mergedAt: '2026-10-20T00:00:00Z',
+              headRefOid: 'a'.repeat(40), headRefName: 'feat/daemon-demo',
+              files: { nodes: [{ path: 'src/conductor/src/engine/demo.ts' }], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          ], pageInfo: { hasNextPage: false, endCursor: null } } } },
+        }),
+      };
+    });
+    const runGit = vi.fn(async (args: string[]) => {
+      if (args[0] === 'log' && args.includes('--all')) return { stdout: '.docs/plans/demo.md\n' };
+      if (args[0] === 'rev-parse') return { stdout: 'audit-head\n' };
+      if (args[0] === 'ls-tree') return { stdout: '.docs/plans/demo.md\n' };
+      if (args[0] === 'show') return { stdout: '# Demo\n' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+
+    try {
+      const report = await runShipmentAudit({
+        cwd, runGh, runGit,
+        evaluateEvidence: async () => ({ kind: 'valid', shippedRecordPath: '.docs/shipped/demo.md' }),
+      });
+
+      expect(report.rows[0]).toMatchObject({
+        classification: 'aligned',
+        implementationPr: { number: 500, url: 'https://github.com/acme/conductor/pull/500' },
       });
     } finally {
       await rm(cwd, { recursive: true, force: true });
