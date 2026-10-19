@@ -470,3 +470,179 @@ Task 5 ──> Task 12
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-5a: build-review-adjudication-coordinator.test.ts: an act binding to an accepted case with an applied effect settles carried, with no halt event or detail, no reserved effect, no work order and no kickback charge
+**Gate:** prd-audit
+**Rationale:** The carry exclusion is in the coordinator, but task 5's required coordinator test is missing. The test-file diff changed only the Covers header (verified, 95%). This is missing test coverage inside an approved task.
+**Criterion:** S1.1
+**Parent task:** 5
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-5a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-5b: build-review-adjudication-coordinator.test.ts: an act binding to an accepted case whose effect was retired as failed keeps the binding, mints no fresh act case and settles carried; the case is byte-identical apart from the appended link
+**Gate:** prd-audit
+**Rationale:** Only the append helper has a test. Task 5's coordinator-level test for a failed-effect accepted case is missing.
+**Criterion:** S1.2
+**Parent task:** 5
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- The repair for task rem-prd-audit-5b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-6a: build-review-adjudication-coordinator.test.ts: a lap-3 re-raise bound to a case already holding the lap-2 carried link settles carried, naming the lap-1 origin finding and lap
+**Gate:** prd-audit
+**Rationale:** Task 6's lap-3 coordinator test is absent. The coordinator derives origins from its own map (directOriginsBySourceId, line 676), not the shared resolver. Tests and the resolver consolidation for as-built finding 2 should land together.
+**Criterion:** S1.4
+**Parent task:** 6
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- The repair for task rem-prd-audit-6a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-12a: build-review-adjudication-coordinator.test.ts: a lap-2 act halt-regression appends live sources through appendCarriedRemediationCaseSources, leaves the case's disposition, resolution, effect and earlier links byte-identical, reserves no effect, and leaves the halt detail and event unchanged
+**Gate:** prd-audit
+**Rationale:** The halt-path append exists at coordinator:812, but both of task 12's tests are missing.
+**Criterion:** S1.5
+**Parent task:** 12
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- The repair for task rem-prd-audit-12a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-12b: build-review-adjudication-coordinator.test.ts: after the operator accepts the lap-2 finding, a lap-3 re-raise bound to the same case settles carried from the lap-2 finding, with no halt, effect or charge
+**Gate:** prd-audit
+**Rationale:** The halt-path append exists at coordinator:812, but both of task 12's tests are missing.
+**Criterion:** S1.5
+**Parent task:** 12
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- The repair for task rem-prd-audit-12b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-5c: conductor-build-review-adjudication.test.ts: replay #3211 (accepted eventSpine finding on lap 1, re-raised under a new id on lap 2 and bound to the accepted case); lap 2 settles PASS, writes no HALT file and needs no second accept
+**Gate:** prd-audit
+**Rationale:** Task 5 requires a conductor-level replay test of #3211. None exists.
+**Criterion:** S1.6
+**Parent task:** 5
+**Done when:**
+- [test] S1.6 is satisfied by this task.
+- The repair for task rem-prd-audit-5c is committed and its targeted tests pass.
+
+### Task rem-prd-audit-5d: build-review-adjudication-coordinator.test.ts: a mixed lap settles the carried finding while the unbound act gets today's work order and a single kickback charge; an act binding to a case with no accepted source still returns halt-regression or halt-repeat
+**Gate:** prd-audit
+**Rationale:** Task 5's mixed-lap and no-accepted-source regression tests are missing.
+**Criterion:** S1.7
+**Parent task:** 5
+**Done when:**
+- [test] S1.7 is satisfied by this task.
+- The repair for task rem-prd-audit-5d is committed and its targeted tests pass.
+
+### Task rem-prd-audit-5e: remediation-case-reconciler.ts and build-review-adjudication-coordinator.ts: treat carried case ids as referenced, so reconcileRemediationCases never flips their resolution in the same lap; add a coordinator test asserting carried open act and non-act cases keep their resolution
+**Gate:** prd-audit
+**Rationale:** Likely defect, at the audit's 70% confidence. Carried cases are removed from ordinaryCases, so reconcileRemediationCases may resolve them as unreferenced open cases. This violates task 5's 'byte-identical apart from the appended link' requirement. The fix is conforming implementation plus a test.
+**Criterion:** S1.8
+**Parent task:** 5
+**Done when:**
+- [test] S1.8 is satisfied by this task.
+- The repair for task rem-prd-audit-5e is committed and its targeted tests pass.
+
+### Task rem-prd-audit-5f: build-review-adjudication-coordinator.test.ts: re-running after a crash that followed the append and the emission but preceded settlement appends no duplicate link, reserves no effect and charges nothing
+**Gate:** prd-audit
+**Rationale:** Task 5's crash-replay test is missing. It belongs with the crash-safe emission fix for as-built finding 3.
+**Criterion:** S1.9
+**Parent task:** 5
+**Done when:**
+- [test] S1.9 is satisfied by this task.
+- The repair for task rem-prd-audit-5f is committed and its targeted tests pass.
+
+### Task rem-prd-audit-7a: build-review-adjudication-coordinator.test.ts: an escalate binding to an open escalate case whose sources are all operator-accepted settles carried and does not return decision stop conflicting-case-id
+**Gate:** prd-audit
+**Rationale:** Task 7's escalate-carry tests are absent; only the Covers header was added.
+**Criterion:** S2.1
+**Parent task:** 7
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-7a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-7b: build-review-adjudication-coordinator.test.ts: an escalate binding to a resolved accepted case with differing source ids settles carried, and the store afterward holds no new open escalate case
+**Gate:** prd-audit
+**Rationale:** Missing task 7 test.
+**Criterion:** S2.2
+**Parent task:** 7
+**Done when:**
+- [test] S2.2 is satisfied by this task.
+- The repair for task rem-prd-audit-7b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-7c: build-review-adjudication-coordinator.test.ts: a carried escalation performs no external effect, files no intake issue and charges no kickback, while authorizeBuildReviewRemediationActionEffects still authorizes an admitted sibling act on the same case-v2 lap
+**Gate:** prd-audit
+**Rationale:** Missing task 7 test.
+**Criterion:** S2.4
+**Parent task:** 7
+**Done when:**
+- [test] S2.4 is satisfied by this task.
+- The repair for task rem-prd-audit-7c is committed and its targeted tests pass.
+
+### Task rem-prd-audit-7d: build-review-adjudication-coordinator.test.ts: with one carried and one unbound escalation, the unbound escalation still produces its decision stop; an escalation bound to a case with no accepted source returns today's conflicting-case-id or new decision stop
+**Gate:** prd-audit
+**Rationale:** Missing task 7 test.
+**Criterion:** S2.5
+**Parent task:** 7
+**Done when:**
+- [test] S2.5 is satisfied by this task.
+- The repair for task rem-prd-audit-7d is committed and its targeted tests pass.
+
+### Task rem-prd-audit-5g: build-review-adjudication-coordinator.test.ts: exactly one build_review_disposition_carried event per carried finding (feature, lapId, findingId, caseId, originFindingId, originLapId) is persisted to .pipeline/events.jsonl through the existing EventPersister across crash and replay; a lap with no carried finding emits none
+**Gate:** prd-audit
+**Rationale:** The emission exists at coordinator:732, but task 5's event-persistence assertion is missing.
+**Criterion:** S7.1
+**Parent task:** 5
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-5g is committed and its targeted tests pass.
+
+### Task rem-prd-audit-11a: build-review-acceptance-consumers.test.ts: a shared-fixture parity test across the effective verdict, coordinator accepted set, reuse partition, decision-stop partition, adjudication context, findings output and accepted-risk renderer; on disagreement it fails naming the consumer
+**Gate:** prd-audit
+**Rationale:** Task 11's parity test across the seven consumers is missing; only the static guard exists.
+**Criterion:** S8.1
+**Parent task:** 11
+**Done when:**
+- [test] S8.1 is satisfied by this task.
+- The repair for task rem-prd-audit-11a is committed and its targeted tests pass.
+
+### Task rem-as-built-3a: step-runners.ts (~3656, ~4394) and artifacts.ts (~3869, ~3977): pass child and adjudicationEnabled to resolveEffectiveBuildReviewVerdict; add tests that a child carry is accepted by both the conductor and the artifact predicate, and that adjudication disabled never opens the case store
+**Gate:** as-built
+**Rationale:** Partial wiring of an approved task, with no architecture change needed. The step-runners.ts and artifacts.ts resolver call sites do not pass child or adjudicationEnabled. The call sites were verified at artifacts.ts:3869/3977 and in step-runners.ts. Task 3 requires child-store resolution and that adjudication-disabled runs skip the case store.
+**Parent task:** 3
+**Governing clause:** Task 3
+**Done when:**
+- Task 3 is satisfied by this task.
+- The repair for task rem-as-built-3a is committed and its targeted tests pass.
+
+### Task rem-as-built-6b: build-review-acceptance-resolver.ts: add the current lapId input and resolve none when it equals the origin sourceLapId; build-review-adjudication-coordinator.ts: replace the independent directOriginsBySourceId carry classification and the post-halt acceptance refresh with resolveBuildReviewAcceptance
+**Gate:** as-built
+**Rationale:** The ADR decision 2 amendment is approved and authoritative, and the code drifts from it. Verified: resolveBuildReviewAcceptance takes no lap and checks only timestamps, and the coordinator reimplements origin and lap exclusion (lines 676-699). The conforming fix is to give the shared resolver the accepting-lap exclusion and route the coordinator's carry classification and post-halt refresh through it. Tasks 6 and 11 admit this. No new architectural decision is needed.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-6b is committed and its targeted tests pass.
+
+### Task rem-as-built-6c: build-review-adjudication-coordinator.test.ts: a same-lap finding appended on the repeat/regression path and then refreshed is not classified carried and keeps today's blocking route; a second finding the judge placed in a case accepted during the same lap is not carried
+**Gate:** as-built
+**Rationale:** The ADR decision 2 amendment is approved and authoritative, and the code drifts from it. Verified: resolveBuildReviewAcceptance takes no lap and checks only timestamps, and the coordinator reimplements origin and lap exclusion (lines 676-699). The conforming fix is to give the shared resolver the accepting-lap exclusion and route the coordinator's carry classification and post-halt refresh through it. Tasks 6 and 11 admit this. No new architectural decision is needed.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-6c is committed and its targeted tests pass.
+
+### Task rem-as-built-5h: build-review-adjudication-coordinator.ts: emit build_review_disposition_carried for every carried finding in the lap that has no persisted event (dedup by lapId, findingId, caseId), not only for newly appended links
+**Gate:** as-built
+**Rationale:** The event requirement is already approved, and the fix is within the coordinator under task 5. Today the event is emitted only for newly appended links, so a crash between the append (line 722) and the emission loses the event. Fix it so every carried link whose event is absent from the spine is emitted at settlement, with dedup by (lapId, findingId, caseId). This matches task 5's exactly-once requirement through the existing persister.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-5h is committed and its targeted tests pass.
+
+### Task rem-as-built-5i: build-review-adjudication-coordinator.test.ts: a crash after the link append but before emission still yields exactly one persisted carried event on replay, with no duplicate link, effect or charge
+**Gate:** as-built
+**Rationale:** The event requirement is already approved, and the fix is within the coordinator under task 5. Today the event is emitted only for newly appended links, so a crash between the append (line 722) and the emission loses the event. Fix it so every carried link whose event is absent from the spine is emitted at settlement, with dedup by (lapId, findingId, caseId). This matches task 5's exactly-once requirement through the existing persister.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-5i is committed and its targeted tests pass.
