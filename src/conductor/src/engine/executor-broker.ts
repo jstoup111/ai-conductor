@@ -16,6 +16,8 @@ export interface ExecutorBrokerDeps {
   worktreeLifecycle: WorktreeLifecycleQueue;
   rootEvents: ConductorEventEmitter;
   featureLogFor: (slug: string) => (line: string) => void;
+  /** Attaches supervisor-owned non-persistence feature subscribers. */
+  attachFeatureEventRenderer?: (slug: string, events: ConductorEventEmitter) => () => void;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -60,6 +62,10 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       const pendingWorktreeAcquires = new Map<string, { cancelled: boolean }>();
       let closed = false;
       const featureEvents = createForwardingFeatureEventEmitter(deps.rootEvents, slug);
+      // The child owns the feature EventPersister. The supervisor attaches only
+      // ephemeral subscribers (currently the slug-aware daemon renderer) to
+      // the proxy bus before it forwards to the root spine.
+      const detachFeatureEventRenderer = deps.attachFeatureEventRenderer?.(slug, featureEvents);
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
       const release = () => {
         for (const window of windows.values()) window.close();
@@ -164,6 +170,9 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         const message = parsed.message;
         if (message.kind === 'request') void request(message.requestId, message.method, message.params);
         else if (message.kind === 'event') {
+          // Dispatch lifecycle is supervisor-owned once per claim. Never let
+          // a child replay or duplicate these root events during a relaunch.
+          if (message.payload.type === 'feature_dispatch_started' || message.payload.type === 'feature_dispatch_ended') return;
           if (!(message.payload.type in EVENT_SINKS)) return; // preserve unknowns in child ledger only
           void (message.scope === 'feature' ? featureEvents : deps.rootEvents).emit(message.payload as ConductorEvent);
         } else if (message.kind === 'log') deps.featureLogFor(slug)(`[executor:${message.level}] ${message.message}`);
@@ -184,6 +193,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         }
         pendingWorktreeAcquires.clear();
         release();
+        detachFeatureEventRenderer?.();
         ports.delete(port);
         attachments.delete(close);
       };
