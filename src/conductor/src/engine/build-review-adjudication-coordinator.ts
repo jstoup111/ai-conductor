@@ -169,7 +169,7 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
  * already-appended link and still publish the one event that was lost between
  * the append and the prior process stopping.
  */
-async function persistedCarriedEventKeys(projectRoot: string): Promise<ReadonlySet<string>> {
+async function persistedCarriedEventKeys(projectRoot: string): Promise<Set<string>> {
   try {
     const text = await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8');
     return new Set(text.split('\n').flatMap((line) => {
@@ -439,7 +439,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         retirementTransitions.push({ caseId: record.id, ...(retiredEffect ? { retiredEffect } : {}) });
         return { ...record, resolution: 'resolved' as const, effect };
       });
-      const eligible = cases.filter((record) => isBuildEligibleActionCase(record) && !carriedCaseIds.has(record.id));
+      const eligible = cases.filter(isBuildEligibleActionCase).filter((record) => !carriedCaseIds.has(record.id));
       if (eligible.length === 0 || !options.republishWorkOrder) {
         return { value: { ok: true as const, cases, retirementTransitions }, nextState: { ...state, cases } };
       }
