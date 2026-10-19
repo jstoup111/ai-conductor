@@ -138,7 +138,10 @@ describe('release metadata GitHub Actions adapter (Task 3)', () => {
   });
 
   it('accepts a stack child with the template-default no-note disposition without applying a semver label', async () => {
-    const template = await readFile(new URL('../../../../.github/pull_request_template.md', import.meta.url), 'utf8');
+    const [template, ciWorkflow] = await Promise.all([
+      readFile(new URL('../../../../.github/pull_request_template.md', import.meta.url), 'utf8'),
+      readFile(new URL('../../../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+    ]);
     const addLabels = vi.fn().mockResolvedValue(undefined);
     const removeLabel = vi.fn().mockResolvedValue(undefined);
     const body = template.match(/^Release-Disposition: no-note$/m)?.[0];
@@ -158,7 +161,11 @@ describe('release metadata GitHub Actions adapter (Task 3)', () => {
       core: { setOutput: vi.fn() },
     })).resolves.toBeUndefined();
 
-    expect({ add: addLabels.mock.calls, remove: removeLabel.mock.calls }).toEqual({ add: [], remove: [] });
+    expect({
+      stackChildCiTrigger: /pull_request:\s*\n\s*branches:\s*\[main, 'feat\/c\*\/\*\*'\]/.test(ciWorkflow),
+      add: addLabels.mock.calls,
+      remove: removeLabel.mock.calls,
+    }).toEqual({ stackChildCiTrigger: true, add: [], remove: [] });
   });
 
   it('leaves an already-correct band alone', async () => {
