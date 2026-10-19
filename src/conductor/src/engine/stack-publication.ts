@@ -8,7 +8,7 @@ import {
   type PublicationRecordDependencies,
   type StoredPublicationRecord,
 } from './stack-publication-record.js';
-import type { GhRunner } from './tracker-client.js';
+import { runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { GithubOperationRequest } from './github-operations.js';
 import type { PublicationMember, PublicationRecord } from './stack-publication-record.js';
 import { executeRemoteGit, type RemoteGitOperationDependencies } from './remote-git-operations.js';
@@ -70,11 +70,11 @@ export async function verifyMemberReachability(
   for (const member of record.members) {
     let observation: MemberMergeObservation;
     try {
-      const response = await gh(
+      const stdout = await runTrackerRepositoryRead(
+        gh, root, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
         ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state,mergeCommit'],
-        { cwd: root },
       );
-      const parsed: unknown = JSON.parse(response.stdout);
+      const parsed: unknown = JSON.parse(stdout);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'indeterminate' };
       observation = parsed as MemberMergeObservation;
     } catch {
@@ -358,11 +358,11 @@ async function observeMembers(
   for (const member of members) {
     if (member.lastSeen !== undefined) return 'diverged';
     try {
-      const response = await gh(
+      const stdout = await runTrackerRepositoryRead(
+        gh, root, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
         ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state,isDraft'],
-        { cwd: root },
       );
-      const parsed: unknown = JSON.parse(response.stdout);
+      const parsed: unknown = JSON.parse(stdout);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'indeterminate';
       const state = (parsed as { state?: unknown }).state;
       if (state !== 'OPEN') return state === 'CLOSED' || state === 'MERGED' ? 'diverged' : 'indeterminate';
@@ -383,11 +383,11 @@ async function observeVerifiedStack(
   pullRequest: number,
 ): Promise<'valid' | 'indeterminate'> {
   try {
-    const response = await gh(
+    const stdout = await runTrackerRepositoryRead(
+      gh, root, 'repository.read', repository, { kind: 'repository' },
       ['api', `repos/${repository}/stacks?pull_request=${pullRequest}`],
-      { cwd: root },
     );
-    JSON.parse(response.stdout);
+    JSON.parse(stdout);
     return 'valid';
   } catch {
     return 'indeterminate';

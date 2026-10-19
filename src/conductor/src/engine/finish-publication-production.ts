@@ -216,6 +216,26 @@ function repositoryAndNumber(prUrl: string): { repository: string; number: numbe
 
 type PullRequestBase = { readonly baseRefName?: unknown };
 
+function publicationRecordGit(git: GitRunner, cwd: string): PublicationRecordGitRunner {
+  return async (args, options) => {
+    try {
+      const result = await git(args, {
+        cwd,
+        ...(options?.credential === undefined ? {} : { credential: options.credential }),
+        ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+      });
+      const observed = result as { stdout: string; exitCode?: unknown; stderr?: unknown };
+      return {
+        exitCode: typeof observed.exitCode === 'number' ? observed.exitCode : 0,
+        stdout: observed.stdout,
+        stderr: typeof observed.stderr === 'string' ? observed.stderr : '',
+      };
+    } catch (error) {
+      return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+    }
+  };
+}
+
 /**
  * Retarget the retained leaf only after recording the intended move.  The
  * durable record is the receipt for an interrupted GitHub mutation: every
@@ -271,8 +291,10 @@ export async function assembleStack(input: {
   }
 
   const writePhase = async (phase: 'intended' | 'observed'): Promise<void> => {
-    const write = await writePublicationRecord(input.root, input.slug, stored, {
-      ...stored.record,
+    const current = stored;
+    if (!current) throw new Error('stack publication record is missing');
+    const write = await writePublicationRecord(input.root, input.slug, current, {
+      ...current.record,
       retarget: { from: input.baseBranch, to: topChild.branch, phase },
     }, { git: input.git });
     if (write.kind !== 'updated') throw new Error(`could not record stack leaf retarget as ${phase}`);
@@ -986,7 +1008,7 @@ export function createProductionFinishPublicationCoordinator(
                 : /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/[1-9]\d*$/.exec(state.pr_url);
               if (!match) return cursor.kind === 'no-child' ? 'not-applicable' : 'indeterminate';
               return observeStackDimension(deps.projectRoot, state.feature_desc, cursor, {
-                git: deps.git,
+                git: publicationRecordGit(deps.git, deps.projectRoot),
                 gh: deps.gh,
                 repository: match[1],
               });

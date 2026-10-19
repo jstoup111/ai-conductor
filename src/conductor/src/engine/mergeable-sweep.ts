@@ -30,7 +30,7 @@ import {
   type PrMergeState,
   type PrRunner,
 } from './pr-labels.js';
-import { createGithubTrackerClient, type TrackerClient } from './tracker-client.js';
+import { createGithubTrackerClient, runTrackerRepositoryRead, type TrackerClient } from './tracker-client.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { GithubOperationRunner } from './github-operations.js';
 import type { FeatureWorktree } from './daemon-runner.js';
@@ -235,11 +235,11 @@ async function observeStackMemberLifecycle(
   // This is both an existence observation and a deliberately bounded stack
   // API read: exactly one per open stacked leaf, before any member reads.
   try {
-    const response = await gh(
+    const stdout = await runTrackerRepositoryRead(
+      gh, entry.repoCwd, 'repository.read', repository, { kind: 'repository' },
       ['api', `repos/${repository}/stacks?pull_request=${leaf.pr}`],
-      { cwd: entry.repoCwd },
     );
-    JSON.parse(response.stdout);
+    JSON.parse(stdout);
   } catch {
     return;
   }
@@ -248,21 +248,21 @@ async function observeStackMemberLifecycle(
   for (const member of stored.record.members.slice(0, -1)) {
     let lifecycle: PublicationMemberLifecycle | undefined;
     try {
-      const response = await gh(
+      const stdout = await runTrackerRepositoryRead(
+        gh, entry.repoCwd, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
         ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state'],
-        { cwd: entry.repoCwd },
       );
-      const observed: unknown = JSON.parse(response.stdout);
+      const observed: unknown = JSON.parse(stdout);
       const state = observed && typeof observed === 'object' && !Array.isArray(observed)
         ? (observed as { state?: unknown }).state
         : undefined;
       if (state === 'CLOSED') lifecycle = 'closed';
       if (state === 'MERGED') {
-        const reverted = await gh(
+        const reverted = await runTrackerRepositoryRead(
+          gh, entry.repoCwd, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
           ['pr', 'list', '-R', repository, '--state', 'merged', '--search', `Reverts ${repository}#${member.pr} in:body`, '--json', 'number'],
-          { cwd: entry.repoCwd },
         );
-        const matches: unknown = JSON.parse(reverted.stdout);
+        const matches: unknown = JSON.parse(reverted);
         lifecycle = Array.isArray(matches) && matches.some((candidate) =>
           candidate !== null && typeof candidate === 'object' && typeof (candidate as { number?: unknown }).number === 'number',
         ) ? 'reverted' : 'merged';
@@ -862,7 +862,7 @@ export async function sweepMergeableLabels({
               // A one-member publication is the ordinary leaf path.  Stack
               // lifecycle and child cleanup apply only once a second member
               // makes the receipt a real chained stack.
-              if ((publication?.record.members.length ?? 0) > 1) {
+              if (publication && publication.record.members.length > 1) {
                 const repository = parseGithubUrl(entry.prUrl)?.repository;
                 const reachability = await verifyMemberReachability(entry.repoCwd, publication.record, {
                   gh,
@@ -894,7 +894,7 @@ export async function sweepMergeableLabels({
                     `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
                   );
                 }
-                if (reachability.kind === 'reachable') {
+                if (reachability.kind === 'reachable' && repository) {
                   const result = await deleteStackChildren(entry.repoCwd, entry.slug, publication.record, {
                     git: makeGitRunner(entry.repoCwd), gh, repository,
                   });

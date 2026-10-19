@@ -1727,7 +1727,7 @@ type ConductorEventBody =
       type: 'halt_record_written';
       path: string;
       slug: string;
-      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap';
+      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap' | 'stack-tip-diverged';
     }
   | {
       /** Writing or committing a durable halt record failed. */

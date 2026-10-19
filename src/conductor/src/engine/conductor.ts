@@ -6158,7 +6158,7 @@ export class Conductor {
         const slug = this.featureSlug ?? this.featureDesc;
         const record = slug === undefined
           ? undefined
-          : await activePublicationRecord(this.projectRoot, slug, { git: this.git });
+          : await activePublicationRecord(this.projectRoot, slug, { git: this.publicationRecordGit() });
         const retarget = record?.record.retarget;
         if (retarget?.phase === 'observed') {
           prUrl = await this.findOpenRetainedShipDraftPrUrl(head, retarget.to);
@@ -6181,6 +6181,27 @@ export class Conductor {
       );
       return undefined;
     }
+  }
+
+  /** Adapts the injected production Git seam to ref-backed publication reads. */
+  private publicationRecordGit(): RebaseGitRunner {
+    return async (args, options) => {
+      try {
+        const result = await this.git(args, {
+          cwd: this.projectRoot,
+          ...(options?.credential === undefined ? {} : { credential: options.credential }),
+          ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        });
+        const observed = result as { stdout: string; exitCode?: unknown; stderr?: unknown };
+        return {
+          exitCode: typeof observed.exitCode === 'number' ? observed.exitCode : 0,
+          stdout: observed.stdout,
+          stderr: typeof observed.stderr === 'string' ? observed.stderr : '',
+        };
+      } catch (error) {
+        return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+      }
+    };
   }
 
   /** Match a retained draft only on one explicitly-authorized base branch. */

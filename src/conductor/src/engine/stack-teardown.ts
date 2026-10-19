@@ -1,7 +1,7 @@
 import { parseChildId, type ChildId } from './child-context.js';
 import { childBranchFor } from './feature-branch-identity.js';
 import type { GitRunner } from './rebase.js';
-import type { GhRunner } from './tracker-client.js';
+import { runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { PublicationRecord } from './stack-publication-record.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
 
@@ -56,11 +56,11 @@ export async function deleteStackChildren(
     if (!branch.ok || !member) return { kind: 'failed' };
     let observed: MergedMember;
     try {
-      const response = await dependencies.gh(
+      const stdout = await runTrackerRepositoryRead(
+        dependencies.gh, root, 'pull-request.read', dependencies.repository, { kind: 'pull-request', number: member.pr },
         ['pr', 'view', String(member.pr), '-R', dependencies.repository, '--json', 'state,headRefOid,mergeCommit'],
-        { cwd: root },
       );
-      observed = JSON.parse(response.stdout) as MergedMember;
+      observed = JSON.parse(stdout) as MergedMember;
     } catch {
       return { kind: 'failed' };
     }
