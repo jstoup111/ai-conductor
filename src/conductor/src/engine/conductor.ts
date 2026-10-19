@@ -183,9 +183,11 @@ import { createRoutedConductStateStore, readConductStateOverlay } from './conduc
 import {
   isRegionStep,
   CHILD_REGION_STEPS,
+  listExistingChildren,
   pipelinePathFor,
   type ChildId,
 } from './child-context.js';
+import { activePublicationRecord } from './stack-publication-record.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
@@ -1307,6 +1309,20 @@ export class Conductor {
   ): Promise<void> {
     const log = this.log ?? console.warn;
     try {
+      // The normal retained draft has no halt presentation. Probe that common
+      // case before deriving remote publication authority: a branch lookup is
+      // a read path, so an N=1 lookup must not reach Git merely to discover
+      // that there is nothing to repair.
+      const initial = await makeRetainedPrPresentable({
+        gh: this.gh,
+        cwd: this.projectRoot,
+        prUrl,
+        featureDesc: state.feature_desc,
+        branch: state.worktree_branch,
+        log,
+      });
+      if (initial === 'not-halt-pr' || initial === 'gh-unavailable') return;
+
       let planPath: string | undefined;
       try {
         planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc);
@@ -6132,41 +6148,56 @@ export class Conductor {
     if (!head || head === 'HEAD' || !this.baseBranch) return undefined;
 
     try {
-      const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
-          'pr', 'list',
-          '--head', head,
-          '--base', this.baseBranch,
-          '--state', 'open',
-          '--json', 'url,state',
-          '--limit', '10',
-        ]);
-      const rows: unknown = JSON.parse(stdout);
-      if (!Array.isArray(rows)) return undefined;
-      const match = rows.find(
-        (row): row is { url: string; state: string } =>
-          typeof row === 'object' &&
-          row !== null &&
-          (row as { state?: unknown }).state === 'OPEN' &&
-          typeof (row as { url?: unknown }).url === 'string' &&
-          (row as { url: string }).url.length > 0,
-      );
-      if (!match) return undefined;
+      let prUrl = await this.findOpenRetainedShipDraftPrUrl(head, this.baseBranch);
+      if (!prUrl && (await listExistingChildren(this.projectRoot)).length > 0) {
+        const slug = this.featureSlug ?? this.featureDesc;
+        const record = slug === undefined
+          ? undefined
+          : await activePublicationRecord(this.projectRoot, slug, { git: this.git });
+        const retarget = record?.record.retarget;
+        if (retarget?.phase === 'observed') {
+          prUrl = await this.findOpenRetainedShipDraftPrUrl(head, retarget.to);
+        }
+      }
+      if (!prUrl) return undefined;
       await this.makeRetainedShipPrPresentable(
-        match.url,
+        prUrl,
         { worktree_branch: head, feature_desc: this.featureDesc },
         undefined,
       );
-      this.shipDraftPrUrl = match.url;
+      this.shipDraftPrUrl = prUrl;
       (this.log ?? console.warn)(
-        `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${match.url}`,
+        `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${prUrl}`,
       );
-      return match.url;
+      return prUrl;
     } catch (err) {
       (this.log ?? console.warn)(
         `[ship-draft-pr] branch lookup for ${head} could not resolve a retained draft PR: ${err}`,
       );
       return undefined;
     }
+  }
+
+  /** Match a retained draft only on one explicitly-authorized base branch. */
+  private async findOpenRetainedShipDraftPrUrl(head: string, base: string): Promise<string | undefined> {
+    const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
+      'pr', 'list',
+      '--head', head,
+      '--base', base,
+      '--state', 'open',
+      '--json', 'url,state',
+      '--limit', '10',
+    ]);
+    const rows: unknown = JSON.parse(stdout);
+    if (!Array.isArray(rows)) return undefined;
+    return rows.find(
+      (row): row is { url: string; state: string } =>
+        typeof row === 'object' &&
+        row !== null &&
+        (row as { state?: unknown }).state === 'OPEN' &&
+        typeof (row as { url?: unknown }).url === 'string' &&
+        (row as { url: string }).url.length > 0,
+    )?.url;
   }
 
   /**
@@ -6179,24 +6210,7 @@ export class Conductor {
     let prUrl = state.pr_url;
     if (!prUrl && state.worktree_branch && this.baseBranch) {
       try {
-        const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
-            'pr', 'list',
-            '--head', state.worktree_branch,
-            '--base', this.baseBranch,
-            '--state', 'open',
-            '--json', 'url,state',
-            '--limit', '10',
-          ]);
-        const rows: unknown = JSON.parse(stdout);
-        if (Array.isArray(rows)) {
-          prUrl = rows.find(
-            (row): row is { url: string; state: string } =>
-              typeof row === 'object' &&
-              row !== null &&
-              (row as { state?: unknown }).state === 'OPEN' &&
-              typeof (row as { url?: unknown }).url === 'string',
-          )?.url;
-        }
+        prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
       } catch (err) {
         (this.log ?? console.warn)(`[halt-pr-rehab] resume clear branch lookup failed: ${err}`);
       }
