@@ -49,6 +49,8 @@ Adopt Option A.
 
 If retry safety is not mechanically provable at a writer, the class is `needs-human`. `legacy` is not writable through this API.
 
+> **Amended 2026-10-17 by #2945:** FINISH stack publication may also write `stack-tip-diverged`, an operator-action class that is never auto-cleared and is retained by the re-kick sweep. It names a published or partly published stack that no longer matches the engine's record: a moved remote tip, a closed or merged member, a wrong base, or a wrong stack membership or order (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11). No other writer may select it.
+
 ### D2 — Read disposition separates compatibility from corruption
 
 The read side returns one of four dispositions:

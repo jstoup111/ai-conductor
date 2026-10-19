@@ -97,6 +97,9 @@ because the changelog-token cycling this ADR fixes is a self-host problem.
 > no change of substance. Each id names a decision exactly as already stated above.
 >
 > **D1** — Option B, hardcoded timing: the engine opens one draft PR for the feature branch at the first SHIP step that will actually execute, after every skip has been evaluated, and `finish` flips it ready for review (above: "Option B. The engine opens one **draft** PR")
+>
+> > **Amended 2026-10-17 by #2945:** For a stacked feature, "the feature branch" is the leaf `feat/daemon-<slug>`, and its draft is still the one PR opened at SHIP entry. Each earlier child gets its own draft PR, opened only during FINISH after every gate has passed, and the leaf is then retargeted onto the last child. `finish` flips every member ready top-down, leaf first (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decisions 4, 5, 7). A non-stacked feature is unchanged.
+>
 > **D2** — A new module `src/engine/ship-draft-pr.ts` (`openShipDraftPr`) sits behind the existing injected `GhRunner`/`GitRunner` seam, plain-pushes, and calls the existing `findOrCreatePr({ draft: true })`; no raw `execFile`, no second gh implementation (above: "New module `src/engine/ship-draft-pr.ts`")
 > **D3** — It never force-pushes; a non-fast-forward rejection is reported, not forced (above: "Never force-pushes.")
 >
