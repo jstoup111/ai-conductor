@@ -146,8 +146,8 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 
 > **Amended 2026-10-19 by #3298:** D4.2 kept the result contract at `v3` because `confidence` is
 > optional. A required, reviewer-assigned `severity` (critical, major, minor, nit) now moves fresh
-> built-in results to `v4`. Because contract version is part of finding identity, every finding id
-> re-keys once at upgrade, and stored `v3` dispositions invalidate through the existing
+> built-in results to `v4`. Because contract version is part of built-in finding identity, every
+> built-in finding id re-keys once at upgrade (custom ids are unchanged), and stored `v3` dispositions invalidate through the existing
 > `build_review_disposition_version_invalidated` path. D4.3's buckets gain `advisory`, classified
 > after `suppressed`: a finding whose severity is strictly below its rubric's declared `min_severity`
 > never reaches remediate, is never charged, and is recorded on the same event, seam and store
