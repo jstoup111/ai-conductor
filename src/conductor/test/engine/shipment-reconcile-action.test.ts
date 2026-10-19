@@ -1,3 +1,4 @@
+// Covers: task:19
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
