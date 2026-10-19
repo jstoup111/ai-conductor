@@ -14,7 +14,6 @@ import {
 import { BUILD_REVIEW_RUBRIC_IDS, isRegisteredRubric } from './build-review-registry.js';
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 import {
-  matchesBuildReviewDisposition,
   matchesBuildReviewReducedCoverageDisposition,
   rehydrateBuildReviewAcceptedRiskFinding,
   type BuildReviewDispositionRecord,
@@ -573,7 +572,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
-  caseInput: RemediationCaseStoreReadResult = { ok: true, state: { version: 'v1', cases: [] } },
+  caseInput: RemediationCaseStoreReadResult = { ok: true, state: { version: 'v1', feature, cases: [] } },
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;

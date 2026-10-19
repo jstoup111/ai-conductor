@@ -11,7 +11,6 @@ import {
 import {
   BuildReviewDispositionStore,
   isRetiredBuildReviewRubric,
-  matchesBuildReviewDisposition,
   rehydrateBuildReviewAcceptedRiskFinding,
   matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewDispositionListResult,
@@ -165,7 +164,7 @@ export function deriveComposedBuildReviewEffectiveVerdict(
   reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
   minConfidence: Partial<Record<string, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
-  caseInput: RemediationCaseStoreReadResult = { ok: true, state: { version: 'v1', cases: [] } },
+  caseInput: RemediationCaseStoreReadResult = { ok: true, state: { version: 'v1', feature, cases: [] } },
 ): BuildReviewEffectiveVerdict | undefined {
   const builtinDispositions = dispositions.filter((record) => isRegisteredRubric(record.finding.canonicalPayload.rubric) && 'concernKind' in record.finding.canonicalPayload);
   const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>, settledSourceIds, caseInput);
@@ -271,15 +270,15 @@ export async function resolveEffectiveBuildReviewVerdict(
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
     const caseInput = deps.adjudicationEnabled === false
-      ? { ok: true as const, state: { version: 'v1' as const, cases: [] } }
+      ? { ok: true as const, state: { version: 'v1' as const, feature, cases: [] } }
       : await readBuildReviewCaseState(projectRoot, feature, deps);
-    effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, new Set(), caseInput);
+    effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, new Set<string>(), caseInput);
     // The adjudication coordinator finalizes cases and marks the step done; this
     // completion check must honor the same settlement or the gate re-selects a
     // settled lap until the loop guard halts it. Unreadable case state settles
     // nothing, so it can only keep a finding unresolved, never pass one.
     if (effective && effective.unresolvedFindingIds.length > 0) {
-      const settledSourceIds = caseInput.ok ? finalizedBuildReviewSourceIds(caseInput.state.cases) : new Set();
+      const settledSourceIds = caseInput.ok ? finalizedBuildReviewSourceIds(caseInput.state.cases) : new Set<string>();
       if (settledSourceIds.size > 0) {
         effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds, caseInput);
       }

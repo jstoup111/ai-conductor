@@ -214,7 +214,7 @@ function acceptedDispositions(
       if (identity) identities.set(identity.id, identity);
     }
   }
-  return effective.acceptedFindingIds.flatMap((findingId) => {
+  return effective.acceptedFindingIds.flatMap<AcceptedDisposition>((findingId) => {
     const identity = identities.get(findingId);
     if (!identity) return [];
     const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records }, caseInput);
