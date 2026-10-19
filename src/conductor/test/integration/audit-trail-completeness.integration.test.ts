@@ -66,6 +66,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   daemon_exited: 'not-audited-by-design',
   daemon_maintenance_phase: 'not-audited-by-design',
   executor_started: 'not-audited-by-design',
+  executor_protocol_mismatch: 'not-audited-by-design',
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
@@ -312,6 +313,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   executor_started: {
     type: 'executor_started', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId,
     protocolVersion: 1, supervisorEngineVersionId: '20261019T120000Z-bbbbbbbbbbbb' as EngineVersionId,
+  },
+  executor_protocol_mismatch: {
+    type: 'executor_protocol_mismatch', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa',
+    expectedProtocolVersion: 1, actualProtocolVersion: 2, reason: 'protocol mismatch', restartRequested: false,
   },
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },

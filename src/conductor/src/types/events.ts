@@ -541,6 +541,17 @@ type ConductorEventBody =
       supervisorEngineVersionId: string;
     }
   | {
+      /** A child was rejected before receiving a work order. */
+      type: 'executor_protocol_mismatch';
+      slug: string;
+      engineVersionId: string;
+      expectedProtocolVersion: number;
+      actualProtocolVersion?: number;
+      reason: string;
+      /** D7's drain fallback was requested through the armed supervisor seam. */
+      restartRequested: boolean;
+    }
+  | {
       type: 'feature_dispatch_ended';
       slug: string;
       outcome: FeatureDispatchOutcome;

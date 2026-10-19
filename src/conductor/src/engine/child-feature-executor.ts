@@ -8,7 +8,6 @@ import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage }
 import type { ExecutorIpcPort } from './executor-proxies.js';
 import type { ExecutorBrokerAttachment } from './executor-broker.js';
 import { removeExecutorRecord, writeExecutorRecord } from './executor-records.js';
-import { versionIdFromEngineDir } from './engine-version-id.js';
 
 export interface ForkedExecutor extends ExecutorIpcPort {
   pid?: number;
@@ -26,8 +25,11 @@ export interface ChildFeatureExecutorDeps {
   fork?: (modulePath: string, args: string[], options: { silent: true; execArgv?: string[] }) => ForkedExecutor;
   dispatchStartTimeoutMs?: number;
   teardownTimeoutMs?: number;
-  /** True only when a protocol mismatch should request the D7 drain fallback. */
-  onProtocolMismatch?: () => void;
+  /**
+   * The supervisor gates D7's drain fallback. Return true only when this
+   * mismatch was recorded as a restart request; consumer daemons return false.
+   */
+  onProtocolMismatch?: () => boolean;
   log?: (line: string) => void;
 }
 
@@ -54,7 +56,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     // record, otherwise status and shipped telemetry lie about the executor.
     const launchedOrder: WorkOrder = {
       ...order,
-      ...(useSupervisorBuild ? { engineVersionId: versionIdFromEngineDir(engineDir) ?? order.engineVersionId } : {}),
+      ...(useSupervisorBuild ? { engineVersionId: deps.supervisorEngineVersionId as WorkOrder['engineVersionId'] } : {}),
       supervisorEngineVersionId: deps.supervisorEngineVersionId as WorkOrder['engineVersionId'],
     };
     const modulePath = join(engineDir, 'index.js');
@@ -78,6 +80,8 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     let ended = false;
     let outcome: FeatureExecutionOutcome | undefined;
     let handshake: 'accepted' | 'failed' | 'missing' | undefined;
+    let handshakeFailure: string | undefined;
+    let protocolMismatchEvent: Promise<void> | undefined;
     let workOrderSent = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = async (result: FeatureExecutionOutcome): Promise<FeatureExecutionOutcome> => {
@@ -98,9 +102,29 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         void finish(outcome ?? errorOutcome(order, reason)).then(resolve);
       });
     });
+    const rejectHandshake = (
+      reason: string,
+      actualProtocolVersion?: number,
+    ): void => {
+      if (handshake !== undefined) return;
+      handshake = 'failed';
+      handshakeFailure = reason;
+      const restartRequested = deps.onProtocolMismatch?.() === true;
+      protocolMismatchEvent = deps.rootEvents.emit({
+        type: 'executor_protocol_mismatch',
+        slug: order.slug,
+        engineVersionId: launchedOrder.engineVersionId,
+        expectedProtocolVersion: EXECUTOR_PROTOCOL_VERSION,
+        ...(actualProtocolVersion === undefined ? {} : { actualProtocolVersion }),
+        reason,
+        restartRequested,
+      });
+      child.kill('SIGTERM');
+    };
     timer = setTimeout(() => {
       if (handshake === undefined) {
         handshake = 'missing';
+        handshakeFailure = 'executor missing startup handshake';
         child.kill('SIGTERM');
       }
     }, startTimeoutMs);
@@ -109,16 +133,18 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       if (parsed.kind === 'malformed') {
         deps.log?.(`[executor ${order.slug}] malformed child message: ${parsed.reason}`);
         if (handshake === undefined) {
-          handshake = 'failed';
-          deps.onProtocolMismatch?.();
-          child.kill('SIGTERM');
+          rejectHandshake(`malformed executor startup handshake: ${parsed.reason}`);
         }
         return;
       }
       const message = parsed.message;
       if (message.kind === 'hello' && handshake === undefined) {
         if (message.protocolVersion !== EXECUTOR_PROTOCOL_VERSION) {
-          handshake = 'failed'; deps.onProtocolMismatch?.(); child.kill('SIGTERM'); return;
+          rejectHandshake(
+            `executor protocol mismatch: expected ${EXECUTOR_PROTOCOL_VERSION}, received ${message.protocolVersion}`,
+            message.protocolVersion,
+          );
+          return;
         }
         handshake = 'accepted';
         void recordPublished.then(() => {
@@ -146,12 +172,18 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     });
     const result = await done;
     if (recordFailure) return errorOutcome(order, `could not publish executor record: ${recordFailure.message}`);
+    await protocolMismatchEvent;
     if (handshake === 'failed' && !useSupervisorBuild) {
-      const reason = priorFailure ?? 'executor protocol handshake failed';
+      const reason = handshakeFailure ?? 'executor protocol handshake failed';
       return launch(order, true, reason);
     }
-    if (handshake === 'failed' && useSupervisorBuild) return errorOutcome(order, `${priorFailure ?? 'executor handshake failed'}; supervisor-build relaunch handshake failed`);
-    if (handshake === 'missing') return errorOutcome(order, 'executor missing startup handshake');
+    if (handshake === 'failed' && useSupervisorBuild) {
+      return errorOutcome(
+        order,
+        `${priorFailure ?? 'executor handshake failed'}; supervisor-build relaunch handshake failed: ${handshakeFailure ?? 'unknown handshake failure'}`,
+      );
+    }
+    if (handshake === 'missing') return errorOutcome(order, handshakeFailure ?? 'executor missing startup handshake');
     return result;
   };
 

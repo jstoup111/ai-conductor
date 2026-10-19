@@ -1,4 +1,4 @@
-// Covers: task:17
+// Covers: task:17, task:18
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -135,5 +135,188 @@ describe('child feature executor dispatch lifecycle', () => {
       expect.objectContaining({ slug: 'v1', status: 'done' }),
       expect.objectContaining({ slug: 'v2', status: 'done' }),
     ]);
+  });
+
+  it('relaunches a protocol mismatch on the supervisor pin and requests a restart only through the armed callback', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const children: Array<{
+      messages: Array<(value?: unknown) => void>;
+      sent: unknown[];
+      kills: NodeJS.Signals[];
+      exit: () => void;
+    }> = [];
+    const launched: string[] = [];
+    const makeChild = (): ForkedExecutor => {
+      const messages: Array<(value?: unknown) => void> = [];
+      const sent: unknown[] = [];
+      const kills: NodeJS.Signals[] = [];
+      let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+      children.push({ messages, sent, kills, exit: () => onExit?.(0, null) });
+      return {
+        pid: 200 + children.length,
+        send(message) { sent.push(message); return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { onExit = listener; return this; },
+        kill(signal = 'SIGTERM') { kills.push(signal); return true; },
+      };
+    };
+    const events = new ConductorEventEmitter();
+    const mismatches: Array<Record<string, unknown>> = [];
+    events.on('executor_protocol_mismatch', (event) => { mismatches.push(event as Record<string, unknown>); });
+    const mismatchRequested = vi.fn(() => true);
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: (_order, supervisor) => supervisor
+        ? `/store/dist-versions/${VERSION_TWO}`
+        : `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION_TWO,
+      rootEvents: events,
+      attachBroker: () => ({ events, close() {} }),
+      fork: (path) => { launched.push(path); return makeChild(); },
+      onProtocolMismatch: mismatchRequested,
+    });
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(children).toHaveLength(1));
+    for (const listener of children[0]!.messages) listener({ kind: 'hello', protocolVersion: 2, engineVersionId: VERSION });
+    expect(children[0]!.sent).toEqual([]);
+    expect(children[0]!.kills).toEqual(['SIGTERM']);
+    children[0]!.exit();
+
+    await vi.waitFor(() => expect(children).toHaveLength(2));
+    expect(launched).toEqual([
+      `/store/dist-versions/${VERSION}/index.js`,
+      `/store/dist-versions/${VERSION_TWO}/index.js`,
+    ]);
+    expect(mismatchRequested).toHaveBeenCalledOnce();
+    expect(mismatches).toEqual([
+      expect.objectContaining({
+        type: 'executor_protocol_mismatch',
+        engineVersionId: VERSION,
+        expectedProtocolVersion: 1,
+        actualProtocolVersion: 2,
+        restartRequested: true,
+      }),
+    ]);
+    for (const listener of children[1]!.messages) listener({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION_TWO });
+    await vi.waitFor(() => expect(children[1]!.sent).toEqual([
+      expect.objectContaining({ kind: 'work-order', order: expect.objectContaining({ engineVersionId: VERSION_TWO, supervisorEngineVersionId: VERSION_TWO }) }),
+    ]));
+    await expect(readFile(join(root, '.daemon', 'executors', 'feature.json'), 'utf8')).resolves.toContain(VERSION_TWO);
+    for (const listener of children[1]!.messages) listener({ kind: 'outcome', outcome: { slug: 'feature', status: 'done' } });
+    children[1]!.exit();
+    await expect(execution).resolves.toMatchObject({ status: 'done' });
+  });
+
+  it('treats a malformed hello as an unarmed mismatch and relaunches without requesting a restart', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const children: Array<{ messages: Array<(value?: unknown) => void>; exit: () => void }> = [];
+    const makeChild = (): ForkedExecutor => {
+      const messages: Array<(value?: unknown) => void> = [];
+      let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+      children.push({ messages, exit: () => onExit?.(0, null) });
+      return {
+        pid: 300 + children.length,
+        send() { return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { onExit = listener; return this; },
+        kill() { return true; },
+      };
+    };
+    const events = new ConductorEventEmitter();
+    const mismatches: Array<Record<string, unknown>> = [];
+    events.on('executor_protocol_mismatch', (event) => { mismatches.push(event as Record<string, unknown>); });
+    const requestRestart = vi.fn(() => false);
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: (_order, supervisor) => `/store/dist-versions/${supervisor ? VERSION_TWO : VERSION}`,
+      supervisorEngineVersionId: VERSION_TWO,
+      rootEvents: events,
+      attachBroker: () => ({ events, close() {} }),
+      fork: () => makeChild(),
+      onProtocolMismatch: requestRestart,
+    });
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(children).toHaveLength(1));
+    for (const listener of children[0]!.messages) listener({ kind: 'hello', protocolVersion: 'not-a-number', engineVersionId: VERSION });
+    children[0]!.exit();
+    await vi.waitFor(() => expect(children).toHaveLength(2));
+    expect(requestRestart).toHaveBeenCalledOnce();
+    expect(mismatches).toEqual([expect.objectContaining({ restartRequested: false, reason: expect.stringContaining('malformed executor startup handshake') })]);
+    children[1]!.exit();
+    await expect(execution).resolves.toMatchObject({ status: 'error' });
+  });
+
+  it('returns a missing-hello error without relaunching', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const kill = vi.fn(() => true);
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: new ConductorEventEmitter(),
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 400,
+        send() { return true; },
+        on() { return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill,
+      }),
+      dispatchStartTimeoutMs: 1,
+    });
+
+    vi.useFakeTimers();
+    try {
+      const execution = executor.execute(order);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(kill).toHaveBeenCalledWith('SIGTERM');
+      exit?.(0, null);
+      await expect(execution).resolves.toMatchObject({ status: 'error', reason: 'executor missing startup handshake' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports both handshake failures and never forks a third executor', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const children: Array<{ messages: Array<(value?: unknown) => void>; exit: () => void }> = [];
+    const fork = vi.fn((): ForkedExecutor => {
+      const messages: Array<(value?: unknown) => void> = [];
+      let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+      children.push({ messages, exit: () => onExit?.(0, null) });
+      return {
+        pid: 500 + children.length,
+        send() { return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { onExit = listener; return this; },
+        kill() { return true; },
+      };
+    });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: (_order, supervisor) => `/store/dist-versions/${supervisor ? VERSION_TWO : VERSION}`,
+      supervisorEngineVersionId: VERSION_TWO,
+      rootEvents: new ConductorEventEmitter(),
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork,
+    });
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(children).toHaveLength(1));
+    for (const listener of children[0]!.messages) listener({ kind: 'hello', protocolVersion: 2, engineVersionId: VERSION });
+    children[0]!.exit();
+    await vi.waitFor(() => expect(children).toHaveLength(2));
+    for (const listener of children[1]!.messages) listener({ kind: 'hello', protocolVersion: 'invalid', engineVersionId: VERSION_TWO });
+    children[1]!.exit();
+    await expect(execution).resolves.toMatchObject({
+      status: 'error',
+      reason: expect.stringContaining('expected 1, received 2'),
+    });
+    const outcome = await execution;
+    expect(outcome.reason).toContain('malformed executor startup handshake');
+    expect(fork).toHaveBeenCalledTimes(2);
   });
 });

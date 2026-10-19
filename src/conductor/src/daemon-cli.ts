@@ -2350,7 +2350,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     attachBroker: executorBroker.attach,
     dispatchStartTimeoutMs: resolveDispatchStartTimeoutSeconds(config) * 1_000,
     teardownTimeoutMs: resolveTeardownTimeoutSeconds(config) * 1_000,
-    onProtocolMismatch: () => log('[daemon] executor protocol mismatch; supervisor-build failover requested'),
+    onProtocolMismatch: () => {
+      log('[daemon] executor protocol mismatch; supervisor-build failover requested');
+      return isArmed;
+    },
     log,
   });
   const childMode = (config?.executor_isolation ?? 'child') === 'child';
