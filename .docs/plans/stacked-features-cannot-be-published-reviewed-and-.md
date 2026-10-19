@@ -1131,3 +1131,341 @@ Each task's `**Dependencies:**` line is authoritative.
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-R1: finish-publication-production.ts/ship-draft-pr.ts: build a per-operation GithubMutationExecutionContext whose provenance.target matches each stacked write (child remote-ref push, child PR create, leaf pull-request draft/retarget/ready, repository/stack-number stack.read/create/add, child ready), so mutation-policy authorizes each stacked write against its own target
+**Gate:** prd-audit
+**Rationale:** ADR decisions 5/11/13 already approve child pushes and stack operations with their own targets. The defect is production wiring: one runner bound to the leaf remote-ref provenance target (ship-draft-pr.ts:264-276) is reused for every child destination, and mutation-policy refuses it as invalid-target. This is conforming implementation work, and the missing three-member dispatch test is part of Task 16.
+**Criterion:** S2.1
+**Parent task:** 16
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3: Add a conductor FINISH dispatch test on the three-member fixture that runs establish_pr→record_outcome through advanceFinishPublication with the real mutation-policy runner (no unbound context), covering the Task 16 done-when argv assertions
+**Gate:** prd-audit
+**Rationale:** ADR decisions 5/11/13 already approve child pushes and stack operations with their own targets. The defect is production wiring: one runner bound to the leaf remote-ref provenance target (ship-draft-pr.ts:264-276) is reused for every child destination, and mutation-policy refuses it as invalid-target. This is conforming implementation work, and the missing three-member dispatch test is part of Task 16.
+**Criterion:** S2.1
+**Parent task:** 16
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-2: finish-publication-production.ts/ship-draft-pr.ts: per-operation mutation contexts whose provenance.target matches each stacked write
+**Gate:** prd-audit
+**Rationale:** The child push logic is already correct. Only the production remoteMutation target binding refuses the child ref, so the shared per-target context fix applies.
+**Criterion:** S2.2
+**Parent task:** 16
+**Done when:**
+- [test] S2.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3-2: Three-member conductor FINISH dispatch test with the real mutation-policy runner
+**Gate:** prd-audit
+**Rationale:** The child push logic is already correct. Only the production remoteMutation target binding refuses the child ref, so the shared per-target context fix applies.
+**Criterion:** S2.2
+**Parent task:** 16
+**Done when:**
+- [test] S2.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R3-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R4: Test that a ready leaf #500 is re-drafted through pull-request.draft under a leaf pull-request-target context before the first child push, emitting stack_member_redrafted at the sealed leaf position
+**Gate:** prd-audit
+**Rationale:** The leaf re-draft runs through a runner bound to the remote-ref target and is refused. It needs a pull-request-target context and a test, both within Task 10.
+**Criterion:** S2.4
+**Parent task:** 10
+**Done when:**
+- [test] S2.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R5: finish-publication-production.ts establishChildPrs: feed renderChildBody the sealed position's slice name, task ids, story ids/stories and diffstat, and final child PR references, and title each child PR from the sealed slice rather than 'Stack slice N'; add a production-path test
+**Gate:** prd-audit
+**Rationale:** renderChildBody already supports real content, but production feeds it placeholders. Task 10/ADR D6 require sealed slice evidence, so this is a conforming implementation fix.
+**Criterion:** S3.1
+**Parent task:** 10
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R6: finish-publication-production.ts assembleStack: after final membership, re-render ## Stack on every child (checkChildBodyPostconditions before pull-request.edit; failure halts needs-human naming the member) and add/refresh ## Stack on the leaf while preserving captured project-owned regions byte-identically; never read the capture store for child URLs; add the Task 13 tests
+**Gate:** prd-audit
+**Rationale:** The leaf ## Stack section is specified by Task 13 and ADR D6 but was never implemented in production.
+**Criterion:** S3.2
+**Parent task:** 13
+**Done when:**
+- [test] S3.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R6-2: assembleStack re-renders ## Stack on every member after final membership, with child postconditions and leaf region preservation; add the Task 13 tests
+**Gate:** prd-audit
+**Rationale:** The post-assembly navigation re-render is missing. It is the same Task 13 work as S3.2.
+**Criterion:** S3.3
+**Parent task:** 13
+**Done when:**
+- [test] S3.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R6-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R7: assembleStack + stack-publication.ts observer: discover by member 1, refuse (diverged, no create/add) when a member is in another stack or the existing stack is not an ordered prefix of the record, then stack.create/stack.add; re-read and compare ordered membership, bases and each member head SHA against the recorded pushed tip before marking verified; the observer re-verifies membership, bases and heads rather than trusting the stored flag or any parseable JSON; add the Task 12 tests
+**Gate:** prd-audit
+**Rationale:** Head-SHA verification against pushed tips is required by Task 12/ADR D5 and is missing.
+**Criterion:** S4.2
+**Parent task:** 12
+**Done when:**
+- [test] S4.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R7-2: assembleStack/observer: member-1 discovery, prefix/other-stack checks before writes, and head-SHA and base verification; Task 12 tests
+**Gate:** prd-audit
+**Rationale:** Discovery must key on member 1 according to ADR D5 step 2. This is an implementation miss.
+**Criterion:** S4.3
+**Parent task:** 12
+**Done when:**
+- [test] S4.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R7-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R8: finish-publication.ts nextFinishPublicationTransition: an observed 'diverged' stack dimension halts stack-tip-diverged (via haltStackTipDiverged naming positions, emitting stack_tip_diverged through a real emitter) instead of selecting assemble_stack; typed retarget/assembly divergence in finish-publication-production.ts halts instead of throwing generic retryable errors
+**Gate:** prd-audit
+**Rationale:** The other-stack and missing-middle checks, and routing an observed diverged state to a halt instead of assembly, are specified by Tasks 12/20.
+**Criterion:** S4.6
+**Parent task:** 12
+**Done when:**
+- [test] S4.6 is satisfied by this task.
+- The repair for task rem-prd-audit-R8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R7-3: assembleStack/observer: head-SHA verification before marking verified; Task 12 tests
+**Gate:** prd-audit
+**Rationale:** This is the same missing head-SHA verification as S4.2.
+**Criterion:** S4.7
+**Parent task:** 12
+**Done when:**
+- [test] S4.7 is satisfied by this task.
+- The repair for task rem-prd-audit-R7-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R9: finish-publication-production.ts ready_pr: flip the leaf first via repairPresentation, then children top-down (#c3, #c1), each via checkChildBodyPostconditions then ensureShipReady using a child pull-request-target context; before each flip, parse the stack.read response and halt stack-tip-diverged naming the member when membership or head SHA differs from the record; snapshot pr.ready is true only when every member is ready; add the Task 15 tests
+**Gate:** prd-audit
+**Rationale:** The ready order is inverted, the child path is wrong, and child ready is refused by the leaf-bound runner. Task 15 specifies the correct behavior.
+**Criterion:** S6.1
+**Parent task:** 15
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1-3: Per-operation mutation contexts whose provenance.target matches each stacked write
+**Gate:** prd-audit
+**Rationale:** The ready order is inverted, the child path is wrong, and child ready is refused by the leaf-bound runner. Task 15 specifies the correct behavior.
+**Criterion:** S6.1
+**Parent task:** 15
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R1-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R9-2: ready_pr top-down with child-only path, per-flip membership/head verification, and all-member snapshot readiness; Task 15 tests
+**Gate:** prd-audit
+**Rationale:** Snapshot readiness looks only at the leaf. Task 15 requires all-member readiness.
+**Criterion:** S6.4
+**Parent task:** 15
+**Done when:**
+- [test] S6.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R9-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R9-3: ready_pr per-flip stack.read membership/head verification; Task 15 tests
+**Gate:** prd-audit
+**Rationale:** The per-flip stack read response is discarded. Task 15 requires membership and head verification.
+**Criterion:** S6.5
+**Parent task:** 15
+**Done when:**
+- [test] S6.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R9-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R10: stack-tip-guard.ts/remote-git-operations.ts/tracker-client.ts: run the tip guard on pull-request.retarget too; return mismatched members as positions (not PR numbers) in the refusal; adopt outstanding push intents before comparing tips on child-push retries (stack-publication.ts); gate the guard and readyStackChildren on child state so N=1 issues no publication-ref read; run restack stack-preflight's freeze before recovery and guard restack-recovery's follow-on restack; add the Task 21 tests including an N=1 git-argv parity assertion
+**Gate:** prd-audit
+**Rationale:** ADR D11 requires the tip guard on retarget as well as pushes, and requires HALTs to name positions. This is an implementation gap.
+**Criterion:** S10.6
+**Parent task:** 21
+**Done when:**
+- [test] S10.6 is satisfied by this task.
+- The repair for task rem-prd-audit-R10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R11: remote-git-operations.ts: return a typed stack-tip-mismatch refusal without writing a HALT; FINISH publication callers map it to haltStackTipDiverged; halt-record.ts skips the push, emits halt_record_push_failed reason stack-tip-mismatch and writes no HALT; refreshPostFinishShippedRecord skips and logs; add the Task 22 tests with the real executeRemoteGit refusal path
+**Gate:** prd-audit
+**Rationale:** executeRemoteGit writes a HALT for every refusal. ADR D11/Task 22 require each caller to map the refusal itself, and the halt-record push must never write another HALT.
+**Criterion:** S10.9
+**Parent task:** 22
+**Done when:**
+- [test] S10.9 is satisfied by this task.
+- The repair for task rem-prd-audit-R11 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R12: daemon-park-cli.ts reclaim-worktree: read the active publication record; with the shipped-record gate and reachability passing, call deleteStackChildren exactly as the sweep reap does; on a closed-unmerged leaf, keep the children and mark the record tornDown; park-reconciliation.ts reconcileMergedPark keeps the positions/publication refs and marks tornDown when children are kept; add the Task 29 tests
+**Gate:** prd-audit
+**Rationale:** Reclaim-worktree stack cleanup is specified by Task 29 and was never wired.
+**Criterion:** S11.2
+**Parent task:** 29
+**Done when:**
+- [test] S11.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R12 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R12-2: reclaim-worktree/park reconciliation stack handling and tornDown marking; Task 29 tests
+**Gate:** prd-audit
+**Rationale:** This is the same missing Task 29 reclaim wiring as S11.2.
+**Criterion:** S11.3
+**Parent task:** 29
+**Done when:**
+- [test] S11.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R12-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R13: mergeable-sweep.ts/stack-teardown.ts: retain the watch entry exactly once per sweep (no pre-reachability push, no duplicate after the kept write, drop it after a full successful delete, retain it on a caught teardown failure); delete reachable children per member with only unreachable/advanced ones kept; treat an already-deleted branch as deleted, and a git probe error as a stop-and-retry failure rather than kept; tornDown must not block retry of incomplete cleanup; add the Task 28 tests
+**Gate:** prd-audit
+**Rationale:** The sweep's watch-entry bookkeeping duplicates entries. This is a Task 28 implementation defect.
+**Criterion:** S11.4
+**Parent task:** 28
+**Done when:**
+- [test] S11.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R13 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R14: finish-publication-production.ts establishChildPrs: use a torn-down prior record only for its CAS receipt and start new membership empty (no position-mismatch halt, no merging of stale members, no duplicate leaf append); add a republish-after-teardown test
+**Gate:** prd-audit
+**Rationale:** A torn-down prior record must supply only the CAS receipt (ADR D2). Reusing its membership is an implementation bug in Task 10.
+**Criterion:** S11.5
+**Parent task:** 10
+**Done when:**
+- [test] S11.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R14 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R13-2: mergeable-sweep.ts/stack-teardown.ts: per-member deletion with unreachable members kept, resumable failure handling and single watch-entry retention; Task 28 tests
+**Gate:** prd-audit
+**Rationale:** Per-member retention under unreachability is specified by Task 28.
+**Criterion:** S11.6
+**Parent task:** 28
+**Done when:**
+- [test] S11.6 is satisfied by this task.
+- The repair for task rem-prd-audit-R13-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R15: github-operations.ts: allow a stack-number target for stack.read; github-operations-cli.ts: refuse a child push or PR bind when the publication record is missing, unreadable or torn-down, not only when an active record omits the position; add the Task 7/22 tests under bound (non-unbound) mutation contexts
+**Gate:** prd-audit
+**Rationale:** ADR D13 approves the stack.read/stack.add targets. Production refuses them only because the contexts are bound to the leaf target, and github-operations.ts lacks the known-stack-number stack.read target.
+**Criterion:** S12.2
+**Parent task:** 7
+**Done when:**
+- [test] S12.2 is satisfied by this task.
+- The repair for task rem-prd-audit-R15 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: finish-publication-production.ts:223 Git adapter: forward options.input as stdin (and return exit code/stdout) so stack-publication-record hash-object persists the record; add a production-adapter record-write test
+**Gate:** as-built
+**Rationale:** The Git adapter drops stdin input needed by hash-object. This is a clear implementation defect in Task 10's production wiring.
+**Parent task:** 10
+**Governing clause:** Task 10
+**Done when:**
+- Task 10 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R10-2: Tip-guard coverage/gating, including the N=1 no-publication-ref-read gate in remote-git-operations and readyStackChildren and an N=1 golden argv parity test
+**Gate:** prd-audit
+**Rationale:** N=1 argv parity (ADR D1) is broken by unconditional publication-ref reads. The guard and readiness need a child-state gate.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1 is satisfied by this task.
+- The repair for task rem-prd-audit-R10-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R14-2: establishChildPrs: a torn-down prior record supplies the CAS receipt only, with fresh membership; republish test
+**Gate:** prd-audit
+**Rationale:** A torn-down record must supply the CAS receipt only (ADR D2).
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 2
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 2 is satisfied by this task.
+- The repair for task rem-prd-audit-R14-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R7-4: stack-publication.ts observer re-verifies ordered membership, bases and head SHAs rather than trusting the stored flag or any parseable JSON; Task 12 tests
+**Gate:** prd-audit
+**Rationale:** The observer must verify bases, heads and current membership (ADR D5).
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5 is satisfied by this task.
+- The repair for task rem-prd-audit-R7-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R5-2: establishChildPrs renders child bodies/titles from sealed slice evidence and final PR references
+**Gate:** prd-audit
+**Rationale:** Placeholder bodies and the missing navigation refresh violate ADR D6. Both are implementation work.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 6
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 6 is satisfied by this task.
+- The repair for task rem-prd-audit-R5-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R6-3: assembleStack re-renders ## Stack on every member, including the leaf, with region preservation; Task 13 tests
+**Gate:** prd-audit
+**Rationale:** Placeholder bodies and the missing navigation refresh violate ADR D6. Both are implementation work.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 6
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 6 is satisfied by this task.
+- The repair for task rem-prd-audit-R6-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R9-4: ready_pr leaf-first top-down with child-only path, per-flip membership/head verification and all-member snapshot readiness; Task 15 tests
+**Gate:** prd-audit
+**Rationale:** Ready order, per-flip verification and snapshot readiness must follow ADR D7/Task 15.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 7
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 7 is satisfied by this task.
+- The repair for task rem-prd-audit-R9-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R8-2: Route observed/typed divergence to haltStackTipDiverged with a real event emitter instead of assemble_stack or generic retry; tests
+**Gate:** prd-audit
+**Rationale:** Diverged must halt with stack_tip_diverged emission instead of routing to assembly or retry (Task 20).
+**Parent task:** 20
+**Governing clause:** Task 20
+**Done when:**
+- Task 20 is satisfied by this task.
+- The repair for task rem-prd-audit-R8-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R10-3: Tip guard on retarget, intent adoption before tip compare, restack preflight freeze-before-recovery and a guarded follow-on restack; Task 21/23 tests
+**Gate:** prd-audit
+**Rationale:** ADR D11 guard coverage is missing on retarget, the intent-recovery order and restack preflight.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 11
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 11 is satisfied by this task.
+- The repair for task rem-prd-audit-R10-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R11-2: executeRemoteGit returns a typed refusal without writing a HALT; callers map it (FINISH halts; halt-record and post-finish skip); Task 22 tests
+**Gate:** prd-audit
+**Rationale:** Refusal handling must be caller-mapped. The halt-record path must not re-HALT (ADR D11/Task 22).
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 11
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 11 is satisfied by this task.
+- The repair for task rem-prd-audit-R11-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R15-2: github-operations-cli refuses child writes when the record is missing/unreadable/torn-down; github-operations allows a stack-number stack.read target; tests
+**Gate:** prd-audit
+**Rationale:** ADR D13 restricts child publication when the record is absent or unusable and approves a stack-number stack.read target.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 13
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 13 is satisfied by this task.
+- The repair for task rem-prd-audit-R15-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R16: shipment-audit.ts: exclude child-head candidates before classification so a child mention never returns plan-level absent or ambiguity ahead of a legitimate leaf candidate; add a test where a child mentions the plan and the leaf shipped
+**Gate:** as-built
+**Rationale:** Shipment-audit child exclusion order is a Task 19 implementation defect under ADR D8.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 8
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 8 is satisfied by this task.
+- The repair for task rem-as-built-R16 is committed and its targeted tests pass.
+
+### Task rem-as-built-R17: stack-publication.ts member-state parsing: reject malformed objects and missing/unknown state as indeterminate (not unreachable); mergeable-sweep.ts retries indeterminate evidence on later sweeps without recording tornDown; tests
+**Gate:** as-built
+**Rationale:** Malformed member state must be indeterminate and retried, not terminal (ADR D9/Task 26).
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 9
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 9 is satisfied by this task.
+- The repair for task rem-as-built-R17 is committed and its targeted tests pass.
+
+### Task rem-as-built-R18: mergeable-sweep.ts revert detection: restrict the search to merged PRs whose base is the default branch, fetch their bodies, and require GitHub's 'Reverts <repo>#<n>' line before reporting reverted; tests for an unrelated mention and a merge into a child branch
+**Gate:** as-built
+**Rationale:** Revert detection must verify a merged default-branch PR carrying the revert line (ADR D10/Task 27).
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 10
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 10 is satisfied by this task.
+- The repair for task rem-as-built-R18 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R13-3: mergeable-sweep.ts/stack-teardown.ts: per-member deletion, resumable failure handling and single watch-entry retention; Task 28 tests
+**Gate:** prd-audit
+**Rationale:** Per-member retention and resumable teardown are specified by ADR D12/Task 28.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 12
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 12 is satisfied by this task.
+- The repair for task rem-prd-audit-R13-3 is committed and its targeted tests pass.
