@@ -1507,10 +1507,10 @@ describe('engine/daemon — runDaemon', () => {
     });
   });
 
-  // ── Dispatch-boundary rebuild + restart (Gap A/B: fire before next task) ────
+  // ── Natural-idle stale restart (pinned children adopt busy rebuilds) ────────
 
-  describe('stale-engine rebuild + restart at the dispatch boundary', () => {
-    it('stale after rebuild: rebuilds, requests restart with identities, and does NOT dispatch the pending feature', async () => {
+  describe('natural-idle stale restart', () => {
+    it('requests restart before the next claim without rebuilding on the dispatch path', async () => {
       const rebuildEngine = vi.fn(async () => {});
       const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
@@ -1532,14 +1532,14 @@ describe('engine/daemon — runDaemon', () => {
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });
-      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).toHaveBeenCalledTimes(1);
       expect(requestRestart).toHaveBeenCalledWith({ fromIdentity: 'old-hash', targetIdentity: 'new-hash' });
       expect(runFeature).not.toHaveBeenCalled(); // restarted BEFORE dispatching anything
       expect(res.stoppedReason).toBe('engine_restart');
     });
 
-    it('current after rebuild: rebuilds before each dispatch, dispatches every feature, never restarts', async () => {
+    it('a current supervisor dispatches every feature without rebuilding per claim', async () => {
       const rebuildEngine = vi.fn(async () => {});
       const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
@@ -1558,13 +1558,13 @@ describe('engine/daemon — runDaemon', () => {
         autoRestartOnStaleEngine: true,
         maxIdlePolls: 1,
       });
-      expect(rebuildEngine).toHaveBeenCalledTimes(2); // once per dispatch, not on idle polls
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).not.toHaveBeenCalled();
       expect(runFeature).toHaveBeenCalledTimes(2);
       expect(res.processed.map((o) => o.slug).sort()).toEqual(['f0', 'f1']);
     });
 
-    it('rebuild failure is swallowed: logs, still evaluates the checker, and dispatches when current', async () => {
+    it('does not run a rebuild on the dispatch path when the supervisor is current', async () => {
       const logs: string[] = [];
       const rebuildEngine = vi.fn(async () => {
         throw new Error('tsup boom');
@@ -1587,10 +1587,10 @@ describe('engine/daemon — runDaemon', () => {
         autoRestartOnStaleEngine: true,
         maxIdlePolls: 0,
       });
-      expect(rebuildEngine).toHaveBeenCalled();
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(runFeature).toHaveBeenCalledTimes(1); // degraded to current engine, dispatched
       expect(requestRestart).not.toHaveBeenCalled();
-      expect(logs.some((m) => m.includes('engine rebuild failed'))).toBe(true);
+      expect(logs.some((m) => m.includes('engine rebuild failed'))).toBe(false);
     });
 
     it('gate off (not self-host): rebuildEngine is never called and dispatch proceeds normally', async () => {
@@ -1614,7 +1614,7 @@ describe('engine/daemon — runDaemon', () => {
       expect(runFeature).toHaveBeenCalledTimes(1);
     });
 
-    it('suppressed identity: stale after rebuild but suppressed → no restart, feature dispatches', async () => {
+    it('suppressed stale identity does not restart and still dispatches', async () => {
       const rebuildEngine = vi.fn(async () => {});
       const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
@@ -1638,7 +1638,7 @@ describe('engine/daemon — runDaemon', () => {
         autoRestartOnStaleEngine: true,
         maxIdlePolls: 1,
       });
-      expect(rebuildEngine).toHaveBeenCalled();
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).not.toHaveBeenCalled();
       expect(runFeature).toHaveBeenCalledTimes(1); // suppressed → dispatched normally
     });

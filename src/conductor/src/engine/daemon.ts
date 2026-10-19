@@ -22,6 +22,7 @@ import { encodeClaimKey, featureSlugs, InMemoryWorkClaims, type WorkClaims } fro
 import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { DaemonMaintenance, MaintenanceJob } from './daemon-maintenance.js';
+import { createSupervisorStaleness } from './supervisor-staleness.js';
 import { timeMaintenancePhase, type MaintenancePhaseInput } from './maintenance-phase-timer.js';
 import type { RepairQueue, RepairRequest } from './repair-queue.js';
 import type { FeatureTerminalEffects } from './feature-executor.js';
@@ -464,6 +465,9 @@ export interface DaemonDeps {
    */
   probeEngineStaleness?: () => Promise<void>;
 
+  /** Set by the child-executor adapter after an incompatible handshake. */
+  protocolMismatchPending?: () => boolean;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
@@ -648,6 +652,8 @@ export interface DaemonOptions {
   isSelfHost?: boolean;
   /** Config flag: auto-restart on stale engine (default false). */
   autoRestartOnStaleEngine?: boolean;
+  /** Maximum time a stale supervisor may continue claiming before it drains. */
+  supervisorMaxStaleHours?: number;
 }
 
 export type DaemonStopReason =
@@ -969,9 +975,6 @@ export async function runDaemon(
   // their existing retry-and-recheck behavior is preserved.
   let restartPendingDeferredByEpisode = false;
   let restartPendingConsumed = false;
-  // Task 21: track whether a stale-engine restart request has been made in this
-  // run. Once requested, don't retry (the restart would exit the process).
-  let staleEngineRestartRequested = false;
   let totalCost = 0;
   let idlePolls = 0;
 
@@ -1081,7 +1084,7 @@ export async function runDaemon(
 
   // Task 1 (#651): park check immediately before every build-start, closing
   // the selection→dispatch race — pickEligible's selection-time check
-  // (:137) can pass, then `await rebuildAndMaybeRestartForStaleEngine()`
+  // (:137) can pass, then an awaited restart decision
   // (below) opens a window where an operator-park marker can land before
   // this slug is actually dispatched. Delegates to the module-level
   // `guardedDispatchWith` so the gate itself is unit-testable without
@@ -1234,9 +1237,13 @@ export async function runDaemon(
   // for it ("waiting for root-mutation admission"), exactly as before.
   let refreshJob: Promise<void> | undefined;
   let refreshedBacklog: BacklogItem[] | undefined;
+  // Once a restart owns a boundary, no new root-maintenance work may begin.
+  // A running refresh is allowed to settle before the single-generation
+  // handoff; it is never cancelled halfway through a mutation.
+  let restartPending = false;
 
   const startRefresh = (): Promise<void> | undefined => {
-    if (refreshJob || !maintenance.refreshStartable()) return refreshJob;
+    if (restartPending || maintenance.isDraining() || refreshJob || !maintenance.refreshStartable()) return refreshJob;
     const job = (async () => {
       try {
         const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({ refresh: true }));
@@ -1413,6 +1420,20 @@ export async function runDaemon(
     options.isSelfHost === true && // gate 2: self-host enabled
     options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
     deps.staleEngineChecker !== undefined; // gate 4: checker armed
+  const supervisorStaleness = createSupervisorStaleness(now);
+  const staleAgeCapHours = options.supervisorMaxStaleHours ?? 24;
+
+  const observeSupervisorStaleness = (): boolean => {
+    if (!staleGatesArmed || !deps.staleEngineChecker) return false;
+    const stale = deps.staleEngineChecker.check() === 'stale';
+    const bootIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+    supervisorStaleness.observe(
+      bootIdentity,
+      stale ? (deps.staleEngineChecker.targetIdentity?.() ?? null) : bootIdentity,
+    );
+    if (deps.protocolMismatchPending?.()) supervisorStaleness.markProtocolMismatch();
+    return stale;
+  };
 
   /**
    * A queued restart or stale running engine is discovered while workers are
@@ -1424,6 +1445,7 @@ export async function runDaemon(
     const wasDraining = maintenance.isDraining();
     const drain = maintenance.beginDrain(reason);
     if (!wasDraining) {
+      restartPending = true;
       // A drain owns the next quiescent boundary. Prevent maintenance from
       // starting another pass while workers finish; the already-running pass
       // is deliberately allowed to settle before that boundary acts.
@@ -1457,29 +1479,17 @@ export async function runDaemon(
       }
     }
 
-    if (!staleGatesArmed || !deps.staleEngineChecker) return;
-    // The dispatch preflight has already refreshed, rebuilt, checked, and
-    // evaluated suppression for this exact source/build boundary. Do not ask
-    // the busy-pool observer to evaluate the same target again while the
-    // just-dispatched worker is still settling.
-    if (staleAlreadyHandledByPreflight) return;
-    if (deps.staleEngineChecker.check() !== 'stale') return;
-
-    const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-    const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
-    if (!suppressed) await beginDrain('stale-engine');
+    if (!observeSupervisorStaleness()) return;
+    // Normal staleness is adopted at natural idle. A protocol mismatch or the
+    // age cap is the deliberately bounded drain fallback.
+    if (
+      supervisorStaleness.restartReason === 'protocol-mismatch' ||
+      supervisorStaleness.capExceeded(staleAgeCapHours)
+    ) await beginDrain('stale-engine');
   };
 
-  /**
-   * Rebuild the engine from the current source, then restart if it is now
-   * stale. Returns true when a restart was requested — in production
-   * `requestRestart` has already exited the process; the return value only
-   * informs tests and the caller's decision not to dispatch the pending item.
-   *
-   * Fires only when quiescent (`inFlight` empty) so a restart never interrupts
-   * an in-flight build. Reuses the shipped suppression + requestRestart path.
-   */
-  const rebuildAndMaybeRestartForStaleEngine = async (): Promise<boolean> => {
+  /** Request a handoff only at a natural idle or after a forced drain. */
+  const restartStaleSupervisor = async (): Promise<boolean> => {
     if (!staleGatesArmed || !deps.staleEngineChecker) {
       // Task 9 (TI-4 HP3): self-heal is disabled (non-self-host, or the flag
       // is off) — the checker/rebuild/restart chain never runs, but still
@@ -1500,74 +1510,28 @@ export async function runDaemon(
     }
     if (inFlight.size !== 0) return false;
 
-    // Root mutations and the maintenance job must never overlap: let a current
-    // pass settle before refresh/rebuild, without permanently disabling future
-    // maintenance when this preflight decides not to restart.
-    if (maintenanceJob.isRunning()) {
-      await maintenanceJob.settled();
-    }
-
-    // Task 7: fast-forward the engine source before rebuilding, so the
-    // rebuild reflects a merge that landed on origin since the last refresh.
-    // Never fatal — a failed refresh degrades to whatever source is on disk.
-    if (deps.refreshEngineSource) {
-      try {
-        await deps.refreshEngineSource();
-      } catch (err) {
-        log(
-          `[daemon] engine source refresh failed: ${err instanceof Error ? err.message : String(err)}; continuing with current source`,
-        );
-      }
-    }
-
-    // Gap A (#309): rebuild so the untracked `dist` reflects fast-forwarded
-    // source; without this the content-hash checker never sees merge-driven
-    // drift. Never fatal — a failed rebuild degrades to the current engine.
-    if (deps.rebuildEngine) {
-      try {
-        await deps.rebuildEngine();
-      } catch (err) {
-        log(
-          `[daemon] engine rebuild failed: ${err instanceof Error ? err.message : String(err)}; continuing on current engine`,
-        );
-      }
-    }
-
-    if (deps.staleEngineChecker.check() !== 'stale') return false;
-
-    // A full stale-and-suppression evaluation just ran for this boundary —
-    // the idle-boundary re-check below is redundant if it's the very next
-    // check reached (e.g. this dispatch attempt errors/parks the item and the
-    // loop goes idle before anything else changes). One-shot: consumed by the
-    // very next idle-boundary check, so a later genuine staleness change is
-    // still observed (#598 Task 15).
-    staleAlreadyHandledByPreflight = true;
+    if (!observeSupervisorStaleness()) return false;
 
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-    if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
+    if (supervisorStaleness.restartReason !== 'protocol-mismatch' && deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
     if (inFlight.size !== 0) return false; // re-verify after the async suppression check
 
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
     if (!deps.requestRestart) return false;
-    log(`[daemon] engine stale after rebuild — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
+    restartPending = true;
+    log(`[daemon] stale supervisor at idle — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
     maintenanceJob.close();
     await maintenanceJob.settled();
+    await refreshJob;
     const result = await deps.requestRestart({ fromIdentity, targetIdentity });
     if (!result.fired && !deps.shouldStop?.() && !maintenance.isDraining()) {
+      restartPending = false;
       maintenanceJob.reopen();
     }
     return result.fired;
   };
 
   let stopReason: DaemonStopReason | null = null;
-  // Set whenever the dispatch-boundary preflight (`rebuildAndMaybeRestartForStaleEngine`)
-  // has run its full refresh/rebuild/check/suppression chain this run. The
-  // idle-boundary stale re-check further below is redundant once the preflight
-  // has already made this decision for the current source/build (nothing
-  // changes between preflight calls), so it's skipped while this is set —
-  // fixes #598 Task 15's regression where both independently invoked
-  // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
-  let staleAlreadyHandledByPreflight = false;
   let firstFillPass = true;
   let firstClaimEmitted = false;
   let startupMaintenanceTriggered = false;
@@ -1727,14 +1691,10 @@ export async function runDaemon(
       await emitTick();
 
       if (next) {
-        // Before starting a feature, ensure the running engine matches current
-        // source: rebuild + restart-if-stale so the next feature is built by
-        // fresh code (Gap A/B — the shipped idle-only gate never fires here
-        // because a merge that lands new specs takes THIS dispatch branch, not
-        // the drained-idle branch below). Only acts when quiescent, so at
-        // concurrency 1 it runs before every feature. In production
-        // `requestRestart` exits the process; the break matters only to tests.
-        if (await rebuildAndMaybeRestartForStaleEngine()) {
+        // Natural idle means no executor is live, even when local discovery
+        // already found another eligible claim. Hand off before that next
+        // claim so one daemon generation never overlaps its successor.
+        if (await restartStaleSupervisor()) {
           triggerStartupMaintenance();
           stopReason = 'engine_restart';
           break;
@@ -1784,6 +1744,9 @@ export async function runDaemon(
                 const hasRestart =
                   restartPendingDeferredByEpisode || (await deps.hasRestartPending());
                 if (hasRestart) {
+                restartPending = true;
+                maintenanceJob.close();
+                await refreshJob;
                 // Task 21 (#392): never fire restart triggers while a rate-limit
                 // episode is active — a respawn mid-episode discards the shared
                 // backoff state and re-enters the API storm.
@@ -1888,71 +1851,13 @@ export async function runDaemon(
                 log('[daemon] stale engine drain reached boundary during episode; deferring restart request');
                 return null;
               }
-              return (await rebuildAndMaybeRestartForStaleEngine()) ? 'engine_restart' : null;
+              return (await restartStaleSupervisor()) ? 'engine_restart' : null;
             }
-            const isSharedMode = !options.once; // continuous mode = shared/not-once
-            const shouldCheckStale =
-              isSharedMode && // gate 1: continuous mode (not once)
-              options.isSelfHost === true && // gate 2: self-host enabled
-              options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
-              deps.staleEngineChecker !== undefined; // gate 4: checker armed
-
-        // One-shot consume: only the very next idle-boundary reach after a
-        // preflight-covered stale evaluation is skipped (#598 Task 15) — a
-        // later genuine staleness change is still observed on subsequent ticks.
-            const skipStaleCheckThisTick = staleAlreadyHandledByPreflight;
-            staleAlreadyHandledByPreflight = false;
-
-            if (shouldCheckStale && deps.staleEngineChecker && !skipStaleCheckThisTick) {
-              const verdict = deps.staleEngineChecker.check();
-
-          // Task 13: Handle stale verdict with in-flight re-verify
-              if (verdict === 'stale') {
-            // Task 11: Check if this identity is suppressed before proceeding.
-            // Suppressed identities hold (no restart request) and log once per session.
-            const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-            const suppressed = deps.isSuppressed ? await deps.isSuppressed(targetIdentity) : false;
-
-            if (suppressed) {
-              // Restart suppressed for this identity: hold and don't request restart.
-              // The suppression check has already logged once per session.
-              // Fall through to idle behavior (sleep/sweep), don't request restart.
-            } else {
-              // Not suppressed: proceed with restart request (if gates still pass).
-              // Re-verify that inFlight is still empty before requesting restart.
-              // A task could have been added between the verdict check and now.
-              if (inFlight.size === 0) {
-                if (episodeActive) {
-                  // Defer restart request while episode is active
-                  log('[daemon] stale engine detected but episode active; deferring restart request');
-                } else if (!staleEngineRestartRequested) {
-                  // All gates still pass, request restart with identities (only once per run)
-                  const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
-                  // Task 11: Log the stale verdict with both identities before requesting restart
-                  log(`[daemon] stale engine detected — captured: ${fromIdentity}, target: ${targetIdentity}`);
-
-                  if (deps.requestRestart) {
-                    maintenanceJob.close();
-                    await maintenanceJob.settled();
-                    const result = await deps.requestRestart({
-                      fromIdentity,
-                      targetIdentity,
-                    });
-                    // Only break if restart was actually fired. If fired: false,
-                    // the restart request was aborted and the loop retries at the next idle boundary.
-                    if (result.fired) {
-                      return 'engine_restart';
-                    }
-                    if (!deps.shouldStop?.() && !maintenance.isDraining()) {
-                      maintenanceJob.reopen();
-                    }
-                    // If fired: false, fall through to continue idle polling and retry
-                  }
-                }
-              }
-              // If inFlight not empty, someone added a task while we checked.
-              // Fall through to next iteration; will not enter idle branch again.
-            }
+            if (observeSupervisorStaleness()) {
+              if (episodeActive) {
+                log('[daemon] stale engine detected but episode active; deferring restart request');
+              } else if (await restartStaleSupervisor()) {
+                return 'engine_restart';
               }
             }
             return null;

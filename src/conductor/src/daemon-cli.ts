@@ -2328,6 +2328,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   });
   const conductorRoot = conductorRootForModuleDir(__dirname);
   const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot });
+  let protocolMismatchPending = false;
   const executorBroker = createExecutorBroker({
     rateLimitEpisode,
     providerAvailability,
@@ -2352,6 +2353,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     teardownTimeoutMs: resolveTeardownTimeoutSeconds(config) * 1_000,
     onProtocolMismatch: () => {
       log('[daemon] executor protocol mismatch; supervisor-build failover requested');
+      protocolMismatchPending ||= isArmed;
       return isArmed;
     },
     log,
@@ -2847,6 +2849,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       log: daemonCoreLog,
       staleEngineChecker,
       requestRestart,
+      protocolMismatchPending: () => protocolMismatchPending,
       // Rebuild the engine from source before each dispatch (self-host only) so
       // the stale-engine checker sees merge-driven drift the untracked `dist`
       // (#309) hides. projectRoot is the harness root under self-host, so
@@ -3364,6 +3367,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // Task 12: wire stale-engine detection gate inputs
       isSelfHost,
       autoRestartOnStaleEngine: config?.auto_restart_on_stale_engine ?? false,
+      supervisorMaxStaleHours: config?.supervisor_max_stale_hours ?? 24,
     },
   );
 

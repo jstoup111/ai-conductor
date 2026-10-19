@@ -17,7 +17,6 @@ export function createSupervisorStaleness(now = () => Date.now()): SupervisorSta
         firstStaleAtMs ??= at;
       } else {
         firstStaleAtMs = undefined;
-        mismatch = false;
       }
     },
     ageHours(at = now()) { return firstStaleAtMs === undefined ? 0 : Math.max(0, at - firstStaleAtMs) / 3_600_000; },
