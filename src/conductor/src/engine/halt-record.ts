@@ -72,7 +72,8 @@ export function isRecordableHaltClass(haltClass: HaltClass): boolean {
   return (
     haltClass === 'needs-human' ||
     haltClass === 'plan-gap' ||
-    haltClass === 'protected-artifact'
+    haltClass === 'protected-artifact' ||
+    haltClass === 'stack-tip-diverged'
   );
 }
 

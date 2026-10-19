@@ -4,6 +4,7 @@ import {
   HALT_MARKER,
   HALT_CLASS_MARKER,
   PLAN_GAP_HALT_CLASS,
+  STACK_TIP_DIVERGED_HALT_CLASS,
   type HaltDisposition,
 } from './halt-marker.js';
 import {
@@ -70,6 +71,7 @@ export interface HaltRetentionDecision {
 export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
   'needs-human',
   PLAN_GAP_HALT_CLASS,
+  STACK_TIP_DIVERGED_HALT_CLASS,
   OVER_SCOPE_HALT_CLASS,
   KICKBACK_CAP_HALT_CLASS,
 ]);

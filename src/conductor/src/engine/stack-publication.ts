@@ -11,6 +11,8 @@ import type { GithubOperationRequest } from './github-operations.js';
 import type { PublicationRecord } from './stack-publication-record.js';
 import { executeRemoteGit, type RemoteGitOperationDependencies } from './remote-git-operations.js';
 import { pushedTipRef } from './push-lease.js';
+import { writeHaltMarker } from './halt-marker.js';
+import type { ConductorEvent } from '../types/events.js';
 
 /** A stack operation payload is never trusted merely because it passed argv decoding. */
 export type StackPayloadValidation =
@@ -69,6 +71,17 @@ export function validateStackPayload(
     default:
       return { kind: 'valid' };
   }
+}
+
+/** Persist the operator-owned divergence stop and mirror it on the event spine. */
+export async function haltStackTipDiverged(
+  root: string,
+  members: readonly { readonly pr: number }[],
+  events?: { emit(event: Extract<ConductorEvent, { type: 'stack_tip_diverged' }>): Promise<void> },
+): Promise<void> {
+  const prs = members.map((member) => member.pr);
+  await writeHaltMarker(root, `published stack tip diverged for PRs: ${prs.join(', ')}\n`, 'stack-tip-diverged');
+  await events?.emit({ type: 'stack_tip_diverged', prs });
 }
 
 /** The FINISH snapshot's independent view of stack publication. */
