@@ -19,6 +19,12 @@ All claims verified against `src/conductor/src/engine/` on `main` at `8daf31609f
 | Performance | The resolver joins at most 128 cases × 512 sources (`MAX_CASES`, `MAX_SOURCES_PER_CASE`) with the feature's disposition list, which is bounded and in-memory. |
 | Worktree isolation | Reads only the feature worktree's `.pipeline/` stores; no shared resource. |
 
+> **Amended 2026-10-19 by #3298:** "Both store schemas and versions are unchanged" holds for this
+> change only. #3298 changes `RemediationCaseStore`: each suppression entry becomes a `confidence`
+> or `severity` kind (a kind-less entry reads as `confidence`), and a case may hold disposition
+> `advisory` with an `adjudicatedSeverity`. Carry still adds no field
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D5, D6).
+
 **Root cause (verified 95%).** Acceptance matches by exact canonical identity
 (`matchesBuildReviewDisposition`). Custom identity includes the policy bundle digest, the candidate
 provider/model/effort, the reviewed-input digest and region content hashes

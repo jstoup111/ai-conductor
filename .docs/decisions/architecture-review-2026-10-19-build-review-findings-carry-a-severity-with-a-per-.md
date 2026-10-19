@@ -13,7 +13,7 @@ inputs are:
 | Check | Assessment |
 |---|---|
 | Stack compatibility | Plain TypeScript in the existing engine, with no new dependency. The native result grammar admits a closed string enum (verified, `build-review-domain.ts` native-grammar note). |
-| Prerequisites | jstoup111/ai-conductor#3271 must build first (operator decision 2026-10-19, recorded as a land dependency). No migration, external account or infrastructure is needed. |
+| Prerequisites | jstoup111/ai-conductor#3271 must build first (operator decision 2026-10-19, recorded as a land dependency). Its spec landed on main in #3308 and is in BUILD. No migration, external account or infrastructure is needed. |
 | Integration surface | One module family (`engine/build-review-*`, `remediation-case-*`), plus config, the event union, the PR-body regions and five skills. All the surfaces are in-process. |
 | Data implications | The built-in contract bump re-keys every built-in finding id once (ADR D2, operator-accepted); custom ids are unchanged because the custom identity grammar keeps its own version. The durable suppression entry becomes a discriminated union, and legacy entries read as the `confidence` kind. No data is lost; old aggregates still parse for reads. |
 | Performance risk | None. The classification is a per-finding comparison beside an existing one. |
@@ -49,8 +49,10 @@ adjudicator downgrade (D6/D7). **The operator declined it on 2026-10-19.** The p
 - **Event spine.** One additive optional field on `build_review_outer_verdict`, with no new
   channel. This is consistent with the event-spine skill's schema-not-file test.
 - **Overlapping specs.**
-  - #3271 (in DECIDE) rewires the same reducers, coordinator, context, CLI and PR body. It is
-    sequenced before this spec.
+  - #3271 (spec landed in #3308, now in BUILD) rewires the same reducers, coordinator, context,
+    CLI and PR body. It is sequenced before this spec. Its carried acceptance precedes the advisory
+    bucket and the D6 downgrade (ADR D4, D6), and this spec amends its architecture review's
+    "store schemas unchanged" claim, which this spec's suppression-entry union makes stale.
   - Spec PR #2878 amends mixed-laps D3/D5 *deferral* and does not touch D4 or D5.1's disposition
     list. No contradiction.
   - The overlap scan found only `config.ts` and `resolved-config.ts` on
@@ -113,15 +115,15 @@ from #2383.
 | Rubric and remediate skill guidance | The bundles the engine already dispatches: `skills/build-review-*/SKILL.md`, the custom contract text and `skills/remediate/SKILL.md`. |
 
 Early overlap scan (advisory): only `config.ts` and `resolved-config.ts` overlap, with
-`origin/spec/daemon-self-host-guardrails`. #3271 is not landed, so the scan cannot see it. It is
-handled by the operator-chosen dependency.
+`origin/spec/daemon-self-host-guardrails`. The scan ran before #3271's spec landed, so it did not
+see #3271. It is handled by the operator-chosen dependency.
 
 ## Risks
 
 | Risk | Type | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
 | Reviewers cluster severity at `major` the way confidence clustered at 82-100, so few findings become advisory | Knowledge | Medium | High | Impact-named levels with per-kind skill guidance; the D6 downgrade as a second lever; a post-ship measurement follow-up (A1) |
-| The one-time built-in re-key strands in-flight features' built-in acceptances and settled cases | Data | High (certain once) | Medium | Operator-accepted (2026-10-19). The existing invalidation event makes it visible. Every v3 acceptance must be re-recorded with `build-review accept`; #3271's carry cannot rescue them, because it requires a currently valid disposition. At most one fresh judgement per feature. |
+| The one-time built-in re-key strands in-flight features' built-in acceptances and settled cases | Data | High (certain once) | Medium | Operator-accepted (2026-10-19). The existing invalidation event makes it visible. A v3 acceptance never matches a re-keyed finding exactly. #3271's carry re-applies it when the fresh judgement binds the re-keyed finding to the accepted case; otherwise it must be re-recorded with `build-review accept`. At most one fresh judgement per feature. |
 | A code collision with #3271 in the reducers, coordinator, context, CLI and PR body | Integration | High | Medium | Land dependency on #3271; this plan builds on its resolver |
 | A reviewer omits severity and the whole result is malformed | Technical | Medium | Low | Native schema enforcement makes the field required at the provider; the existing mechanical-retry lane |
 | An adjudicator downgrades a real defect to dodge a kickback | Technical | Low | High | Allowed only below an operator-declared threshold, with a rationale; visible in the CLI and on the PR; lowering the threshold reopens it (D7) |
@@ -129,11 +131,15 @@ handled by the operator-chosen dependency.
 
 ## ADRs Created
 
-- `adr-2026-10-19-build-review-finding-severity-advisory-threshold` (DRAFT, pending operator
-  approval). Decisions D1–D7.
+- `adr-2026-10-19-build-review-finding-severity-advisory-threshold` (APPROVED 2026-10-19).
+  Decisions D1–D7.
 - Amendment notes on the approved ADRs:
   - `adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication`, beside D4.2 and D5.1;
-  - `adr-2026-09-10-portable-build-review-policy`, beside D7.1.
+  - `adr-2026-09-10-portable-build-review-policy`, beside D7.1;
+  - `adr-2026-08-13-stable-build-review-finding-dispositions`, beside Decision 1's version rule;
+  - `adr-2026-08-29-build-review-remediate-case-adjudication`, beside Decision 4's disposition
+    vocabulary and #3271's carry rule.
+- An amendment note on #3271's architecture review, beside its Data implications row.
 
 ## Conditions
 
@@ -142,6 +148,6 @@ handled by the operator-chosen dependency.
 - **Scope exception.** The plan states a `**Scope-exception:**` citing the operator's 2026-10-19
   decision to keep D6/D7 in this spec.
 - **Obligation coverage.** The plan carries Architecture Obligation Coverage rows for every decision
-  of the new ADR and of both amended ADRs.
+  of the new ADR and of all four amended ADRs.
 - **No implementationQuality re-enable.** This spec does not change this repository's
   `.ai-conductor/config.yml`.

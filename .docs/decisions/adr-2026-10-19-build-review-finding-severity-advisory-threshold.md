@@ -97,12 +97,18 @@ Option A. Each decision below states how it extends the existing suppression arc
   identity grammar carries its own `version: 'v1'`, independent of the custom result contract
   version, and this decision leaves that grammar unchanged. The operator accepted that cost on 2026-10-19:
   - stored v3 operator dispositions invalidate through the existing
-    `build_review_disposition_version_invalidated` path, so every operator-accepted finding on an
-    in-flight feature must be re-accepted with `build-review accept`. Carried acceptance (#3271)
-    cannot rescue them, because it requires a disposition valid at the current contract version;
+    `build_review_disposition_version_invalidated` path and never match a v4 finding by exact
+    identity. Where adjudication is enabled and remediate binds the re-keyed finding to the case
+    holding the accepted v3 source, #3271's carried acceptance applies it with no re-accept
+    (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.3). Every other
+    operator-accepted finding on an in-flight feature must be re-accepted with `build-review accept`;
   - an in-flight feature's settled cases stop binding their re-keyed findings, which costs at most
     one fresh remediate judgement per feature.
 - **What this amends.**
+  - Stable-dispositions ADR Decision 1: a contract version changes only when identity semantics
+    change. Severity is outside identity, but contract version is an identity input, so this bump
+    re-keys built-in ids although identity semantics are unchanged. The operator accepted that on
+    2026-10-19 over keeping a dual v3/v4 parse path with stable ids.
   - Mixed-laps ADR D4.2: it kept the contract at v3 only because `confidence` was optional.
   - Portable-policy ADR D7.1: it fixed the custom-review result contract at `custom-findings` v1.
     The `custom-v1` identity grammar it held unchanged stays unchanged.
@@ -126,7 +132,7 @@ Option A. Each decision below states how it extends the existing suppression arc
 ### D4 — A below-threshold finding is advisory at the effective verdict and never reaches remediate
 
 - **Order.** Both effective reducers, built-in and custom, classify each finding in this order:
-  - operator-accepted;
+  - operator-accepted, by exact disposition or as carried acceptance (#3271);
   - settled;
   - declared replication;
   - `suppressed` (confidence below the floor);
@@ -182,6 +188,12 @@ Option A. Each decision below states how it extends the existing suppression arc
 - **Effects.** An advisory case routes no BUILD and charges nothing.
 - **Older engines.** An older engine that reads a persisted `advisory` disposition fails closed as
   an unknown disposition.
+- **Carried acceptance first.** A finding the judgement binds to a case holding an
+  operator-accepted source is carried acceptance whatever disposition the judgement proposed,
+  `advisory` included (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1). The bound
+  case keeps its disposition, and the finding is listed as accepted risk, never as advisory.
+- **What this amends.** Decision 4 of `adr-2026-08-29-build-review-remediate-case-adjudication`: its
+  case disposition vocabulary gains `advisory`, carrying `adjudicatedSeverity`.
 
 ### D7 — A finalized advisory case settles recurrence only while its threshold still admits it
 
@@ -214,8 +226,9 @@ Option A. Each decision below states how it extends the existing suppression arc
   helper.
 
 ### Negative
-- One-time built-in re-keying at upgrade: every v3 built-in operator acceptance must be re-recorded with
-  `build-review accept`, and in-flight features pay one fresh judgement.
+- One-time built-in re-keying at upgrade: in-flight features pay one fresh judgement, and a v3
+  built-in operator acceptance must be re-recorded with `build-review accept` unless that judgement
+  binds its re-keyed finding to the accepted case, where #3271 carries it.
 - A required field means a reviewer that omits severity makes its whole result malformed, which
   costs a mechanical retry.
 - The plan is about 20 tasks. The operator chose one spec with a scope exception over splitting the

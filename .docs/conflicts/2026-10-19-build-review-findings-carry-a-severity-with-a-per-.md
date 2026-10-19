@@ -13,8 +13,8 @@
   - `min_confidence`, kickback charging, or the PR body.
 
   Each pair was checked in both directions.
-- **Drafts.** The in-flight #3271 draft
-  (`.worktrees/engineer-operator-acceptance-of-a-build-review-finding-does`) was compared.
+- **#3271.** Its spec landed on main in #3308 after this check first ran. Its stories and its
+  amendments to four ADRs were re-compared as landed. Its build worktree was not touched.
 - **Not examined.** Open spec PR #2878's stories are not in this worktree, so they were not
   examined. Its ADR amendment (mixed-laps D3/D5 deferral) was compared and does not conflict.
 - **ADRs examined:**
@@ -22,6 +22,7 @@
   - `adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication`
   - `adr-2026-09-10-portable-build-review-policy`
   - `adr-2026-08-13-stable-build-review-finding-dispositions`
+  - `adr-2026-08-29-build-review-remediate-case-adjudication`
   - `adr-2026-08-12-cumulative-build-review-convergence-bound`
   - `adr-2026-08-14-retire-build-review-wiring-rubric`
 - **ADRs narrowed out:** every other ADR, none of which addresses rubric contracts, finding
@@ -92,33 +93,81 @@ existing build_review_disposition_version_invalidated event and does not bind."
 
 **Applied:** a carve-out for contract-version changes was added in place in commit `80a4d3067d`.
 
-## Conflict: The #3271 carry cannot rescue v3 acceptances invalidated at upgrade
+## Conflict: The #3271 carry and v3 acceptances invalidated at upgrade
 
-**Stories involved:** Story 3 (new) against #3271's draft Story 8 (unlanded)
+**Stories involved:** Story 3 (new) against #3271's Story 1 and Story 3 (landed in #3308)
 **Type:** state-conflict, a one-time effect at upgrade
 **Severity:** degrading
 
-**Description:** #3271 carries only dispositions that are valid now. A v3 disposition invalidated by
-the bump stops binding, so carry cannot restore it. Earlier text in the ADR and the review claimed
-the opposite.
+**Description:** An earlier pass claimed #3271 carries only dispositions valid at the current
+contract version, so carry could never rescue a v3 acceptance. #3271 as landed has no version
+condition: a case source is directly accepted when its own exact disposition exists, and a later
+finding the judge binds to that case is carried. A re-keyed v4 finding bound to the case holding
+the accepted v3 source is therefore carried; one the judge does not bind still needs
+`build-review accept`.
 
 **Resolution Options:**
-1. Accept the cost and state that every acceptance must be re-recorded.
-2. Add a migration that forwards v3 dispositions to v4 ids. This reverses the existing "version
-   change never matches silently" rule.
+1. State both outcomes: carry when the judge binds, re-accept otherwise.
+2. Exclude version-invalidated dispositions from carry origins. That adds a resolver condition
+   #3271 does not have.
 
-**Recommendation:** Option 1. The operator selected it on 2026-10-19.
+**Recommendation:** Option 1. It needs no code and keeps the re-accept cost as the worst case the
+operator accepted on 2026-10-19.
 
-**Applied:**
-- ADR D2 and the Consequences section corrected.
-- The architecture review's risk mitigation corrected.
-- A re-accept criterion added to Story 3.
+**Applied:** ADR D2 and Consequences, the architecture review's risk row, and the mixed-laps and
+stable-dispositions amendment notes. Story 3's exact-identity criteria stay true: a v3 disposition
+never binds a v4 finding directly.
 
-## Noted, not resolved here
+## Conflict: An advisory downgrade proposed for a finding bound to an accepted case
 
-**#3271 draft architecture review, Data implications row:** "Both store schemas and versions are
-unchanged." That stops being true once this spec adds the suppression-entry kind. It is another
-session's unlanded draft, so it is reported to the operator and not edited from here.
+**Stories involved:** Story 8 (new) against #3271's Story 1 (landed in #3308)
+**Type:** overlap
+**Severity:** degrading
+**ADR filename stem:** adr-2026-08-29-build-review-remediate-case-adjudication
+**Story ID:** Story 8
+**ADR opposing sentence (verbatim):** "It counts as operator-resolved for the effective verdict and settles with no action, deferral, escalation, decision stop, repeat or regression halt, or kickback charge, whatever disposition the judge proposed for that case."
+**Story opposing sentence (verbatim):** "Given implementationQuality min_severity major and a live major finding, when the remediate judgement returns an advisory case for it with adjudicated severity minor, a non-empty rationale and effect none, then the case is accepted, the lap routes no BUILD and charges no kickback."
+
+**Description:** Both outcomes are non-blocking, but they record the finding differently: carried
+acceptance lists it as accepted risk, while an advisory case lists it as advisory. With no stated
+precedence, a builder could record the same finding both ways.
+
+**Resolution Options:**
+1. Carry takes precedence, as #3271's D2.1 already says for every proposed disposition.
+2. Advisory takes precedence. This contradicts an approved ADR.
+
+**Recommendation:** Option 1.
+
+**Applied:** ADR D6 "Carried acceptance first", a new Story 8 negative criterion, a Task 19 check,
+and an amendment note beside remediate-case-adjudication Decision 4.
+
+## Conflict: The v4 bump against stable-dispositions Decision 1
+
+**Stories involved:** Story 3 (new) against the stable-dispositions ADR
+**Type:** contradiction
+**Severity:** degrading
+**ADR filename stem:** adr-2026-08-13-stable-build-review-finding-dispositions
+**Story ID:** Story 3
+**ADR opposing sentence (verbatim):** "A contract version changes only when identity semantics change; that change intentionally prevents an old disposition from silently matching the new meaning."
+**Story opposing sentence (verbatim):** "Given a v3 finding and a v4 finding identical in rubric, concern kind and anchor, when their identities are computed, then the ids differ, because contract version is part of identity."
+
+**Description:** Severity is excluded from identity, so identity semantics do not change, yet the
+built-in contract version still moves and re-keys every built-in id.
+
+**Resolution Options:**
+1. Amend Decision 1 to record the operator-accepted exception.
+2. Decouple the identity version from the result contract version, which the operator declined on
+   2026-10-19 in favour of the one-time re-key.
+
+**Recommendation:** Option 1.
+
+**Applied:** an amendment note beside Decision 1, and plan obligation rows for all six decisions.
+
+## Resolved after #3271 landed
+
+**#3271 architecture review, Data implications row:** "Both store schemas and versions are
+unchanged." That holds for #3271's own change only. An amendment note now records this spec's
+suppression-entry union and `advisory` case disposition beside it.
 
 ## Re-check
 
