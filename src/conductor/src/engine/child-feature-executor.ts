@@ -197,7 +197,16 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         engineVersionId: order.engineVersionId,
         ...(order.pinFallbackReason === undefined ? {} : { pinFallbackReason: order.pinFallbackReason }),
       });
-      const result = await launch(order, false);
+      // Fork and broker construction are process boundaries too.  Preserve the
+      // dispatch pair even when either fails synchronously before a child can
+      // report an outcome; otherwise a durable start record would have no
+      // matching collection record.
+      let result: FeatureExecutionOutcome;
+      try {
+        result = await launch(order, false);
+      } catch (error) {
+        result = errorOutcome(order, error instanceof Error ? error.message : String(error));
+      }
       await deps.rootEvents.emit({
         type: 'feature_dispatch_ended', slug: order.slug,
         outcome: result.status === 'done' ? 'complete' : result.status === 'halted' || result.status === 'parked' ? 'halted' : 'terminated',

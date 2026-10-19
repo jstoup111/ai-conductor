@@ -1,4 +1,4 @@
-// Covers: task:17, task:18
+// Covers: task:17, task:18, task:19
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -63,17 +63,175 @@ describe('child feature executor dispatch lifecycle', () => {
 
     for (const listener of messages.get('message') ?? []) listener({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
     await vi.waitFor(() => expect(sent).toEqual([expect.objectContaining({ kind: 'work-order', order: expect.objectContaining(order) })]));
-    for (const listener of messages.get('message') ?? []) listener({ kind: 'outcome', outcome: { slug: 'feature', status: 'done' } });
+    const firstOutcome = {
+      slug: 'feature', status: 'done' as const,
+      terminalEffects: { markProcessed: { prUrl: 'https://example.test/pr/1' } },
+    };
+    for (const listener of messages.get('message') ?? []) listener({ kind: 'outcome', outcome: firstOutcome });
 
     // A terminal outcome does not prove process exit: retain the pin until
     // the child actually terminates so engine-store GC remains safe.
     await expect(readFile(join(root, '.daemon', 'executors', 'feature.json'), 'utf8')).resolves.toContain(VERSION);
     exit?.(0, null);
-    await expect(execution).resolves.toMatchObject({ slug: 'feature', status: 'done' });
+    await expect(execution).resolves.toEqual(firstOutcome);
     await expect(readFile(join(root, '.daemon', 'executors', 'feature.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(emitted).toEqual([
       expect.objectContaining({ type: 'feature_dispatch_started', engineVersionId: VERSION, pinFallbackReason: 'publish-incomplete' }),
       expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'complete' }),
+    ]);
+  });
+
+  it.each([
+    { code: 9, signal: 'SIGTERM' as NodeJS.Signals, reason: 'code 9, signal SIGTERM' },
+    { code: 134, signal: 'SIGABRT' as NodeJS.Signals, reason: 'V8 heap exhaustion' },
+  ])('collects an outcome error and one dispatch end when a child exits before reporting ($reason)', async ({ code, signal, reason }) => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_started', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 700,
+        send() { return true; },
+        on() { return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill() { return true; },
+      }),
+    });
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(exit).toBeDefined());
+    exit?.(code, signal);
+
+    await expect(execution).resolves.toMatchObject({ slug: order.slug, status: 'error', reason: expect.stringContaining(reason) });
+    expect(lifecycle).toEqual([
+      expect.objectContaining({ type: 'feature_dispatch_started', engineVersionId: VERSION }),
+      expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'terminated' }),
+    ]);
+  });
+
+  it('closes the supervisor-owned lifecycle when fork fails before a child exists', async () => {
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_started', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: '/not-used-when-fork-fails',
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => { throw new Error('pinned executor entrypoint is unavailable'); },
+    });
+
+    await expect(executor.execute(order)).resolves.toMatchObject({
+      slug: order.slug,
+      status: 'error',
+      reason: 'pinned executor entrypoint is unavailable',
+    });
+    expect(lifecycle).toEqual([
+      expect.objectContaining({ type: 'feature_dispatch_started', engineVersionId: VERSION }),
+      expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'terminated' }),
+    ]);
+  });
+
+  it('keeps the first child outcome, then force-kills a hung child after the teardown budget', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    const sent: unknown[] = [];
+    const kills: NodeJS.Signals[] = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const log = vi.fn();
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: new ConductorEventEmitter(),
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 701,
+        send(value) { sent.push(value); return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill(signal = 'SIGTERM') {
+          kills.push(signal);
+          exit?.(null, signal);
+          return true;
+        },
+      }),
+      teardownTimeoutMs: 1,
+      log,
+    });
+    const firstOutcome = {
+      slug: order.slug, status: 'halted' as const, reason: 'gate needs attention',
+      terminalEffects: { autoPark: { reason: 'gate needs attention' } },
+    };
+
+    const execution = executor.execute(order);
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    messages[0]!({ kind: 'outcome', outcome: firstOutcome });
+    messages[0]!({ kind: 'outcome', outcome: { slug: order.slug, status: 'error', reason: 'ignored duplicate' } });
+
+    await vi.waitFor(() => expect(kills).toEqual(['SIGTERM']));
+    await expect(execution).resolves.toEqual(firstOutcome);
+    expect(log).toHaveBeenCalledWith(`[executor ${order.slug}] ignored duplicate outcome`);
+  });
+
+  it('records each sequential dispatch of the same slug with its own engine pin', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const children: Array<{
+      messages: Array<(value?: unknown) => void>;
+      sent: unknown[];
+      exit: () => void;
+    }> = [];
+    const events = new ConductorEventEmitter();
+    const starts: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_started', (event) => { starts.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: (item) => `/store/dist-versions/${item.engineVersionId}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => {
+        const messages: Array<(value?: unknown) => void> = [];
+        const sent: unknown[] = [];
+        let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+        children.push({ messages, sent, exit: () => onExit?.(0, null) });
+        return {
+          pid: 800 + children.length,
+          send(value) { sent.push(value); return true; },
+          on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+          once(_event, listener) { onExit = listener; return this; },
+          kill() { return true; },
+        };
+      },
+    });
+    const complete = async (engineVersionId: WorkOrder['engineVersionId'], childIndex: number) => {
+      const execution = executor.execute({ ...order, engineVersionId });
+      await vi.waitFor(() => expect(children).toHaveLength(childIndex + 1));
+      const child = children[childIndex]!;
+      child.messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId });
+      await vi.waitFor(() => expect(child.sent).toHaveLength(1));
+      child.messages[0]!({ kind: 'outcome', outcome: { slug: order.slug, status: 'done' } });
+      child.exit();
+      await expect(execution).resolves.toMatchObject({ status: 'done' });
+    };
+
+    await complete(VERSION, 0);
+    await complete(VERSION_TWO, 1);
+    expect(starts).toEqual([
+      expect.objectContaining({ slug: order.slug, engineVersionId: VERSION }),
+      expect.objectContaining({ slug: order.slug, engineVersionId: VERSION_TWO }),
     ]);
   });
 
@@ -162,7 +320,10 @@ describe('child feature executor dispatch lifecycle', () => {
     };
     const events = new ConductorEventEmitter();
     const mismatches: Array<Record<string, unknown>> = [];
+    const lifecycle: Array<Record<string, unknown>> = [];
     events.on('executor_protocol_mismatch', (event) => { mismatches.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_started', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { lifecycle.push(event as Record<string, unknown>); });
     const mismatchRequested = vi.fn(() => true);
     const executor = createChildProcessFeatureExecutor({
       projectRoot: root,
@@ -206,6 +367,10 @@ describe('child feature executor dispatch lifecycle', () => {
     for (const listener of children[1]!.messages) listener({ kind: 'outcome', outcome: { slug: 'feature', status: 'done' } });
     children[1]!.exit();
     await expect(execution).resolves.toMatchObject({ status: 'done' });
+    expect(lifecycle).toEqual([
+      expect.objectContaining({ type: 'feature_dispatch_started', engineVersionId: VERSION }),
+      expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'complete' }),
+    ]);
   });
 
   it('treats a malformed hello as an unarmed mismatch and relaunches without requesting a restart', async () => {
