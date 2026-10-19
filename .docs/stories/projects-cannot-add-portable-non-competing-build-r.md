@@ -433,7 +433,7 @@ As an existing project maintainer, I want accurate cache reuse without being for
 #### Happy Path
 
 - Given no custom declarations, when review runs, then existing built-in selection/defaults, empty-container and empty-scope behavior, permitted dispositions, and attended/daemon routing remain effective without requiring custom-policy containment.
-- Given an enabled built-in rubric and an unchanged effective policy on the actual candidate, when an eligible judgment exists, then review retains reuse; changed effective built-in criteria invalidate incompatible reuse without erasing existing built-in operator-risk binding.
+- Given an enabled built-in rubric and an unchanged effective policy on the actual candidate, when an eligible judgment exists, then review retains reuse; changed effective built-in criteria invalidate incompatible reuse without erasing existing built-in operator-risk binding, except that a built-in contract version change invalidates dispositions recorded under the earlier version through build_review_disposition_version_invalidated.
 
 #### Negative Paths
 
