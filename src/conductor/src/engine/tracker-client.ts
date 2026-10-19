@@ -138,6 +138,34 @@ function payloadField(request: GithubOperationRequest, field: 'body' | 'label' |
   return value;
 }
 
+function payloadNumber(request: GithubOperationRequest, field: 'pullRequest'): number {
+  const payload = request.payload;
+  const value = payload && (payload as unknown as Record<string, unknown>)[field];
+  if (typeof value !== 'number') {
+    throw new Error(`GitHub operation '${request.operation}' is missing its registered '${field}' payload.`);
+  }
+  return value;
+}
+
+function stackMembersPayload(request: GithubOperationRequest): readonly number[] {
+  const payload = request.payload;
+  if (!payload
+    || !('pullRequests' in payload)
+    || !Array.isArray(payload.pullRequests)
+    || payload.pullRequests.length === 0
+    || !payload.pullRequests.every((number) => typeof number === 'number' && Number.isSafeInteger(number) && number > 0)) {
+    throw new Error(`GitHub operation '${request.operation}' is missing its registered stack members payload.`);
+  }
+  return payload.pullRequests;
+}
+
+function stackNumber(request: GithubOperationRequest): string {
+  if (request.target.kind !== 'stack') {
+    throw new Error(`GitHub operation '${request.operation}' requires a stack target.`);
+  }
+  return String(request.target.number);
+}
+
 function commitStatusPayload(request: GithubOperationRequest): {
   readonly sha: string;
   readonly state: 'success' | 'failure';
@@ -168,6 +196,8 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
       return ['pr', 'view', issueNumber(request), '-R', repository];
     case 'repository.read':
       return ['api', `repos/${repository}`];
+    case 'stack.read':
+      return ['api', `repos/${repository}/stacks?pull_request=${payloadNumber(request, 'pullRequest')}`];
     case 'issue.comment.create':
     case 'intake.issue.comment.create':
       return ['issue', 'comment', issueNumber(request), '-R', repository, '--body', payloadField(request, 'body')];
@@ -227,6 +257,8 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
       if (request.payload && 'body' in request.payload && typeof request.payload.body === 'string') args.push('--body', request.payload.body);
       return args;
     }
+    case 'pull-request.retarget':
+      return ['pr', 'edit', issueNumber(request), '-R', repository, '--base', payloadField(request, 'base')];
     case 'pull-request.ready':
       return ['pr', 'ready', issueNumber(request), '-R', repository];
     case 'pull-request.draft':
@@ -249,6 +281,16 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
         '-f', `state=${payload.state}`, '-f', `context=${payload.context}`, '-f', `description=${payload.description}`,
       ];
     }
+    case 'stack.create':
+      return [
+        'api', '--method', 'POST', `repos/${repository}/stacks`,
+        ...stackMembersPayload(request).flatMap((number) => ['-F', `pull_requests[]=${number}`]),
+      ];
+    case 'stack.add':
+      return [
+        'api', '--method', 'POST', `repos/${repository}/stacks/${stackNumber(request)}/add`,
+        ...stackMembersPayload(request).flatMap((number) => ['-F', `pull_requests[]=${number}`]),
+      ];
     case 'label-definition.create':
     case 'label-definition.update': {
       if (request.target.kind !== 'label-definition') throw new Error('Registered label operation has an invalid target.');

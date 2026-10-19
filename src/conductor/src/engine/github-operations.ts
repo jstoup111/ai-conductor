@@ -26,6 +26,7 @@ export type GithubOperationAccess =
 export type GithubResourceKind =
   | 'issue'
   | 'pull-request'
+  | 'stack'
   | 'label-definition'
   | 'remote-ref'
   | 'repository';
@@ -47,6 +48,12 @@ export interface GithubPullRequestTarget {
   readonly number: number;
 }
 
+export interface GithubStackTarget {
+  readonly repository: string;
+  readonly kind: 'stack';
+  readonly number: number;
+}
+
 export interface GithubLabelDefinitionTarget {
   readonly repository: string;
   readonly kind: 'label-definition';
@@ -63,12 +70,25 @@ export type GithubOperationTarget =
   | GithubRepositoryTarget
   | GithubIssueTarget
   | GithubPullRequestTarget
+  | GithubStackTarget
   | GithubLabelDefinitionTarget
   | GithubRemoteRefTarget;
 
 export interface GithubPullRequestEditPayload {
   readonly title?: string;
   readonly body?: string;
+}
+
+export interface GithubStackReadPayload {
+  readonly pullRequest: number;
+}
+
+export interface GithubStackMembersPayload {
+  readonly pullRequests: readonly number[];
+}
+
+export interface GithubPullRequestRetargetPayload {
+  readonly base: string;
 }
 
 /** Issue and pull-request comments share GitHub's issue-comment update API. */
@@ -106,6 +126,9 @@ export type GithubOperationPayload =
   | { readonly title: string; readonly body: string; readonly head: string; readonly base: string; readonly draft?: boolean }
   | { readonly name: string; readonly color?: string; readonly description?: string }
   | GithubPullRequestEditPayload
+  | GithubStackReadPayload
+  | GithubStackMembersPayload
+  | GithubPullRequestRetargetPayload
   | GithubCommentUpdatePayload
   | GithubDependencyPayload
   | GithubCommitStatusPayload;
@@ -230,7 +253,7 @@ export function githubGraphqlReadArgs(request: GithubGraphqlReadRequest): string
 interface GithubOperationDefinition {
   readonly access: GithubOperationAccess;
   readonly targetKinds: readonly GithubResourceKind[];
-  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'repository-create' | 'label-definition' | 'pull-request-edit' | 'comment-update' | 'dependency' | 'commit-status';
+  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'repository-create' | 'label-definition' | 'pull-request-edit' | 'pull-request-retarget' | 'comment-update' | 'dependency' | 'commit-status' | 'stack-read' | 'stack-members';
 }
 
 /** Every operation admitted by this boundary is named here. */
@@ -252,6 +275,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'pull-request.comment.create': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'body' },
   'pull-request.comment.update': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'comment-update' },
   'pull-request.edit': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'pull-request-edit' },
+  'pull-request.retarget': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'pull-request-retarget' },
   'pull-request.ready': { access: 'feature-write', targetKinds: ['pull-request'] },
   'pull-request.draft': { access: 'feature-write', targetKinds: ['pull-request'] },
   'pull-request.label.add': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'label' },
@@ -265,6 +289,9 @@ export const GITHUB_OPERATION_REGISTRY = {
   'issue.create': { access: 'create', targetKinds: ['repository'], payload: 'issue-create' },
   'pull-request.create': { access: 'create', targetKinds: ['repository'], payload: 'pull-request-create' },
   'commit.status.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'commit-status' },
+  'stack.read': { access: 'read', targetKinds: ['repository'], payload: 'stack-read' },
+  'stack.create': { access: 'create', targetKinds: ['repository'], payload: 'stack-members' },
+  'stack.add': { access: 'feature-write', targetKinds: ['stack'], payload: 'stack-members' },
   'label-definition.create': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
   'label-definition.update': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
   'repository.create': { access: 'shared-write', targetKinds: ['repository'], payload: 'repository-create' },
@@ -380,6 +407,7 @@ export function formatGithubOperationTarget(target: GithubOperationTarget): stri
   switch (target.kind) {
     case 'issue': return `${target.repository}#${target.number}`;
     case 'pull-request': return `${target.repository}#${target.number}`;
+    case 'stack': return `${target.repository} stack:${target.number}`;
     case 'label-definition': return `${target.repository} label:${target.name}`;
     case 'remote-ref': return `${target.repository} ${target.ref}`;
     case 'repository': return target.repository;
@@ -438,12 +466,13 @@ function targetFrom(resource: unknown, repository: unknown): GithubOperationTarg
   if (typeof repository !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(repository)) return undefined;
   if (!record(resource) || typeof resource.kind !== 'string') return undefined;
   const kind = resource.kind;
-  if (!['issue', 'pull-request', 'label-definition', 'remote-ref', 'repository'].includes(kind)) return undefined;
+  if (!['issue', 'pull-request', 'stack', 'label-definition', 'remote-ref', 'repository'].includes(kind)) return undefined;
   if (kind === 'label-definition' && (typeof resource.name !== 'string' || resource.name === '')) return undefined;
   if (kind === 'remote-ref' && (typeof resource.ref !== 'string' || resource.ref === '')) return undefined;
   switch (kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       if (typeof resource.number !== 'number' || !Number.isSafeInteger(resource.number) || resource.number < 1) {
         return undefined;
       }
@@ -531,11 +560,18 @@ function payloadFrom(value: unknown, required: GithubOperationDefinition['payloa
     };
   }
   if (required === 'pull-request-edit'
+    && !Object.hasOwn(value, 'base')
     && (typeof value.title === 'string' || typeof value.body === 'string')) {
     return {
       ...(typeof value.title === 'string' ? { title: value.title } : {}),
       ...(typeof value.body === 'string' ? { body: value.body } : {}),
     };
+  }
+  if (required === 'pull-request-retarget'
+    && Object.keys(value).length === 1
+    && typeof value.base === 'string'
+    && value.base !== '') {
+    return { base: value.base };
   }
   if (required === 'comment-update'
     && typeof value.commentId === 'string'
@@ -568,6 +604,20 @@ function payloadFrom(value: unknown, required: GithubOperationDefinition['payloa
       context: value.context,
       description: value.description,
     };
+  }
+  if (required === 'stack-read'
+    && Object.keys(value).length === 1
+    && typeof value.pullRequest === 'number'
+    && Number.isSafeInteger(value.pullRequest)
+    && value.pullRequest > 0) {
+    return { pullRequest: value.pullRequest };
+  }
+  if (required === 'stack-members'
+    && Object.keys(value).length === 1
+    && Array.isArray(value.pullRequests)
+    && value.pullRequests.length > 0
+    && value.pullRequests.every((number) => typeof number === 'number' && Number.isSafeInteger(number) && number > 0)) {
+    return { pullRequests: value.pullRequests };
   }
   return undefined;
 }

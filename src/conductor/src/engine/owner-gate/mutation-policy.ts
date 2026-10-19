@@ -55,6 +55,7 @@ function boundTarget(target: GithubOperationTarget): GithubOperationTarget {
   switch (target.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       return Object.freeze({ repository: target.repository, kind: target.kind, number: target.number });
     case 'label-definition':
       return Object.freeze({ repository: target.repository, kind: target.kind, name: target.name });
@@ -73,6 +74,7 @@ function targetInRepository(target: GithubOperationTarget, repository: string): 
   switch (target.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       return { repository, kind: target.kind, number: target.number };
     case 'label-definition':
       return { repository, kind: target.kind, name: target.name };

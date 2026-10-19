@@ -64,7 +64,9 @@ const GH_COMMAND_FAMILIES = new Set(['pr', 'issue', 'api', 'repo', 'label', 'aut
 /** A `gh` invocation inside a shell string, at the start or after a shell operator. */
 const SHELL_GH = /(?:^|[\s;&|(`{$])gh\s/;
 
-type MutationOperation = Exclude<GithubOperationName, 'issue.read' | 'pull-request.read' | 'repository.read'>;
+type MutationOperation = {
+  [Operation in GithubOperationName]: (typeof GITHUB_OPERATION_REGISTRY)[Operation]['access'] extends 'read' ? never : Operation;
+}[GithubOperationName];
 interface OperationCallerProof { readonly adapter: 'createGuardedGithubOperationRunner' | 'executeRemoteGit'; readonly owner: string; }
 
 /**
@@ -83,6 +85,7 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'pull-request.comment.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.comment.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.edit': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'pull-request.retarget': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.ready': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.draft': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.label.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
@@ -96,6 +99,8 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'issue.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'commit.status.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'stack.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'stack.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'repository.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
