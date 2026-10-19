@@ -133,12 +133,26 @@ describe('build_review oversized projection step', () => {
 
   it('publishes a child build-review aggregate in that child\'s pipeline directory', async () => {
     const child = 1 as ChildId;
-    const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes', 'projection-oversized', 'none', undefined, child);
+    const carriedChildAcceptance = vi.fn(async () => ({
+      ok: true as const,
+      feature: { version: 'v1' as const, repository: projectRoot, feature: 'feature' },
+      effective: {
+        rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: ['carried-child-finding'], unresolvedFindingIds: [],
+        suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'] as const,
+        uncoveredInfrastructureFailureRubrics: ['testQuality'] as const,
+      },
+      reducedCoverageEvidence: 'reduced coverage recorded',
+    }));
+    const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes', 'projection-oversized', 'none', carriedChildAcceptance, child);
 
     await runner.run('build_review', state);
 
     await expect(readFile(join(projectRoot, '.pipeline', 'children', '1', 'build-review.json'), 'utf8')).resolves.toContain('testQuality');
     await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(carriedChildAcceptance).toHaveBeenCalledWith(projectRoot, expect.anything(), expect.objectContaining({
+      child,
+      adjudicationEnabled: true,
+    }));
   });
 
   it('stamps an empty-set child PASS at the child verdict path', async () => {

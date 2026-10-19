@@ -104,6 +104,7 @@ import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 import { HALT_MARKER_RELATIVE } from '../../src/engine/task-progress.js';
@@ -5641,7 +5642,14 @@ Task 1 → Task 2
       }));
       const result = await checkStepCompletion(dir, 'build_review', {
         sessionStartedAt: Date.now(),
-        config: { gate_code_validity: { enabled: true }, build_review: { rubrics: { testQuality: { enabled: true, min_confidence: 70 } } } },
+        activeChild: parseChildId(1)!,
+        config: {
+          gate_code_validity: { enabled: true },
+          build_review: {
+            adjudication: { enabled: false },
+            rubrics: { testQuality: { enabled: true, min_confidence: 70 } },
+          },
+        },
         buildReviewEffectiveResolver: effectiveResolver,
         git: async (args) => {
           if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
@@ -5659,6 +5667,8 @@ Task 1 → Task 2
       });
       expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), {
         minConfidence: { testQuality: 70, security: 0, implementationQuality: 0 },
+        child: 1,
+        adjudicationEnabled: false,
       });
       expect(result.staleLap).toBeUndefined();
     });
@@ -5681,6 +5691,31 @@ Task 1 → Task 2
       });
       expect(result.reason).toMatch(/not rewritten by this judging session/);
       expect(result.staleLap).toBeUndefined();
+    });
+
+    it('passes the active child and disabled adjudication to the rewritten aggregate predicate', async () => {
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-B', false)));
+      const effectiveResolver = vi.fn(async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: dir, feature: 'fixture' },
+        effective: {
+          rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [],
+          suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+        },
+      }));
+
+      await expect(checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now() - 1_000,
+        activeChild: parseChildId(1)!,
+        config: { build_review: { adjudication: { enabled: false } } },
+        buildReviewEffectiveResolver: effectiveResolver,
+        git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
+      })).resolves.toMatchObject({ done: true });
+
+      expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), expect.objectContaining({
+        child: 1,
+        adjudicationEnabled: false,
+      }));
     });
 
     it('keeps a pre-session stamp-less PASS aggregate absent without reporting a stale lap', async () => {

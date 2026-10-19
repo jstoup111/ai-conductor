@@ -3870,6 +3870,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               )(dir, aggregate, {
                 minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
                   .map(([id, policy]) => [id, policy.min_confidence])),
+                child: ctx.activeChild,
+                adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
               });
               if (!effectiveResolution.ok) {
                 return {
@@ -3978,6 +3980,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       )(dir, aggregate, {
         minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
           .map(([id, policy]) => [id, policy.min_confidence])),
+        child: ctx.activeChild,
+        adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
       });
       if (!effectiveResolution.ok) {
         return {
