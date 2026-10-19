@@ -3,8 +3,9 @@
 # Stories: A rejected case transition halts as corrupt case history
 
 Technical track, intake jstoup111/ai-conductor#3123. Fixture shorthand used below: a valid persisted
-case store holding resolved case R that links source S, and a proposed next state that adds new
-case N also linking S (the shape replayed from PR #2423, head `b680acd52`).
+case store holding open case R that links source S, and a proposed next state that adds new open
+case N also linking S. A source linked by a resolved case and one new case is admissible history,
+not this fixture.
 
 ## Story 1: The case store classifies a refused next state as a rejected transition
 
@@ -17,11 +18,11 @@ unreadable or corrupt saved history, so that callers never report valid history 
 
 #### Happy Path
 - Given the fixture, when the store applies the mutation proposing N, then it returns a rejected-transition failure distinct from every persisted-history failure and writes nothing.
-- Given the fixture, when the store returns that rejected-transition failure, then the failure names the violated invariant as a source linked from more than one case, names the case ids R and N, and names the source id S.
+- Given the fixture, when the store returns that rejected-transition failure, then the failure names the violated invariant as a source linked from more than one open case, names the case ids R and N, and names the source id S.
 - Given a valid persisted store and a proposed next state that repeats a case id, when the store applies the mutation, then it returns a rejected-transition failure naming that invariant and the repeated case id.
 
 #### Negative Paths
-- Given a persisted store file that itself links S from two cases, when it is read or mutated, then the store still fails with the existing malformed-state reason and never with a rejected transition.
+- Given a persisted store file that itself links S from two open cases, when it is read or mutated, then the store still fails with the existing malformed-state reason and never with a rejected transition.
 - Given a persisted store file that is not valid JSON, when it is read or mutated, then the store still fails with the existing malformed-json reason.
 - Given the fixture, when the mutation is rejected, then the store file is byte-identical to its content before the mutation and no temporary file remains.
 
@@ -63,7 +64,7 @@ becomes admissible, so that I never delete case history or accept unresolved fin
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a feature halted by the fixture's rejected transition, when the HALT is cleared and the next lap's judgement proposes an admissible transition, then the lap reconciles against the same store file and R keeps its resolution, applied effect and source link byte for byte.
+- Given a feature halted by the fixture's rejected transition, when the HALT is cleared and the next lap's judgement proposes an admissible transition, then the lap reconciles against the same store file and R keeps its resolution, effect and source link byte for byte.
 
 #### Negative Paths
 - Given a feature halted by the fixture's rejected transition, when the HALT is cleared and the next lap proposes the same rejected transition, then adjudication fails closed again with the same rejected-transition diagnostic and the store file stays byte-identical.
