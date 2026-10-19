@@ -5,7 +5,7 @@ import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
 import { versionIdFromEngineDir } from './engine-version-id.js';
 import type { TimingRollup } from './timing-rollup.js';
-import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import { upsertBuildReviewAcceptedRisk, type BuildReviewCarriedAcceptedRisk } from './build-review-accepted-risk.js';
 import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewMetrics } from './build-tail-rollup.js';
 
@@ -283,8 +283,10 @@ export function appendTimingSection(
 export function appendBuildReviewAcceptedRisk(
   existingContent: string,
   records: readonly BuildReviewDispositionRecord[],
+  carried: readonly BuildReviewCarriedAcceptedRisk[] = [],
+  carriedAcceptanceUnavailable = false,
 ): string {
-  const upserted = upsertBuildReviewAcceptedRisk(existingContent, records);
+  const upserted = upsertBuildReviewAcceptedRisk(existingContent, records, carried, carriedAcceptanceUnavailable);
   if (!upserted.ok) throw new Error(upserted.message);
   return upserted.body;
 }

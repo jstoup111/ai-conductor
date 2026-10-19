@@ -1313,6 +1313,15 @@ describe('production FINISH publication composition', () => {
       target: { repository: 'acme/conductor', kind: 'pull-request', number: 1 },
     }));
     expect(gh).not.toHaveBeenCalled();
+    const carriedId = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [accepted], operations,
+      carried: [{ findingId: carriedId, rubric: 'security', originFindingId: finding.id, originLapId: 'lap-7' }],
+    })).resolves.toEqual({ ok: true, changed: true });
+    const carriedBody = (operations.run as ReturnType<typeof vi.fn>).mock.calls[1]![0].payload.body as string;
+    expect(carriedBody).toContain(`- Finding: \`${carriedId}\` — rubric: security; carried from \`${finding.id}\` (lap lap-7)`);
+    expect(carriedBody).not.toContain('james');
+    expect(carriedBody).not.toContain('reason');
     await expect(publishAcceptedBuildReviewRiskToRetainedPr({
       prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [{ ...accepted, rationale: '' }], operations,
     })).resolves.toMatchObject({ ok: false });

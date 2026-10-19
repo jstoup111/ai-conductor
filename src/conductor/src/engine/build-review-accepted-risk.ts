@@ -1,7 +1,4 @@
-import {
-  rehydrateBuildReviewAcceptedRiskFinding,
-  type BuildReviewDispositionRecord,
-} from './build-review-dispositions.js';
+import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionRecord } from './build-review-dispositions.js';
 import { maskProjectOwnedRegions } from './pr-body-regions.js';
 import {
   HALT_PR_BANNER_SENTINEL,
@@ -33,6 +30,15 @@ export type BuildReviewAcceptedRiskUpsertResult =
   | { readonly ok: true; readonly body: string; readonly changed: boolean }
   | { readonly ok: false; readonly message: string };
 
+/** A later finding explicitly linked to a case with a direct operator acceptance. */
+export interface BuildReviewCarriedAcceptedRisk {
+  readonly findingId: string;
+  readonly rubric: string;
+  readonly originFindingId: string;
+  readonly originLapId: string;
+}
+
+
 function validRecord(value: BuildReviewDispositionRecord): boolean {
   const identity = rehydrateBuildReviewAcceptedRiskFinding(value.finding.canonicalPayload);
   return identity !== undefined && identity.id === value.finding.id && identity.canonicalJson === value.finding.canonicalJson &&
@@ -48,7 +54,11 @@ function validRecord(value: BuildReviewDispositionRecord): boolean {
  * operator identity, and timestamps stay in the local disposition store and MUST NOT be
  * rendered here.
  */
-export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskRenderResult {
+export function renderBuildReviewAcceptedRisk(
+  records: readonly BuildReviewDispositionRecord[],
+  carried: readonly BuildReviewCarriedAcceptedRisk[] = [],
+  carriedAcceptanceUnavailable = false,
+): BuildReviewAcceptedRiskRenderResult {
   if (records.some((record) => !validRecord(record))) {
     return { ok: false, message: 'accepted build-review risk contains an unrenderable record' };
   }
@@ -57,9 +67,11 @@ export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispo
     BUILD_REVIEW_ACCEPTED_RISK_START,
     SECTION,
     '',
-    `Accepted findings: ${entries.length}`,
+    `Accepted findings: ${entries.length + carried.length}`,
     '',
     ...entries.map((record) => `- Finding: \`${record.finding.id}\` — rubric: ${record.finding.canonicalPayload.rubric}`),
+    ...carried.map((row) => `- Finding: \`${row.findingId}\` — rubric: ${row.rubric}; carried from \`${row.originFindingId}\` (lap ${row.originLapId})`),
+    ...(carriedAcceptanceUnavailable ? ['Carried acceptance unavailable: remediation case state unreadable'] : []),
     '',
     POINTER,
     BUILD_REVIEW_ACCEPTED_RISK_END,
@@ -86,15 +98,20 @@ function existingSectionBounds(body: string): { readonly start: number; readonly
  * that body, so record_outcome's upsert staled the judgment the coordinator had
  * just accepted, re-selected judge_pr_prose, and halted FINISH as non-advancing.
  */
-export function upsertBuildReviewAcceptedRisk(body: string, records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskUpsertResult {
+export function upsertBuildReviewAcceptedRisk(
+  body: string,
+  records: readonly BuildReviewDispositionRecord[],
+  carried: readonly BuildReviewCarriedAcceptedRisk[] = [],
+  carriedAcceptanceUnavailable = false,
+): BuildReviewAcceptedRiskUpsertResult {
   const bounds = existingSectionBounds(body);
   if (bounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
-  if (records.length === 0) {
+  if (records.length === 0 && carried.length === 0 && !carriedAcceptanceUnavailable) {
     if (bounds === null) return { ok: true, body, changed: false };
     const next = `${body.slice(0, bounds.start).trimEnd()}${body.slice(bounds.after).trimStart() ? '\n\n' : ''}${body.slice(bounds.after).trimStart()}`.trimEnd();
     return { ok: true, body: next, changed: next !== body };
   }
-  const rendered = renderBuildReviewAcceptedRisk(records);
+  const rendered = renderBuildReviewAcceptedRisk(records, carried, carriedAcceptanceUnavailable);
   if (!rendered.ok) return rendered;
   const next = bounds !== null
     ? `${body.slice(0, bounds.start)}${rendered.section}${body.slice(bounds.after)}`

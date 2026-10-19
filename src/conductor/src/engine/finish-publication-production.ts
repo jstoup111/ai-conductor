@@ -45,10 +45,13 @@ import { executeRemoteGit } from './remote-git-operations.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
-import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import { upsertBuildReviewAcceptedRisk, type BuildReviewCarriedAcceptedRisk } from './build-review-accepted-risk.js';
 import { maskProjectOwnedRegions } from './pr-body-regions.js';
-import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewAcceptedRiskFinding, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import { resolveBuildReviewAcceptance } from './build-review-acceptance-resolver.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import {
@@ -124,11 +127,52 @@ export interface ProductionFinishPublicationDeps {
   /** Task 38 seams: overridable in tests; production defaults resolve the real worktree identity and store. */
   resolveFeatureIdentity?: (projectRoot: string) => Promise<BuildReviewFeatureIdentity | undefined>;
   createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list' | 'listReducedCoverage'>;
+  createCaseStore?: (projectRoot: string, feature: BuildReviewFeatureIdentity) => { read(): Promise<RemediationCaseStoreReadResult> };
 }
 
 export interface ProductionReleaseReadinessObserverInput {
   projectRoot: string;
   config?: HarnessConfig;
+}
+
+function acceptedRiskFindings(aggregate: ReturnType<typeof parseBuildReviewAggregate>): readonly BuildReviewAcceptedRiskFinding[] {
+  if (!aggregate) return [];
+  const findings: BuildReviewAcceptedRiskFinding[] = [];
+  for (const [rubric, result] of Object.entries(aggregate.results)) {
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({ rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor });
+      if (identity) findings.push(identity);
+    }
+  }
+  for (const rubric of aggregate.currentCustomRubrics ?? []) {
+    const result = aggregate.customResults?.[rubric]?.result;
+    if (!result || result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const payload = typeof finding === 'object' && finding !== null && 'identity' in finding
+        ? (finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload
+        : undefined;
+      const identity = rehydrateBuildReviewAcceptedRiskFinding(payload);
+      if (identity) findings.push(identity);
+    }
+  }
+  return findings;
+}
+
+function carriedAcceptedRisk(
+  feature: BuildReviewFeatureIdentity,
+  records: readonly BuildReviewDispositionRecord[],
+  findings: readonly BuildReviewAcceptedRiskFinding[],
+  caseRead: RemediationCaseStoreReadResult,
+): { carried: readonly BuildReviewCarriedAcceptedRisk[]; carriedAcceptanceUnavailable: boolean } {
+  if (!caseRead.ok) return { carried: [], carriedAcceptanceUnavailable: true };
+  return {
+    carried: findings.flatMap((finding) => {
+      const resolved = resolveBuildReviewAcceptance(feature, finding, { ok: true, records }, caseRead);
+      return resolved.kind === 'carried' ? [{ findingId: finding.id, rubric: finding.canonicalPayload.rubric, originFindingId: resolved.originFindingId, originLapId: resolved.originLapId }] : [];
+    }).sort((left, right) => left.findingId.localeCompare(right.findingId)),
+    carriedAcceptanceUnavailable: false,
+  };
 }
 
 /** Applies the authoritative accepted-risk section to one already-retained PR. */
@@ -138,9 +182,11 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   /** A prior retained-PR projection may have changed the body before risk upsert. */
   originalBody?: string;
   records: readonly BuildReviewDispositionRecord[];
+  carried?: Parameters<typeof upsertBuildReviewAcceptedRisk>[2];
+  carriedAcceptanceUnavailable?: boolean;
   operations?: GithubOperationRunner;
 }): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
-  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records);
+  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records, input.carried, input.carriedAcceptanceUnavailable);
   if (!upserted.ok) return upserted;
   if (upserted.changed || (input.originalBody !== undefined && upserted.body !== input.originalBody)) {
     const mutation = await mutateRetainedPullRequest({
@@ -440,6 +486,9 @@ export function createProductionFinishPublicationCoordinator(
     const aggregate = await readFile(join(deps.projectRoot, '.pipeline', 'build-review.json'), 'utf8')
       .then((text) => parseBuildReviewAggregate(JSON.parse(text)))
       .catch(() => undefined);
+    const caseRead = await (deps.createCaseStore
+      ?? ((root: string, caseFeature: BuildReviewFeatureIdentity) => new RemediationCaseStore(root, caseFeature)))(deps.projectRoot, feature).read();
+    const carried = carriedAcceptedRisk(feature, listed.records, acceptedRiskFindings(aggregate), caseRead);
     if (reducedCoverage.records.length > 0 && !aggregate) {
       throw new Error('accepted-risk projection: reduced build-review coverage has no renderable current-lap evidence');
     }
@@ -471,6 +520,8 @@ export function createProductionFinishPublicationCoordinator(
       body: reducedCoverageBody.body,
       originalBody: typeof body === 'string' ? body : '',
       records: listed.records,
+      carried: carried.carried,
+      carriedAcceptanceUnavailable: carried.carriedAcceptanceUnavailable,
       operations,
     });
     if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);

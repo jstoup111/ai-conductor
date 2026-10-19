@@ -35,7 +35,11 @@ import {
   resolveEngineVersion,
   writeShippedRecord,
 } from './shipped-record.js';
-import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewAcceptedRiskFinding } from './build-review-dispositions.js';
+import type { BuildReviewCarriedAcceptedRisk } from './build-review-accepted-risk.js';
+import { RemediationCaseStore } from './remediation-case-store.js';
+import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import { resolveBuildReviewAcceptance } from './build-review-acceptance-resolver.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { computeCostRollup } from './cost-rollup.js';
@@ -50,6 +54,38 @@ import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail
 export type ShippedRecordDispatch =
   | { kind: 'write'; slug: string; pr: string }
   | { kind: 'guide' };
+
+function acceptedRiskFindings(aggregate: ReturnType<typeof parseBuildReviewAggregate>): readonly BuildReviewAcceptedRiskFinding[] {
+  if (!aggregate) return [];
+  const findings: BuildReviewAcceptedRiskFinding[] = [];
+  for (const [rubric, result] of Object.entries(aggregate.results)) {
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({ rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor });
+      if (identity) findings.push(identity);
+    }
+  }
+  for (const rubric of aggregate.currentCustomRubrics ?? []) {
+    const result = aggregate.customResults?.[rubric]?.result;
+    if (!result || result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const payload = typeof finding === 'object' && finding !== null && 'identity' in finding
+        ? (finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload
+        : undefined;
+      const identity = rehydrateBuildReviewAcceptedRiskFinding(payload);
+      if (identity) findings.push(identity);
+    }
+  }
+  return findings;
+}
+
+function carriedAcceptedRisk(feature: { readonly version: 'v1'; readonly repository: string; readonly feature: string }, records: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[], findings: readonly BuildReviewAcceptedRiskFinding[], caseRead: Awaited<ReturnType<RemediationCaseStore['read']>>): { carried: readonly BuildReviewCarriedAcceptedRisk[]; carriedAcceptanceUnavailable: boolean } {
+  if (!caseRead.ok) return { carried: [], carriedAcceptanceUnavailable: true };
+  return { carried: findings.flatMap((finding) => {
+    const resolved = resolveBuildReviewAcceptance(feature, finding, { ok: true, records }, caseRead);
+    return resolved.kind === 'carried' ? [{ findingId: finding.id, rubric: finding.canonicalPayload.rubric, originFindingId: resolved.originFindingId, originLapId: resolved.originLapId }] : [];
+  }).sort((left, right) => left.findingId.localeCompare(right.findingId)), carriedAcceptanceUnavailable: false };
+}
 
 /**
  * Parse argv for the `shipped-record` subcommand.
@@ -206,7 +242,17 @@ export async function dispatchShippedRecord(
         version: 'v1', repository, feature: identity.slug,
       });
       if (!dispositions.ok) throw new Error(dispositions.message);
-      recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
+      const aggregateText = await readFile(join(cwd, '.pipeline', 'build-review.json'), 'utf-8').catch(() => undefined);
+      const aggregate = aggregateText === undefined ? undefined : parseBuildReviewAggregate(JSON.parse(aggregateText));
+      const caseRead = await new RemediationCaseStore(cwd, {
+        version: 'v1', repository, feature: identity.slug,
+      }).read();
+      const carried = carriedAcceptedRisk(
+        { version: 'v1', repository, feature: identity.slug }, dispositions.records, acceptedRiskFindings(aggregate), caseRead,
+      );
+      recordBody = appendBuildReviewAcceptedRisk(
+        recordBody, dispositions.records, carried.carried, carried.carriedAcceptanceUnavailable,
+      );
 
       const reducedCoverage = await new BuildReviewDispositionStore(cwd).listReducedCoverage({
         version: 'v1', repository, feature: identity.slug,
@@ -220,8 +266,6 @@ export async function dispatchShippedRecord(
         }
         recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, undefined);
       } else {
-        const aggregateText = await readFile(join(cwd, '.pipeline', 'build-review.json'), 'utf-8').catch(() => undefined);
-        const aggregate = aggregateText === undefined ? undefined : parseBuildReviewAggregate(JSON.parse(aggregateText));
         if (reducedCoverage.records.length > 0 && !aggregate) {
           throw new Error('reduced build-review coverage has no renderable current-lap evidence');
         }

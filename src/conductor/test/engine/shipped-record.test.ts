@@ -531,6 +531,31 @@ describe('accepted build-review risk shipped projection', () => {
     expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
   });
 
+  it('renders carried rows without exposing the accepting operator or rationale', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
+    const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'private rationale', operator: 'private-operator', acceptedAt: '2026-08-14T12:00:00.000Z' };
+    const carriedId = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+    const rendered = appendBuildReviewAcceptedRisk('## Summary', [accepted], [{
+      findingId: carriedId, rubric: 'security', originFindingId: finding.id, originLapId: 'lap-1',
+    }]);
+
+    expect(rendered).toContain(`- Finding: \`${carriedId}\` — rubric: security; carried from \`${finding.id}\` (lap lap-1)`);
+    expect(rendered).not.toContain('private-operator');
+    expect(rendered).not.toContain('private rationale');
+  });
+
+  it('retains direct rows and reports unreadable carried acceptance state', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
+    const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
+
+    const rendered = appendBuildReviewAcceptedRisk('## Summary', [accepted], [], true);
+
+    expect(rendered).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
+    expect(rendered).toContain('Carried acceptance unavailable: remediation case state unreadable');
+    expect(rendered).not.toContain('carried from');
+  });
+
   it('upserts the accepted-risk section idempotently: a repeat with the same records changes nothing', () => {
     const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
     const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
