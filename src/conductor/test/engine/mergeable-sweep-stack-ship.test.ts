@@ -1,4 +1,4 @@
-// Covers: task:25
+// Covers: task:25, task:26
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
