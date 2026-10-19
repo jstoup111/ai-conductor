@@ -188,6 +188,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { activePublicationRecord } from './stack-publication-record.js';
+import { publishedStackRefusal } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
@@ -4699,6 +4700,10 @@ export class Conductor {
           const declaredPositions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
             .filter((position) => Number.isSafeInteger(position) && position > 0).sort((a, b) => a - b) as ChildId[];
           if (declaredPositions.length > 1) {
+            if (await publishedStackRefusal(this.projectRoot, this.featureSlug)) {
+              await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+              return { kind: 'halt', haltClass: 'needs-human', detail: 'routing admission refused: published-stack' };
+            }
             const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
             if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
             const planText = activePlanText || await readFile(planPath, 'utf8');
@@ -15050,6 +15055,10 @@ export class Conductor {
       if (preflight.kind !== 'available') return preflight;
     }
 
+    if (await publishedStackRefusal(this.projectRoot, slug)) {
+      await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+      return { kind: 'halted', reason: 'routing admission refused: published-stack' };
+    }
     const roundId = await nextRoundId(this.projectRoot, slug);
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
 
@@ -16062,6 +16071,10 @@ export class Conductor {
     // rebase observation for that whole-stack operation.
     const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
+      if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
+        await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+        return { success: true };
+      }
       const preflight = await runStackPreflight({
         worktree: this.projectRoot,
         slug: stackSlug,

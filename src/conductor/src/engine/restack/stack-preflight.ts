@@ -20,6 +20,7 @@ import { drainRoutingOutboxes } from '../routing/route-record-store.js';
 import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
 import { EventPersister } from '../event-persister.js';
+import { publishedStackRefusal } from '../stack-publication.js';
 
 /** The bounded result consumed by daemon and resume entry points. */
 export type StackPreflightResult =
@@ -155,6 +156,14 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     return { kind: 'halted' };
   }
 
+  // A routed repair rewrites closure refs. Once those refs back published
+  // member branches, only an operator may choose a refresh/recovery path.
+  const publishedChild = cursor.repairChildren[0];
+  if (publishedChild !== undefined && await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
+    await haltRestack(options.worktree, 'published-stack', options.events, { child: publishedChild });
+    return { kind: 'halted' };
+  }
+
   // Check every origin before creating a journal. runRestack repeats the
   // check with the active child's configured allowance and owns cap evidence.
   for (const child of cursor.repairChildren) {
@@ -199,6 +208,13 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // place. The durable journal is the hand-off; the sentinel is only its
   // discovery trigger.
   await options.consumeRekick?.();
+  // The publication record can appear while the repair journal was being
+  // settled. Do not let the routed-exit follow-on rewrite a newly published
+  // stack after that hand-off.
+  if (publishedChild !== undefined && await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
+    await haltRestack(options.worktree, 'published-stack', options.events, { child: publishedChild });
+    return { kind: 'halted' };
+  }
   const followOn = await runRestack({
     worktree: options.worktree,
     slug: options.slug,

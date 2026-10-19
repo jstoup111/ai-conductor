@@ -14,6 +14,21 @@ import { pushedTipRef } from './push-lease.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEvent } from '../types/events.js';
 
+/**
+ * A publication record with members freezes the local stack.  This deliberately
+ * reads the durable record rather than child state: a feature can have durable
+ * children long before it is published, while a torn-down record is no longer
+ * an active publication and must not block its normal cleanup paths.
+ */
+export async function publishedStackRefusal(
+  root: string,
+  slug: string,
+  dependencies: PublicationRecordDependencies = {},
+): Promise<boolean> {
+  const publication = await activePublicationRecord(root, slug, dependencies);
+  return publication !== undefined && publication.record.members.length > 0;
+}
+
 /** A stack operation payload is never trusted merely because it passed argv decoding. */
 export type StackPayloadValidation =
   | { readonly kind: 'valid' }
