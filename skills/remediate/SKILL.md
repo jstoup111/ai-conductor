@@ -153,6 +153,10 @@ file an intake issue, navigate BUILD, charge a budget, or mutate durable state. 
 approved plan. In this mode the only write is the schema-constrained `.pipeline/remediation.json`
 artifact.
 
+A prior case marked `operatorAccepted` may be bound by `existingCaseId` when the current finding has
+the same substance. This records the adjudicator's equivalence judgement only; it does not assert or
+create operator acceptance, which remains entirely engine-owned.
+
 ### case-v2 consistency, admission, and decision stops
 
 When the engine stamps `mode: "case-v2"`, write exactly the v1 graph fields plus a top-level

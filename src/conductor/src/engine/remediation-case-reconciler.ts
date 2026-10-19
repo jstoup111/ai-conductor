@@ -88,7 +88,10 @@ export async function appendCarriedRemediationCaseSources(
     if (!record) return { value: { ok: true as const, appended: [] as readonly RemediationCaseSourceLink[] } };
     const existing = new Set(record.sources.map((source) => source.sourceId));
     const appended = input.sources.filter((source) => !existing.has(source.sourceId))
-      .map((source) => ({ ...source, recordedAt: input.recordedAt }));
+      // Graph sources also carry their provider-local caseRef at runtime.
+      // Persist only the durable link schema; spreading it made a valid
+      // judge-bound reuse fail the store's exact-key validation.
+      .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt: input.recordedAt }));
     if (appended.length === 0) return { value: { ok: true as const, appended } };
     return {
       value: { ok: true as const, appended },

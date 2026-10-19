@@ -673,31 +673,53 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
   // The binding, rather than a textual similarity, is the only authority that
   // can extend an acceptance. Append it before any reuse check sees a repeat.
-  const directOriginsBySourceId = new Map<string, { readonly findingId: string; readonly lapId: string }>();
+  const directOriginsBySourceId = new Map<string, {
+    readonly findingId: string;
+    readonly lapId: string;
+    readonly acceptedAt: string;
+  }>();
   for (const record of dispositionRead.records) {
     const acceptance = resolveBuildReviewAcceptance(input.feature, record.finding, dispositionRead, prior);
     if (acceptance.kind === 'direct') {
       directOriginsBySourceId.set(buildReviewAdjudicationSourceId({
         rubric: record.finding.canonicalPayload.rubric,
         findingId: record.finding.id,
-      }), { findingId: record.finding.id, lapId: record.sourceLapId });
+      }), { findingId: record.finding.id, lapId: record.sourceLapId, acceptedAt: record.acceptedAt });
     }
   }
-  const acceptedOriginsByCaseId = new Map<string, { readonly findingId: string; readonly lapId: string }>();
+  const acceptedOriginsByCaseId = new Map<string, {
+    readonly findingId: string;
+    readonly lapId: string;
+    readonly acceptedAt: string;
+    readonly linkRecordedAt: string;
+  }>();
   for (const record of prior.state.cases) {
-    const origin = record.sources.map((source) => directOriginsBySourceId.get(source.sourceId)).find(Boolean);
-    if (origin) acceptedOriginsByCaseId.set(record.id, origin);
+    const originLink = record.sources.find((source) => directOriginsBySourceId.has(source.sourceId));
+    if (!originLink) continue;
+    const origin = directOriginsBySourceId.get(originLink.sourceId)!;
+    acceptedOriginsByCaseId.set(record.id, { ...origin, linkRecordedAt: originLink.recordedAt });
   }
+  const carryRecordedAt = new Date().toISOString();
+  const isStrictlyLater = (left: string, right: string): boolean => Date.parse(left) > Date.parse(right);
   const carried = graph.graph.cases.filter((proposed) => {
     const origin = proposed.case.existingCaseId === undefined ? undefined : acceptedOriginsByCaseId.get(proposed.case.existingCaseId);
-    return origin !== undefined && origin.lapId !== input.aggregate.lapId;
+    if (!origin || origin.lapId === input.aggregate.lapId) return false;
+    const existing = prior.state.cases.find((record) => record.id === proposed.case.existingCaseId);
+    // A binding is the acceptance boundary.  An old sibling link made before
+    // the operator accepted the origin cannot be swept in merely because the
+    // case later became accepted; a new link receives this reconciliation's
+    // timestamp and is eligible only under the resolver's strict-later rule.
+    return proposed.sources.every((source) => {
+      const link = existing?.sources.find((candidate) => candidate.sourceId === source.sourceId);
+      const recordedAt = link?.recordedAt ?? carryRecordedAt;
+      return isStrictlyLater(recordedAt, origin.acceptedAt) && isStrictlyLater(recordedAt, origin.linkRecordedAt);
+    });
   });
   if (carried.length > 0) {
-    const recordedAt = new Date().toISOString();
     for (const proposed of carried) {
       const caseId = proposed.case.existingCaseId!;
       const origin = acceptedOriginsByCaseId.get(caseId)!;
-      const appended = await appendCarriedRemediationCaseSources(store, { caseId, sources: proposed.sources, recordedAt });
+      const appended = await appendCarriedRemediationCaseSources(store, { caseId, sources: proposed.sources, recordedAt: carryRecordedAt });
       if (!appended.ok) return failStore('case store', appended);
       for (const source of proposed.sources) {
         const finding = sources.find((candidate) => buildReviewAdjudicationSourceId(candidate) === source.sourceId);
@@ -715,7 +737,18 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   }
   // The v2 consistency/escalation gate is an effect authority, not advisory
   // context: no partial action set survives a blocked or escalated judgement.
-  const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({ judgement, validation: graph }));
+  const carriedCaseRefs = new Set(carried.map((proposed) => proposed.case.caseRef));
+  // A carried escalation is not an unresolved decision stop.  Give the
+  // effect authority the same reduced graph that reconciliation will receive.
+  const judgementWithoutCarried = {
+    ...judgement,
+    cases: judgement.cases.filter((caseRow) => !carriedCaseRefs.has(caseRow.caseRef)),
+  } as RemediationCaseJudgement;
+  const graphWithoutCarried = {
+    ...graph,
+    graph: { ...graph.graph, cases: graph.graph.cases.filter((proposed) => !carriedCaseRefs.has(proposed.case.caseRef)) },
+  };
+  const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({ judgement: judgementWithoutCarried, validation: graphWithoutCarried }));
   for (const proposed of graph.graph.cases) {
     if (proposed.case.disposition !== 'refute') continue;
     const evidence = await resolveRefutationEvidence({ projectRoot: input.projectRoot, refutation: proposed.case.refutation! });
@@ -733,7 +766,6 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     return record !== undefined && record.resolution === 'resolved' && record.disposition === 'act'
       && record.effect.kind === 'action' && record.effect.status === 'failed';
   };
-  const carriedCaseRefs = new Set(carried.map((proposed) => proposed.case.caseRef));
   const admitted = graph.graph.cases.filter((proposed) =>
     !carriedCaseRefs.has(proposed.case.caseRef) &&
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)) &&
@@ -774,6 +806,13 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     if (!record) continue;
     const reuse = classifyRemediationCaseReuse(record, attempted);
     if (reuse === 'halt-regression' || reuse === 'halt-repeat') {
+      // Preserve the judge's explicit binding before stopping.  A later
+      // operator acceptance can then carry a re-raise through this same case;
+      // no effect is reserved and the existing case state is otherwise intact.
+      const appended = await appendCarriedRemediationCaseSources(store, {
+        caseId: record.id, sources: proposed.sources, recordedAt: new Date().toISOString(),
+      });
+      if (!appended.ok) return failStore('case store', appended);
       await input.emit?.({
         type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId: record.id, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),

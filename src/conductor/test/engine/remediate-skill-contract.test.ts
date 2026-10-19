@@ -88,6 +88,8 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/must not mint.*durable.*case.*effect.*id/i);
     expect(caseMode).toMatch(/engine.*stamps.*durable.*ids/i);
     expect(caseMode).toMatch(/never assert or create operator\s+acceptance/i);
+    expect(caseMode).toMatch(/prior case marked `operatorAccepted` may be bound by `existingCaseId` when the current finding has\s+the same substance/i);
+    expect(caseMode).toMatch(/never treat an autonomous case outcome as accepted risk/i);
     expect(caseMode).toMatch(/do not.*apply.*effect/i);
     expect(caseMode).toMatch(/do not append[\s\S]*approved plan/i);
     expect(caseMode).toMatch(/write.*only.*`\.pipeline\/remediation\.json`/is);
