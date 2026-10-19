@@ -1,4 +1,4 @@
-// Covers: task:8, task:10
+// Covers: task:8, task:10, task:11
 import { describe, expect, it } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
@@ -11,6 +11,7 @@ import {
   createLiveBoundaryProxy,
   createProviderAvailabilityProxy,
   createRateLimitEpisodeProxy,
+  createWorktreeLifecycleProxy,
   type ExecutorIpcPort,
 } from '../../src/engine/executor-proxies.js';
 
@@ -289,5 +290,121 @@ describe('executor broker', () => {
     expect(proxy).toBeUndefined();
     expect(channel.child.deliver()).toBe(false);
     expect(channel.supervisor.deliver()).toBe(false);
+  });
+
+  it('serializes child worktree lifecycle sections behind a supervisor sweep', async () => {
+    const lifecycle = new WorktreeLifecycleQueue();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: lifecycle, rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+    });
+    const a = pair();
+    const b = pair();
+    const proxyA = createWorktreeLifecycleProxy(createExecutorRequestClient(a.child));
+    const proxyB = createWorktreeLifecycleProxy(createExecutorRequestClient(b.child));
+    broker.attach('a', a.supervisor);
+    broker.attach('b', b.supervisor);
+
+    let releaseSweep!: () => void;
+    const sweep = lifecycle.run(() => new Promise<void>((resolve) => { releaseSweep = resolve; }));
+    await Promise.resolve();
+    const entered: string[] = [];
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const runA = proxyA.run(async () => {
+      entered.push('a');
+      await new Promise<void>((resolve) => { releaseA = resolve; });
+    });
+    const runB = proxyB.run(async () => {
+      entered.push('b');
+      await new Promise<void>((resolve) => { releaseB = resolve; });
+    });
+
+    await flushAsync(a);
+    await flushAsync(b);
+    expect(entered).toEqual([]);
+
+    releaseSweep();
+    await sweep;
+    await flushAsync(a);
+    await flushAsync(b);
+    expect(entered).toEqual(['a']);
+
+    releaseA();
+    await flushAsync(a);
+    await runA;
+    await flushAsync(b);
+    expect(entered).toEqual(['a', 'b']);
+
+    releaseB();
+    await flushAsync(b);
+    await runB;
+  });
+
+  it('releases a held worktree lifecycle lock when its child disconnects', async () => {
+    const lifecycle = new WorktreeLifecycleQueue();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: lifecycle, rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+    });
+    const a = pair();
+    const b = pair();
+    const proxyA = createWorktreeLifecycleProxy(createExecutorRequestClient(a.child));
+    const proxyB = createWorktreeLifecycleProxy(createExecutorRequestClient(b.child));
+    broker.attach('a', a.supervisor);
+    broker.attach('b', b.supervisor);
+
+    const entered: string[] = [];
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const runA = proxyA.run(async () => {
+      entered.push('a');
+      await new Promise<void>((resolve) => { releaseA = resolve; });
+    });
+    await flushAsync(a);
+    const runB = proxyB.run(async () => {
+      entered.push('b');
+      await new Promise<void>((resolve) => { releaseB = resolve; });
+    });
+    await flushAsync(b);
+    expect(entered).toEqual(['a']);
+
+    a.supervisor.emit('disconnect');
+    await flushAsync(b);
+    expect(entered).toEqual(['a', 'b']);
+
+    releaseA();
+    await flushAsync(a);
+    await runA;
+    releaseB();
+    await flushAsync(b);
+    await runB;
+  });
+
+  it('rejects a queued worktree lifecycle request when the supervisor shuts down', async () => {
+    const lifecycle = new WorktreeLifecycleQueue();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: lifecycle, rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+    });
+    const channel = pair();
+    const proxy = createWorktreeLifecycleProxy(createExecutorRequestClient(channel.child));
+    broker.attach('feature', channel.supervisor);
+
+    let releaseSweep!: () => void;
+    const sweep = lifecycle.run(() => new Promise<void>((resolve) => { releaseSweep = resolve; }));
+    await Promise.resolve();
+    const pending = proxy.run(async () => undefined);
+    await flushAsync(channel);
+
+    broker.abortAll();
+    await flushAsync(channel);
+    releaseSweep();
+    await sweep;
+    await flushAsync(channel);
+    await expect(pending).rejects.toThrow(/aborted/);
   });
 });

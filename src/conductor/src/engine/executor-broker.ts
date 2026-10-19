@@ -52,15 +52,20 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       ports.add(port);
       const windows = new Map<string, LiveBoundaryWindow>();
       const pendingRateLimitClears = new Map<string, AbortController>();
-      let releasedLock: (() => void) | undefined;
-      let lockHeld: Promise<void> | undefined;
+      // A child can have one request holding the queue while another is still
+      // queued behind a supervisor sweep. Track them independently: closing a
+      // channel must release the holder *and* make a late queued admission a
+      // no-op rather than a leaked lock.
+      const heldWorktreeLocks = new Map<string, () => void>();
+      const pendingWorktreeAcquires = new Map<string, { cancelled: boolean }>();
       let closed = false;
       const featureEvents = createForwardingFeatureEventEmitter(deps.rootEvents, slug);
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
       const release = () => {
         for (const window of windows.values()) window.close();
         windows.clear();
-        releasedLock?.(); releasedLock = undefined;
+        for (const releaseLock of heldWorktreeLocks.values()) releaseLock();
+        heldWorktreeLocks.clear();
       };
       const request = async (requestId: string, method: string, params: unknown) => {
         try {
@@ -122,19 +127,34 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
             respond(requestId, { ok: undefined }); return;
           }
           if (method === 'worktree.acquire') {
+            const pending = { cancelled: false };
+            const token = `${slug}:${requestId}`;
+            pendingWorktreeAcquires.set(requestId, pending);
             let resolveRelease!: () => void;
             const hold = new Promise<void>((resolve) => { resolveRelease = resolve; });
             let acquired!: () => void;
             const acquiredPromise = new Promise<void>((resolve) => { acquired = resolve; });
-            lockHeld = deps.worktreeLifecycle.run(async () => {
-              releasedLock = resolveRelease;
+            void deps.worktreeLifecycle.run(async () => {
+              if (closed || pending.cancelled) { acquired(); return; }
+              heldWorktreeLocks.set(token, resolveRelease);
               acquired();
               await hold;
+              heldWorktreeLocks.delete(token);
             });
             await acquiredPromise;
-            respond(requestId, { ok: slug }); return;
+            if (closed || pending.cancelled) return;
+            pendingWorktreeAcquires.delete(requestId);
+            respond(requestId, { ok: token }); return;
           }
-          if (method === 'worktree.release') { releasedLock?.(); releasedLock = undefined; await lockHeld; respond(requestId, { ok: undefined }); return; }
+          if (method === 'worktree.release') {
+            const token = (params as { token?: unknown })?.token;
+            if (typeof token === 'string') {
+              const releaseLock = heldWorktreeLocks.get(token);
+              releaseLock?.();
+              heldWorktreeLocks.delete(token);
+            }
+            respond(requestId, { ok: undefined }); return;
+          }
           respond(requestId, { error: `unknown executor request: ${method}` });
         } catch (error) { respond(requestId, { error: error instanceof Error ? error.message : String(error) }); }
       };
@@ -158,6 +178,11 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           abort.abort();
         }
         pendingRateLimitClears.clear();
+        for (const [requestId, pending] of pendingWorktreeAcquires) {
+          pending.cancelled = true;
+          respond(requestId, { error: reason });
+        }
+        pendingWorktreeAcquires.clear();
         release();
         ports.delete(port);
         attachments.delete(close);
