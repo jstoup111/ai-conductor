@@ -28,7 +28,13 @@ import { classifyRunningWork } from './daemon-dashboard.js';
 import { describeLiveHalt } from './unpark-halt-warning.js';
 import { isLive, readPidRecordDiagnosed, type PidRecord, type PidRecordRead } from './daemon-lock.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
-import type { GitRunner, GhRunner } from './pr-labels.js';
+import { makeProductionGh, makeProductionGit, type GitRunner, type GhRunner } from './pr-labels.js';
+import { activePublicationRecord, writePublicationRecord } from './stack-publication-record.js';
+import { deleteStackChildren } from './stack-teardown.js';
+import { verifyMemberReachability } from './stack-publication.js';
+import { makeGitRunner } from './rebase.js';
+import { parseGithubUrl } from './github-target.js';
+import { shippedRecordOnMain } from './shipped-record-on-main.js';
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -269,6 +275,55 @@ export async function dispatchDaemonPark(
       if (resume.kind === 'resume') {
         out(`Could not reclaim-worktree '${cmd.slug}': in-progress`);
         return 1;
+      }
+      // Match the sweep's stack cleanup proof before removing the worktree.
+      // A closed-but-unmerged leaf is deliberately non-destructive: preserve
+      // its child branches and record the operator-visible teardown state.
+      const publication = await activePublicationRecord(worktreePath, cmd.slug, { git: makeGitRunner(worktreePath) });
+      if (publication && publication.record.members.length > 1) {
+        const stateText = await readFile(join(worktreePath, '.pipeline', 'conduct-state.json'), 'utf8').catch(() => '');
+        let prUrl: string | undefined;
+        try {
+          const parsed: unknown = JSON.parse(stateText);
+          prUrl = parsed && typeof parsed === 'object' && typeof (parsed as { pr_url?: unknown }).pr_url === 'string'
+            ? (parsed as { pr_url: string }).pr_url : undefined;
+        } catch { /* no usable leaf identity */ }
+        const target = parseGithubUrl(prUrl);
+        const gh = deps.runGh ?? makeProductionGh();
+        if (!target) {
+          out(`Could not reclaim-worktree '${cmd.slug}': stack-leaf-unreadable`);
+          return 1;
+        }
+        const leaf = publication.record.members.at(-1)!;
+        let leafState: string | undefined;
+        try {
+          leafState = JSON.parse((await gh(['pr', 'view', String(leaf.pr), '-R', target.repository, '--json', 'state'], { cwd: worktreePath })).stdout).state;
+        } catch {
+          out(`Could not reclaim-worktree '${cmd.slug}': stack-leaf-unreadable`);
+          return 1;
+        }
+        if (leafState === 'CLOSED') {
+          await writePublicationRecord(worktreePath, cmd.slug, publication, { ...publication.record, tornDown: true }, { git: makeGitRunner(worktreePath) });
+        } else {
+          const shipped = await shippedRecordOnMain(resolvedRoot, cmd.slug, deps.runGit ?? makeProductionGit());
+          if (shipped !== 'present') {
+            out(`Could not reclaim-worktree '${cmd.slug}': shipped-record-not-on-main`);
+            return 1;
+          }
+          const reachability = await verifyMemberReachability(worktreePath, publication.record, { gh, repository: target.repository, git: makeGitRunner(worktreePath) });
+          if (reachability.kind !== 'reachable') {
+            out(`Could not reclaim-worktree '${cmd.slug}': stack-members-${reachability.kind}`);
+            return 1;
+          }
+          const deleted = await deleteStackChildren(worktreePath, cmd.slug, publication.record, { gh, repository: target.repository, git: makeGitRunner(worktreePath) });
+          if (deleted.kind === 'failed') {
+            out(`Could not reclaim-worktree '${cmd.slug}': stack-teardown-failed`);
+            return 1;
+          }
+          if (deleted.kind === 'kept') {
+            await writePublicationRecord(worktreePath, cmd.slug, publication, { ...publication.record, tornDown: true }, { git: makeGitRunner(worktreePath) });
+          }
+        }
       }
       out(`Reclaiming retained worktree: ${worktreePath}`);
       const configResult = await loadConfig(resolvedRoot);
