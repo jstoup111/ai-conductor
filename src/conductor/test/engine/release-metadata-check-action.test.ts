@@ -1,3 +1,4 @@
+// Covers: task:17
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -134,6 +135,30 @@ describe('release metadata GitHub Actions adapter (Task 3)', () => {
         name: 'semver:major',
       }]],
     });
+  });
+
+  it('accepts a stack child with the template-default no-note disposition without applying a semver label', async () => {
+    const template = await readFile(new URL('../../../../.github/pull_request_template.md', import.meta.url), 'utf8');
+    const addLabels = vi.fn().mockResolvedValue(undefined);
+    const removeLabel = vi.fn().mockResolvedValue(undefined);
+    const body = template.match(/^Release-Disposition: no-note$/m)?.[0];
+
+    await expect(runReleaseMetadataCheckAction({
+      github: { rest: { issues: { addLabels, removeLabel } } },
+      context: {
+        repo: { owner: 'jstoup111', repo: 'ai-conductor' },
+        payload: {
+          pull_request: {
+            number: 17,
+            labels: [{ name: 'stack-member' }],
+            body,
+          },
+        },
+      },
+      core: { setOutput: vi.fn() },
+    })).resolves.toBeUndefined();
+
+    expect({ add: addLabels.mock.calls, remove: removeLabel.mock.calls }).toEqual({ add: [], remove: [] });
   });
 
   it('leaves an already-correct band alone', async () => {
