@@ -677,7 +677,12 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'pr_url_persistence_failed',
     'pr_identity_not_verified_after_establish',
   ],
-  establish_child_prs: ['publication_transition_indeterminate'],
+  establish_child_prs: [
+    'publication_transition_indeterminate',
+    'publication_transition_unavailable',
+    'publication_transition_failed',
+    'publication_transition_not_verified_after_effect',
+  ],
   verify_release_readiness: ['publication_transition_indeterminate'],
   author_pr_prose: [
     'publication_transition_indeterminate',
@@ -1334,6 +1339,13 @@ export interface AdvanceFinishPublicationInput {
      */
     establishPr?: OpenShipDraftPrDeps;
     /**
+     * Publish the immutable non-leaf closures and establish their chained
+     * draft pull requests.  It is deliberately a single effect: the durable
+     * publication record makes a resumed attempt adopt work already created
+     * before an interrupted response.
+     */
+    establishChildPrs?: () => Promise<void>;
+    /**
      * Persist the authoritative URL returned by a successful draft-PR
      * establishment before the coordinator re-observes PR identity. The
      * composition root owns its durable feature-state representation.
@@ -1797,6 +1809,46 @@ async function advanceFinishPublicationUnreconciled(
         transition: 'establish_pr',
         reason: 'pr_identity_not_verified_after_establish',
       };
+    });
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'establish_child_prs') {
+    return coalescePublicationEffect(input.effects, 'establish_child_prs', async () => {
+      if (!input.effects.establishChildPrs) {
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_child_prs',
+          reason: 'publication_transition_unavailable',
+        };
+      }
+      await emitPublicationEvent(input.emit, {
+        type: 'finish_publication_transition', phase: 'started', transition: 'establish_child_prs',
+      });
+      try {
+        await input.effects.establishChildPrs();
+      } catch (error) {
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_child_prs',
+          reason: 'publication_transition_failed',
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+      const observedAfterEstablish = await input.observe();
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'establish_child_prs',
+        snapshot,
+        observedAfterEstablish,
+      );
+      if (transition) return transition;
+      return stackDimension(observedAfterEstablish) !== 'members-missing'
+        ? { kind: 'advanced', transition: 'establish_child_prs' }
+        : {
+            kind: 'publication_retry',
+            transition: 'establish_child_prs',
+            reason: 'publication_transition_not_verified_after_effect',
+          };
     });
   }
 

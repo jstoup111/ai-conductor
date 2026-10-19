@@ -1,4 +1,4 @@
-// Covers: task:5, task:7
+// Covers: task:5, task:7, task:10
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1664,6 +1664,17 @@ describe('advancedPublicationTransition', () => {
 });
 
 describe('advanceFinishPublication unmoved transition dimensions', () => {
+  it('runs establish_child_prs once and verifies the re-observed stack dimension', async () => {
+    let stack: PublicationSnapshot['stack'] = 'members-missing';
+    const establishChildPrs = vi.fn(async () => { stack = 'unassembled'; });
+
+    await expect(advanceFinishPublication({
+      observe: async () => ({ ...readyPublicationSnapshot(), stack } as PublicationSnapshot),
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), establishChildPrs },
+    })).resolves.toEqual({ kind: 'advanced', transition: 'establish_child_prs' });
+    expect(establishChildPrs).toHaveBeenCalledTimes(1);
+  });
+
   it('halts human-required when authoring leaves a judged revision byte-identical', async () => {
     const objection = 'The body omits the validation evidence readers need.';
     const revisionRequired = readyPublicationSnapshot({

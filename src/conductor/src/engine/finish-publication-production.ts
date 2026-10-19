@@ -22,7 +22,15 @@ import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js'
 import { readState, replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import { readAllVerdicts, readVerdict } from './gate-verdicts.js';
 import { resolveActiveChild } from './child-cursor.js';
-import { observeStackDimension } from './stack-publication.js';
+import {
+  observeStackDimension,
+  pushChildClosure,
+  readStackPublicationChildren,
+  verifyChildChain,
+} from './stack-publication.js';
+import { activePublicationRecord, writePublicationRecord } from './stack-publication-record.js';
+import { leafBranchFor } from './feature-branch-identity.js';
+import { checkChildBodyPostconditions, renderChildBody } from './stack-member-body.js';
 import { gateSatisfied } from './selector.js';
 import {
   dispatchFinishRecord,
@@ -64,7 +72,7 @@ import {
   upsertShipmentPlanDeclaration,
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
-import { runTrackerAmbientRead, runTrackerUrlRead } from './tracker-client.js';
+import { runTrackerAmbientRead, runTrackerRepositoryRead, runTrackerUrlRead } from './tracker-client.js';
 
 export interface ProductionFinishPublicationCoordinator {
   requiresArtifactValidation: true;
@@ -191,6 +199,142 @@ async function mutateRetainedPullRequest(input: {
     return { ok: false, message: `guarded ${input.operation} returned a partial result` };
   }
   return { ok: false, message: `guarded ${input.operation} failed: ${result.error}` };
+}
+
+type ChildPullRequest = {
+  readonly number: number;
+  readonly isDraft: boolean;
+  readonly state: string;
+  readonly base: string;
+};
+
+function repositoryAndNumber(prUrl: string): { repository: string; number: number } | undefined {
+  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)\/?$/.exec(prUrl);
+  return match === null ? undefined : { repository: match[1]!, number: Number(match[2]) };
+}
+
+/**
+ * The child publication effect is intentionally small and restart-safe.  Every
+ * remote mutation is preceded by discovery, and a record write is a CAS; an
+ * interrupted create is consequently adopted on the next pass rather than
+ * created again.
+ */
+async function establishChildPrs(input: {
+  root: string;
+  slug: string;
+  leafUrl: string;
+  baseBranch: string;
+  template?: string;
+  git: GitRunner;
+  gh: GhRunner;
+  operations?: GithubOperationRunner;
+  remoteMutation?: GithubMutationExecutionContext;
+  remoteGit?: typeof executeRemoteGit;
+  events?: GithubOperationEventEmitter;
+}): Promise<void> {
+  const leaf = repositoryAndNumber(input.leafUrl);
+  if (!leaf || !input.operations || !input.remoteMutation) throw new Error('stack child publication boundary unavailable');
+  const stackGit = input.git as never;
+  const children = await readStackPublicationChildren(input.root, input.slug, { git: stackGit });
+  if (children === 'unreadable') throw new Error('stack child positions are unreadable');
+  const chain = await verifyChildChain(input.root, children, { git: stackGit });
+  if (chain.kind !== 'valid') throw new Error(chain.kind === 'broken' ? `stack child chain broken at ${chain.position}` : 'stack child chain unreadable');
+
+  const list = async (head: string): Promise<ChildPullRequest[]> => {
+    const stdout = await runTrackerRepositoryRead(
+      input.gh, input.root, 'pull-request.read', leaf.repository, { kind: 'repository' },
+      ['pr', 'list', '-R', leaf.repository, '--head', head, '--state', 'all', '--json', 'number,isDraft,state,baseRefName'],
+    );
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) throw new Error(`invalid pull request list for ${head}`);
+    return parsed.map((value) => {
+      if (!value || typeof value !== 'object') throw new Error(`invalid pull request list for ${head}`);
+      const candidate = value as Record<string, unknown>;
+      if (!Number.isInteger(candidate.number) || typeof candidate.isDraft !== 'boolean'
+        || typeof candidate.state !== 'string' || typeof candidate.baseRefName !== 'string') {
+        throw new Error(`invalid pull request list for ${head}`);
+      }
+      return { number: candidate.number as number, isDraft: candidate.isDraft, state: candidate.state, base: candidate.baseRefName };
+    });
+  };
+  const choose = (prs: ChildPullRequest[], branch: string, expectedBase: string): ChildPullRequest | undefined => {
+    if (prs.length > 1) throw new Error(`ambiguous child pull request for ${branch}`);
+    const pr = prs[0];
+    if (!pr) return undefined;
+    if (pr.state !== 'OPEN' || !pr.isDraft || pr.base !== expectedBase) {
+      throw new Error(`diverged child pull request for ${branch}`);
+    }
+    return pr;
+  };
+
+  // Validate the whole graph before a first push.  The repeated discovery in
+  // the loop below is deliberate: it is the ambiguity recovery fence after a
+  // create response is lost.
+  await Promise.all(children.map((child, index) => list(child.branch).then((prs) =>
+    choose(prs, child.branch, index === 0 ? input.baseBranch : children[index - 1]!.branch))));
+  const prior = await activePublicationRecord(input.root, input.slug, { git: stackGit });
+  if (prior && prior.record.members.some((member, index) => member.position !== [...children.map((child) => child.position), Number.MAX_SAFE_INTEGER][index])) {
+    throw new Error('publication record has divergent members');
+  }
+  const leafView = await list(leafBranchFor(input.slug));
+  const retained = leafView.find((candidate) => candidate.number === leaf.number);
+  if (!retained) throw new Error('retained leaf pull request is unreadable');
+  if (!retained.isDraft) {
+    const result = await executeGithubOperation({ operation: 'pull-request.draft', repository: leaf.repository,
+      resource: { kind: 'pull-request', number: leaf.number }, context: { actor: 'finish-publication' } }, input.operations);
+    if (result.kind !== 'executed') throw new Error('could not re-draft retained leaf pull request');
+    await input.events?.emit({ type: 'stack_member_redrafted', child: children.at(-1)?.position ?? 1 as never, pr: leaf.number } as never);
+  }
+
+  let stored = prior;
+  for (const [index, child] of children.entries()) {
+    const base = index === 0 ? input.baseBranch : children[index - 1]!.branch;
+    const body = renderChildBody({
+      slice: { position: child.position, name: `Stack slice ${child.position}`, taskIds: [], storyIds: [] },
+      stories: [], branch: child.branch, base, diffstat: '',
+      members: [...children.map((item) => ({ position: item.position, name: item.branch, reference: item.branch })),
+        { position: Number.MAX_SAFE_INTEGER, name: leafBranchFor(input.slug), reference: `#${leaf.number}` }],
+      template: input.template,
+    });
+    const bodyCheck = checkChildBodyPostconditions(body, input.template, child.branch);
+    if (!bodyCheck.ok) throw new Error(bodyCheck.reason);
+    const pushed = await pushChildClosure(input.root, input.slug, child, {
+      git: stackGit,
+      remote: {
+        mutation: input.remoteMutation,
+        events: input.events,
+        config: async () => ({ stdout: (await input.git(['config', '--get', 'remote.origin.url'], { cwd: input.root })).stdout }),
+        runRemoteGit: async (args, options) => ({ stdout: (await input.git(args, { cwd: options.cwd, credential: options.credential })).stdout }),
+      },
+      remoteGit: input.remoteGit,
+    });
+    if (pushed.kind === 'diverged') throw new Error(`child closure diverged at ${child.position}`);
+    if (pushed.kind === 'read-failed') throw new Error(`child closure read failed at ${child.position}`);
+    let member = choose(await list(child.branch), child.branch, base);
+    if (!member) {
+      const created = await executeGithubOperation({ operation: 'pull-request.create', repository: leaf.repository,
+        resource: { kind: 'repository', repository: leaf.repository }, context: { actor: 'finish-publication' },
+        payload: { title: `Stack slice ${child.position}`, body, head: child.branch, base, draft: true } }, input.operations);
+      if (created.kind !== 'executed') throw new Error(`could not create child pull request for ${child.branch}`);
+      member = choose(await list(child.branch), child.branch, base);
+      if (!member) throw new Error(`created child pull request is not discoverable for ${child.branch}`);
+    }
+    const members = [...(stored?.record.members ?? []).filter((candidate) => candidate.position !== child.position),
+      { position: child.position, branch: child.branch, pr: member.number }]
+      .sort((left, right) => left.position - right.position);
+    const next = { version: 1 as const, members };
+    const write = await writePublicationRecord(input.root, input.slug, stored, next, { git: stackGit });
+    if (write.kind !== 'updated') throw new Error(`could not record child pull request for ${child.branch}`);
+    stored = await activePublicationRecord(input.root, input.slug, { git: stackGit });
+    if (!stored) throw new Error('written stack publication record is unreadable');
+    await input.events?.emit({ type: 'stack_member_published', child: child.position, pr: member.number } as never);
+  }
+  if (!stored) throw new Error('stack publication record is missing');
+  const leafPosition = children.at(-1)!.position + 1;
+  const final = { version: 1 as const, members: [...stored.record.members,
+    { position: leafPosition as never, branch: leafBranchFor(input.slug), pr: leaf.number }].sort((left, right) => left.position - right.position) };
+  const write = await writePublicationRecord(input.root, input.slug, stored, final, { git: stackGit });
+  if (write.kind !== 'updated') throw new Error('could not record retained leaf pull request');
 }
 
 function upsertReducedCoverageEvidence(body: string, section: string | undefined): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
@@ -832,6 +976,22 @@ export function createProductionFinishPublicationCoordinator(
             // divergence goes through while an actually-moved remote is still
             // refused (`lease-rejected`, never a bare `--force`).
             pushMode: 'lease',
+          },
+          establishChildPrs: async () => {
+            if (!state.feature_desc || !state.pr_url) throw new Error('missing stack publication identity');
+            await establishChildPrs({
+              root: deps.projectRoot,
+              slug: state.feature_desc,
+              leafUrl: state.pr_url,
+              baseBranch: deps.baseBranch,
+              template: deps.prTemplateBytes,
+              git: deps.git,
+              gh: deps.gh,
+              operations,
+              remoteMutation: deps.remoteMutation ?? publication?.remoteMutation,
+              remoteGit: deps.remoteGit,
+              events: deps.events,
+            });
           },
           persistEstablishedPrUrl: async (prUrl) => {
             // A production run normally has a state file already. Preserve
