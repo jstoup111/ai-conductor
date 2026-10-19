@@ -163,10 +163,32 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
   return (current.length > 0 ? current : eligible).map((record) => record.id);
 }
 
+/**
+ * The case link is the crash-safe authority for a carried settlement, while
+ * the event ledger records its occurrence.  A retry can therefore find an
+ * already-appended link and still publish the one event that was lost between
+ * the append and the prior process stopping.
+ */
+async function persistedCarriedEventKeys(projectRoot: string): Promise<ReadonlySet<string>> {
+  try {
+    const text = await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8');
+    return new Set(text.split('\n').flatMap((line) => {
+      try {
+        const event = JSON.parse(line) as Partial<Extract<ConductorEvent, { type: 'build_review_disposition_carried' }>>;
+        return event.type === 'build_review_disposition_carried' && typeof event.lapId === 'string' &&
+          typeof event.findingId === 'string' && typeof event.caseId === 'string'
+          ? [`${event.lapId}\u0000${event.findingId}\u0000${event.caseId}`]
+          : [];
+      } catch { return []; }
+    }));
+  } catch { return new Set(); }
+}
+
 export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudicationCoordinatorInput): Promise<BuildReviewAdjudicationCoordinatorResult> {
   const sources = projectBuildReviewAggregateSources(input.aggregate);
   if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
   const carriedFindingIds = new Set<string>();
+  const emittedCarriedKeys = await persistedCarriedEventKeys(input.projectRoot);
   // A carried case keeps its durable autonomous state intact, but its current
   // source is settled by operator authority. Do not make a sibling BUILD route
   // republish that carried case as unfinished work.
@@ -683,7 +705,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     readonly acceptedAt: string;
   }>();
   for (const record of dispositionRead.records) {
-    const acceptance = resolveBuildReviewAcceptance(input.feature, record.finding, dispositionRead, prior);
+    const acceptance = resolveBuildReviewAcceptance(
+      input.feature, record.finding, dispositionRead, prior, input.aggregate.lapId,
+    );
     if (acceptance.kind === 'direct') {
       directOriginsBySourceId.set(buildReviewAdjudicationSourceId({
         rubric: record.finding.canonicalPayload.rubric,
@@ -730,13 +754,19 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         const finding = sources.find((candidate) => buildReviewAdjudicationSourceId(candidate) === source.sourceId);
         if (finding) carriedFindingIds.add(finding.findingId);
       }
-      for (const source of appended.appended) {
+      // Append is idempotent, but event delivery can be interrupted after the
+      // durable append.  Publish every carried finding whose event is absent,
+      // not only the sources this invocation appended.
+      for (const source of proposed.sources) {
         const finding = sources.find((candidate) => buildReviewAdjudicationSourceId(candidate) === source.sourceId);
         if (!finding) continue;
+        const eventKey = `${input.aggregate.lapId}\u0000${finding.findingId}\u0000${caseId}`;
+        if (emittedCarriedKeys.has(eventKey)) continue;
         await input.emit?.({
           type: 'build_review_disposition_carried', feature: input.feature.feature, lapId: input.aggregate.lapId,
           findingId: finding.findingId, caseId, originFindingId: origin.findingId, originLapId: origin.lapId,
         });
+        emittedCarriedKeys.add(eventKey);
       }
     }
   }

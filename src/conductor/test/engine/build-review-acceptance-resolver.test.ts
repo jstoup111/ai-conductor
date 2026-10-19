@@ -76,6 +76,14 @@ describe('build-review acceptance resolver', () => {
     });
   });
 
+  it('does not carry an acceptance recorded in the lap being evaluated', () => {
+    expect(resolveBuildReviewAcceptance(feature, lap2, dispositions([
+      disposition(origin, { sourceLapId: parseBuildReviewLapId('lap-2')! }),
+    ]), cases([
+      caseRecord([source(origin, '2026-10-19T09:00:00.000Z'), source(lap2, '2026-10-19T11:00:00.000Z')]),
+    ]), parseBuildReviewLapId('lap-2')!)).toEqual({ kind: 'none' });
+  });
+
   it.each([
     ['same-reconciliation sibling', '2026-10-19T09:00:00.000Z'],
     ['pre-acceptance link', '2026-10-19T09:30:00.000Z'],

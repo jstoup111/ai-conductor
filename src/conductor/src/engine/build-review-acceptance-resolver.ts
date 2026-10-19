@@ -51,6 +51,8 @@ export function resolveBuildReviewAcceptance(
   finding: BuildReviewAcceptedRiskFinding,
   dispositionInput: BuildReviewDispositionListResult,
   caseInput: RemediationCaseStoreReadResult,
+  /** The lap being evaluated; a disposition made in it cannot carry itself. */
+  currentLapId?: BuildReviewLapId,
 ): ResolveBuildReviewAcceptanceResult {
   if (!dispositionInput.ok) return dispositionInput;
 
@@ -63,7 +65,8 @@ export function resolveBuildReviewAcceptance(
     if (!currentLink) continue;
 
     const origin = directlyAcceptedOrigin(feature, caseRecord, dispositionInput.records);
-    if (!origin || !strictlyLater(currentLink.recordedAt, origin.disposition.acceptedAt) ||
+    if (!origin || origin.disposition.sourceLapId === currentLapId ||
+      !strictlyLater(currentLink.recordedAt, origin.disposition.acceptedAt) ||
       !strictlyLater(currentLink.recordedAt, origin.linkRecordedAt)) continue;
 
     return {

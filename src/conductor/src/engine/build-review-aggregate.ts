@@ -585,7 +585,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
         rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
       });
       if (!identity) return undefined;
-      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput);
+      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput, aggregate.lapId);
       if (acceptance.kind === 'direct' || acceptance.kind === 'carried') acceptedIds.add(identity.id);
     }
   }
@@ -600,7 +600,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
         : undefined;
       const identity = rehydrateBuildReviewAcceptedRiskFinding(payload);
       if (!identity) return undefined;
-      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput);
+      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput, aggregate.lapId);
       if (acceptance.kind === 'direct' || acceptance.kind === 'carried') acceptedIds.add(identity.id);
     }
   }

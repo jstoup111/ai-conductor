@@ -122,7 +122,7 @@ function applyCurrentCustomEffectiveVerdict(
         ? rehydrateBuildReviewAcceptedRiskFinding((finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload)
         : undefined;
       if (!identity) return [];
-      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput);
+      const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records: dispositions }, caseInput, aggregate.lapId);
       return acceptance.kind === 'direct' || acceptance.kind === 'carried' ? [identity.id] : [];
     }),
   ));
