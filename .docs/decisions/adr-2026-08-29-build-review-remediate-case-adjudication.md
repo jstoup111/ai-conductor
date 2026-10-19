@@ -128,6 +128,10 @@ late-acceptance rule.
 >   substance only and still never asserts or creates acceptance.
 > - **D2.5** Every carry is one `build_review_disposition_carried` `ConductorEvent` naming the
 >   feature, lap, finding, case, and origin finding and lap, registered with every sink (D9).
+> - **D2.6** A repeat or regression halt on an explicit `existingCaseId` binding first appends the
+>   bound current sources to the reused case as links only, with no effect and no other field
+>   changed, before halting. An operator who then accepts that finding has accepted a source of
+>   that case, so a later re-raise bound to it carries. The halt itself is unchanged.
 
 ### D3 — One existing remediate dispatch owns the semantic fan-in
 
