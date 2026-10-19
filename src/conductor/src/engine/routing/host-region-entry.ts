@@ -16,6 +16,7 @@ import { switchToChild, type ChildLifecycleTarget } from '../child-lifecycle.js'
 import type { StateMutation } from '../conduct-state-store.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
+import { resolveGitRef } from './git-ref-resolver.js';
 import { readRouteRecord, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
@@ -145,8 +146,9 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   } catch {
     return { kind: 'refused', reason: `child ${input.host} RED marker or ref is invalid` };
   }
-  const head = await gitSha(git, 'HEAD');
-  if (!head) return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
+  const resolvedHead = await resolveGitRef(git, 'HEAD');
+  if (typeof resolvedHead !== 'string') return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
+  const head = resolvedHead;
   await mkdir(childDir, { recursive: true });
   await writeFile(recordPath, JSON.stringify({ roundId: input.roundId, host: input.host, headSha: head, done: true }) + '\n');
   return { kind: 'verified', headSha: head };
@@ -156,15 +158,6 @@ function terminalJournal(journal: Awaited<ReturnType<typeof readRestackJournal>>
   return journal.kind === 'missing' || (journal.kind === 'journal' &&
     (journal.journal.state === 'aborted' ||
       (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined)));
-}
-
-async function gitSha(git: GitRunner, ref: string): Promise<CommitSha | undefined> {
-  try {
-    const result = await git(['rev-parse', '-q', '--verify', ref]);
-    return result.exitCode === 0 ? parseCommitSha(result.stdout.trim()) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 async function hostTarget(
@@ -185,10 +178,12 @@ async function hostTarget(
     return { detail: `cannot resolve host ${host} closure` };
   }
   const isLeaf = closure === undefined;
-  const pinnedBase = closure ?? await gitSha(git, `refs/heads/${leafBranchFor(slug)}`);
-  if (!pinnedBase) return { detail: `cannot resolve host ${host} closure or leaf tip` };
-  const tree = await gitSha(git, `${pinnedBase}^{tree}`);
-  if (!tree) return { detail: `cannot resolve tree for host ${host} base ${pinnedBase}` };
+  const resolvedBase = closure ?? await resolveGitRef(git, `refs/heads/${leafBranchFor(slug)}`);
+  if (typeof resolvedBase !== 'string') return { detail: `cannot resolve host ${host} closure or leaf tip` };
+  const pinnedBase = resolvedBase;
+  const resolvedTree = await resolveGitRef(git, `${pinnedBase}^{tree}`);
+  if (typeof resolvedTree !== 'string') return { detail: `cannot resolve tree for host ${host} base ${pinnedBase}` };
+  const tree = resolvedTree;
   if (isLeaf) return { target: { child: host, position: host, branch: leafBranchFor(slug) }, pinnedBase, tree };
   const branch = childBranchFor(slug, host);
   if (!branch.ok) return { detail: branch.reason };
@@ -372,8 +367,9 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const restaged = await restageHostRegion(input.worktree, input.host, stored.record.kind);
   if (restaged.kind === 'refused') return restaged;
 
-  const entryHead = await gitSha(git, 'HEAD');
-  if (!entryHead) return { kind: 'refused', detail: `cannot resolve host ${input.host} tip at region entry` };
+  const resolvedEntryHead = await resolveGitRef(git, 'HEAD');
+  if (typeof resolvedEntryHead !== 'string') return { kind: 'refused', detail: `cannot resolve host ${input.host} tip at region entry` };
+  const entryHead = resolvedEntryHead;
   const allocation = stored.record.allocation[input.host];
   if (!allocation) return { kind: 'refused', detail: `routing round ${input.roundId} has no frozen allocation for host ${input.host}` };
   const appended = await writeFrozenBlocks({

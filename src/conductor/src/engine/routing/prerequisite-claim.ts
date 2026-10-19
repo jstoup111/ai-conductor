@@ -6,6 +6,7 @@ import { isHaltRecordOnlyDescendant } from '../restack/restack-recovery.js';
 import { syncRestackedWorktree } from '../restack/restack-sync.js';
 import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
 import { closureRefFor, rejectedPinRefFor } from './routing-refs.js';
+import { resolveGitRef } from './git-ref-resolver.js';
 import { readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction, type RouteRecordStoreDependencies } from './route-record-store.js';
 import { remediationReroutedEvent, withOutboxEvent } from './routing-events.js';
 import { validatedReroute, type RouteRecord, type RoundId } from './route-types.js';
@@ -196,13 +197,6 @@ export interface RerouteRoundInput extends RouteRecordStoreDependencies {
   readonly evidence: readonly string[];
 }
 
-async function shaAt(git: GitRunner, ref: string): Promise<CommitSha | undefined> {
-  try {
-    const result = await git(['rev-parse', '-q', '--verify', ref]);
-    return result.exitCode === 0 ? parseCommitSha(result.stdout.trim()) : undefined;
-  } catch { return undefined; }
-}
-
 function branchRef(slug: string, child: ChildId): string | undefined {
   const branch = childBranchFor(slug, child);
   return branch.ok ? `refs/heads/${branch.branch}` : undefined;
@@ -228,8 +222,8 @@ async function hasOnlyRoundOrHaltCommits(
       if (message.exitCode !== 0) return { ok: false, commit };
       if (!new RegExp(`^Round:\\s*${roundId}\\s*$`, 'mi').test(message.stdout)) {
         const parsed = parseCommitSha(commit);
-        const parent = await shaAt(git, `${commit}^`);
-        if (!parsed || !parent || !await isHaltRecordOnlyDescendant(git, parent, parsed, slug)) return { ok: false, commit };
+        const parent = await resolveGitRef(git, `${commit}^`);
+        if (!parsed || typeof parent !== 'string' || !await isHaltRecordOnlyDescendant(git, parent, parsed, slug)) return { ok: false, commit };
       }
     }
     return { ok: true };
@@ -254,10 +248,12 @@ export async function rerouteRound(input: RerouteRoundInput): Promise<RerouteRou
     return { kind: 'refused', detail: `routing round ${input.roundId} destination is not pending` };
   }
   const sourceBranch = branchRef(input.slug, input.from);
-  const resetTip = await shaAt(git, closureRefFor(input.slug, input.from));
-  if (!sourceBranch || !resetTip) return { kind: 'refused', detail: `routing round ${input.roundId} source closure is unavailable` };
-  const rejectedTip = await shaAt(git, sourceBranch);
-  if (!rejectedTip) return { kind: 'refused', detail: `routing round ${input.roundId} source branch is unavailable` };
+  const resolvedResetTip = await resolveGitRef(git, closureRefFor(input.slug, input.from));
+  if (!sourceBranch || typeof resolvedResetTip !== 'string') return { kind: 'refused', detail: `routing round ${input.roundId} source closure is unavailable` };
+  const resetTip = resolvedResetTip;
+  const resolvedRejectedTip = await resolveGitRef(git, sourceBranch);
+  if (typeof resolvedRejectedTip !== 'string') return { kind: 'refused', detail: `routing round ${input.roundId} source branch is unavailable` };
+  const rejectedTip = resolvedRejectedTip;
   const descendants = await hasOnlyRoundOrHaltCommits(git, resetTip, rejectedTip, input.roundId, input.slug);
   if (!descendants.ok) return { kind: 'refused', detail: `routing round ${input.roundId} refuses non-round commit${descendants.commit ? ` ${descendants.commit}` : ''}` };
 
@@ -265,10 +261,12 @@ export async function rerouteRound(input: RerouteRoundInput): Promise<RerouteRou
   const destination = prerequisiteDestination(input.slug, input.to, leaf);
   const destinationBranchRef = destination.branchRef;
   if (!destinationBranchRef) return { kind: 'refused', detail: `routing round ${input.roundId} destination branch is unavailable` };
-  const destinationHead = await shaAt(git, destination.ref);
-  if (!destinationHead) return { kind: 'refused', detail: `routing round ${input.roundId} destination closure is unavailable` };
-  const destinationTree = await shaAt(git, `${destinationHead}^{tree}`);
-  if (!destinationTree) return { kind: 'refused', detail: `routing round ${input.roundId} destination tree is unavailable` };
+  const resolvedDestinationHead = await resolveGitRef(git, destination.ref);
+  if (typeof resolvedDestinationHead !== 'string') return { kind: 'refused', detail: `routing round ${input.roundId} destination closure is unavailable` };
+  const destinationHead = resolvedDestinationHead;
+  const resolvedDestinationTree = await resolveGitRef(git, `${destinationHead}^{tree}`);
+  if (typeof resolvedDestinationTree !== 'string') return { kind: 'refused', detail: `routing round ${input.roundId} destination tree is unavailable` };
+  const destinationTree = resolvedDestinationTree;
   const moved = stored.record.allocation[input.from];
   if (!moved) return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.from} has no allocation` };
   const destinationAllocation = stored.record.allocation[input.to] ?? { remTaskIds: [], blockBodies: [] };
