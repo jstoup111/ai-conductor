@@ -3048,6 +3048,51 @@ steps:
     });
   });
 
+  describe('executor_isolation and supervisor_max_stale_hours config fields', () => {
+    it('defaults executor_isolation to child without a warning', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.executor_isolation).toBe('child');
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it.each(['child', 'in-process'] as const)('accepts executor_isolation %s', (executor_isolation) => {
+      const result = validateConfig({ executor_isolation });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.executor_isolation).toBe(executor_isolation);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it.each(['thread', true, 1, null])('rejects invalid executor_isolation %#', (executor_isolation) => {
+      const result = validateConfig({ executor_isolation });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/executor_isolation/);
+      expect(result.error.message).toMatch(/child/);
+      expect(result.error.message).toMatch(/in-process/);
+    });
+
+    it('defaults supervisor_max_stale_hours to 24 without a warning', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.supervisor_max_stale_hours).toBe(24);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it.each([0, -1, 'twenty-four'])('warns and defaults invalid supervisor_max_stale_hours %#', (supervisor_max_stale_hours) => {
+      const result = validateConfig({ supervisor_max_stale_hours });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.supervisor_max_stale_hours).toBe(24);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/supervisor_max_stale_hours/);
+      expect(result.warnings[0]).toMatch(/24/);
+    });
+  });
+
   describe('prd_audit and architecture_review_as_built config fields', () => {
     it('resolves the remediation caps and plan-gap policy defaults', () => {
       expect(validateConfig({})).toMatchObject({
