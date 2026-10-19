@@ -998,6 +998,175 @@ async function deriveGrowthFromActivePlan(
   }
 }
 
+/** One accounting view, resolved before its flat or routed reconciliation runs. */
+type GrowthAccountingSnapshot =
+  | { readonly kind: 'flat'; readonly configurationUnavailable: boolean }
+  | {
+    readonly kind: 'routed';
+    readonly pendingAllocationTaskIds: ReadonlySet<string>;
+    readonly sealedAuthored: number | undefined;
+  };
+
+/**
+ * Resolve the routed receipt exactly once. Its pending allocations and sealed
+ * denominator must always come from that one durable view.
+ */
+async function resolveGrowthAccountingSnapshot(projectRoot: string): Promise<GrowthAccountingSnapshot> {
+  const state = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
+  const slug = state.ok ? state.value.feature_desc : undefined;
+  const hasChildState = await access(join(projectRoot, '.pipeline', 'children'))
+    .then(() => true)
+    .catch(() => false);
+  if (!slug || !hasChildState) return { kind: 'flat', configurationUnavailable: false };
+
+  try {
+    const config = await loadConfig(projectRoot);
+    if (!config.ok) return { kind: 'flat', configurationUnavailable: true };
+    const cursor = await resolveActiveChild(projectRoot, slug);
+    if (!routingEligible(cursor, config.config)) return { kind: 'flat', configurationUnavailable: false };
+
+    const { readRoutedGrowthSnapshot } = await import('./routing/round-receipt.js');
+    const snapshot = await readRoutedGrowthSnapshot(projectRoot, slug, { cursor, config: config.config });
+    return {
+      kind: 'routed',
+      pendingAllocationTaskIds: new Set(snapshot.pendingAllocationTaskIds),
+      sealedAuthored: snapshot.sealedAuthored,
+    };
+  } catch (error) {
+    // A route snapshot is indivisible: falling back after only one of its
+    // inputs failed could pair stale pending ids with a leaf denominator.
+    throw new Error(`routed sealed growth denominator is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function reconcileFlatGrowth(
+  projectRoot: string,
+  cap: number,
+  options: { persist: boolean },
+  ledger: KickbackLedger,
+  pendingGrowth: boolean,
+  snapshot: Extract<GrowthAccountingSnapshot, { kind: 'flat' }>,
+): Promise<PlanGrowthAccounting> {
+  if (snapshot.configurationUnavailable) {
+    return {
+      growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap),
+      authoredSource: 'unresolved',
+    };
+  }
+
+  const stored = ledger.growth;
+  const derived = await deriveGrowthFromActivePlan(
+    projectRoot,
+    new Set(pendingGrowth ? ledger.pendingRepair?.taskIds ?? [] : []),
+  );
+  const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
+
+  if (!stored) return { growth: withRemaining(derived.growth, cap), authoredSource };
+
+  const matchesPlan = !derived.resolved || (pendingGrowth
+    ? stored.authored === derived.growth.authored
+    : stored.authored + stored.added === derived.growth.authored);
+  if (growthTotalsAgree(stored) && matchesPlan) return { growth: withRemaining(stored, cap), authoredSource };
+  if (growthTotalsAgree(stored) && derived.resolved) {
+    const reconciled = {
+      authored: Math.max(0, derived.growth.authored - stored.added),
+      added: stored.added,
+      byGate: { ...stored.byGate },
+    };
+    if (options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
+    return { growth: withRemaining(reconciled, cap), authoredSource };
+  }
+  console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
+  if (options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
+  return { growth: withRemaining(derived.growth, cap), authoredSource };
+}
+
+async function reconcileRoutedGrowth(
+  projectRoot: string,
+  cap: number,
+  options: { persist: boolean },
+  ledger: KickbackLedger,
+  pendingGrowth: boolean,
+  snapshot: Extract<GrowthAccountingSnapshot, { kind: 'routed' }>,
+): Promise<PlanGrowthAccounting> {
+  const stored = ledger.growth;
+  if (snapshot.sealedAuthored !== undefined) {
+    if (stored && (!growthTotalsAgree(stored) || stored.authored !== snapshot.sealedAuthored)) {
+      throw new Error(`stored authored denominator ${stored.authored} disagrees with routed sealed denominator ${snapshot.sealedAuthored}`);
+    }
+    const growth = stored ?? { authored: snapshot.sealedAuthored, added: 0, byGate: {} };
+    if (!stored && options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth });
+    return { growth: withRemaining(growth, cap), authoredSource: stored ? 'ledger' : 'plan' };
+  }
+
+  const derived = await deriveGrowthFromActivePlan(
+    projectRoot,
+    new Set([
+      ...(pendingGrowth ? ledger.pendingRepair?.taskIds ?? [] : []),
+      ...snapshot.pendingAllocationTaskIds,
+    ]),
+    { routed: true },
+  );
+  // A shared repair may be admitted again against the rem task that an
+  // earlier round already appended and settled. Its task id is present in
+  // the new receipt, but excluding it would erase that settled growth from
+  // the comparison. Keep a view that excludes routed allocations only so
+  // either shape can prove the same sealed denominator.
+  const derivedWithFlatPending = pendingGrowth
+    ? await deriveGrowthFromActivePlan(projectRoot, snapshot.pendingAllocationTaskIds, { routed: true })
+    : derived;
+  const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
+
+  if (!stored) {
+    // The first plan read seals the authored denominator. Later routed
+    // entries can write rem blocks on another child branch, so deriving again
+    // from whichever plan happens to be checked out would turn that branch
+    // movement into free (or phantom) feature growth.
+    if (options.persist && derived.resolved) {
+      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
+    }
+    return { growth: withRemaining(derived.growth, cap), authoredSource };
+  }
+
+  if (stored.authored === 0 && derived.resolved && derived.growth.authored > 0) {
+    throw new Error(`stored authored denominator 0 disagrees with sealed plan denominator ${derived.growth.authored}`);
+  }
+
+  // `deriveGrowthFromActivePlan` already excludes every `rem-*` heading, so
+  // its authored count is the sealed baseline, not the plan's total task
+  // count. A settled append therefore changes `added` but must never be
+  // folded back into the denominator being reconciled.
+  //
+  // A pending new task is excluded from `derived`, retaining every earlier
+  // settled append. If the receipt instead reuses an already-settled task,
+  // `derivedWithFlatPending` preserves that task in the count. Both forms
+  // must agree with the sealed baseline; no other denominator is accepted.
+  const expectedDerivedAuthored = stored.authored;
+  const legacyExpectedDerivedAuthored = stored.authored + stored.added;
+  const matchesPlan = !derived.resolved ||
+    expectedDerivedAuthored === derived.growth.authored ||
+    legacyExpectedDerivedAuthored === derived.growth.authored ||
+    (derivedWithFlatPending.resolved &&
+      (expectedDerivedAuthored === derivedWithFlatPending.growth.authored ||
+        legacyExpectedDerivedAuthored === derivedWithFlatPending.growth.authored));
+  if (growthTotalsAgree(stored) && matchesPlan) {
+    return { growth: withRemaining(stored, cap), authoredSource };
+  }
+
+  // The sealed authored denominator is immutable. Re-deriving it from a
+  // leaf plan can silently refund routed growth, so disagreement fails
+  // closed instead of rewriting the denominator.
+  if (growthTotalsAgree(stored) && derived.resolved && !matchesPlan) {
+    throw new Error(`stored authored denominator ${stored.authored} disagrees with sealed plan denominator ${derived.growth.authored}`);
+  }
+
+  console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
+  if (options.persist) {
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
+  }
+  return { growth: withRemaining(derived.growth, cap), authoredSource };
+}
+
 /**
  * Read growth accounting, deriving its initial authored denominator only from
  * the feature's resolved plan. Routed receipts retain their sealed denominator;
@@ -1014,130 +1183,13 @@ export async function readGrowthAccounting(
     requireReadableGrowth(ledger);
     const pendingGrowth = Object.values(ledger.pendingRepair?.charges ?? {})
       .some((charge) => charge.growth > 0);
-    const stored = ledger.growth;
-    // Routed rounds deliberately keep their frozen rem blocks off the active
-    // leaf plan until their host enters.  Their allocation, not the current
-    // checkout's plan text, is the authority for excluding uncharged work.
-    const stateForRouting = await readState(join(projectRoot, '.pipeline', 'conduct-state.json'));
-    const slug = stateForRouting.ok ? stateForRouting.value.feature_desc : undefined;
-    let routedPending = new Set<string>();
-    let sealedRoutedAuthored: number | undefined;
-    let routedAccounting = false;
-    const hasChildState = await access(join(projectRoot, '.pipeline', 'children')).then(() => true).catch(() => false);
-    if (slug && hasChildState) {
-      try {
-        const config = await loadConfig(projectRoot);
-        if (!config.ok) return { growth: withRemaining(ledger.growth ?? { authored: 0, added: 0, byGate: {} }, cap), authoredSource: 'unresolved' };
-        const cursor = await resolveActiveChild(projectRoot, slug);
-        if (routingEligible(cursor, config.config)) {
-          routedAccounting = true;
-          const { readRoutedGrowthSnapshot } = await import('./routing/round-receipt.js');
-          const snapshot = await readRoutedGrowthSnapshot(projectRoot, slug, { cursor, config: config.config });
-          routedPending = new Set(snapshot.pendingAllocationTaskIds);
-          sealedRoutedAuthored = snapshot.sealedAuthored;
-        }
-      } catch (error) {
-        // A route snapshot is indivisible: falling back after only one of its
-        // inputs failed could pair stale pending ids with a leaf denominator.
-        throw new Error(`routed sealed growth denominator is unreadable: ${error instanceof Error ? error.message : String(error)}`);
-      }
+    const snapshot = await resolveGrowthAccountingSnapshot(projectRoot);
+    switch (snapshot.kind) {
+      case 'flat':
+        return reconcileFlatGrowth(projectRoot, cap, options, ledger, pendingGrowth, snapshot);
+      case 'routed':
+        return reconcileRoutedGrowth(projectRoot, cap, options, ledger, pendingGrowth, snapshot);
     }
-    if (sealedRoutedAuthored !== undefined) {
-      if (stored && (!growthTotalsAgree(stored) || stored.authored !== sealedRoutedAuthored)) {
-        throw new Error(`stored authored denominator ${stored.authored} disagrees with routed sealed denominator ${sealedRoutedAuthored}`);
-      }
-      const growth = stored ?? { authored: sealedRoutedAuthored, added: 0, byGate: {} };
-      if (!stored && options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth });
-      return { growth: withRemaining(growth, cap), authoredSource: stored ? 'ledger' : 'plan' };
-    }
-    const derived = await deriveGrowthFromActivePlan(
-      projectRoot,
-      new Set([
-        ...(pendingGrowth ? ledger.pendingRepair?.taskIds ?? [] : []),
-        ...routedPending,
-      ]),
-      { routed: routedAccounting },
-    );
-    // A shared repair may be admitted again against the rem task that an
-    // earlier round already appended and settled. Its task id is present in
-    // the new receipt, but excluding it would erase that settled growth from
-    // the comparison. Keep a view that excludes routed allocations only so
-    // either shape can prove the same sealed denominator.
-    const derivedWithFlatPending = pendingGrowth
-      ? await deriveGrowthFromActivePlan(projectRoot, routedPending, { routed: routedAccounting })
-      : derived;
-    const authoredSource = derived.resolved ? 'plan' : stored ? 'ledger' : 'unresolved';
-
-    if (!stored) {
-      // The first plan read seals the authored denominator.  Later routed
-      // entries can write rem blocks on another child branch, so deriving
-      // again from whichever plan happens to be checked out would turn that
-      // branch movement into free (or phantom) feature growth.
-      if (routedAccounting && options.persist && derived.resolved) {
-        await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
-      }
-      return { growth: withRemaining(derived.growth, cap), authoredSource };
-    }
-
-    // The sealed-denominator rules are only for routed features.  Preserve
-    // the established N=1 reconciliation (including its no-first-read-write
-    // behavior) byte-for-byte for routing-off and unsliced features.
-    if (!routedAccounting) {
-      const matchesPlan = !derived.resolved || (pendingGrowth
-        ? stored.authored === derived.growth.authored
-        : stored.authored + stored.added === derived.growth.authored);
-      if (growthTotalsAgree(stored) && matchesPlan) return { growth: withRemaining(stored, cap), authoredSource };
-      if (growthTotalsAgree(stored) && derived.resolved) {
-        const reconciled = {
-          authored: Math.max(0, derived.growth.authored - stored.added),
-          added: stored.added,
-          byGate: { ...stored.byGate },
-        };
-        if (options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
-        return { growth: withRemaining(reconciled, cap), authoredSource };
-      }
-      console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
-      if (options.persist) await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
-      return { growth: withRemaining(derived.growth, cap), authoredSource };
-    }
-
-    if (stored.authored === 0 && derived.resolved && derived.growth.authored > 0) {
-      throw new Error(`stored authored denominator 0 disagrees with sealed plan denominator ${derived.growth.authored}`);
-    }
-
-    // `deriveGrowthFromActivePlan` already excludes every `rem-*` heading, so
-    // its authored count is the sealed baseline, not the plan's total task
-    // count. A settled append therefore changes `added` but must never be
-    // folded back into the denominator being reconciled.
-    //
-    // A pending new task is excluded from `derived`, retaining every earlier
-    // settled append. If the receipt instead reuses an already-settled task,
-    // `derivedWithFlatPending` preserves that task in the count. Both forms
-    // must agree with the sealed baseline; no other denominator is accepted.
-    const expectedDerivedAuthored = stored.authored;
-    const legacyExpectedDerivedAuthored = stored.authored + stored.added;
-    const matchesPlan = !derived.resolved ||
-      expectedDerivedAuthored === derived.growth.authored ||
-      legacyExpectedDerivedAuthored === derived.growth.authored ||
-      (derivedWithFlatPending.resolved &&
-        (expectedDerivedAuthored === derivedWithFlatPending.growth.authored ||
-          legacyExpectedDerivedAuthored === derivedWithFlatPending.growth.authored));
-    if (growthTotalsAgree(stored) && matchesPlan) {
-      return { growth: withRemaining(stored, cap), authoredSource };
-    }
-
-    // The sealed authored denominator is immutable. Re-deriving it from a
-    // leaf plan can silently refund routed growth, so disagreement fails
-    // closed instead of rewriting the denominator.
-    if (growthTotalsAgree(stored) && derived.resolved && !matchesPlan) {
-      throw new Error(`stored authored denominator ${stored.authored} disagrees with sealed plan denominator ${derived.growth.authored}`);
-    }
-
-    console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
-    if (options.persist) {
-      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
-    }
-    return { growth: withRemaining(derived.growth, cap), authoredSource };
   });
 }
 
