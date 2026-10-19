@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-19T22:35:23.763Z
 Slug: engine-updates-reach-dispatched-features-only-afte
 Class: needs-human
 Halting step: prd_audit
