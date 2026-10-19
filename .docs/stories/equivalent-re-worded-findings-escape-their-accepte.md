@@ -77,14 +77,16 @@ defect discovered later at the same path still blocks the gate.
 #### Negative Paths
 - Given any accepted finding, when a new finding shares its path but not its classification member,
   then no path-level, rubric-level, or feature-level suppression occurs — only the exact identity is
-  suppressed.
+  suppressed, apart from a finding the `remediate` adjudicator binds to the accepted case in a later
+  lap (carried operator acceptance, adr-2026-08-29-build-review-remediate-case-adjudication D2.1–D2.5).
 - Given a completeness identity, when it is derived, then it includes a missing-surface reference —
   a test asserts that two different missing deliverables under one plan task do not collapse.
 
 ### Done When
 - [ ] Same-path different-classification cases are pinned per rubric and remain blocking.
 - [ ] The completeness collapse case is pinned explicitly.
-- [ ] No suppression path exists that is broader than one exact identity.
+- [ ] No suppression path exists that is broader than one exact identity, other than carried operator
+      acceptance through an adjudicator binding to an accepted case.
 
 ---
 
