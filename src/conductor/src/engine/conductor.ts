@@ -2581,6 +2581,7 @@ export class Conductor {
       const runId = this.stepRunner.selfHostRunId?.();
       return this.transcriptRetention.settleBeforeRetry({
         owner,
+        step: event.step,
         ...(runId === undefined ? {} : { runId }),
       });
     });

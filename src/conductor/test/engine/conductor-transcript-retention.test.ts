@@ -205,6 +205,52 @@ describe('conductor transcript retention wiring', () => {
     }
   });
 
+  it('retains main and rubric captures from an earlier configured-member dispatch through its successful settle', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-configured-member-auxiliary-retry-'));
+    const events = new ConductorEventEmitter();
+    const retained: string[] = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') retained.push(event.path);
+    });
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }), selfHostRunId: () => 'configured-member-retry' },
+    });
+    const main = join('.pipeline', 'transcripts', 'build_review', 'main-dispatch-1');
+    const rubric = join('.pipeline', 'transcripts', 'build_review', 'rubric-dispatch-1');
+    const executionContext = {
+      executionId: 'configured-member-retry',
+      subject: { kind: 'configured-member' as const, parentGroup: 'explore', member: 'build_review' },
+    };
+    try {
+      for (const [path, owner, member] of [
+        [main, { kind: 'registered-step' as const, step: 'build_review' }, undefined],
+        [rubric, { kind: 'configured-group-member' as const, parentGroup: 'build_review', member: 'rubric-security' }, 'rubric-security'],
+      ] as const) {
+        await mkdir(join(root, path), { recursive: true });
+        await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+        await events.emit({
+          type: 'provider_transcripts_captured', owner, step: 'build_review', runId: 'configured-member-retry', attempt: 1,
+          ...(member === undefined ? {} : { member }), provider: 'codex', path, files: 1, bytes: 3,
+          interrupted: false, skipped: 0, omittedLines: 0,
+        });
+      }
+
+      await events.emit({
+        type: 'step_retry', step: 'explore', attempt: 1, maxAttempts: 2, reason: 'configured member retry', executionContext,
+      });
+      await events.emit({ type: 'step_completed', step: 'explore', status: 'done', executionContext });
+
+      expect(retained).toEqual([main, rubric]);
+      await expect(access(join(root, main))).resolves.toBeUndefined();
+      await expect(access(join(root, rubric))).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('prunes every successful build_review rubric capture at its own identity', async () => {
     const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-rubric-success-'));
     const events = new ConductorEventEmitter();
@@ -310,6 +356,18 @@ describe('conductor transcript retention wiring', () => {
           provider: 'codex', path, files: 1, bytes: 3,
           interrupted: false, skipped: 0, omittedLines: 0,
         });
+        if (dispatch === 1) {
+          const rubricPath = join('.pipeline', 'transcripts', 'build_review', 'rubric-dispatch-1');
+          await mkdir(join(root, rubricPath), { recursive: true });
+          await writeFile(join(root, rubricPath, 'session.jsonl'), '{}\n');
+          await events.emit({
+            type: 'provider_transcripts_captured',
+            owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'rubric-security' },
+            step: 'build_review', runId: 'configured-retry', attempt: 1, member: 'rubric-security',
+            provider: 'codex', path: rubricPath, files: 1, bytes: 3,
+            interrupted: false, skipped: 0, omittedLines: 0,
+          });
+        }
         return { success: dispatch === 2 };
       },
     };
@@ -327,9 +385,11 @@ describe('conductor transcript retention wiring', () => {
 
       expect(lifecycle).toEqual([
         { type: 'provider_transcripts_retained', path: join('.pipeline', 'transcripts', 'build_review', 'dispatch-1') },
+        { type: 'provider_transcripts_retained', path: join('.pipeline', 'transcripts', 'build_review', 'rubric-dispatch-1') },
         { type: 'provider_transcripts_pruned', path: join('.pipeline', 'transcripts', 'build_review', 'dispatch-2') },
       ]);
       await expect(access(join(root, '.pipeline', 'transcripts', 'build_review', 'dispatch-1'))).resolves.toBeUndefined();
+      await expect(access(join(root, '.pipeline', 'transcripts', 'build_review', 'rubric-dispatch-1'))).resolves.toBeUndefined();
       await expect(access(join(root, '.pipeline', 'transcripts', 'build_review', 'dispatch-2'))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -369,6 +429,18 @@ describe('conductor transcript retention wiring', () => {
           attempt: 1, provider: 'codex', path, files: 1, bytes: 3,
           interrupted: false, skipped: 0, omittedLines: 0,
         });
+        if (retries === 1) {
+          const rubricPath = join('.pipeline', 'transcripts', retriedMember, 'rubric-dispatch-1');
+          await mkdir(join(root, rubricPath), { recursive: true });
+          await writeFile(join(root, rubricPath, 'session.jsonl'), '{}\n');
+          await events.emit({
+            type: 'provider_transcripts_captured',
+            owner: { kind: 'configured-group-member', parentGroup: retriedMember, member: 'rubric-security' },
+            step: retriedMember, runId: 'validation-retry', attempt: 1, member: 'rubric-security',
+            provider: 'codex', path: rubricPath, files: 1, bytes: 3,
+            interrupted: false, skipped: 0, omittedLines: 0,
+          });
+        }
         return { success: retries === 2 };
       },
     };
@@ -387,9 +459,11 @@ describe('conductor transcript retention wiring', () => {
 
       expect(lifecycle).toEqual([
         { type: 'provider_transcripts_retained', path: join('.pipeline', 'transcripts', retriedMember, 'dispatch-1') },
+        { type: 'provider_transcripts_retained', path: join('.pipeline', 'transcripts', retriedMember, 'rubric-dispatch-1') },
         { type: 'provider_transcripts_pruned', path: join('.pipeline', 'transcripts', retriedMember, 'dispatch-2') },
       ]);
       await expect(access(join(root, '.pipeline', 'transcripts', retriedMember, 'dispatch-1'))).resolves.toBeUndefined();
+      await expect(access(join(root, '.pipeline', 'transcripts', retriedMember, 'rubric-dispatch-1'))).resolves.toBeUndefined();
       await expect(access(join(root, '.pipeline', 'transcripts', retriedMember, 'dispatch-2'))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -259,7 +259,7 @@ export class TranscriptRetention {
     const identities = [...this.pending.entries()].flatMap(([key, captures]) => {
       const capture = captures[0];
       return capture !== undefined
-        && transcriptOwnerKey(capture.owner) === transcriptOwnerKey(owner)
+        && captureMatchesRetryScope(capture, owner, scope.step)
         && (scope.runId === undefined || capture.runId === scope.runId)
         ? [{ key, capture }]
         : [];
@@ -468,6 +468,26 @@ function ownerFromRetryScope(source: { readonly owner?: TranscriptOwner; readonl
   if (source.owner !== undefined) return source.owner;
   if (source.step === undefined) return { kind: 'legacy-unknown-step' };
   return { kind: 'registered-step', step: source.step };
+}
+
+/**
+ * Main provider captures are keyed to their lifecycle step, while an
+ * auxiliary rubric capture is keyed to that same step as its parent group.
+ * A configured-member retry identifies the member rather than either capture
+ * owner, so settle both forms as part of its earlier dispatch sequence.
+ */
+function captureMatchesRetryScope(
+  capture: Pick<CapturedTranscript, 'owner'>,
+  owner: TranscriptOwner,
+  retryStep: StepName | undefined,
+): boolean {
+  if (transcriptOwnerKey(capture.owner) === transcriptOwnerKey(owner)) return true;
+  const step = owner.kind === 'configured-group-member'
+    ? owner.member
+    : retryStep ?? (owner.kind === 'registered-step' ? owner.step : undefined);
+  if (step === undefined) return false;
+  return (capture.owner.kind === 'registered-step' && capture.owner.step === step)
+    || (capture.owner.kind === 'configured-group-member' && capture.owner.parentGroup === step);
 }
 
 function normalizeOwner(owner: TranscriptOwner | StepName): TranscriptOwner {
