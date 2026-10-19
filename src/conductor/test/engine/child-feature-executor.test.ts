@@ -1,4 +1,4 @@
-// Covers: task:17, task:18, task:19
+// Covers: task:17, task:18, task:19, task:20
 
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -184,6 +184,69 @@ describe('child feature executor dispatch lifecycle', () => {
     await vi.waitFor(() => expect(kills).toEqual(['SIGTERM']));
     await expect(execution).resolves.toEqual(firstOutcome);
     expect(log).toHaveBeenCalledWith(`[executor ${order.slug}] ignored duplicate outcome`);
+  });
+
+  it('fans a stop request to every live child, then SIGKILLs survivors only after the scaled shutdown budget', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const children: Array<{
+      sent: unknown[];
+      kills: NodeJS.Signals[];
+      exit: () => void;
+    }> = [];
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: new ConductorEventEmitter(),
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: (): ForkedExecutor => {
+        const sent: unknown[] = [];
+        const kills: NodeJS.Signals[] = [];
+        let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+        children.push({ sent, kills, exit: () => onExit?.(null, 'SIGKILL') });
+        return {
+          pid: 900 + children.length,
+          send(message) { sent.push(message); return true; },
+          on() { return this; },
+          once(_event, listener) { onExit = listener; return this; },
+          kill(signal = 'SIGTERM') {
+            kills.push(signal);
+            if (signal === 'SIGKILL') onExit?.(null, signal);
+            return true;
+          },
+        };
+      },
+      teardownTimeoutMs: 10,
+    });
+
+    const first = executor.execute({ ...order, slug: 'first' });
+    const second = executor.execute({ ...order, slug: 'second' });
+    await vi.waitFor(() => expect(children).toHaveLength(2));
+
+    vi.useFakeTimers();
+    try {
+      let stopped = false;
+      const stopping = executor.stopAll().then(() => { stopped = true; });
+      expect(children.map((child) => child.sent)).toEqual([
+        [{ kind: 'stop', reason: 'supervisor shutdown' }],
+        [{ kind: 'stop', reason: 'supervisor shutdown' }],
+      ]);
+
+      await vi.advanceTimersByTimeAsync(19);
+      expect(children.map((child) => child.kills)).toEqual([[], []]);
+      expect(stopped).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await stopping;
+      expect(children.map((child) => child.kills)).toEqual([['SIGKILL'], ['SIGKILL']]);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ slug: 'first', status: 'error' }),
+      expect.objectContaining({ slug: 'second', status: 'error' }),
+    ]);
   });
 
   it('records each sequential dispatch of the same slug with its own engine pin', async () => {

@@ -48,6 +48,7 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
   const running = new Set<RunningChild>();
   const startTimeoutMs = deps.dispatchStartTimeoutMs ?? 30_000;
   const teardownTimeoutMs = deps.teardownTimeoutMs ?? 15_000;
+  let stopAllPromise: Promise<void> | undefined;
 
   const launch = async (order: WorkOrder, useSupervisorBuild: boolean, priorFailure?: string): Promise<FeatureExecutionOutcome> => {
     const engineDir = deps.engineDirForOrder(order, useSupervisorBuild);
@@ -214,10 +215,24 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       return result;
     },
     async stopAll() {
+      if (stopAllPromise) return stopAllPromise;
       const children = [...running];
-      for (const entry of children) entry.child.send({ kind: 'stop', reason: 'supervisor shutdown' });
-      await delay(teardownTimeoutMs);
-      for (const entry of children) entry.child.kill('SIGTERM');
+      if (children.length === 0) return;
+      stopAllPromise = (async () => {
+        for (const entry of children) entry.child.send({ kind: 'stop', reason: 'supervisor shutdown' });
+        // The supervisor gives every concurrently draining executor a full
+        // teardown allowance.  This matches its lock-release budget and
+        // avoids killing a healthy later child merely because an earlier one
+        // consumed the first slice of the shutdown window.
+        await delay(teardownTimeoutMs * children.length);
+        for (const entry of children) {
+          // A cooperative child may have exited during the grace period.
+          // SIGKILL only children still owned by this adapter, then report
+          // completion so the daemon can continue its bounded lock drain.
+          if (running.has(entry)) entry.child.kill('SIGKILL');
+        }
+      })();
+      return stopAllPromise;
     },
   };
 }
