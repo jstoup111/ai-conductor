@@ -144,6 +144,15 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 > This is the predecessor's decision 5 store used as designed: the occurrence is emitted on the
 > spine (D4.5), and the store carries it as durable control input for later judgement.
 
+> **Amended 2026-10-19 by #3298:** D4.2 kept the result contract at `v3` because `confidence` is
+> optional. A required, reviewer-assigned `severity` (critical, major, minor, nit) now moves fresh
+> built-in results to `v4`. Because contract version is part of finding identity, every finding id
+> re-keys once at upgrade, and stored `v3` dispositions invalidate through the existing
+> `build_review_disposition_version_invalidated` path. D4.3's buckets gain `advisory`, classified
+> after `suppressed`: a finding whose severity is strictly below its rubric's declared `min_severity`
+> never reaches remediate, is never charged, and is recorded on the same event, seam and store
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D2, D4, D5).
+
 ### D5 — Exact-id recurrence of a settled finding does not re-dispatch the judge
 
 > **Amended 2026-09-06 by #2383:** The predecessor's decision 7 says a previously deferred or
@@ -180,6 +189,12 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   exact id, so a refuted claim is neither re-dispatched to the judge nor halted as a regression.
 >   A `refute` case whose deferral effect is `reserved` or `failed` does not satisfy the predicate,
 >   exactly as D5.2 prescribes for every other unfinished effect.
+
+> **Amended 2026-10-19 by #3298:** D5.1's finalized cases also include a remediate case with
+> disposition `advisory` and effect `none`. That case settles only while every source rubric's
+> current `min_severity` stays strictly above the case's adjudicated severity. Lowering or removing
+> the threshold makes its sources live again. The predicate remains read-only
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D6, D7).
 
 ## Consequences
 
