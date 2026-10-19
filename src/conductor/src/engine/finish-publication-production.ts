@@ -837,6 +837,14 @@ export function createProductionFinishPublicationCoordinator(
         return retained?.operations;
       };
 
+      let activeChildForObservation: Awaited<ReturnType<typeof resolveActiveChild>> | undefined;
+      const resolveObservationChild = async () => {
+        if (activeChildForObservation !== undefined) return activeChildForObservation;
+        activeChildForObservation = state.feature_desc === undefined
+          ? { kind: 'no-child' as const }
+          : await resolveActiveChild(deps.projectRoot, state.feature_desc);
+        return activeChildForObservation;
+      };
       const observationInput = {
         mode: intent.authority.kind === 'operator_confirmed' ? 'interactive' : intent.authority.mode,
         intent,
@@ -848,9 +856,7 @@ export function createProductionFinishPublicationCoordinator(
             // observation preserves selector fallback behavior for missing or
             // malformed verdicts without manufacturing state.
             observeImplementationEvidence: async () => {
-              const cursor = state.feature_desc === undefined
-                ? { kind: 'no-child' as const }
-                : await resolveActiveChild(deps.projectRoot, state.feature_desc);
+              const cursor = await resolveObservationChild();
               const verdicts = cursor.kind === 'active' && cursor.isLeaf
                 ? {
                   build_review: (await readVerdict(deps.projectRoot, 'build_review', cursor.child)) ?? undefined,
@@ -999,7 +1005,7 @@ export function createProductionFinishPublicationCoordinator(
           stack: {
             observeStackDimension: async () => {
               if (!state.feature_desc) return 'not-applicable';
-              const cursor = await resolveActiveChild(deps.projectRoot, state.feature_desc);
+              const cursor = await resolveObservationChild();
               // The leaf URL is the authoritative repository binding. Before
               // the ordinary establish-PR transition finishes, the stack is
               // deliberately indeterminate rather than guessed from cwd.
@@ -1020,10 +1026,16 @@ export function createProductionFinishPublicationCoordinator(
         // Re-read every boundary after an effect. The ports close over the
         // current filesystem/GitHub state, so no successful write is trusted
         // merely because its caller received a response.
-        observe: async () =>
-          observePublicationSnapshot(
+        observe: async () => {
+          // The snapshot ports are evaluated in a fixed order. Reuse the
+          // cursor within one observation so adding the stack dimension does
+          // not add duplicate N=1 Git discovery; discard it before every
+          // re-observation after an effect.
+          activeChildForObservation = undefined;
+          return observePublicationSnapshot(
             observationInput as Parameters<typeof observePublicationSnapshot>[0],
-          ),
+          );
+        },
         emit,
         effects: {
           // Authoring is dispatched only when the engine itself observed an

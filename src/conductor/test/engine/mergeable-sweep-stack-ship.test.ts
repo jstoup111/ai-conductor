@@ -37,7 +37,7 @@ describe('stacked mergeable sweep shipping', () => {
     cleanup.push(root);
     const origin = join(root, 'origin.git');
     const worktree = join(root, 'worktree');
-    await execa('git', ['init', '--bare', origin]);
+    await execa('git', ['init', '--bare', '-b', 'main', origin]);
     await execa('git', ['init', '-b', 'main', worktree]);
     await git(worktree, ['config', 'user.email', 'stack@example.invalid']);
     await git(worktree, ['config', 'user.name', 'Stack sweep']);
@@ -128,7 +128,7 @@ describe('stacked mergeable sweep shipping', () => {
     cleanup.push(root);
     const origin = join(root, 'origin.git');
     const worktree = join(root, 'worktree');
-    await execa('git', ['init', '--bare', origin]);
+    await execa('git', ['init', '--bare', '-b', 'main', origin]);
     await execa('git', ['init', '-b', 'main', worktree]);
     await git(worktree, ['config', 'user.email', 'stack@example.invalid']);
     await git(worktree, ['config', 'user.name', 'Stack sweep']);
@@ -190,7 +190,7 @@ describe('stacked mergeable sweep shipping', () => {
     cleanup.push(root);
     const origin = join(root, 'origin.git');
     const worktree = join(root, 'worktree');
-    await execa('git', ['init', '--bare', origin]);
+    await execa('git', ['init', '--bare', '-b', 'main', origin]);
     await execa('git', ['init', '-b', 'main', worktree]);
     await git(worktree, ['config', 'user.email', 'stack@example.invalid']);
     await git(worktree, ['config', 'user.name', 'Stack sweep']);

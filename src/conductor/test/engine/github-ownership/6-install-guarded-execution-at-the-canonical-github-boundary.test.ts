@@ -59,6 +59,7 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
   const repositoryResource = operation === 'issue.create'
     || operation === 'pull-request.create'
     || operation === 'commit.status.create'
+    || operation === 'stack.read'
     || operation === 'stack.create'
     || operation === 'repository.create';
   const resource = sharedLabel

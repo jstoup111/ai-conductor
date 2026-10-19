@@ -318,7 +318,7 @@ describe('N=1 golden renderings', () => {
     await execFile('git', ['commit', '-m', 'fixture'], { cwd: root });
     await execFile('git', ['checkout', '-b', 'feat/daemon-n1-golden'], { cwd: root });
     const origin = join(root, 'origin.git');
-    await execFile('git', ['init', '--bare', '-q', origin], { cwd: root });
+    await execFile('git', ['init', '--bare', '-b', 'main', '-q', origin], { cwd: root });
     await execFile('git', ['remote', 'add', 'origin', origin], { cwd: root });
     await execFile('git', ['push', '-u', 'origin', 'feat/daemon-n1-golden'], { cwd: root });
     await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
