@@ -1,4 +1,4 @@
-// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template
+// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template, task:rem-prd-audit-rem-v3-read-indeterminate
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
 import { assembleStack } from '../../src/engine/finish-publication-production.js';
+import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import {
@@ -221,6 +222,41 @@ describe('assembleStack leaf retarget journal', () => {
       'read:api repos/acme/demo/stacks?pull_request=500',
     ]));
     expect(trace.filter((entry) => entry === 'stack:create' || entry === 'stack:add')).toEqual([]);
+  });
+
+  it('retries a timed-out stack.read without recording a pull-request.ready write', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const { gh } = fixture('feat/c3/demo', trace);
+    const writes: string[] = [];
+    const operations: GithubOperationRunner = {
+      run: async (request) => {
+        if (request.operation === 'stack.read') throw new Error('stack.read timed out');
+        if (request.operation === 'pull-request.ready') writes.push('pull-request.ready');
+        throw new Error(`unexpected operation ${request.operation}`);
+      },
+    };
+    const snapshot: PublicationSnapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid',
+      branchPushed: 'valid', shippedRecord: 'valid', outcomeRecord: 'missing', stack: 'unassembled',
+      pr: { identity: 'one', url: 'https://github.com/acme/demo/pull/500', prose: 'accepted', ready: false },
+    };
+
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: {
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+        assembleStack: async () => assembleStack({
+          root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+          git: tracingGit(trace), gh, operations,
+        }),
+      },
+    })).resolves.toMatchObject({
+      kind: 'publication_retry', transition: 'assemble_stack', reason: 'publication_transition_indeterminate',
+    });
+    expect(writes).toEqual([]);
   });
 
   it('re-renders every member from the template while preserving opaque child and captured leaf regions', async () => {

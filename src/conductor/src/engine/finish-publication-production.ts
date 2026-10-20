@@ -349,6 +349,13 @@ async function executeValidatedStackOperation(input: {
   }
   const runner = input.operationsForTarget?.(decodedRequest.request.target) ?? input.operations;
   const result = await executeGithubOperation(input.request, runner);
+  // A stack.read transport failure leaves the durable record untouched and
+  // cannot establish (or contradict) membership. Let the core coordinator
+  // retry that indeterminate observation; policy refusals remain a
+  // fail-closed precondition halt below.
+  if (result.kind === 'failed' && decodedRequest.request.operation === 'stack.read') {
+    throw new Error(`stack.read could not be observed: ${result.error}`);
+  }
   if (result.kind !== 'executed') {
     throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack operation did not execute: ${result.kind}`);
   }
