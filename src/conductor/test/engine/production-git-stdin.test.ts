@@ -5,7 +5,10 @@ const boundary = vi.hoisted(() => ({
   blobs: new Map<string, string>(),
   refs: new Map<string, string>(),
   stdin: [] as string[],
+  calls: [] as string[][],
+  trace: [] as string[],
 }));
+const guard = vi.hoisted(() => ({ assertRealExecAllowed: vi.fn(() => boundary.trace.push('guard')) }));
 
 // setup.ts imports engine modules before this file's mock is registered.
 vi.hoisted(() => { vi.resetModules(); });
@@ -14,6 +17,8 @@ vi.mock('node:child_process', async (importOriginal) => {
   return {
     ...actual,
     execFile: vi.fn((_file, args: string[], _options, callback) => {
+      boundary.calls.push(args);
+      boundary.trace.push('child');
       let input: string | undefined;
       const child = { stdin: { end: (value: unknown) => { input = String(value); boundary.stdin.push(input); } } };
       if (args[0] === 'hash-object' && args.includes('--stdin')) {
@@ -44,6 +49,10 @@ vi.mock('node:child_process', async (importOriginal) => {
     }),
   };
 });
+vi.mock('../../src/engine/tracker-client.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/tracker-client.js')>();
+  return { ...actual, assertRealExecAllowed: guard.assertRealExecAllowed };
+});
 
 import { makeProductionGit } from '../../src/engine/pr-labels.js';
 import type { GitRunner as PublicationRecordGitRunner } from '../../src/engine/rebase.js';
@@ -51,27 +60,23 @@ import { publicationRefFor, writePublicationRecord, type PublicationRecord } fro
 
 describe('production git stdin transport', () => {
   it('persists a publication record through the production child process', async () => {
-    const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    try {
-      const productionGit = makeProductionGit();
-      const git: PublicationRecordGitRunner = async (args, options) => {
-        const result = await productionGit(args, {
-          cwd: '/fixture',
-          ...(options?.input === undefined ? {} : { input: options.input }),
-        });
-        return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: '' };
-      };
-      const record: PublicationRecord = { version: 1, members: [] };
+    const productionGit = makeProductionGit();
+    const git: PublicationRecordGitRunner = async (args, options) => {
+      const result = await productionGit(args, {
+        cwd: '/fixture',
+        ...(options?.input === undefined ? {} : { input: options.input }),
+      });
+      return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: '' };
+    };
+    const record: PublicationRecord = { version: 1, members: [] };
 
-      await expect(writePublicationRecord('/fixture', 'entry', undefined, record, { git })).resolves.toEqual({ kind: 'updated' });
+    await expect(writePublicationRecord('/fixture', 'entry', undefined, record, { git })).resolves.toEqual({ kind: 'updated' });
 
-      expect(boundary.stdin).toEqual([JSON.stringify(record)]);
-      expect(boundary.blobs.get('a'.repeat(40))).toBe(JSON.stringify(record));
-      expect(boundary.refs.get(publicationRefFor('entry'))).toBe('a'.repeat(40));
-    } finally {
-      if (noRealExec === undefined) delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-      else process.env.AI_CONDUCTOR_NO_REAL_EXEC = noRealExec;
-    }
+    expect(guard.assertRealExecAllowed).toHaveBeenCalledWith('git');
+    expect(boundary.trace).toEqual(['guard', 'child', 'guard', 'child']);
+    expect(boundary.calls[0]).toEqual(['hash-object', '-w', '--stdin']);
+    expect(boundary.stdin).toEqual([JSON.stringify(record)]);
+    expect(boundary.blobs.get('a'.repeat(40))).toBe(JSON.stringify(record));
+    expect(boundary.refs.get(publicationRefFor('entry'))).toBe('a'.repeat(40));
   });
 });
