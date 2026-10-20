@@ -11,7 +11,6 @@
  */
 
 import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { ParsedIssueRef } from './engineer/issue-ref.js';
 import {
   executeGithubOperation,
@@ -19,8 +18,6 @@ import {
   type GithubOperationResult,
   type GithubOperationRunner,
 } from './github-operations.js';
-
-const execFileP = promisify(execFileCb);
 
 // ── Runner types ──────────────────────────────────────────────────────────────
 
@@ -51,8 +48,8 @@ export { makeProductionGh, assertRealExecAllowed, type GhRunner };
  */
 export type GitRunner = (
   args: string[],
-  opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' },
-) => Promise<{ stdout: string }>;
+  opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh'; input?: string },
+) => Promise<{ stdout: string; exitCode?: number }>;
 
 /**
  * The PR seam accepts its historical raw runner for read-only compatibility,
@@ -127,7 +124,7 @@ async function runMutation(
 
 /** Construct the real git runner used in production. */
 export function makeProductionGit(): GitRunner {
-  return async (args: string[], opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh' }) => {
+  return async (args: string[], opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh'; input?: string }) => {
     assertRealExecAllowed('git');
     let env: NodeJS.ProcessEnv | undefined;
     let botToken: string | undefined;
@@ -142,8 +139,22 @@ export function makeProductionGit(): GitRunner {
       }
     }
     try {
-      const result = await execFileP('git', args, { cwd: opts.cwd, maxBuffer: 32 * 1024 * 1024, ...(env === undefined ? {} : { env }) });
-      return { stdout: String(result.stdout) };
+      const result = await new Promise<{ stdout: string | Buffer }>((resolve, reject) => {
+        const child = execFileCb(
+          'git',
+          args,
+          { cwd: opts.cwd, maxBuffer: 32 * 1024 * 1024, ...(env === undefined ? {} : { env }) },
+          (error, stdout) => error === null ? resolve({ stdout }) : reject(error),
+        );
+        if (opts.input !== undefined) {
+          if (child.stdin === null) {
+            reject(new Error('git stdin is unavailable'));
+          } else {
+            child.stdin.end(opts.input);
+          }
+        }
+      });
+      return { exitCode: 0, stdout: String(result.stdout) };
     } catch (error) {
       if (botToken !== undefined && classifyGitPushAuthRefusal(error)) throw new GithubBotAuthRefusalError('auth-refused');
       // Do not retain the raw child as Error.cause: inspect/error reporters
