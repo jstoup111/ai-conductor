@@ -667,12 +667,10 @@ describe('executeProviderCandidates', () => {
 
     expect(failed).toHaveBeenCalledTimes(2);
     expect(failed).toHaveBeenNthCalledWith(1, {
-      owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' },
-      runId: 'R', attempt: 1, auxiliaryMember: 'security',
+      step: 'build_review', runId: 'R', attempt: 1, auxiliaryMember: 'security',
     });
     expect(failed).toHaveBeenNthCalledWith(2, {
-      owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' },
-      runId: 'R', attempt: 2, auxiliaryMember: 'security',
+      step: 'build_review', runId: 'R', attempt: 2, auxiliaryMember: 'security',
     });
   });
 
@@ -692,8 +690,7 @@ describe('executeProviderCandidates', () => {
 
     expect(result.success).toBe(true);
     expect(failed).toHaveBeenCalledExactlyOnceWith({
-      owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' },
-      runId: 'R', attempt: 1, auxiliaryMember: 'security',
+      step: 'build_review', runId: 'R', attempt: 1, auxiliaryMember: 'security',
     });
   });
 

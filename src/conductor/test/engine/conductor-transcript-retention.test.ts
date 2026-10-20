@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { executeProviderCandidates, type ProviderExecutionContext } from '../../src/engine/provider-execution.js';
+import {
+  executeAuxiliaryProviderCandidates,
+  executeProviderCandidates,
+  type ProviderExecutionContext,
+} from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -62,6 +66,104 @@ describe('conductor transcript retention wiring', () => {
 
       expect(retention.maxCaptures).toBe(20);
       expect(retention.maxBytes).toBe(1_073_741_824);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:rem-prd-audit-rem-aux-failed-settle-uses-capture-owner
+  it.each([
+    {
+      label: 'registered-step',
+      owner: { kind: 'registered-step' as const, step: 'build_review' },
+      executionContext: undefined,
+    },
+    {
+      label: 'configured member',
+      owner: {
+        kind: 'configured-group-member' as const,
+        parentGroup: 'ship_validation',
+        member: 'build_review',
+      },
+      executionContext: {
+        executionId: 'configured-build-review',
+        subject: {
+          kind: 'configured-member' as const,
+          parentGroup: 'ship_validation',
+          member: 'build_review',
+        },
+      },
+    },
+  ])('retains a failed auxiliary rubric capture through a later success for $label ownership', async ({ owner, executionContext }) => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-auxiliary-failure-'));
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<{ type: string; path: string }> = [];
+    events.on('provider_transcripts_retained', (event) => {
+      if (event.type === 'provider_transcripts_retained') lifecycle.push(event);
+    });
+    events.on('provider_transcripts_pruned', (event) => {
+      if (event.type === 'provider_transcripts_pruned') lifecycle.push(event);
+    });
+    const captures = [
+      join('.pipeline', 'transcripts', transcriptOwnerDirectory(owner), 'failed'),
+      join('.pipeline', 'transcripts', transcriptOwnerDirectory(owner), 'successful'),
+    ];
+    let invocation = 0;
+    const capture = async (attempt: number) => {
+      const path = captures[attempt - 1]!;
+      await mkdir(join(root, path), { recursive: true });
+      await writeFile(join(root, path, 'session.jsonl'), '{}\n');
+      await events.emit({
+        type: 'provider_transcripts_captured', owner, step: 'build_review', runId: 'review', attempt,
+        member: 'security', provider: 'codex', path, files: 1, bytes: 3,
+        interrupted: false, skipped: 0, omittedLines: 0,
+      });
+    };
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: {
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        invoke: async () => {
+          invocation += 1;
+          await capture(invocation);
+          return { success: invocation === 2, output: 'auxiliary result', exitCode: invocation === 2 ? 0 : 1 };
+        },
+      },
+      policy: providerDescriptor('codex').modelPolicy,
+      builtIn: true,
+      availability: new ModelAvailability([]),
+    }] as never);
+    const providerExecution: ProviderExecutionContext = {
+      configuredProviders: ['codex'],
+      runtimes,
+      sessions: {} as never,
+    };
+    new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      events,
+      stepRunner: { run: async () => ({ success: true }), selfHostRunId: () => 'review' },
+      providerExecution,
+    });
+    const dispatch = () => executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'security', executionContext,
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: [], max_retries: 1, escalate: false, min_confidence: 0 },
+      runtimes, sessions: new ProviderSessionScope(() => 'auxiliary-session'), runId: 'review',
+      nextCaptureAttempt: () => invocation + 1,
+      onAuxiliaryAttemptFailed: providerExecution.onAuxiliaryAttemptFailed,
+      options: { prompt: 'review', cwd: root },
+    });
+    try {
+      expect((await dispatch()).success).toBe(false);
+      expect((await dispatch()).success).toBe(true);
+      await events.emit({ type: 'step_completed', step: 'build_review', status: 'done', ...(executionContext === undefined ? {} : { executionContext }) });
+
+      expect(lifecycle).toEqual([
+        { type: 'provider_transcripts_retained', path: captures[0] },
+        { type: 'provider_transcripts_pruned', path: captures[1] },
+      ]);
+      await expect(access(join(root, captures[0]!))).resolves.toBeUndefined();
+      await expect(access(join(root, captures[1]!))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

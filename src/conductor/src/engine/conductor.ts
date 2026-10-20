@@ -2546,11 +2546,11 @@ export class Conductor {
     this.transcriptRetention = new TranscriptRetention(this.projectRoot, this.events);
     if (this.providerExecution) {
       const previousAuxiliaryFailure = this.providerExecution.onAuxiliaryAttemptFailed;
-      this.providerExecution.onAuxiliaryAttemptFailed = async (identity) => {
-        await previousAuxiliaryFailure?.(identity);
-        if (!('owner' in identity) || identity.owner === undefined) return;
+      this.providerExecution.onAuxiliaryAttemptFailed = async (identity, executionContext) => {
+        await previousAuxiliaryFailure?.(identity, executionContext);
+        const owner = this.transcriptOwner(identity.step, executionContext);
         await this.transcriptRetention.settleAttempt({
-          owner: identity.owner,
+          owner,
           runId: identity.runId,
           attempt: asTranscriptCaptureDispatchIdentity(identity.attempt),
           ...(identity.auxiliaryMember === undefined ? {} : { auxiliaryMember: identity.auxiliaryMember }),

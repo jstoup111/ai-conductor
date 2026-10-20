@@ -362,7 +362,10 @@ export interface ProviderExecutionContext {
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   /** Settle a failed auxiliary capture before any later auxiliary dispatch can prune it. */
-  onAuxiliaryAttemptFailed?: (identity: TranscriptCaptureSource) => void | Promise<void>;
+  onAuxiliaryAttemptFailed?: (
+    identity: AuxiliaryAttemptFailureIdentity,
+    executionContext?: ExecutionContext,
+  ) => void | Promise<void>;
   onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
@@ -370,6 +373,18 @@ export interface ProviderExecutionContext {
   /** Immutable identity established by the daemon before provider dispatch. */
   managedSessionContext?: ManagedSessionContext;
   prepareManagedSessionObservation?: ExecuteProviderCandidatesInput['prepareManagedSessionObservation'];
+}
+
+/**
+ * A failed auxiliary dispatch identifies its capture without claiming which
+ * lifecycle owner created it.  The conductor owns that resolution because it
+ * alone has the issuing execution context.
+ */
+export interface AuxiliaryAttemptFailureIdentity {
+  readonly step: StepName;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly auxiliaryMember: string;
 }
 
 /**
@@ -1513,12 +1528,17 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       captureAttempt,
     });
     if (!result.success && input.runId !== undefined) {
-      await input.onAuxiliaryAttemptFailed?.(transcriptCaptureSource({
-        owner: { kind: 'configured-group-member', parentGroup: input.step, member: input.memberId },
+      const failureIdentity: AuxiliaryAttemptFailureIdentity = {
+        step: input.step,
         runId: input.runId,
         attempt: captureAttempt,
         auxiliaryMember: input.memberId,
-      }));
+      };
+      if (input.executionContext === undefined) {
+        await input.onAuxiliaryAttemptFailed?.(failureIdentity);
+      } else {
+        await input.onAuxiliaryAttemptFailed?.(failureIdentity, input.executionContext);
+      }
     }
     // A setup-only exhaustion is terminal for this logical dispatch: retrying
     // repeats the same verified capability checks without ever invoking a
