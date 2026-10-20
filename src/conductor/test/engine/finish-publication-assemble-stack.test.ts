@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:13, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-R8, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template, task:rem-prd-audit-rem-v3-read-indeterminate, task:rem-prd-audit-rem-v3-divergence-mapping
+// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-R8, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template, task:rem-prd-audit-rem-v3-read-indeterminate, task:rem-prd-audit-rem-v3-divergence-mapping
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

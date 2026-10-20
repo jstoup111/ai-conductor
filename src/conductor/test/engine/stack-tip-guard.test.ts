@@ -1,4 +1,4 @@
-// Covers: task:21, task:rem-prd-audit-R10, task:rem-prd-audit-rem-v3-divergence-mapping
+// Covers: task:21, task:rem-prd-audit-rem-v3-divergence-mapping
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
