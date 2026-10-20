@@ -1684,3 +1684,30 @@ Each task's `**Dependencies:**` line is authoritative.
 **Done when:**
 - adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5 is satisfied by this task.
 - The repair for task rem-as-built-rem-asbuilt-d5-actual-prestack-base is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s6-4-preflight-freeze-scope: restack/stack-preflight.ts: limit the published-stack freeze to actual rewrites (suppress the journal follow-on, halt only before a feature-repair restack); otherwise return clean so resume continues. Replace the sweepG4 no-journal-halt test and add an interrupted ready_pr resume-without-halt test
+**Gate:** prd-audit
+**Rationale:** Verified (95%) at restack/stack-preflight.ts:84-90: runStackPreflight halts needs-human with 'published-stack' whenever the record has members. It does this before any journal or repair check, and it runs on every conductor resume and every daemon re-kick resume. A ready_pr run interrupted after partial flips therefore halts on resume, which contradicts Story 6 ('only #c1 is flipped, and the feature does not halt'). The approved architecture (ADR decision 11: freeze engine rewrites) is unchanged. This is implementation drift inside the freeze-ordering repair already owned by rem-prd-audit-rem-v3-intent-restack. Fix: the freeze must refuse only an actual rewrite. (1) With no outstanding journal and no feature-repair needed, return a clean result so resume proceeds. (2) With an outstanding journal, run recovery but suppress the recovery-owned follow-on restack, so no member ref moves. (3) Halt needs-human naming position 1 only when a feature-repair restack would run (S10.2). Replace the sweepG4 test that asserts a halt with no journal by a test that resume continues. Add an interrupted-ready_pr resume test proving no halt.
+**Criterion:** S6.4
+**Parent task:** rem-prd-audit-rem-v3-intent-restack
+**Done when:**
+- [test] S6.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s6-4-preflight-freeze-scope is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s10-1-rekick-refuse-continue: daemon-cli.ts/daemon-rekick.ts: confirm that a re-kick resume of a published stack passes runStackPreflight without halting and reaches resumeRebaseFirst's refuse-and-continue; add a re-kick test asserting restack_refused, no ref movement and no HALT
+**Gate:** prd-audit
+**Rationale:** Same root cause as S6.4, verified (95%). Story 10 requires the FINISH rebase step and the re-kick base refresh to refuse with restack_refused/published-stack, move no ref, and continue. daemon-cli.ts:2015 runs runStackPreflight before resumeRebaseFirst, and the unconditional freeze at stack-preflight.ts:84-90 writes a needs-human HALT first, so the re-kick never reaches its refuse-and-continue path. This is conforming implementation drift under owner task rem-prd-audit-rem-v3-intent-restack, and the same preflight change fixes it. Add a re-kick test with a published record and no journal or repair: it must assert that resumeRebaseFirst emits restack_refused published-stack, that no ref moves, that no HALT is written, and that the gate retry proceeds.
+**Criterion:** S10.1
+**Parent task:** rem-prd-audit-rem-v3-intent-restack
+**Done when:**
+- [test] S10.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s10-1-rekick-refuse-continue is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s11-5-sweep-stale-torndown: mergeable-sweep.ts: use a tornDown receipt for child cleanup only when its leaf PR matches the watch entry; otherwise run teardownWorktree and the ordinary path; always tear down an existing worktree. Add tests for a stale slug-reuse tornDown record and for the retained-receipt retry
+**Gate:** prd-audit
+**Rationale:** Verified (85%) at mergeable-sweep.ts:836-860: when the stored record is tornDown, the sweep skips teardownWorktree and runs reachability and deleteStackChildren against that record's members. A tornDown record left by an earlier feature that reused the slug therefore controls the new feature's reap: its worktree is never removed, and cleanup acts on obsolete members. Story 11 says a tornDown record must be ignored by later publications. The retained-receipt retry (S11.3/S11.6) must keep working. Fix: treat a tornDown receipt as per-member cleanup input only when it belongs to this watch entry's publication, meaning its leaf member's PR equals entry.prUrl. Otherwise run the ordinary teardownWorktree path and ignore the stale record. Also always run teardownWorktree while the feature worktree still exists. This fits owner task rem-prd-audit-rem-v3-teardown-per-member, which already covers the tornDown receipt lookup. No architectural decision is needed.
+**Criterion:** S11.5
+**Parent task:** rem-prd-audit-rem-v3-teardown-per-member
+**Done when:**
+- [test] S11.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s11-5-sweep-stale-torndown is committed and its targeted tests pass.
