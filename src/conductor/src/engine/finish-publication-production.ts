@@ -916,8 +916,16 @@ async function establishChildPrs(input: {
   // Validate the whole graph before a first push.  The repeated discovery in
   // the loop below is deliberate: it is the ambiguity recovery fence after a
   // create response is lost.
-  await Promise.all(children.map((child, index) => list(child.branch).then((prs) =>
-    choose(prs, child.branch, index === 0 ? input.baseBranch : children[index - 1]!.branch, child.position))));
+  const listedMembers = new Map<number, ChildPullRequest>();
+  await Promise.all(children.map(async (child, index) => {
+    const member = await choose(
+      await list(child.branch),
+      child.branch,
+      index === 0 ? input.baseBranch : children[index - 1]!.branch,
+      child.position,
+    );
+    if (member) listedMembers.set(child.position, member);
+  }));
   const rawPrior = await readPublicationRecord(input.root, input.slug, { git: stackGit });
   const prior = rawPrior.kind === 'record' ? rawPrior : undefined;
   // A torn-down receipt is only the CAS predecessor for a new publication.
@@ -976,7 +984,10 @@ async function establishChildPrs(input: {
       remoteGit: input.remoteGit,
     });
     if (pushed.kind === 'diverged') {
-      await haltStackTipDiverged(input.root, stored?.record.members ?? [{ pr: leaf.number, position: child.position }], input.events, `published stack tip diverged at position ${child.position}`);
+      const knownPr = stored?.record.members.find((member) => member.position === child.position)?.pr
+        ?? listedMembers.get(child.position)?.number;
+      await haltStackTipDiverged(input.root, [{ position: child.position, ...(knownPr === undefined ? {} : { pr: knownPr }) }], input.events,
+        `published stack tip diverged at position ${child.position}`);
       throw new StackPublicationHaltError('stack_tip_diverged', `child closure diverged at position ${child.position}`);
     }
     if (pushed.kind === 'read-failed') throw new Error(`child closure read failed at ${child.position}`);
