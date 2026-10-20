@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:35
+// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -439,5 +439,107 @@ describe('N=1 golden renderings', () => {
     const resumed = await run(true);
     await expectFinishGolden('resumed-events', resumed.events.map((event) => JSON.stringify(event)).join('\n'));
     expect(JSON.stringify(resumed.gitArgv)).not.toContain('refs/conductor/n1-golden/publication');
+  });
+
+  it('pushes an N=1 FINISH leaf without probing stack publication state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'n1-golden-finish-push-'));
+    roots.push(root);
+    const pipeline = join(root, '.pipeline');
+    const branch = 'feat/daemon-n1-push';
+    const prUrl = 'https://github.com/acme/widget/pull/43';
+    const origin = join(root, 'origin.git');
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(root, 'README.md'), '# n1 push golden\n');
+    await execFile('git', ['init', '-b', 'main', '-q'], { cwd: root });
+    await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await execFile('git', ['config', 'user.name', 'Test User'], { cwd: root });
+    await execFile('git', ['add', 'README.md'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'fixture'], { cwd: root });
+    await execFile('git', ['checkout', '-b', branch], { cwd: root });
+    await writeFile(join(root, 'leaf.txt'), 'leaf\n');
+    await execFile('git', ['add', 'leaf.txt'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'leaf'], { cwd: root });
+    await execFile('git', ['init', '--bare', '-b', 'main', '-q', origin], { cwd: root });
+    await execFile('git', ['remote', 'add', 'origin', origin], { cwd: root });
+    await execFile('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: root });
+    await writeFile(join(root, 'leaf-push.txt'), 'leaf push\n');
+    await execFile('git', ['add', 'leaf-push.txt'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'leaf push'], { cwd: root });
+
+    const state = {
+      feature_desc: 'n1-push',
+      worktree_branch: branch,
+      complexity_tier: 'S',
+      track: 'technical',
+      test_suite: 'done',
+      build_review: 'done',
+      manual_test: 'done',
+      architecture_review_as_built: 'done',
+    } as any;
+    await writeState(join(pipeline, 'conduct-state.json'), state);
+
+    let created = false;
+    const git = async (args: string[], opts: { cwd: string }) => {
+      if (args.join('\0') === 'remote\0get-url\0--push\0origin') {
+        return { stdout: 'https://github.com/acme/widget.git\n' };
+      }
+      const result = await execFile('git', args, { cwd: opts.cwd });
+      return { stdout: result.stdout };
+    };
+    const gh = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === branch) {
+        if (!created) throw new Error('no open PR');
+        return { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
+        return { stdout: JSON.stringify({ url: prUrl, title: 'feat: n1 push', body: shipDraftPrBody('n1-push'), isDraft: true, labels: [] }) };
+      }
+      throw new Error(`unexpected gh argv: ${JSON.stringify(args)}`);
+    };
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: root,
+      stateFilePath: join(pipeline, 'conduct-state.json'),
+      baseBranch: 'main',
+      git,
+      gh,
+      operations: {
+        run: async (request: { operation: string }) => {
+          if (request.operation === 'pull-request.create') created = true;
+          return {} as never;
+        },
+      },
+      remoteMutation: {
+        provenance: {
+          repository: 'acme/widget', defaultBranch: 'main', specBranch: branch,
+          featureMarker: '.docs/intake/n1-push.md', publication: 'initial',
+        },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-user' }),
+          provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/n1-push.md', content: 'Owner: test-user\n' }] },
+        },
+      },
+      observeReleaseReadiness: async () => 'present',
+      recordFinish: async () => 0,
+    });
+
+    let outcome: unknown;
+    const gitArgv = await withGitArgvShim(root, async () => {
+      outcome = await coordinator.advance({
+        state,
+        mode: 'auto',
+        daemon: true,
+        dispatchAuthoring: async () => ({ success: true }),
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      });
+    });
+    expect(outcome).toEqual({ kind: 'publication_progress', transition: 'establish_pr' });
+
+    const pushed = await execFile('git', ['--git-dir', origin, 'rev-parse', `refs/heads/${branch}`], { cwd: root });
+    const leaf = await execFile('git', ['rev-parse', 'HEAD'], { cwd: root });
+    expect(pushed.stdout.trim()).toBe(leaf.stdout.trim());
+    expect(gitArgv).toContainEqual(expect.arrayContaining(['push', 'origin', `HEAD:refs/heads/${branch}`]));
+    expect(JSON.stringify(gitArgv)).not.toContain('refs/conductor/n1-push/publication');
+    expect(gitArgv.some((args) => args[0] === 'ls-remote')).toBe(false);
   });
 });

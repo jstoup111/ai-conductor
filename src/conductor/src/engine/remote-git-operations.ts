@@ -21,6 +21,7 @@ import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushe
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { makeGitRunner } from './rebase.js';
+import { hasDurableChildState } from './child-cursor.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
@@ -161,16 +162,26 @@ async function guardPublishedStackPushes(
     const result = await makeGitRunner(dependencies.cwd)([...localArgs], input === undefined ? undefined : { input });
     return { stdout: result.stdout, exitCode: result.exitCode };
   });
+  const childStateGit = async (localArgs: string[], options?: { readonly input?: string }) => {
+    const result = await localGit(localArgs, options?.input);
+    return { stdout: result.stdout, stderr: '', exitCode: result.exitCode };
+  };
   for (const candidate of candidates) {
     const destination = destinations.find((value) => value.operation === 'remote-ref.push'
       && value.ref === `refs/heads/${candidate.branch}`);
     if (destination === undefined) continue;
+    const durableChildState = await hasDurableChildState(dependencies.cwd, candidate.slug, { git: childStateGit });
+    // N=1 takes the historical unguarded push path. An unreadable topology is
+    // not evidence that a published stack may be written without its lease.
+    if (durableChildState === false) continue;
+    if (durableChildState === 'git-error') return { kind: 'refuse', members: [] };
     const guard = await guardPublishedStackWrite({
       cwd: dependencies.cwd,
       remote,
       slug: candidate.slug,
       destination: destination.ref,
       source: candidate.source,
+      durableChildState,
       git: localGit,
       lsRemote: (lsArgs) => dependencies.runRemoteGit([...lsArgs], {
         cwd: dependencies.cwd,

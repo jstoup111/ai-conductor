@@ -66,6 +66,8 @@ export async function guardPublishedStackWrite(input: {
   readonly slug: string;
   readonly destination: string;
   readonly source: string;
+  /** The remote-Git choke point established durable stacked-child state. */
+  readonly durableChildState: true;
   readonly git: PushLeaseGitRunner;
   readonly lsRemote: (args: readonly string[]) => Promise<{ readonly stdout: string }>;
 }): Promise<PublishedStackWriteGuard> {
