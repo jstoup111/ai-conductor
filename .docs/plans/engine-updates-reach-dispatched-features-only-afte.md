@@ -1015,3 +1015,46 @@ Task 31 <- Task 14
 **Done when:**
 - adr-2026-10-15-per-dispatch-engine-pinned-executor decision 8 is satisfied by this task.
 - The repair for task rem-as-built-R9 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-1: executor-child-runtime.ts/index.ts: replace the direct Conductor construction with a child composition of daemon-runner.ts makeRunFeature. Supply child-side deps for prepareWorktree, runSetupTriage, teardownWorktree and runConductor. The FeatureExecutionOutcome must carry the runner's own terminalEffects (autoPark, cleanupHaltPresentation, engineerSignal, markProcessed, enrollWatch, sweep) as declarative data, so root-owned effects still apply only at supervisor collection. Delete the handcrafted effect objects at executor-child-runtime.ts:170-188. Add targeted tests in executor-child-runtime.test.ts covering setup-triage park → autoPark, halt → cleanupHaltPresentation and engineerSignal, and teardown invocation.
+**Gate:** as-built
+**Rationale:** Verified (99%): ADR D1 says the child runs the whole per-feature path, including preparation, setup triage, runConductorInWorktree and teardown. executor-child-runtime.ts:95-188 builds a Conductor directly and handcrafts terminalEffects ({markProcessed, enrollWatch, sweep} / {sweep}). It bypasses makeRunFeature in daemon-runner.ts (prepareWorktree :470, runSetupTriage/autoPark :488-516, teardown :511/648/663/692, cleanupHaltPresentation/engineerSignal :563-600). The approved architecture is unambiguous, so this is conforming implementation work. Earlier laps patched individual effects instead of reusing the shared runner, so the repair must compose makeRunFeature itself and stop re-deriving its outputs.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 1
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-2: daemon parity test (e.g. test/engine/executor-parity.test.ts): run one fixture feature through createChildProcessFeatureExecutor and createInProcessFeatureExecutor. Assert an identical ordered step sequence, identical ledger event types excluding executor_started, identical terminal status, and identical terminalEffects. Add the rate-limited-episode variant: wait on the daemon-wide episode in both modes, and record a halt during the episode as episode-caused and recovered by the episode-halt sweep.
+**Gate:** prd-audit
+**Rationale:** Verified (99%): same root cause as the lifecycle as-built finding (the child bypasses daemon-runner's whole-feature lifecycle), and no child-versus-in-process parity test exists. The code repair is rem-vg-1. This disposition adds the missing parity coverage that task 30 and rem-prd-audit-R4 already admit, so the criterion is proven rather than asserted.
+**Criterion:** S16.1
+**Parent task:** rem-prd-audit-R3
+**Done when:**
+- [test] S16.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-3: Add the gate-halt parity variant to the parity test. A gate halt in child and in-process modes must produce identical HALT marker content, an identical ledger event sequence (fields equal except timestamps, run ids and executor_started), and an identical collected outcome including terminalEffects.
+**Gate:** prd-audit
+**Rationale:** Verified (99%): on a halt, the child returns only {sweep:true}. The in-process path also produces cleanupHaltPresentation, engineerSignal and (for triage) autoPark, and runs teardown. rem-vg-1 fixes the behavior. Task 30's third done-when (the gate-halt variant) has no test, so this adds it.
+**Criterion:** S16.3
+**Parent task:** 30
+**Done when:**
+- [test] S16.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-4: executor-child.ts / shipped-record-cli.ts / finish path: in child mode, pass the child's pinned engineVersionId (derived via versionIdFromEngineDir from the child's own module dir, never inherited from supervisor env) to the shipped-record writer. For example, the child exports it to the finish step's conduct invocation, or the finish step launches the CLI from the pinned dist-versions/<id>. Add an executor-child.test.ts test asserting that a child-mode finish writes engine_version equal to the pinned engineVersionId, not the supervisor or floating-dist build.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): shipped-record-cli.ts stamps engine_version from resolveEngineVersion of its own module dir. Invoked through the conduct CLI from a child, that resolves through the floating dist instead of the child's pinned dist-versions/<id>. Task 31 Steps 1-4 directly admit the fix: make the finish path resolve from the executing engine dir in child mode, and add the missing child-mode test.
+**Criterion:** S13.3
+**Parent task:** 31
+**Done when:**
+- [test] S13.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-5: daemon.ts: honor a recorded protocol mismatch independently of current staleness at both the drained boundary (:1565) and the idle boundary (:1916). Record pending mismatches before reading recordedMismatch. Ensure a fallback child that completes before busy observation still has its mismatch recorded and starts the claim-stop drain/restart. Add daemon.test.ts cases: mismatch with current staleness false still restarts at drained and idle boundaries, and a fast-completing fallback child does not permit another claim.
+**Gate:** as-built
+**Rationale:** Verified (95%): ADR D7 and task 27's done-when require that a recorded protocol mismatch start the drain/restart regardless of stale age. daemon.ts:1565-1568 reads recordedMismatch before the observation that records it, and abandons the drain when staleness is false. The idle path at :1916-1921 requires observeSupervisorStaleness() before restarting. A fallback child that settles before busy observation (:1998-2003) skips mismatch observation entirely. This is clear conforming scheduling work inside task 27.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-5 is committed and its targeted tests pass.
