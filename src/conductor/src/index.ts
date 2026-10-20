@@ -857,9 +857,7 @@ async function dispatchCliCommand(): Promise<void> {
       import('./engine/self-host/detector.js'),
     ]);
     const projectRoot = process.cwd();
-    const engineVersionId = resolveEngineVersion(__dirname);
     await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
-      engineVersionId,
       // Reuse the daemon seam, which verifies the WorkOrder before its first
       // worktree side effect and performs the pinned-base create under the
       // brokered lifecycle lock.

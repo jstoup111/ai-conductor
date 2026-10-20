@@ -110,6 +110,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     finishPublication: createProductionFinishPublicationCoordinator({
       projectRoot: worktree.path,
       stateFilePath,
+      engineVersionId: input.engineVersionId,
       baseBranch,
       prTemplateBytes: config?.pr_template_bytes,
       git,

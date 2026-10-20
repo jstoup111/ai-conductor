@@ -1,17 +1,22 @@
-// Covers: task:14, task:15, task:16
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+// Covers: task:14, task:15, task:16, task: rem-prd-audit-rem-vg-4
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConductState } from '../../src/types/index.js';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { runExecutorChild, withExecutorBrokerProxies } from '../../src/engine/executor-child.js';
 import { EXECUTOR_PROTOCOL_VERSION } from '../../src/engine/executor-protocol.js';
+import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
+import { parseShippedRecord } from '../../src/engine/shipped-record.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 
 const VERSION = '20261019T120000Z-aaaaaaaaaaaa' as WorkOrder['engineVersionId'];
+const CHILD_MODULE_DIR = `/engine-store/dist-versions/${VERSION}/engine`;
 const order: WorkOrder = {
   schemaVersion: 1,
   repository: 'repo',
@@ -24,6 +29,8 @@ const order: WorkOrder = {
 
 const LEGACY_CONCURRENCY_REFUSAL =
   'LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL: legacy no-providerExecution dispatch mutates process-global provider environment and cannot run with effective daemon concurrency 2 (requires 1).';
+
+const execFile = promisify(execFileCallback);
 
 class FakePort {
   readonly sent: unknown[] = [];
@@ -58,6 +65,39 @@ let root: string | undefined;
 afterEach(async () => { if (root) await rm(root, { recursive: true, force: true }); root = undefined; });
 
 describe('executor child entrypoint', () => {
+  it('writes the shipped record with the pin derived from the child module directory', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-shipped-record-'));
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'feature.md'), '# Plan\n');
+    await execFile('git', ['init', '-b', 'main', root]);
+    await execFile('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+    await execFile('git', ['-C', root, 'config', 'user.name', 'Test']);
+    await execFile('git', ['-C', root, 'add', '.']);
+    await execFile('git', ['-C', root, 'commit', '-m', 'fixture']);
+
+    const port = new FakePort();
+    const done = runExecutorChild(port, {
+      // This is deliberately the supervisor identity. The child must derive
+      // its own identity from its loaded module, not reuse this value.
+      engineVersionId: order.supervisorEngineVersionId,
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: async (input) => {
+        const status = await dispatchShippedRecord({
+          kind: 'write', slug: input.order.slug, pr: 'local', engineVersion: input.engineVersionId,
+        }, root!);
+        expect(status).toBe(0);
+        return { slug: input.order.slug, status: 'done' };
+      },
+    } as Parameters<typeof runExecutorChild>[1]);
+
+    port.dispatch({ kind: 'work-order', order });
+    await done;
+
+    const record = parseShippedRecord(await readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8'));
+    expect(record).toMatchObject({ engineVersion: VERSION });
+  });
+
   it('forwards envelope concurrency to the existing legacy no-providerExecution refusal', async () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-'));
     const port = new FakePort();
@@ -66,7 +106,7 @@ describe('executor child entrypoint', () => {
       run: vi.fn(async () => ({ success: true })),
     };
     const done = runExecutorChild(port, {
-      engineVersionId: VERSION,
+      moduleDir: CHILD_MODULE_DIR,
       createWorktree: async () => ({ path: root! }),
       run: async ({ effectiveConcurrency }) => {
         const conductor = new Conductor({
@@ -114,7 +154,7 @@ describe('executor child entrypoint', () => {
     const port = new FakePort();
     const calls: string[] = [];
     const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
-      engineVersionId: VERSION,
+      moduleDir: CHILD_MODULE_DIR,
       createWorktree: async (received, lifecycle) => {
         calls.push(`create:${received.slug}`);
         expect(lifecycle).toBeDefined();
@@ -163,7 +203,7 @@ describe('executor child entrypoint', () => {
     let observedAbort = false;
     let exitCode: number | undefined;
     const done = runExecutorChild(port, {
-      engineVersionId: VERSION,
+      moduleDir: CHILD_MODULE_DIR,
       createWorktree: async () => {
         const path = join(root!, '.worktrees', 'feature');
         await import('node:fs/promises').then(({ mkdir }) => mkdir(path, { recursive: true }));
@@ -205,7 +245,7 @@ describe('executor child entrypoint', () => {
     const running = new Promise<void>((resolve) => { started = resolve; });
     let exitCode: number | undefined;
     const done = runExecutorChild(port, {
-      engineVersionId: VERSION,
+      moduleDir: CHILD_MODULE_DIR,
       createWorktree: async () => {
         const path = join(root!, '.worktrees', 'feature');
         await import('node:fs/promises').then(({ mkdir }) => mkdir(path, { recursive: true }));
@@ -235,7 +275,7 @@ describe('executor child entrypoint', () => {
     const port = new FakePort();
     let exitCode: number | undefined;
     const done = runExecutorChild(port, {
-      engineVersionId: VERSION,
+      moduleDir: CHILD_MODULE_DIR,
       createWorktree: async () => { throw new Error('must not create worktree'); },
       run: async () => ({ slug: 'feature', status: 'done' }),
       exit: (code) => { exitCode = code; },

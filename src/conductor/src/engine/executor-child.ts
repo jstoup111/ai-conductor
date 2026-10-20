@@ -1,8 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage } from './executor-protocol.js';
+import { versionIdFromEngineDir } from './engine-version-id.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import type { ExecutorIpcPort } from './executor-proxies.js';
@@ -16,7 +18,13 @@ import {
 } from './executor-proxies.js';
 
 export interface ExecutorChildDeps {
-  engineVersionId: string;
+  /**
+   * Legacy supervisor-provided value. Retained only for adapter compatibility;
+   * child identity is always derived from `moduleDir` below.
+   */
+  engineVersionId?: string;
+  /** Test seam; production always derives this module's own directory. */
+  moduleDir?: string;
   supervisorEngineVersionId?: string;
   /** Creates/reuses a worktree only after the supervisor has sent its order. */
   createWorktree(order: WorkOrder): Promise<{ path: string }>;
@@ -28,12 +36,26 @@ export interface ExecutorChildDeps {
 /** The child receives replicas of every dispatcher-owned coordination service. */
 export interface ExecutorChildBaseRunInput {
   order: WorkOrder;
+  /** Engine identity derived from this child process's loaded module. */
+  engineVersionId: string;
   /** Supervisor pool width from the IPC envelope; retained for legacy guard parity. */
   effectiveConcurrency?: number;
   events: ConductorEventEmitter;
   signal: AbortSignal;
   /** Feature-scoped logger forwarded to the supervisor-owned daemon sink. */
   log?: (line: string) => void;
+}
+
+/**
+ * The executor's identity belongs to the loaded child module, never to the
+ * supervisor that forked it.  A published child runs from
+ * `dist-versions/<id>/engine`; source and other unpublished runs degrade to
+ * `dev`, matching shipped-record's existing non-blocking behavior.
+ */
+export function resolveExecutorChildEngineVersion(
+  moduleDir = dirname(fileURLToPath(import.meta.url)),
+): string {
+  return versionIdFromEngineDir(moduleDir) ?? 'dev';
 }
 
 export interface ExecutorChildRunInput extends ExecutorChildBaseRunInput {
@@ -86,6 +108,7 @@ export function withExecutorBrokerProxies(
  * real process. The child is the sole writer of its feature event ledger.
  */
 export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChildDeps): Promise<void> {
+  const engineVersionId = resolveExecutorChildEngineVersion(deps.moduleDir);
   const controller = new AbortController();
   let started = false;
   let complete = false;
@@ -107,7 +130,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
     const parsed = parseExecutorMessage(raw);
     if (parsed.kind === 'ok' && parsed.message.kind === 'stop') stop(parsed.message.reason);
   });
-  port.send({ kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId: deps.engineVersionId });
+  port.send({ kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId });
   await new Promise<void>((resolve) => {
     finishWaitingForOrder = resolve;
     const receive = (raw?: unknown) => {
@@ -132,13 +155,13 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
             events.on(type, (event) => { port.send({ kind: 'event', scope: event.type === 'feature_shipped' || event.type === 'provider_suppressed' ? 'root' : 'feature', payload: event }); });
           }
           await events.emit({
-            type: 'executor_started', slug: order.slug, engineVersionId: order.engineVersionId,
+            type: 'executor_started', slug: order.slug, engineVersionId,
             protocolVersion: EXECUTOR_PROTOCOL_VERSION,
             supervisorEngineVersionId: deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
           });
           const outcome = controller.signal.aborted
             ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
-            : await deps.run({ order, effectiveConcurrency, events, signal: controller.signal });
+            : await deps.run({ order, engineVersionId, effectiveConcurrency, events, signal: controller.signal });
           persister.stop();
           sendOutcome(outcome);
         } catch (error) {
