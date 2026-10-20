@@ -1469,3 +1469,135 @@ Each task's `**Dependencies:**` line is authoritative.
 **Done when:**
 - adr-2026-10-17-stacked-feature-publication-as-native-stack decision 12 is satisfied by this task.
 - The repair for task rem-prd-audit-R13-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-n1-guard-gate: stack-tip-guard.ts/remote-git-operations.ts: gate guardPublishedStackPushes on durable child state so an N=1 leaf push issues no publication-ref rev-parse; add an N=1 golden test whose FINISH fixture actually pushes the leaf and asserts git argv parity
+**Gate:** prd-audit
+**Rationale:** Verified: stack-tip-guard.ts:75 calls activePublicationRecord before any child-state gate, and remote-git-operations.ts:315 enters the guard on every push. ADR decision 1 is clear, so this is conforming implementation drift.
+**Criterion:** S1.4
+**Parent task:** rem-prd-audit-R10-2
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-n1-guard-gate is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-rerender-template: finish-publication-production.ts assembleStack re-render: pass deps.prTemplateBytes to checkChildBodyPostconditions, mask opaque/captured regions in replaceStackNavigation, rewrite the leaf through the established captured-region rewrite, emit stack_assembled; add Task 13 tests using a template with ai-conductor:step regions
+**Gate:** prd-audit
+**Rationale:** Verified: finish-publication-production.ts:775 passes undefined as the template to checkChildBodyPostconditions, so a child carrying template regions fails and the re-render halts. The fix is a code change under the approved Task 13 design.
+**Criterion:** S3.1
+**Parent task:** rem-prd-audit-R6-2
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-rerender-template is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-foreign-stack: finish-publication-production.ts assembleStack: before stack.create/stack.add, read stack membership for every record member and halt stack-tip-diverged naming the position when any member belongs to a foreign stack; test #c3 in a different stack with no create/add in argv
+**Gate:** prd-audit
+**Rationale:** Discovery checks only member 1, so foreign-stack membership of a later member goes undetected. ADR decision 5 already requires refusing before create/add; this is implementation work.
+**Criterion:** S4.6
+**Parent task:** rem-prd-audit-R8
+**Done when:**
+- [test] S4.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-foreign-stack is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-read-indeterminate: finish-publication-production.ts executeValidatedStackOperation: distinguish transport failure/timeout of stack.read from authorization refusal and surface it as indeterminate so advanceFinishPublication returns publication_retry; test timed-out stack.read records no pull-request.ready
+**Gate:** prd-audit
+**Rationale:** executeValidatedStackOperation maps a failed (timed-out) read to a precondition halt. Task 12 requires indeterminate retry routing, so this is clear implementation drift.
+**Criterion:** S4.8
+**Parent task:** 12
+**Done when:**
+- [test] S4.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-read-indeterminate is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-ready-target-binding: finish-publication-production.ts verifyStackBeforeReadyFlip/readyStackChildren/repairPresentation: obtain repository- or per-PR-bound operations via operationsForTarget for stack.read and each child pull-request.ready; add production-wiring tests using retainedOperations from ship-draft-pr.ts instead of an unbound mock
+**Gate:** prd-audit
+**Rationale:** The leaf-bound prOperations is reused for a repository-target stack.read, which mutation-policy refuses as invalid-target. The task rem-prd-audit-R1-3 design (per-operation contexts) admits the fix.
+**Criterion:** S6.1
+**Parent task:** rem-prd-audit-R1-3
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-ready-target-binding is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-intent-restack: stack-publication.ts pushChildClosure: adopt an outstanding push intent (including for members not yet recorded) before comparing remote and recorded tips; restack/stack-preflight.ts: run the freeze before journal recovery; restack-recovery.ts: guard the follow-on restack; add crash-after-push retry and recovery-path tests
+**Gate:** prd-audit
+**Rationale:** pushChildClosure compares receipts before adopting an outstanding intent for a member not yet in the record. ADR decision 11 prescribes intent recovery, so this is code-ordering drift.
+**Criterion:** S10.5
+**Parent task:** rem-prd-audit-R10-3
+**Done when:**
+- [test] S10.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-intent-restack is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-divergence-mapping: remote-git-operations.ts/stack-tip-guard.ts: carry mismatched positions in the stack-tip-mismatch refusal; ship-draft-pr.ts and finish-publication.ts: map that refusal to haltStackTipDiverged; finish-publication-production.ts: route generic retarget divergence (~573/591/595) and typed divergence sites (~692/717/722/738/847) through haltStackTipDiverged with a real emitter, rendering mismatched positions; tests per site
+**Gate:** prd-audit
+**Rationale:** The typed refusal exists, but FINISH callers (ship-draft-pr.ts, finish-publication.ts) never map it to haltStackTipDiverged, and the halt names PRs rather than mismatched positions. This is implementation wiring.
+**Criterion:** S10.6
+**Parent task:** rem-prd-audit-R10
+**Done when:**
+- [test] S10.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-divergence-mapping is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-postfinish-refusal: post-finish-shipped-record.ts: detect the typed executeRemoteGit refusal (reason stack-tip-mismatch) rather than a legacy message string, skip and log while retaining the local shipped-record commit; test through the real executeRemoteGit refusal path
+**Gate:** prd-audit
+**Rationale:** Verified: isStackTipMismatch (post-finish-shipped-record.ts:181) matches only the legacy string, but the real refusal reason is 'stack-tip-mismatch'. This is a clear bug.
+**Criterion:** S10.10
+**Parent task:** rem-prd-audit-R11
+**Done when:**
+- [test] S10.10 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-postfinish-refusal is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-teardown-per-member: mergeable-sweep.ts/stack-teardown.ts: delete reachable children per member while keeping only unreachable ones; probe with rev-parse --quiet --verify; treat non-ancestry as keep, not failure; treat any non-zero delete exit as failure; look up plain tornDown receipts for child cleanup; retain watch enrollment on caught teardown failure; Task 28 tests including partial-teardown retry
+**Gate:** prd-audit
+**Rationale:** The sweep skips all child deletion when one member is unreachable. ADR decision 12 prescribes per-member retention, so this is implementation drift.
+**Criterion:** S11.6
+**Parent task:** rem-prd-audit-R13-2
+**Done when:**
+- [test] S11.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-teardown-per-member is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-v3-cli-stack-validation: github-operations-cli.ts/tracker-client.ts: apply validateStackPayload (membership, recorded stack number, retarget base in member branches) and the tip-guard fence to CLI stack.create/add/read and pull-request.retarget; refuse unrecorded child operations when the record is missing, unreadable or torn down; tests per operation
+**Gate:** prd-audit
+**Rationale:** The CLI stack.create path bypasses validateStackPayload. Task 7 already requires record-bound validation before any runner call.
+**Criterion:** S12.4
+**Parent task:** 7
+**Done when:**
+- [test] S12.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-v3-cli-stack-validation is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-v3-production-git-stdin: pr-labels.ts makeProductionGit: forward options.input to the child process stdin; add a test that persists a publication record through the production transport (index.ts/daemon-cli.ts wiring)
+**Gate:** as-built
+**Rationale:** makeProductionGit in pr-labels.ts has no stdin/input handling (grep confirms), so production hash-object gets no record data. This is a transport bug within Task 10.
+**Parent task:** 10
+**Governing clause:** Task 10
+**Done when:**
+- Task 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-v3-production-git-stdin is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-v3-preassembly-verify: stack-publication.ts stack observation: verify recorded members' bases and head SHAs against pushed tips even when requireDraft is true (unverified records), returning diverged before any assembly mutation; test a changed draft member pre-assembly
+**Gate:** as-built
+**Rationale:** Pre-assembly observation skips base/head checks when requireDraft is true. ADR decision 4 is clear; this is code drift.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 4
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-v3-preassembly-verify is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-v3-audit-child-exclusion: shipment-audit.ts: exclude stack child bodies before plan-level classification so they never decide absent/ambiguous; classify only legitimate leaf candidates (multiple → ambiguous); tests with a child mention plus one and two leaf candidates
+**Gate:** as-built
+**Rationale:** Child bodies still decide the plan-level absent result before ambiguity among multiple legitimate leaf candidates is evaluated. ADR decision 8 is explicit, so this is a code-ordering fix.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 8
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 8 is satisfied by this task.
+- The repair for task rem-as-built-rem-v3-audit-child-exclusion is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-v3-malformed-state-indeterminate: stack-publication.ts member-state parsing: reject objects with missing/unknown state as indeterminate (not unreachable) so mergeable-sweep.ts records no tornDown and re-observes next sweep; tests for missing and unknown state
+**Gate:** as-built
+**Rationale:** A malformed member state is classified unreachable and recorded as terminal tornDown. ADR decision 9 requires indeterminate and retryable, so this is clear drift.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 9
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 9 is satisfied by this task.
+- The repair for task rem-as-built-rem-v3-malformed-state-indeterminate is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-v3-park-reclaim-order: park-reconciliation.ts: mark the retained publication record tornDown on merged-park reconciliation without deleting positions/publication refs; daemon-park-cli.ts reclaim: remove the worktree first, then delete children only when shipped-record and reachability proof pass, otherwise keep children and still remove the worktree; Task 29 tests
+**Gate:** as-built
+**Rationale:** Task 29 specifies the cleanup order and tornDown retirement; the implementation deviates from it.
+**Parent task:** 29
+**Governing clause:** Task 29
+**Done when:**
+- Task 29 is satisfied by this task.
+- The repair for task rem-as-built-rem-v3-park-reclaim-order is committed and its targeted tests pass.
