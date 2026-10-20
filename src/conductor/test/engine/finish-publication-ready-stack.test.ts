@@ -1,4 +1,5 @@
 // Covers: task:15
+// Covers: task:rem-prd-audit-rem-v3-ready-target-binding
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
