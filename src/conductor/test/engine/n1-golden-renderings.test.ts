@@ -381,7 +381,9 @@ describe('N=1 golden renderings', () => {
         gh,
         operations: operations as any,
         observeReleaseReadiness: async () => 'present',
-        writeShippedRecord: async ({ slug, pr }, cwd) => {
+        writeShippedRecord: async (command, cwd) => {
+          if (command.kind !== 'write') return 1;
+          const { slug, pr } = command;
           const record = appendTimingSection(
             renderShippedRecordWithCost({
               slug,

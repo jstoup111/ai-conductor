@@ -54,19 +54,23 @@ function fixture(options: {
   const git = async (args: string[]) => {
     gitArgs.push(args);
     if (args[0] === 'cat-file' && args[2] === 'refs/conductor/demo/positions') {
-      return { exitCode: 0, stdout: JSON.stringify(positions) };
+      return { exitCode: 0, stdout: JSON.stringify(positions), stderr: '' };
     }
     if (args[0] === 'rev-parse' && args.at(-1) === 'refs/conductor/demo/publication') {
-      return record === undefined ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `${publicationBlob}\n` };
+      return record === undefined
+        ? { exitCode: 1, stdout: '', stderr: '' }
+        : { exitCode: 0, stdout: `${publicationBlob}\n`, stderr: '' };
     }
     if (args[0] === 'rev-parse' && args.at(-1)?.startsWith('refs/conductor/demo/pushed/')) {
       const branch = args.at(-1)!.replace('refs/conductor/demo/pushed/', '');
-      return tips[branch] ? { exitCode: 0, stdout: `${tips[branch]}\n` } : { exitCode: 1, stdout: '' };
+      return tips[branch]
+        ? { exitCode: 0, stdout: `${tips[branch]}\n`, stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: '' };
     }
     if (args[0] === 'cat-file' && args[2] === publicationBlob) {
-      return { exitCode: 0, stdout: JSON.stringify(record) };
+      return { exitCode: 0, stdout: JSON.stringify(record), stderr: '' };
     }
-    return { exitCode: 1, stdout: '' };
+    return { exitCode: 1, stdout: '', stderr: '' };
   };
   const gh = async (args: string[]) => {
     ghArgs.push(args);
