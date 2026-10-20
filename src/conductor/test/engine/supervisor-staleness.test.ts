@@ -1,3 +1,4 @@
+// Covers: task:25
 import { describe, expect, it } from 'vitest';
 import { createSupervisorStaleness } from '../../src/engine/supervisor-staleness.js';
 

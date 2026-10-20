@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:8, task:9, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
