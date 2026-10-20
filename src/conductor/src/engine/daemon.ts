@@ -1994,13 +1994,11 @@ export async function runDaemon(
     // busy-pool timer; a genuinely busy pool still reaches the periodic
     // maintenance sweep below.
     await Promise.resolve();
+    await Promise.resolve();
     if (completedWorker) {
-      // Preserve a scheduler turn between dispatch and collection without
-      // treating it as an idle poll. `sleep` is the caller-owned poll seam and
-      // may intentionally never resolve while a HALT-clear watcher is expected
-      // to wake the daemon; awaiting `sleep(0)` here would then prevent the
-      // settled feature from being collected and its watcher from registering.
-      await yieldToEventLoop();
+      // Do not wait on the caller-owned poll seam for an already-settled
+      // worker. HALT-clear tests deliberately inject a sleep that never
+      // resolves; collection registers the watch that is meant to wake it.
       await collectOne();
       continue;
     }
@@ -2027,6 +2025,11 @@ export async function runDaemon(
       void sleep(idlePollMs).then(resolve, reject);
     });
     wakeBusyPoll = resolveBusyPoll;
+    // The completion observer can publish between the early check above and
+    // installing this poll's wake callback. Do not lose that edge: injected
+    // sleeps used by the HALT-clear path intentionally never resolve, so a
+    // settled worker must wake this poll even when it beat the assignment.
+    if (completedWorker) resolveBusyPoll();
     await busyPoll;
     // A busy lap must be a real event-loop turn, never a microtask-only lap.
     // `sleep` is injectable, and an immediately-resolved one leaves this whole
