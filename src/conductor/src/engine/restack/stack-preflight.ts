@@ -81,15 +81,11 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   if (!existsSync(join(options.worktree, '.git')) && !await hasDurableChildState(options.worktree, options.slug, { git: options.git })) {
     return { kind: 'no-stack' };
   }
-  // A publication can race a crashed restack. Freeze before recovery so the
-  // recovery-owned follow-on never gets a chance to rewrite a member branch.
-  if (await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
-    await haltRestack(options.worktree, 'published-stack', options.events, {
-      child: await resolveSealedFirst(options.worktree),
-    });
-    return { kind: 'halted' };
-  }
-  const recovery = await recoverRestackJournal(options);
+  // Publication freezes new rewrites, not a resume which has no rewrite to
+  // perform. A settled feature-repair journal may still be cleaned, but its
+  // base-refresh follow-on must not move published member refs.
+  const published = await publishedStackRefusal(options.worktree, options.slug, { git: options.git });
+  const recovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
   if (recovery.kind === 'live-owner' || recovery.kind === 'halted') return { kind: 'halted' };
   if (recovery.kind === 'unavailable') return recovery;
 
@@ -113,7 +109,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // Recheck after the supersede/authorization phase: it may have made an
   // aborted journal collectible. Task 31.1 adds live-HALT gating around this
   // entry point; until then recovery remains the sole owner of cleanup.
-  const secondRecovery = await recoverRestackJournal(options);
+  const secondRecovery = await recoverRestackJournal({ ...options, suppressFollowOn: published });
   if (secondRecovery.kind === 'live-owner' || secondRecovery.kind === 'halted') return { kind: 'halted' };
   if (secondRecovery.kind === 'unavailable') return secondRecovery;
 
@@ -217,11 +213,11 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   // discovery trigger.
   await options.consumeRekick?.();
   // The publication record can appear while the repair journal was being
-  // settled. Do not let the routed-exit follow-on rewrite a newly published
-  // stack after that hand-off.
+  // settled. Keep the completed repair, but clean its journal rather than
+  // letting the routed-exit follow-on rewrite a newly published stack.
   if (publishedChild !== undefined && await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
-    await haltRestack(options.worktree, 'published-stack', options.events, { child: publishedChild });
-    return { kind: 'halted' };
+    const suppressed = await recoverRestackJournal({ ...options, suppressFollowOn: true });
+    return suppressed.kind === 'unavailable' ? suppressed : { kind: 'repaired' };
   }
   const followOn = await runRestack({
     worktree: options.worktree,

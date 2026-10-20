@@ -66,6 +66,11 @@ export interface RecoverRestackJournalOptions {
    * therefore stops at `synced` (or finishes a rollback at `aborted`).
    */
   readonly target?: 'completed' | 'synced';
+  /**
+   * A publication that appeared after a feature-repair applied may retain its
+   * settled work, but must not start the journal-owned base-refresh follow-on.
+   */
+  readonly suppressFollowOn?: boolean;
 }
 
 function ref(raw: string): RefName {
@@ -604,7 +609,9 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   // An aborted journal is terminal: its owner wrote its last state and only
   // leaves cleanup behind.  A long-lived daemon that halted a restack is still
   // that owner at its next dispatch, so liveness must not block the cleanup.
-  if (read.journal.state !== 'aborted' && await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner' };
+  if (read.journal.state !== 'aborted'
+    && !(read.journal.state === 'applied' && options.suppressFollowOn)
+    && await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner' };
 
   let journal: StoredRestackJournal | undefined = { slug: read.slug, blob: read.blob, journal: read.journal };
   let moves: RestackMoveRef[] = [];
@@ -615,6 +622,11 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   try {
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
+        if (options.suppressFollowOn) {
+          return await cleanJournal(options.worktree, journal, git)
+            ? { kind: 'cleaned' }
+            : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
+        }
         if (await publishedStackRefusal(options.worktree, options.slug, { git })) {
           await haltRestack(options.worktree, 'published-stack', options.events, {
             child: journal.journal.ranges[0]?.child,

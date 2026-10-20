@@ -257,4 +257,77 @@ describe('stacked mergeable sweep shipping', () => {
     expect(teardownWorktree).not.toHaveBeenCalled();
     await expect(readWatch(root)).resolves.toHaveLength(1);
   });
+
+  // Covers: S11.5, task:rem-prd-audit-rem-s11-5-sweep-stale-torndown
+  it('ignores a stale tornDown receipt when a reused slug has a different leaf PR', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'mergeable-sweep-stale-receipt-'));
+    cleanup.push(worktree);
+    await execa('git', ['init', '-b', 'main', worktree]);
+    await git(worktree, ['config', 'user.email', 'stack@example.invalid']);
+    await git(worktree, ['config', 'user.name', 'Stack sweep']);
+    await commit(worktree, 'base.txt', 'base\n', 'base');
+    await writePublicationRecord(worktree, 'demo', undefined, {
+      version: 1,
+      tornDown: true,
+      members: [
+        { position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 },
+        { position: parseChildId(2)!, branch: 'feat/daemon-demo', pr: 500 },
+      ],
+    });
+    await enrollWatch(worktree, {
+      prUrl: 'https://github.com/acme/demo/pull/600', slug: 'demo', repoCwd: worktree,
+    });
+    const teardownWorktree = vi.fn(async () => undefined);
+    const gh = vi.fn();
+
+    await sweepMergeableLabels({
+      projectRoot: worktree,
+      runGh: gh,
+      tracker: { readPullRequestMergeState: async () => ({
+        state: 'MERGED' as const, mergeable: 'UNKNOWN' as const, hasFailingOrPendingChecks: false,
+        labels: [], checksOutcome: 'none' as const, isDraft: false,
+      }) },
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree,
+    });
+
+    expect(teardownWorktree).toHaveBeenCalledWith({
+      path: join(worktree, '.worktrees', 'demo'), branch: 'feat/daemon-demo',
+    }, false);
+    expect(gh).not.toHaveBeenCalled();
+    await expect(readWatch(worktree)).resolves.toEqual([]);
+  });
+
+  // Covers: S11.5, task:rem-prd-audit-rem-s11-5-sweep-stale-torndown
+  it('retries matching retained-receipt cleanup after a worktree reappears', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'mergeable-sweep-retained-receipt-'));
+    cleanup.push(worktree);
+    await execa('git', ['init', '-b', 'main', worktree]);
+    await git(worktree, ['config', 'user.email', 'stack@example.invalid']);
+    await git(worktree, ['config', 'user.name', 'Stack sweep']);
+    await commit(worktree, 'base.txt', 'base\n', 'base');
+    await mkdir(join(worktree, '.worktrees', 'demo'), { recursive: true });
+    await writePublicationRecord(worktree, 'demo', undefined, {
+      version: 1,
+      tornDown: true,
+      members: [{ position: parseChildId(1)!, branch: 'feat/daemon-demo', pr: 500 }],
+    });
+    await enrollWatch(worktree, {
+      prUrl: 'https://github.com/acme/demo/pull/500', slug: 'demo', repoCwd: worktree,
+    });
+    const teardownWorktree = vi.fn(async () => undefined);
+
+    await sweepMergeableLabels({
+      projectRoot: worktree,
+      tracker: { readPullRequestMergeState: async () => ({
+        state: 'MERGED' as const, mergeable: 'UNKNOWN' as const, hasFailingOrPendingChecks: false,
+        labels: [], checksOutcome: 'none' as const, isDraft: false,
+      }) },
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree,
+    });
+
+    expect(teardownWorktree).toHaveBeenCalledOnce();
+    await expect(readWatch(worktree)).resolves.toEqual([]);
+  });
 });

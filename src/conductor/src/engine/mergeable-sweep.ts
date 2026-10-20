@@ -17,6 +17,7 @@
  * All operations are best-effort / non-throwing (C3, FR-15).
  */
 
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -843,28 +844,35 @@ export async function sweepMergeableLabels({
               continue;
             }
             try {
+              const worktree = {
+                path: join(entry.repoCwd, '.worktrees', entry.slug),
+                branch: leafBranchFor(entry.slug),
+              };
+              const entryLeafPr = parseGithubUrl(entry.prUrl)?.number;
+              const isReceiptForEntry = (publication: StoredPublicationRecord) =>
+                publication.record.tornDown === true
+                && publication.record.members.at(-1)?.pr === entryLeafPr;
               let publication: StoredPublicationRecord | undefined;
-              if (storedPublication.kind === 'record' && storedPublication.record.tornDown === true) {
-                // The worktree has already gone. Keep reading the receipt so
-                // a later per-member retry can finish its remaining children.
+              if (storedPublication.kind === 'record' && isReceiptForEntry(storedPublication) && !existsSync(worktree.path)) {
+                // The matching worktree is already gone. Retain this receipt
+                // so a later per-member retry can finish child cleanup.
                 publication = storedPublication;
               } else {
                 if (!teardownWorktree) {
                   throw new Error('worktree teardown dependency unavailable');
                 }
-                await teardownWorktree(
-                  {
-                    path: join(entry.repoCwd, '.worktrees', entry.slug),
-                    branch: leafBranchFor(entry.slug),
-                  },
-                  false,
-                );
+                await teardownWorktree(worktree, false);
                 const reread = await readPublicationRecord(
                   entry.repoCwd,
                   entry.slug,
                   publicationRecordDependencies,
                 );
-                publication = reread.kind === 'record' ? reread : undefined;
+                // A torn-down receipt left by an earlier publication of this
+                // slug is not evidence for this watch entry's child cleanup.
+                publication = reread.kind === 'record'
+                  && (reread.record.tornDown !== true || isReceiptForEntry(reread))
+                  ? reread
+                  : undefined;
               }
               // A one-member publication is the ordinary leaf path.  Stack
               // lifecycle and child cleanup apply only once a second member

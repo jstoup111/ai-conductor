@@ -137,7 +137,7 @@ async function advanceDefault(subject: Subject) {
 }
 
 describe('runStackPreflight Task 30 sweep (real local Git)', () => {
-  it('freezes a published stack before attempting journal recovery', async () => {
+  it('lets a published stack with no pending repair resume without a halt', async () => {
     const subject = await fixture();
     await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
       version: 1,
@@ -149,11 +149,30 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
 
     await expect(runStackPreflight({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toEqual({ kind: 'clear' });
 
-    expect(recoverRestackJournal).not.toHaveBeenCalled();
+    expect(recoverRestackJournal).toHaveBeenCalledTimes(2);
     expect(runRestack).not.toHaveBeenCalled();
-    expect(refusals).toEqual([expect.objectContaining({ reason: 'published-stack', child: 1 })]);
+    expect(refusals).toEqual([]);
+  });
+
+  // Covers: S6.4, task:rem-prd-audit-rem-s6-4-preflight-freeze-scope
+  it('resumes an interrupted ready_pr publication after partial flips without a halt', async () => {
+    const subject = await fixture();
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [
+        { position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 },
+        { position: parseChildId(2)!, branch: 'feat/c2/demo', pr: 102 },
+        { position: parseChildId(3)!, branch: 'feat/daemon-demo', pr: 103 },
+      ],
+    })).resolves.toEqual({ kind: 'updated' });
+
+    const { result, records } = await preflight(subject);
+
+    expect(result).toEqual({ kind: 'clear' });
+    expect(ofType(records, 'restack_refused')).toEqual([]);
+    expect(await exists(join(subject.repo, '.pipeline', 'HALT'))).toBe(false);
   });
 
   // Covers: S9.1, task:30
@@ -345,6 +364,65 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       expect(await subject.isAncestor(advanced, 'feat/c1/demo')).toBe(true);
       expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
     }
+    // (c) Publication after the repair reached applied keeps that repair but
+    // drops the recovery-owned base-refresh follow-on.
+    {
+      const subject = await fixture();
+      await advanceDefault(subject);
+      await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'operator.txt', 'X\n'));
+      const childOne = parseChildId(1);
+      if (!childOne) throw new Error('child id should parse');
+      await expect(runRestack({
+        worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [childOne],
+        followOnCause: 'base-refresh', git: makeGitRunner(subject.repo),
+      })).resolves.toMatchObject({ kind: 'applied' });
+      const applied = await readRestackJournal(subject.repo, 'demo');
+      if (applied.kind !== 'journal') throw new Error('repair journal should remain');
+      const deadBlob = await writeRestackJournalBlob(subject.repo, {
+        ...applied.journal, owner: { host: 'dead-preflight-host', pid: 1, processStartTime: '0' },
+      });
+      await subject.git(['update-ref', journalRefFor('demo'), deadBlob, applied.blob]);
+      await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+        version: 1,
+        members: [{ position: childOne, branch: 'feat/c1/demo', pr: 101 }],
+      })).resolves.toEqual({ kind: 'updated' });
+      vi.mocked(runRestack).mockClear();
+
+      const { result, records } = await preflight(subject);
+
+      expect(result).toEqual({ kind: 'clear' });
+      expect(vi.mocked(runRestack)).not.toHaveBeenCalled();
+      expect(ofType(records, 'restack_refused')).toEqual([]);
+      expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+      expect(await exists(join(subject.repo, '.pipeline', 'HALT'))).toBe(false);
+    }
+  });
+
+  // Covers: S6.4, task:rem-prd-audit-rem-s6-4-preflight-freeze-scope
+  it('suppresses a follow-on when publication arrives after feature-repair applies', async () => {
+    const subject = await fixture();
+    await advanceDefault(subject);
+    await subject.onBranch('feat/c1/demo', () => subject.commit('operator change', 'operator.txt', 'X\n'));
+    let published = false;
+    const { result, records } = await withPersistedEvents(subject.repo, async (events) => {
+      events.on('restack_applied', async (event) => {
+        if (event.cause !== 'feature-repair' || published) return;
+        published = true;
+        await writePublicationRecord(subject.repo, 'demo', undefined, {
+          version: 1,
+          members: [{ position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 }],
+        });
+      });
+      return runStackPreflight({
+        worktree: subject.repo, slug: 'demo', baseRefreshDue: true, events, git: makeGitRunner(subject.repo),
+      });
+    });
+
+    expect(result).toEqual({ kind: 'repaired' });
+    expect(restackCauses()).toEqual(['feature-repair']);
+    expect(ofType(records, 'restack_refused')).toEqual([]);
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+    expect(await exists(join(subject.repo, '.pipeline', 'HALT'))).toBe(false);
   });
 
   // Covers: S9.9, S9.10, task:30

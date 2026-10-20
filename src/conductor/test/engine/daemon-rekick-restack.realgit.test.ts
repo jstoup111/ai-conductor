@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { clearMarker, REKICK_SENTINEL, resumeRebaseFirst } from '../../src/engine/daemon-rekick.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { supersedeHaltRecord } from '../../src/engine/halt-record.js';
@@ -18,6 +19,7 @@ import {
   writeRestackJournalBlob,
 } from '../../src/engine/restack/restack-journal.js';
 import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
+import { writePublicationRecord } from '../../src/engine/stack-publication-record.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -136,6 +138,33 @@ async function dispatch(repo: string, events: ConductorEventEmitter, rebase: typ
 }
 
 describe('daemon re-kick whole-stack restack (real local Git)', () => {
+  // Covers: S10.1, task:rem-prd-audit-rem-s10-1-rekick-refuse-continue
+  it('continues a published re-kick through preflight and refuses the base refresh without moving refs or halting', async () => {
+    const subject = await stackFixture({ path: 'base.txt', content: 'advanced\n' });
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [
+        { position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 },
+        { position: parseChildId(2)!, branch: 'feat/c2/demo', pr: 102 },
+        { position: parseChildId(3)!, branch: 'feat/daemon-demo', pr: 500 },
+      ],
+    })).resolves.toEqual({ kind: 'updated' });
+    await writeSentinel(subject.repo);
+    const before = await Promise.all(['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']
+      .map((branch) => subject.git('rev-parse', branch)));
+    const events = new ConductorEventEmitter();
+    const seen = recordEvents(events, ['restack_refused']);
+
+    const result = await dispatch(subject.repo, events, performRebaseSpy());
+
+    expect(result.preflight).toEqual({ kind: 'clear' });
+    expect(result.resume).toBe('rebased');
+    expect(seen).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'published-stack' })]);
+    await expect(Promise.all(['feat/c1/demo', 'feat/c2/demo', 'feat/daemon-demo']
+      .map((branch) => subject.git('rev-parse', branch)))).resolves.toEqual(before);
+    expect(existsSync(join(subject.repo, HALT_MARKER))).toBe(false);
+  });
+
   // Covers: S10.7, task:rem-prd-audit-R11, task:33
   it('halts the re-kick needs-human naming the dirty overlapping path when its base-refresh restack is refused for dirty-overlap', async () => {
     const subject = await stackFixture({ path: 'src/a.ts', content: 'advanced\n' });
