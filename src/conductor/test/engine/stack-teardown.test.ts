@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-rem-v3-teardown-per-member
+// Covers: task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -157,6 +157,53 @@ describe('stack teardown', () => {
     expect(calls).toContainEqual(['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo']);
     expect(calls).toContainEqual(['update-ref', '-d', 'refs/heads/feat/c3/demo', 'head-103']);
     expect(calls).not.toContainEqual(['update-ref', '-d', 'refs/heads/feat/c1/demo', 'head-101']);
+  });
+
+  it('keeps an open member while deleting a later independently proven merged member', async () => {
+    const calls: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'cat-file') return { exitCode: 0, stdout: '[1,3,5]', stderr: '' };
+      if (args[0] === 'merge-base') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'head-103\n', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const gh = vi.fn(async (args: string[]) => ({
+      stdout: JSON.stringify(Number(args[2]) === 101
+        ? { state: 'OPEN' }
+        : { state: 'MERGED', headRefOid: 'head-103', mergeCommit: { oid: 'merge-103' } }),
+    }));
+
+    await expect(deleteStackChildren('/repo', 'demo', record, {
+      git,
+      gh,
+      repository: 'acme/demo',
+    })).resolves.toEqual({ kind: 'kept' });
+
+    expect(calls).toContainEqual(['update-ref', '-d', 'refs/heads/feat/c3/demo', 'head-103']);
+  });
+
+  it('fails a local-ref probe error before acting on a non-ancestral member or later deletion', async () => {
+    const calls: string[][] = [];
+    const git = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'cat-file') return { exitCode: 0, stdout: '[1,3,5]', stderr: '' };
+      if (args[0] === 'merge-base') return { exitCode: args[2] === 'merge-101' ? 1 : 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse') {
+        return args.at(-1) === 'refs/heads/feat/c1/demo'
+          ? { exitCode: 128, stdout: '', stderr: 'injected local-ref probe failure' }
+          : { exitCode: 0, stdout: 'head-103\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
+    await expect(deleteStackChildren('/repo', 'demo', record, {
+      git,
+      gh: mergedGh(),
+      repository: 'acme/demo',
+    })).resolves.toEqual({ kind: 'failed' });
+
+    expect(calls).not.toContainEqual(['update-ref', '-d', 'refs/heads/feat/c3/demo', 'head-103']);
   });
 
   it('stops on the first nonzero child deletion and leaves later members for retry', async () => {

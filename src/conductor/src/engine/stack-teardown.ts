@@ -69,19 +69,26 @@ export async function deleteStackChildren(
     // Earlier reachability observation is the authority for an unreachable
     // member. A malformed or unexpectedly non-merged response here is not a
     // reason to retain it: it is an unreadable deletion proof and must retry.
+    if (observed.state === 'OPEN' || observed.state === 'CLOSED') {
+      kept = true;
+      continue;
+    }
     if (observed.state !== 'MERGED' || !head || typeof merge !== 'string') return { kind: 'failed' };
     try {
       const [onMain, local] = await Promise.all([
         dependencies.git(['merge-base', '--is-ancestor', merge, 'origin/main']),
         dependencies.git(['rev-parse', '--quiet', '--verify', `refs/heads/${branch.branch}`]),
       ]);
+      // Both probes must complete without an error before non-ancestry can
+      // preserve this member: an unreadable local ref keeps the sweep retryable.
+      if ((onMain.exitCode !== 0 && onMain.exitCode !== 1)
+        || (local.exitCode !== 0 && local.exitCode !== 1)) return { kind: 'failed' };
       // Exit 1 from merge-base means this one member is no longer reachable;
       // preserve it while later independently-proven members remain eligible.
       if (onMain.exitCode === 1) {
         kept = true;
         continue;
       }
-      if (onMain.exitCode !== 0 || local.exitCode > 1) return { kind: 'failed' };
       // A missing local branch is an already-completed member deletion.
       if (local.exitCode === 1) continue;
       if (local.stdout.trim() !== head) {
