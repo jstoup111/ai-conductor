@@ -23,7 +23,7 @@ import { leafRefExists } from './daemon-halt-pr-operations.js';
 import { readPublicationRecord } from './stack-publication-record.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { pushedTipRef } from './push-lease.js';
-import { validateStackPayload } from './stack-publication.js';
+import { validateStackPayload } from './stack-publication-payload-validation.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   createGuardedGithubOperationRunner,

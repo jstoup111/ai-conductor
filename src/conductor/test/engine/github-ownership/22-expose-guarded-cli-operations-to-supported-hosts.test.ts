@@ -522,7 +522,6 @@ describe('github-operation CLI', () => {
     expect(gitCalls).toEqual([
       ['branch', '--show-current'],
       ['show-ref', '--verify', '--quiet', 'refs/heads/feat/daemon-x'],
-      ['rev-parse', '-q', '--verify', 'refs/conductor/x/publication'],
     ]);
     expect(gh).not.toHaveBeenCalled();
     expect(remoteGit).not.toHaveBeenCalled();
@@ -731,7 +730,7 @@ describe('github-operation CLI', () => {
       if (joined === 'symbolic-ref refs/remotes/origin/HEAD') return { stdout: 'refs/remotes/origin/main\n' };
       if (joined === 'rev-parse -q --verify refs/conductor/x/publication') return { stdout: `${blob}\n` };
       if (joined === `cat-file -p ${blob}`) return { stdout: record };
-      if (joined === 'show feat/daemon-x:.docs/intake/x.md') return { stdout: 'Owner: alice\n' };
+      if (joined === 'show origin/main:.docs/intake/x.md') return { stdout: 'Owner: alice\n' };
       if (joined.startsWith('rev-parse --verify --quiet refs/conductor/x/pushed/')) return { stdout: `${pushed}\n` };
       if (joined.startsWith('rev-parse --verify --quiet refs/conductor/x/push-intent/')) {
         throw Object.assign(new Error('not found'), { code: 1 });

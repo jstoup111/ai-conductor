@@ -41,7 +41,7 @@ import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGhAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { resolvePrivateGhObserverPassthrough } from '../execution/gh-observer-passthrough.js';
-import { validateStackPayload } from './stack-publication.js';
+import { validateStackPayload } from './stack-publication-payload-validation.js';
 import type { PublicationRecord } from './stack-publication-record.js';
 
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
