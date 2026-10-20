@@ -69,7 +69,8 @@ import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisite
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
-import { maskProjectOwnedRegions } from './pr-body-regions.js';
+import { maskProjectOwnedRegions, restoreRegion } from './pr-body-regions.js';
+import { readRegionCaptures } from './pr-body-region-store.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
@@ -271,10 +272,29 @@ async function sealedChildPresentation(input: {
 
 /** Replace only engine-owned stack navigation; all other bytes stay untouched. */
 function replaceStackNavigation(body: string, navigation: string): string {
-  const start = body.indexOf('## Stack\n');
+  const searchable = maskProjectOwnedRegions(body);
+  const start = searchable.indexOf('## Stack\n');
   if (start < 0) return `${body.trimEnd()}\n\n${navigation}`;
-  const next = body.indexOf('\n## ', start + '## Stack'.length);
-  return `${body.slice(0, start)}${navigation}${next < 0 ? '' : body.slice(next)}`;
+  const nextHeading = searchable.indexOf('\n## ', start + '## Stack'.length);
+  const nextRegion = body.indexOf('\n<!-- ai-conductor:step ', start + '## Stack'.length);
+  const nextBoundary = nextHeading === -1 ? nextRegion
+    : nextRegion === -1 ? nextHeading
+      : Math.min(nextHeading, nextRegion);
+  // Existing leaf prose can follow its Stack section without its own heading.
+  // Consume only the navigation's blank and list lines, stopping before that
+  // prose (or before the next structural boundary, whichever comes first).
+  let next = start + '## Stack'.length;
+  while (next < body.length && (nextBoundary < 0 || next < nextBoundary)) {
+    if (body[next] !== '\n') break;
+    const lineEnd = body.indexOf('\n', next + 1);
+    const afterLine = lineEnd < 0 ? body.length : lineEnd;
+    const line = body.slice(next + 1, afterLine);
+    if (line !== '' && !line.startsWith('- ')) break;
+    next = afterLine;
+    if (lineEnd < 0) break;
+  }
+  if (nextBoundary >= 0 && next >= nextBoundary) next = nextBoundary;
+  return `${body.slice(0, start)}${navigation}${body.slice(next)}`;
 }
 
 function publicationRecordGit(git: GitRunner, cwd: string): PublicationRecordGitRunner {
@@ -535,6 +555,8 @@ export async function assembleStack(input: {
   operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
   /** Production FINISH enables the post-membership body projection. */
   refreshMemberBodies?: boolean;
+  /** Template defaults are the child-body postcondition authority. */
+  template?: string;
   events?: { emit(event: unknown): Promise<void> };
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
@@ -780,11 +802,16 @@ export async function assembleStack(input: {
     if (typeof body !== 'string') {
       throw new StackPublicationHaltError('stack_publication_precondition_failed', `stack member ${member.position} body is unreadable`);
     }
-    const nextBody = replaceStackNavigation(body, renderStackNavigation(navigationMembers, member.position));
+    let nextBody = replaceStackNavigation(body, renderStackNavigation(navigationMembers, member.position));
     const isLeaf = member.pr === leaf.number;
     if (!isLeaf) {
-      const postcondition = checkChildBodyPostconditions(nextBody, undefined, member.branch);
+      const postcondition = checkChildBodyPostconditions(nextBody, input.template, member.branch);
       if (!postcondition.ok) throw new StackPublicationHaltError('stack_publication_precondition_failed', postcondition.reason);
+    } else {
+      const captures = await readRegionCaptures(input.root, input.leafUrl);
+      for (const [key, bytes] of Object.entries(captures)) {
+        nextBody = restoreRegion(nextBody, { key, bytes });
+      }
     }
     const edited = await executeGithubOperation({
       operation: 'pull-request.edit', repository: leaf.repository,
@@ -1698,6 +1725,7 @@ export function createProductionFinishPublicationCoordinator(
               operations,
               operationsForTarget,
               refreshMemberBodies: true,
+              template: deps.prTemplateBytes,
               events: deps.events as never,
             });
           },

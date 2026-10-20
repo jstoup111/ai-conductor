@@ -1,4 +1,4 @@
-// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-rem-v3-foreign-stack
+// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import {
   writePublicationRecord,
   type PublicationRecord,
 } from '../../src/engine/stack-publication-record.js';
+import { writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 
 const c1 = parseChildId(1)!;
@@ -24,6 +25,17 @@ const members = [
   { position: c3, branch: 'feat/c3/demo', pr: 103 },
   { position: c5, branch: 'feat/daemon-demo', pr: 500 },
 ] as const;
+
+const regionTemplate = [
+  '<!-- ai-conductor:step release-disposition -->',
+  'Release-Disposition: no-note',
+  '## Stack',
+  'opaque project content',
+  '<!-- /ai-conductor:step -->',
+].join('\n');
+
+const capturedLeafRegion = '\nRelease-Disposition: note\nRelease-Note: retained leaf prose\n';
+const staleLeafRegion = '\nRelease-Disposition: no-note\n';
 
 let root: string;
 
@@ -57,6 +69,7 @@ function fixture(
   trace: string[],
   initialStack?: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] },
   stacksByMember: Readonly<Record<number, { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] }>> = {},
+  bodies?: Map<number, string>,
 ) {
   let stack: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] } | undefined = initialStack;
   const gh: GhRunner = async (args) => {
@@ -70,6 +83,7 @@ function fixture(
     if (Number.isInteger(number)) {
       const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
       const memberBase = number === 101 ? 'main' : number === 103 ? 'feat/c1/demo' : base;
+      if (args.at(-1) === 'body') return { stdout: JSON.stringify({ body: bodies?.get(number) }) };
       return { stdout: JSON.stringify({ baseRefName: memberBase, headRefOid: head }) };
     }
     return { stdout: JSON.stringify({ baseRefName: base }) };
@@ -83,6 +97,11 @@ function fixture(
         const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
         stack = { number: 44, pull_requests: (request.payload as { pullRequests: readonly number[] }).pullRequests.map((number) => ({ number, head: { sha: head } })) };
         trace.push('stack:create');
+      } else if (request.operation === 'pull-request.edit') {
+        const number = request.target.kind === 'pull-request' ? request.target.number : undefined;
+        if (number === undefined || !bodies) throw new Error('missing body fixture');
+        bodies.set(number, (request.payload as { body: string }).body);
+        trace.push(`edit:${number}`);
       } else if (request.operation !== 'stack.read') {
         throw new Error(`unexpected operation ${request.operation}`);
       }
@@ -202,5 +221,72 @@ describe('assembleStack leaf retarget journal', () => {
       'read:api repos/acme/demo/stacks?pull_request=500',
     ]));
     expect(trace.filter((entry) => entry === 'stack:create' || entry === 'stack:add')).toEqual([]);
+  });
+
+  it('re-renders every member from the template while preserving opaque child and captured leaf regions', async () => {
+    await writeRecord({ version: 1, members });
+    const leafUrl = 'https://github.com/acme/demo/pull/500';
+    await writeRegionCapture(root, leafUrl, 'release-disposition', capturedLeafRegion);
+    const bodies = new Map<number, string>([
+      [101, [
+        '# Child one',
+        '',
+        regionTemplate,
+        '',
+        '## Stack',
+        '',
+        '- #101 (current)',
+      ].join('\n')],
+      [103, [
+        '# Child three',
+        '',
+        regionTemplate,
+        '',
+        '## Stack',
+        '',
+        '- #101',
+        '- #103 (current)',
+      ].join('\n')],
+      [500, [
+        '# Retained leaf prose',
+        '',
+        '<!-- ai-conductor:step release-disposition -->',
+        staleLeafRegion.trim(),
+        '<!-- /ai-conductor:step -->',
+        '',
+        '## Stack',
+        '',
+        '- #101',
+        '- #103',
+        '- #500 (current)',
+        '',
+        'Plan: demo',
+        'Closes acme/demo#7',
+      ].join('\n')],
+    ]);
+    const trace: string[] = [];
+    const events: unknown[] = [];
+    const { gh, operations } = fixture('main', trace, undefined, {}, bodies);
+
+    await assembleStack({
+      root, slug: 'demo', leafUrl, baseBranch: 'main', git: tracingGit(trace), gh, operations,
+      refreshMemberBodies: true, template: regionTemplate,
+      events: { emit: async (event) => { events.push(event); } },
+    });
+
+    for (const [number, body] of bodies) {
+      expect(body).toContain([
+        '## Stack',
+        '',
+        ...members.map((member) => `- #${member.pr}${member.pr === number ? ' (current)' : ''}`),
+      ].join('\n'));
+    }
+    expect(bodies.get(101)).toContain(regionTemplate);
+    expect(bodies.get(103)).toContain(regionTemplate);
+    expect(bodies.get(500)).toContain(`<!-- ai-conductor:step release-disposition -->${capturedLeafRegion}<!-- /ai-conductor:step -->`);
+    expect(bodies.get(500)).toContain('Plan: demo');
+    expect(bodies.get(500)).toContain('Closes acme/demo#7');
+    expect(trace.filter((entry) => entry.startsWith('edit:'))).toEqual(['edit:101', 'edit:103', 'edit:500']);
+    expect(events).toContainEqual({ type: 'stack_assembled', prs: [101, 103, 500] });
   });
 });
