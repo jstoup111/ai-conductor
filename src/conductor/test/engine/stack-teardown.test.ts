@@ -8,7 +8,7 @@ import { execa } from 'execa';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { enrollWatch, readWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import { deleteStackChildren } from '../../src/engine/stack-teardown.js';
-import { writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import { readPublicationRecord, writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
 
 const record: PublicationRecord = {
   version: 1,
@@ -110,7 +110,7 @@ describe('stack teardown', () => {
     expect(calls).toContainEqual(['update-ref', '-d', 'refs/heads/feat/c3/demo', 'head-103']);
   });
 
-  it('keeps the watch entry after a partial delete and retries the remaining child from its plain receipt', async () => {
+  it('keeps the watch entry after a partial delete and retries the remaining child from its plain tornDown receipt', async () => {
     const root = await mkdtemp(join(tmpdir(), 'stack-teardown-retry-'));
     cleanup.push(root);
     await runGit(root, ['init', '-q', '-b', 'main']);
@@ -162,6 +162,9 @@ describe('stack teardown', () => {
     expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c1/demo'])).exitCode).toBe(1);
     expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo'])).exitCode).toBe(0);
 
+    const stored = await readPublicationRecord(root, 'demo');
+    if (stored.kind !== 'record') throw new Error('expected the partial-teardown receipt');
+    await writePublicationRecord(root, 'demo', stored, { ...stored.record, tornDown: true });
     await rm(lock);
     await sweepMergeableLabels({
       projectRoot: root,
@@ -173,7 +176,7 @@ describe('stack teardown', () => {
 
     expect(await readWatch(root)).toEqual([]);
     expect((await runGit(root, ['rev-parse', '--quiet', '--verify', 'refs/heads/feat/c3/demo'])).exitCode).toBe(1);
-    expect(teardownWorktree).toHaveBeenCalledTimes(2);
+    expect(teardownWorktree).toHaveBeenCalledOnce();
   });
 });
 
