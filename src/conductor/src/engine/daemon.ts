@@ -1584,6 +1584,10 @@ export async function runDaemon(
     }
     if (inFlight.size !== 0) return false;
 
+    // Record a newly surfaced mismatch before consulting the durable restart
+    // reason. A fallback child can settle between busy observations, so the
+    // drained boundary must not require a stale sample to preserve its restart.
+    if (deps.protocolMismatchPending?.()) supervisorStaleness.markProtocolMismatch();
     // A recorded protocol mismatch is itself restart authority even if a
     // later staleness sample looks current.
     const recordedMismatch = supervisorStaleness.restartReason === 'protocol-mismatch';
@@ -1933,7 +1937,9 @@ export async function runDaemon(
               }
               return (await restartStaleSupervisor()) ? 'engine_restart' : null;
             }
-            if (observeSupervisorStaleness()) {
+            const stale = observeSupervisorStaleness();
+            const recordedMismatch = supervisorStaleness.restartReason === 'protocol-mismatch';
+            if (stale || recordedMismatch) {
               if (episodeActive) {
                 log('[daemon] stale engine detected but episode active; deferring restart request');
               } else if (await restartStaleSupervisor()) {
@@ -2021,6 +2027,10 @@ export async function runDaemon(
     // maintenance sweep below.
     await Promise.resolve();
     if (completedWorker) {
+      // A fallback child may report its mismatch as it settles, after the
+      // first busy observation above. Record that request while the claim is
+      // still active so collection cannot open a replacement slot first.
+      if (maintenance.busyMaintenanceEnabled() || serialBusyDrainDue()) await observeBusyDrainRequest();
       await collectOne();
       continue;
     }
