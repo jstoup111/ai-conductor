@@ -51,7 +51,7 @@ describe('daemon ledger readers', () => {
       ],
       skipped: 0,
     });
-    if (!('event' in timeline)) throw timeline.error;
+    if (!('event' in timeline) || timeline.event === null) throw new Error('daemon timeline was unavailable');
     expect(timeline.event[1]?.engineVersionId).toBeUndefined();
   });
 
