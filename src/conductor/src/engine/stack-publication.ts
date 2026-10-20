@@ -81,6 +81,9 @@ export async function verifyMemberReachability(
       return { kind: 'indeterminate' };
     }
 
+    if (observation.state !== 'OPEN' && observation.state !== 'CLOSED' && observation.state !== 'MERGED') {
+      return { kind: 'indeterminate' };
+    }
     if (observation.state !== 'MERGED') return { kind: 'unreachable', member };
     const mergeCommit = observation.mergeCommit?.oid;
     if (typeof mergeCommit !== 'string' || mergeCommit.length === 0) return { kind: 'indeterminate' };

@@ -1,4 +1,4 @@
-// Covers: task:25, task:26
+// Covers: task:25, task:26, task:rem-as-built-rem-v3-malformed-state-indeterminate
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -184,8 +184,12 @@ describe('stacked mergeable sweep shipping', () => {
     await expect(readWatch(worktree)).resolves.toHaveLength(1);
   });
 
-  // Covers: task:26
-  it('retains an unreadable member observation without deleting stack state', async () => {
+  // Covers: task:rem-as-built-rem-v3-malformed-state-indeterminate
+  it.each([
+    ['missing state', {}],
+    ['unknown state', { state: 'UNKNOWN' }],
+    ['unreadable response', undefined],
+  ])('keeps $0 member evidence indeterminate and re-observes it on the next sweep', async (_label, response) => {
     const root = await mkdtemp(join(tmpdir(), 'mergeable-sweep-stack-unreadable-'));
     cleanup.push(root);
     const origin = join(root, 'origin.git');
@@ -207,9 +211,13 @@ describe('stacked mergeable sweep shipping', () => {
     const teardownWorktree = vi.fn(async () => undefined);
     const gitRunner = makeGitRunner(worktree);
 
-    await sweepMergeableLabels({
+    const runGh = vi.fn(async () => {
+      if (response === undefined) throw new Error('GitHub read failed');
+      return { stdout: JSON.stringify(response) };
+    });
+    const options = {
       projectRoot: worktree,
-      runGh: vi.fn(async () => { throw new Error('GitHub read failed'); }),
+      runGh,
       tracker: { readPullRequestMergeState: async () => ({ state: 'MERGED', mergeable: 'UNKNOWN', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none', isDraft: false }) },
       shippedRecordProbe: (cwd, slug) => shippedRecordOnMain(cwd, slug, async (args) => {
         const result = await gitRunner(args);
@@ -217,10 +225,16 @@ describe('stacked mergeable sweep shipping', () => {
         return { stdout: result.stdout, stderr: result.stderr };
       }),
       teardownWorktree,
-    });
+    };
 
-    expect(teardownWorktree).toHaveBeenCalledOnce();
-    await expect(readPublicationRecord(worktree, 'demo')).resolves.toMatchObject({ kind: 'record', record });
+    await sweepMergeableLabels(options);
+    await sweepMergeableLabels(options);
+
+    expect(teardownWorktree).toHaveBeenCalledTimes(2);
+    expect(runGh).toHaveBeenCalledTimes(2);
+    const stored = await readPublicationRecord(worktree, 'demo');
+    expect(stored).toMatchObject({ kind: 'record', record });
+    expect(stored.kind === 'record' && stored.record.tornDown).toBeUndefined();
     await expect(readWatch(worktree)).resolves.toHaveLength(1);
   });
 
