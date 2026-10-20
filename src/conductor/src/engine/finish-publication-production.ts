@@ -608,6 +608,7 @@ export async function assembleStack(input: {
       slug: input.slug,
       destination: `refs/heads/${leafBranchFor(input.slug)}`,
       source: leafTip.stdout.trim(),
+      durableChildState: true,
       git: async (args, inputText) => {
         const result = await input.git([...args], inputText === undefined ? undefined : { input: inputText });
         return { stdout: result.stdout, exitCode: result.exitCode };
@@ -644,18 +645,17 @@ export async function assembleStack(input: {
   // `writePhase` owns the sole earlier mutation of `stored`; take its now
   // settled, non-optional record into the stack assembly flow.
   let publication = stored;
-  const discoverMember = publication.record.members[0]!;
-  const observeNativeStack = async (): Promise<{ number: number; members: readonly NativeStackMember[] } | undefined> => {
+  const observeNativeStack = async (member: typeof publication.record.members[number]): Promise<{ number: number; members: readonly NativeStackMember[] } | undefined> => {
     const current = await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
       request: {
         operation: 'stack.read', repository: leaf.repository, resource: { kind: 'repository' },
-        context: { actor: 'finish-publication' }, payload: { pullRequest: discoverMember.pr },
+        context: { actor: 'finish-publication' }, payload: { pullRequest: member.pr },
       },
     });
     const stdout = await runTrackerRepositoryRead(
       input.gh, input.root, 'repository.read', leaf.repository, { kind: 'repository' },
-      ['api', `repos/${leaf.repository}/stacks?pull_request=${discoverMember.pr}`],
+      ['api', `repos/${leaf.repository}/stacks?pull_request=${member.pr}`],
     );
     const raw: unknown = JSON.parse(stdout);
     const value = Array.isArray(raw) ? raw[0] : raw;
@@ -670,7 +670,18 @@ export async function assembleStack(input: {
     return { number: stack.number as number, members };
   };
 
-  let native = await observeNativeStack();
+  // Before either mutation, observe every member's native-stack ownership. A
+  // later member can belong to another stack even when member 1 is unstacked.
+  const memberships = await Promise.all(publication.record.members.map(observeNativeStack));
+  let native = memberships[0];
+  const foreignIndex = memberships.findIndex((membership) =>
+    membership !== undefined && (native === undefined || membership.number !== native.number));
+  if (foreignIndex >= 0) {
+    throw new StackPublicationHaltError(
+      'stack_tip_diverged',
+      `native stack membership diverged at position ${publication.record.members[foreignIndex]!.position}`,
+    );
+  }
   if (!native) {
     await executeValidatedStackOperation({
       root: input.root, slug: input.slug, git: input.git, operations: input.operations!, operationsForTarget: input.operationsForTarget,
@@ -679,7 +690,7 @@ export async function assembleStack(input: {
         context: { actor: 'finish-publication' }, payload: { pullRequests: publication.record.members.map((member) => member.pr) },
       },
     });
-    native = await observeNativeStack();
+    native = await observeNativeStack(publication.record.members[0]!);
   }
   if (!native) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'native stack is unreadable after create');
 
@@ -710,7 +721,7 @@ export async function assembleStack(input: {
         context: { actor: 'finish-publication' }, payload: { pullRequests: missing },
       },
     });
-    native = await observeNativeStack();
+    native = await observeNativeStack(publication.record.members[0]!);
   }
   if (!native || native.members.length !== publication.record.members.length
     || native.members.some((member, index) => member.number !== publication.record.members[index]?.pr)) {
