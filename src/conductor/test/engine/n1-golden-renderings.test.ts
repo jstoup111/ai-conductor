@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv
+// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-n1-golden-probe-list, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,7 +24,7 @@ import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 import { runTaskStart } from '../../src/engine/task-cli.js';
 import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
-import { BASE_SHA, CELLS, expectGolden, normalizeGolden, RECORD, withGitArgvShim } from './n1-golden-shared.js';
+import { BASE_SHA, CELLS, expectGolden, normalizeGolden, partitionConductorRefProbes, RECORD, withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
 
@@ -431,7 +431,11 @@ describe('N=1 golden renderings', () => {
     await expectFinishGolden('leaf-body', normal.body);
     await expectFinishGolden('conduct-state', JSON.stringify(JSON.parse(await readFile(statePath, 'utf8')), null, 2));
     await expectFinishGolden('gh-argv', JSON.stringify(normal.ghArgv, null, 2));
-    await expectFinishGolden('git-argv', JSON.stringify(normal.gitArgv, null, 2));
+    // ADR 2026-10-17 D1 (amended 2026-10-20): local read-only conductor-ref
+    // probes are recorded separately; remote and mutating argv stay pinned.
+    const normalGit = partitionConductorRefProbes(normal.gitArgv, 'n1-golden');
+    await expectFinishGolden('git-argv', JSON.stringify(normalGit.parity, null, 2));
+    await expectFinishGolden('git-probe-argv', JSON.stringify(normalGit.probes, null, 2));
     await expectFinishGolden('events', normal.events.map((event) => JSON.stringify(event)).join('\n'));
     await expectFinishGolden('shipped-record', normalizeRecord(normal.record));
     expect(normal.record).toMatch(/^## Cost\n[\s\S]*^## Time\n(?:state|active_ms):/m);
@@ -440,10 +444,11 @@ describe('N=1 golden renderings', () => {
     await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
     const resumed = await run(true);
     await expectFinishGolden('resumed-events', resumed.events.map((event) => JSON.stringify(event)).join('\n'));
-    expect(JSON.stringify(resumed.gitArgv)).not.toContain('refs/conductor/n1-golden/publication');
+    const resumedGit = partitionConductorRefProbes(resumed.gitArgv, 'n1-golden');
+    expect(JSON.stringify(resumedGit.parity)).not.toContain('refs/conductor/n1-golden/');
   });
 
-  it('pushes an N=1 FINISH leaf without probing stack publication state', async () => {
+  it('pushes an N=1 FINISH leaf with only local read-only stack probes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'n1-golden-finish-push-'));
     roots.push(root);
     const pipeline = join(root, '.pipeline');
@@ -540,10 +545,12 @@ describe('N=1 golden renderings', () => {
     const pushed = await execFile('git', ['--git-dir', origin, 'rev-parse', `refs/heads/${branch}`], { cwd: root });
     const leaf = await execFile('git', ['rev-parse', 'HEAD'], { cwd: root });
     expect(pushed.stdout.trim()).toBe(leaf.stdout.trim());
-    expect(gitArgv).toContainEqual(expect.arrayContaining(['push', 'origin', `HEAD:refs/heads/${branch}`]));
-    expect(gitArgv.some((args) => args[0] === 'for-each-ref')).toBe(false);
-    expect(JSON.stringify(gitArgv)).not.toContain('refs/conductor/n1-push/publication');
-    expect(gitArgv.some((args) => args[0] === 'ls-remote')).toBe(false);
+    const pushGit = partitionConductorRefProbes(gitArgv, 'n1-push');
+    expect(pushGit.parity).toContainEqual(expect.arrayContaining(['push', 'origin', `HEAD:refs/heads/${branch}`]));
+    expect(JSON.stringify(pushGit.parity)).not.toContain('refs/conductor/n1-push/publication');
+    expect(pushGit.parity.some((args) => args[0] === 'ls-remote')).toBe(false);
+    // The D11 guard always probes durable child refs; absent metadata is not proof of N=1.
+    expect(pushGit.probes).toContainEqual(['for-each-ref', '--format=%(refname)', 'refs/heads/feat']);
 
     const localArgv: string[][] = [];
     await expect(executeRemoteGit(['push', 'origin', `HEAD:refs/heads/${branch}`], {
@@ -566,7 +573,11 @@ describe('N=1 golden renderings', () => {
       },
       runRemoteGit: async () => ({ stdout: '' }),
     })).resolves.toMatchObject({ kind: 'executed' });
-    expect(localArgv.some((args) => args[0] === 'for-each-ref')).toBe(false);
-    expect(JSON.stringify(localArgv)).not.toContain('refs/conductor/n1-push/publication');
+    const localGit = partitionConductorRefProbes(localArgv, 'n1-push');
+    expect(localGit.probes).toEqual(expect.arrayContaining([
+      ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
+      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-push/closed/'],
+    ]));
+    expect(JSON.stringify(localGit.parity)).not.toContain('refs/conductor/n1-push/publication');
   });
 });
