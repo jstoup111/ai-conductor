@@ -159,14 +159,19 @@ describe('executor child runtime lifecycle composition', () => {
       prUrl: 'https://github.com/example/repo/pull/42',
       finishChoice: 'pr',
     }, {
-      prepareWorktree: vi.fn(async () => {}),
+      prepareWorktree: vi.fn(async (_worktree, _log, events) => {
+        await events?.emit({ type: 'project_setup', ran: false, reason: 'no-script' });
+      }),
     });
 
     await makeExecutorChildFeatureRunner({ order, worktree, events: bus, providerExecution }, deps)();
 
     // Setup events travel on the child bus, and the verified ship reaches it.
     expect(vi.mocked(deps.prepareWorktree!).mock.calls[0]?.[2]).toBe(bus);
-    expect(seen.map((event) => event.type)).toContain('feature_shipped');
+    expect(seen.map((event) => event.type)).toEqual(expect.arrayContaining([
+      'project_setup',
+      'feature_shipped',
+    ]));
     // The supervisor alone emits the once-per-claim dispatch pair (ADR D4).
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_started');
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_ended');
@@ -188,6 +193,39 @@ describe('executor child runtime lifecycle composition', () => {
     const triageCall = vi.mocked(deps.runSetupTriage!).mock.calls[0];
     expect(triageCall?.[3]).toBe(providerExecution);
     expect(triageCall?.[5]).toBe(bus);
+    expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_started');
+    expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_ended');
+  });
+
+  it('forwards shipment-refusal and conductor-termination events without the supervisor dispatch pair', async () => {
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    root = testRoot;
+    const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
+    await mkdir(join(worktree.path, '.pipeline'), { recursive: true });
+    const { bus, seen } = recordingBus();
+    const deps = lifecycle(worktree, {
+      done: true,
+      halted: false,
+      prUrl: 'https://github.com/example/repo/pull/42',
+      finishChoice: 'pr',
+    }, {
+      runConductor: vi.fn(async (_worktree, _item, _providerExecution, events) => {
+        await events?.emit({ type: 'loop_halt', reason: 'child conductor terminated' });
+      }),
+      shipmentEvidence: vi.fn(async () => ({
+        kind: 'refusal' as const,
+        code: 'shipped-record-missing' as const,
+        expected: '.docs/shipped/feature.md',
+        observed: null,
+      })),
+    });
+
+    await makeExecutorChildFeatureRunner({ order, worktree, events: bus, providerExecution }, deps)();
+
+    expect(seen.map((event) => event.type)).toEqual(expect.arrayContaining([
+      'loop_halt',
+      'shipment_evidence_refused',
+    ]));
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_started');
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_ended');
   });
