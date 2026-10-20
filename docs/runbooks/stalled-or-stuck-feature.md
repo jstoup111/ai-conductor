@@ -187,7 +187,9 @@ move for `build_progress.active_stall_minutes`. `warn` only reports it. `end_att
 attempt; that spends one ordinary retry, and a pinned retry from attempt 2 onward becomes
 [`no_task_progress`](#no_task_progress).
 
-**Recovery:** inspect the attempt's transcript for a loop or an unreachable task. To end such
+**Recovery:** inspect the attempt's transcript for a loop or an unreachable task. For a self-host
+build, list the retained captures with `ai-conductor transcripts <slug>`. Read one with
+`--show <capture>` (see [`ai-conductor transcripts`](../reference/cli.md#ai-conductor-transcripts)). To end such
 attempts automatically, set `build_progress.active_stall_action: end_attempt`; to tolerate long
 non-committing work, raise `active_stall_minutes`. See
 [`build_progress`](../reference/configuration.md#build_progress).
