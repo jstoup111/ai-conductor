@@ -1,20 +1,19 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-20T14:55:01.818Z
+Status: halted
 Slug: stacked-features-cannot-be-published-reviewed-and-
-Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Class: protected-artifact
+Halting step: build
+Phase: BUILD
 Branch: feat/daemon-stacked-features-cannot-be-published-reviewed-and-
-Head SHA: 68e821a811682d49311c28ab6a89066c6a929277
-Halted at: 2026-10-20T14:06:40.104Z
+Head SHA: bb8f17f1b25f45b4df351c84eba625d2d1e1b8a2
+Halted at: 2026-10-20T15:04:10.606Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings. Missing: as-built:06184ff1-b4f1-4ebb-9589-6174af9bc700:3, as-built:06184ff1-b4f1-4ebb-9589-6174af9bc700:4.
+Protected artifact changed: .docs/decisions/adr-2026-10-17-stacked-feature-publication-as-native-stack.md
+Attribution: feature-authored (committed on this branch since merge-base 99df4e9105a4001ab0f03ec1912ee0ff8037ca98)
 ```
