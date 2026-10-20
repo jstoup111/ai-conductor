@@ -1,4 +1,4 @@
-// Covers: task:3, task:5, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-prd-audit-5a, task:rem-prd-audit-5b, task:rem-prd-audit-6a, task:rem-prd-audit-12a, task:rem-prd-audit-12b, task:rem-prd-audit-5d, task:rem-prd-audit-5e, task:rem-prd-audit-5f, task:rem-prd-audit-7a, task:rem-prd-audit-7b, task:rem-prd-audit-7c, task:rem-prd-audit-7d, task:rem-prd-audit-5g, task:rem-as-built-5h, task:rem-as-built-5i, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:3, task:5, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-prd-audit-5a, task:rem-prd-audit-5b, task:rem-prd-audit-6a, task:rem-prd-audit-12a, task:rem-prd-audit-12b, task:rem-prd-audit-5d, task:rem-prd-audit-5e, task:rem-prd-audit-5f, task:rem-prd-audit-7a, task:rem-prd-audit-7b, task:rem-prd-audit-7c, task:rem-prd-audit-7d, task:rem-prd-audit-5g, task:rem-as-built-5h, task:rem-as-built-5i, task:rem-as-built-rem-as-built-6e, task:rem-as-built-rem-as-built-5k, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1297,11 +1297,18 @@ describe('coordinateBuildReviewAdjudication', () => {
     persister.start();
     await expect(coordinateBuildReviewAdjudication({
       ...input(root, async () => bound),
-      emit: async (event) => { await events.emit(event); throw new Error('simulated process crash after carry emission'); },
+      // The durable link won the store lease, but process death preceded the
+      // event-spine write. A refreshed operator read now resolves every raw
+      // source, so recovery must happen before the all-resolved shortcut.
+      emit: async (event) => { if (event.type === 'build_review_disposition_carried') throw new Error('simulated process crash before carry emission'); await events.emit(event); },
       chargeEffect: async () => { throw new Error('carried finding must not charge'); },
-    })).rejects.toThrow('simulated process crash');
+    })).rejects.toThrow('simulated process crash before carry emission');
     await expect(coordinateBuildReviewAdjudication({
-      ...input(root, async () => bound), emit: async (event) => { await events.emit(event); },
+      ...input(root, async () => bound), resolveOperatorResolvedFindingIds: async () => new Set([findingId]), emit: async (event) => { await events.emit(event); },
+      chargeEffect: async () => { throw new Error('carried finding must not charge'); },
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => bound), resolveOperatorResolvedFindingIds: async () => new Set([findingId]), emit: async (event) => { await events.emit(event); },
       chargeEffect: async () => { throw new Error('carried finding must not charge'); },
     })).resolves.toMatchObject({ ok: true, route: 'pass' });
     persister.stop();
@@ -3076,5 +3083,79 @@ describe('coordinateBuildReviewAdjudication', () => {
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '4', status: 'completed' }] },
       effectPointers: [],
     });
+  });
+
+  it.each([
+    ['open', 'open' as const],
+    ['resolved', 'resolved' as const],
+  ])('settles an escalate binding to an %s accepted decision stop as carried without minting another stop', async (_label, resolution) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const origin = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'security', contractVersion: 'v3', concernKind: 'injection',
+      anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
+    });
+    if (!origin) throw new Error('fixture origin finding is invalid');
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'accepted-stop', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+      rationale: 'Architecture previously owned this decision.', resolution,
+      sources: [{ sourceId: securitySourceId, outcome: 'escalate', recordedAt: '2025-12-01T00:00:00.000Z' }],
+      effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+    }] });
+    await new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-01T00:00:00.000Z') }).append({
+      feature, finding: origin, sourceLapId: 'lap-security' as never,
+      summary: 'The original decision is accepted.', rationale: 'Accepted for this feature.', operator: 'operator',
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'accepted-stop' }],
+      cases: [{ caseRef: 'accepted-stop', existingCaseId: 'accepted-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'The re-raise is covered by the accepted decision.', effect: { kind: 'none' }, escalation: { owner: 'architecture' } }],
+      consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['accepted-stop'], rationale: 'The case is source complete.' },
+    };
+    const events: ConductorEvent[] = [];
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: () => 'conflicting-case-id',
+      chargeEffect: async () => { throw new Error('carried escalation must not charge'); },
+      fileIssue: async () => { throw new Error('carried escalation must not file intake'); },
+      emit: async (event) => { events.push(event); },
+    });
+
+    if (!result.ok) throw new Error(result.detail);
+    expect(result).toMatchObject({ route: 'pass' });
+    expect(JSON.stringify(result)).not.toContain('conflicting-case-id');
+    expect(events.some((event) => event.type === 'remediation_effect_reserved')).toBe(false);
+    const settled = await store.read();
+    expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ id: 'accepted-stop', resolution })] } });
+    if (!settled.ok) throw new Error(settled.reason);
+    expect(settled.state.cases.filter((entry) => entry.disposition === 'escalate' && entry.resolution === 'open')).toHaveLength(resolution === 'open' ? 1 : 0);
+  });
+
+  it('keeps an unbound escalation as a decision stop beside a carried escalation', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const origin = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'security', contractVersion: 'v3', concernKind: 'injection',
+      anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
+    });
+    if (!origin) throw new Error('fixture origin finding is invalid');
+    await seedCases(store, { version: 'v1', feature, cases: [{
+      id: 'accepted-stop', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Accepted.', resolution: 'resolved',
+      sources: [{ sourceId: securitySourceId, outcome: 'escalate', recordedAt: '2025-12-01T00:00:00.000Z' }], effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+    }] });
+    await new BuildReviewDispositionStore(root, { clock: () => Date.parse('2026-01-01T00:00:00.000Z') }).append({ feature, finding: origin, sourceLapId: 'lap-security' as never, summary: 'Accepted.', rationale: 'Accepted.', operator: 'operator' });
+    const second = projectBuildReviewAggregateSources(mixedAggregate)![1]!;
+    const secondId = buildReviewAdjudicationSourceId(second);
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(mixedAggregate)![0]!), outcome: 'escalate', caseRef: 'carried' }, { sourceId: secondId, outcome: 'escalate', caseRef: 'live' }],
+      cases: [
+        { caseRef: 'carried', existingCaseId: 'accepted-stop', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Accepted.', effect: { kind: 'none' }, escalation: { owner: 'architecture' } },
+        { caseRef: 'live', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Still needs a decision.', effect: { kind: 'none' }, escalation: { owner: 'architecture' } },
+      ],
+      consistency: { verdict: 'consistent', sourceIds: [buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(mixedAggregate)![0]!), secondId], caseRefs: ['carried', 'live'], rationale: 'Both sources are represented.' },
+    };
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, async () => judgement), aggregate: mixedAggregate, generateId: () => 'live-stop' });
+    expect(result).toMatchObject({ ok: true, route: 'halt', durable: { decisionStops: [expect.objectContaining({ caseId: 'live-stop' })] } });
   });
 });
