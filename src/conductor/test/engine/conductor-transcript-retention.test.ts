@@ -658,12 +658,13 @@ describe('conductor transcript retention wiring', () => {
       await mkdir(join(root, '.pipeline'), { recursive: true });
       await writeFile(join(root, '.docs', 'plans', 'retry.md'), '### Task 1: Retry transcript capture\n');
       await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
+        ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
         feature_desc: 'retry-flow', complexity_tier: 'S', track: 'technical',
         bootstrap: 'done', memory: 'done', assess: 'done', explore: 'done', prd: 'skipped',
         complexity: 'done', stories: 'done', conflict_check: 'done', plan: 'done',
         coherence_check: 'done', plan_review: 'done', coverage_binding: 'done',
         architecture_diagram: 'done', architecture_review: 'done', worktree: 'done',
-        acceptance_specs: 'done',
+        acceptance_specs: 'done', build: 'pending',
       }));
       await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: 'retry-task', status: 'pending' }],
