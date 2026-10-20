@@ -81,6 +81,14 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   if (!existsSync(join(options.worktree, '.git')) && !await hasDurableChildState(options.worktree, options.slug, { git: options.git })) {
     return { kind: 'no-stack' };
   }
+  // A publication can race a crashed restack. Freeze before recovery so the
+  // recovery-owned follow-on never gets a chance to rewrite a member branch.
+  if (await publishedStackRefusal(options.worktree, options.slug, { git: options.git })) {
+    await haltRestack(options.worktree, 'published-stack', options.events, {
+      child: await resolveSealedFirst(options.worktree),
+    });
+    return { kind: 'halted' };
+  }
   const recovery = await recoverRestackJournal(options);
   if (recovery.kind === 'live-owner' || recovery.kind === 'halted') return { kind: 'halted' };
   if (recovery.kind === 'unavailable') return recovery;

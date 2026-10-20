@@ -1,4 +1,4 @@
-// Covers: task:30
+// Covers: task:30, task:rem-prd-audit-rem-v3-intent-restack
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,6 +21,7 @@ import {
 } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
+import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 // Pass-through spies: production behaviour is unchanged, the spies only record
@@ -136,6 +137,25 @@ async function advanceDefault(subject: Subject) {
 }
 
 describe('runStackPreflight Task 30 sweep (real local Git)', () => {
+  it('freezes a published stack before attempting journal recovery', async () => {
+    const subject = await fixture();
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [{ position: parseChildId(1)!, branch: 'feat/c1/demo', pr: 101 }],
+    })).resolves.toEqual({ kind: 'updated' });
+    const events = new ConductorEventEmitter();
+    const refusals: unknown[] = [];
+    events.on('restack_refused', (event) => { refusals.push(event); });
+
+    await expect(runStackPreflight({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    expect(recoverRestackJournal).not.toHaveBeenCalled();
+    expect(runRestack).not.toHaveBeenCalled();
+    expect(refusals).toEqual([expect.objectContaining({ reason: 'published-stack', child: 1 })]);
+  });
+
   // Covers: S9.1, task:30
   it('sweepG4: an appended operator commit is repaired by one feature-repair restack that moves closed/c1 and replays child 2 and the leaf, for one or two appended children, another worktree, and a trailing halt record', async () => {
     // (a) X appended on feat/c1/demo in this worktree.

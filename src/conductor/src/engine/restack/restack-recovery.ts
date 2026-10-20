@@ -32,6 +32,7 @@ import { applyRestackTransition } from './restack-transition.js';
 import { mergeInRange, runRestack, transitionAppliedWithCascade } from './restack-executor.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
+import { publishedStackRefusal } from '../stack-publication.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -614,6 +615,12 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   try {
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
+        if (await publishedStackRefusal(options.worktree, options.slug, { git })) {
+          await haltRestack(options.worktree, 'published-stack', options.events, {
+            child: journal.journal.ranges[0]?.child,
+          });
+          return { kind: 'halted' };
+        }
         const result = await runRestack({
           worktree: options.worktree,
           slug: options.slug,

@@ -12,7 +12,7 @@ import { runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { PublicationMember, PublicationRecord } from './stack-publication-record.js';
 export { validateStackPayload, type StackPayloadValidation } from './stack-publication-payload-validation.js';
 import { executeRemoteGit, type RemoteGitOperationDependencies } from './remote-git-operations.js';
-import { pushedTipRef } from './push-lease.js';
+import { pushedTipIntentRef, pushedTipRef, recordPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEvent } from '../types/events.js';
 
@@ -265,6 +265,48 @@ function lsRemoteTip(stdout: string, ref: string): string | undefined {
 }
 
 /**
+ * A transport can succeed just before its pushed-tip receipt is recorded.
+ * Adopt that durable intent only when the remote still names the exact
+ * intended SHA; any unreadable or contested intent leaves the caller unable
+ * to prove the remote's identity.
+ */
+async function adoptCompletedPushIntent(
+  root: string,
+  slug: string,
+  branch: string,
+  remoteTip: string | undefined,
+  git: GitRunner,
+): Promise<boolean> {
+  if (remoteTip === undefined) return true;
+  let intentObject: string | undefined;
+  try {
+    const intentRef = await git(['rev-parse', '--verify', '--quiet', pushedTipIntentRef(slug, branch)]);
+    intentObject = intentRef.exitCode === 0 ? intentRef.stdout.trim() || undefined : undefined;
+    if (intentObject === undefined) return true;
+    const contents = await git(['cat-file', '-p', intentObject]);
+    if (contents.exitCode !== 0) return false;
+    const parsed: unknown = JSON.parse(contents.stdout);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || typeof (parsed as { new?: unknown }).new !== 'string'
+      || ((parsed as { expected?: unknown }).expected !== undefined
+        && typeof (parsed as { expected?: unknown }).expected !== 'string')) return false;
+    const intent = parsed as { readonly new: string; readonly expected?: string };
+    if (intent.new !== remoteTip) return true;
+    const pushLeaseGit: PushLeaseGitRunner = async (args, input) => {
+      const result = await git([...args], input === undefined ? undefined : { input });
+      return { stdout: result.stdout, exitCode: result.exitCode };
+    };
+    return recordPushedTip({
+      cwd: root,
+      prepared: { slug, branch, expected: intent.expected, new: intent.new, intentObject },
+      git: pushLeaseGit,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Publish one immutable child closure.  A child branch is only ever created
  * with a plain push; a pre-existing branch is accepted only when both the
  * durable pushed-tip receipt and closure agree with the remote.
@@ -278,18 +320,23 @@ export async function pushChildClosure(
   const git = dependencies.git ?? makeGitRunner(root);
   const destination = `refs/heads/${child.branch}`;
   let remote: Awaited<ReturnType<GitRunner>>;
-  let recorded: Awaited<ReturnType<GitRunner>>;
   try {
-    [remote, recorded] = await Promise.all([
-      git(['ls-remote', '--heads', 'origin', destination]),
-      git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, child.branch)]),
-    ]);
+    remote = await git(['ls-remote', '--heads', 'origin', destination]);
   } catch {
     return { kind: 'read-failed', position: child.position };
   }
   if (remote.exitCode !== 0) return { kind: 'read-failed', position: child.position };
   const remoteTip = lsRemoteTip(remote.stdout, destination);
-  const recordedTip = recorded.exitCode === 0 ? recorded.stdout.trim() : undefined;
+  if (!await adoptCompletedPushIntent(root, slug, child.branch, remoteTip, git)) {
+    return { kind: 'read-failed', position: child.position };
+  }
+  let recordedTip: string | undefined;
+  try {
+    const recorded = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, child.branch)]);
+    recordedTip = recorded.exitCode === 0 ? recorded.stdout.trim() : undefined;
+  } catch {
+    return { kind: 'read-failed', position: child.position };
+  }
   if (remoteTip !== undefined) {
     return remoteTip === child.closure && recordedTip === child.closure
       ? { kind: 'unchanged', position: child.position, tip: child.closure }
