@@ -35,6 +35,7 @@ import { verifyMemberReachability } from './stack-publication.js';
 import { makeGitRunner } from './rebase.js';
 import { parseGithubUrl } from './github-target.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
+import { runTrackerRepositoryRead } from './tracker-client.js';
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -297,7 +298,14 @@ export async function dispatchDaemonPark(
         const leaf = publication.record.members.at(-1)!;
         let leafState: string | undefined;
         try {
-          leafState = JSON.parse((await gh(['pr', 'view', String(leaf.pr), '-R', target.repository, '--json', 'state'], { cwd: worktreePath })).stdout).state;
+          leafState = JSON.parse(await runTrackerRepositoryRead(
+            gh,
+            worktreePath,
+            'pull-request.read',
+            target.repository,
+            { kind: 'pull-request', number: leaf.pr },
+            ['pr', 'view', String(leaf.pr), '-R', target.repository, '--json', 'state'],
+          )).state;
         } catch {
           out(`Could not reclaim-worktree '${cmd.slug}': stack-leaf-unreadable`);
           return 1;

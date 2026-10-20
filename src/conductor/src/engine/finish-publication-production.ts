@@ -35,8 +35,11 @@ import { activePublicationRecord, readPublicationRecord, writePublicationRecord 
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
-import { validatePlanSlices } from './plan-slices.js';
-import { parsePlanTaskBodies, parsePlanTaskStoryLineIds } from './plan-task-parse.js';
+import {
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  projectChildOwnership,
+  readCoverageBindingEnvelope,
+} from './coverage-binding-envelope.js';
 import { splitStoryBlocks } from './story-criteria.js';
 import { gateSatisfied } from './selector.js';
 import {
@@ -234,15 +237,15 @@ async function sealedChildPresentation(input: {
   base: string;
   git: GitRunner;
 }): Promise<{ slice: { position: number; name: string; taskIds: readonly string[]; storyIds: readonly string[] }; stories: readonly { id: string; title: string }[]; diffstat: string }> {
-  const planPath = join(input.root, '.docs', 'plans', `${input.slug}.md`);
-  const plan = await readFile(planPath, 'utf8').catch(() => undefined);
-  if (plan === undefined) throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack plan is unreadable');
-  const slices = validatePlanSlices(plan);
-  if (slices.kind !== 'sliced') throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack slices are unreadable');
-  const slice = slices.slices.find((candidate) => candidate.position === input.position);
-  if (!slice) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} is missing`);
-  const taskBodies = parsePlanTaskBodies(plan);
-  const storyIds = [...new Set(slice.taskIds.flatMap((taskId) => parsePlanTaskStoryLineIds(taskBodies.get(taskId) ?? '').flat()))];
+  const envelope = await readCoverageBindingEnvelope(input.root).catch(() => null);
+  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack coverage evidence is unreadable');
+  }
+  const positions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))].sort((left, right) => left - right);
+  const title = envelope.sliceMembership.titles[positions.indexOf(input.position)];
+  if (!title) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} is missing`);
+  const ownership = projectChildOwnership(envelope, input.position);
+  if (ownership.taskIds.length === 0) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} has no tasks`);
   const storiesPath = join(input.root, '.docs', 'stories', `${input.slug}.md`);
   const storiesText = await readFile(storiesPath, 'utf8').catch(() => '');
   const stories = splitStoryBlocks(storiesText).flatMap((story) => story.id === undefined ? [] : [{
@@ -250,7 +253,11 @@ async function sealedChildPresentation(input: {
     title: story.text.split('\n').find((line) => /^##\s+Story\s+/i.test(line))?.replace(/^##\s+Story\s+[^:]+:?\s*/i, '') || story.id,
   }]);
   const diff = await input.git(['diff', '--stat', `${input.base}...${input.branch}`], { cwd: input.root });
-  return { slice: { position: slice.position, name: slice.title, taskIds: slice.taskIds, storyIds }, stories, diffstat: diff.stdout.trim() };
+  return {
+    slice: { position: input.position, name: title, taskIds: ownership.taskIds, storyIds: ownership.storyIds },
+    stories,
+    diffstat: diff.stdout.trim(),
+  };
 }
 
 /** Replace only engine-owned stack navigation; all other bytes stay untouched. */
@@ -417,7 +424,10 @@ export async function readyStackChildren(input: {
   /** Each child ready write needs its own exact pull-request provenance target. */
   operationsForPullRequest?: (pr: number) => Promise<GithubOperationRunner | undefined>;
   events?: Parameters<typeof haltStackTipDiverged>[2];
+  /** The coordinator already proved durable child state before reading the receipt. */
+  stacked?: boolean;
 }): Promise<void> {
+  if (input.stacked === false) return;
   const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
   // N=1 and non-stacked FINISH never need a publication-ref-dependent URL
   // parse or a stack read. Gate on durable child state first.
@@ -1676,7 +1686,10 @@ export function createProductionFinishPublicationCoordinator(
             const prOperations = await retainedOperations(state.pr_url);
             if (!state.feature_desc) throw new Error('missing stack publication identity');
             const stackGit = publicationRecordGit(deps.git, deps.projectRoot);
-            const publicationRecord = await activePublicationRecord(deps.projectRoot, state.feature_desc, { git: stackGit });
+            const cursor = await resolveObservationChild();
+            const publicationRecord = cursor.kind === 'no-child'
+              ? undefined
+              : await activePublicationRecord(deps.projectRoot, state.feature_desc, { git: stackGit });
             const leaf = publicationRecord?.record.stack?.verified === true
               ? repositoryAndNumber(state.pr_url)
               : undefined;
@@ -1726,6 +1739,7 @@ export function createProductionFinishPublicationCoordinator(
                 ? undefined
                 : retainedOperations(`https://github.com/${leaf.repository}/pull/${pr}`),
               events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
+              stacked: publicationRecord?.record.stack?.verified === true,
             });
             if (!state.feature_desc) throw new Error('missing shipment identity');
             await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc, prOperations);

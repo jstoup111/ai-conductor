@@ -35,7 +35,7 @@ async function writeRecord(record: PublicationRecord): Promise<void> {
   const origin = join(root, 'origin.git');
   const remote = await git(['config', '--get', 'remote.origin.url']);
   if (remote.exitCode !== 0) {
-    await git(['init', '--bare', '-q', origin]);
+    await git(['init', '--bare', '-b', 'main', '-q', origin]);
     await git(['remote', 'add', 'origin', origin]);
   }
   const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
