@@ -1601,3 +1601,54 @@ Each task's `**Dependencies:**` line is authoritative.
 **Done when:**
 - Task 29 is satisfied by this task.
 - The repair for task rem-as-built-rem-v3-park-reclaim-order is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-rem-v4-child-divergence-member: finish-publication-production.ts establishChildPrs (~979): when pushChildClosure returns diverged, call haltStackTipDiverged with only the diverging child's identity: its position, plus its PR number if a recorded or listed member exists, else no PR (never the leaf PR or earlier recorded members). Test in finish-publication-production tests: child 3 diverges after child 1 is recorded → the HALT subject lists position 3 only and the event carries no #c1 or leaf PR; diverging with nothing recorded → no leaf PR is named
+**Gate:** prd-audit
+**Rationale:** Verified (95%) at finish-publication-production.ts:979. On child-closure divergence, haltStackTipDiverged gets the stored record's members, or a fallback that pairs the leaf PR with the child position, instead of the diverging child. The HALT subject and the stack_tip_diverged event therefore name the wrong member. This is implementation drift under ADR decision 11 / Task 20, so it is BUILD work.
+**Criterion:** S2.10
+**Parent task:** rem-prd-audit-rem-v3-divergence-mapping
+**Done when:**
+- [test] S2.10 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-rem-v4-child-divergence-member is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base: stack-publication.ts observeMembers: make base verification phase-aware. While the record is unassembled/unretargeted, the leaf (last member) must target the journaled pre-stack base (record.retarget.from, or the default base when unset). After retarget, it must target its predecessor. Children keep predecessor-base checks and all head-SHA checks stay. Fix the stack-publication-observe.test.ts fixture so the pre-retarget leaf reports the pre-stack base. Add a production three-member advanceFinishPublication dispatch test proving establish_child_prs → assemble_stack is selected (not stack_tip_diverged) and that a leaf already on the wrong base still diverges
+**Gate:** prd-audit
+**Rationale:** Verified (97%) at stack-publication.ts:399-401. observeMembers requires the leaf, the last member after establish_child_prs, to target its predecessor before assemble_stack has retargeted it. A correctly unretargeted leaf (base still the pre-stack base) is therefore reported as diverged, and FINISH halts instead of assembling. The test fixture hides this. The fix is a phase-aware check inside the approved observation design (ADR decision 5), so it is BUILD work.
+**Criterion:** S4.1
+**Parent task:** rem-as-built-rem-v3-preassembly-verify
+**Done when:**
+- [test] S4.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-rem-v4-first-child-base: stack-publication.ts observeMembers: always verify member 1's base. Use record.retarget.from when present, otherwise the record's journaled pre-stack/default base. Return indeterminate, not skip, if no expected base can be derived. Test: a record without retarget.from whose first child targets the wrong base → diverged; one targeting the correct base → healthy
+**Gate:** as-built
+**Rationale:** Verified (97%). Two defects sit in the same check. The leaf rejection is covered by the S4.1 task. Separately, the `expectedBase !== undefined` guard at stack-publication.ts:401 skips verifying the first child's base whenever retarget.from is absent. The approved ADR decision 5 requires first-child verification, so the fix is conforming BUILD work.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-rem-v4-first-child-base is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-rem-v4-n1-push-argv: remote-git-operations.ts guardPublishedStackPushes: decide whether a push is stacked without issuing Git commands for N=1 features. Gate on filesystem/sealed-plan child evidence (e.g. .pipeline/children or declared child positions) before calling hasDurableChildState or any for-each-ref/rev-parse. Read Git refs only when child evidence exists. Extend the N=1 golden argv test so an ordinary leaf push produces exactly the historical git argv, with no for-each-ref or publication-ref reads
+**Gate:** as-built
+**Rationale:** Verified (95%). In remote-git-operations.ts:176, every ordinary leaf push calls hasDurableChildState, and child-cursor.ts:140/:146 then runs two `git for-each-ref` commands. That changes the N=1 Git argv that ADR decision 1 and the N=1 golden suite require to stay unchanged. The repair can gate on non-Git evidence (the .pipeline/children directory or the sealed plan's child declaration) before any Git read. That fits the approved design, so it is BUILD work.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-rem-v4-n1-push-argv is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-rem-v4-second-read-indeterminate: finish-publication-production.ts readiness verification (~438-452): separate a transport failure, timeout or unparseable response of the stacks repository.read from a successfully read but mismatched membership. Surface failures as the existing indeterminate error so advanceFinishPublication returns publication_retry. Halt stack_tip_diverged only on a parsed mismatch. Test: a timed-out second read → publication_retry, with no HALT, no stack_tip_diverged event and no pull-request.ready
+**Gate:** as-built
+**Rationale:** Verified (97%) at finish-publication-production.ts:438-452. After the validated stack.read, a second stacks API read (runTrackerRepositoryRead) swallows all errors, so a timeout or transport failure becomes a terminal stack_tip_diverged HALT. The indeterminate-read repair already established retryable routing; this path just needs to reuse it. That is BUILD work.
+**Parent task:** rem-prd-audit-rem-v3-read-indeterminate
+**Governing clause:** Task rem-prd-audit-rem-v3-read-indeterminate
+**Done when:**
+- Task rem-prd-audit-rem-v3-read-indeterminate is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-rem-v4-second-read-indeterminate is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail: stack-teardown.ts deleteStackChildren: (a) a well-formed OPEN or CLOSED member response marks that member kept and continues; only malformed/unreadable responses return failed. (b) check both probe results for errors (merge-base exit >1, rev-parse exit >1) before acting on non-ancestry, returning failed so the sweep keeps retry enrollment. Tests: an OPEN member followed by a proven merged member → first kept, second deleted; a local-ref probe error alongside non-ancestry → failed, with no later update-ref -d
+**Gate:** as-built
+**Rationale:** Verified (93%) in stack-teardown.ts. Line 72 returns failed for a validly observed member that is not MERGED (OPEN/CLOSED), which stops later independently proven deletions instead of keeping that member. Line 80 continues on merge-base exit 1 before the local-ref probe error is checked at :84, so deletion proceeds after a Git error. ADR decision 12 already specifies the semantics: keep members whose proof legitimately fails, and stop with retry enrollment on observation errors. This is BUILD work.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 12
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 12 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail is committed and its targeted tests pass.
