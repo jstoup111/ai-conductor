@@ -104,15 +104,6 @@ the completion predicate and failure-detail renderer read the store afterward an
 matching finding's blocking effect. New, unmatched, malformed, legacy, and infrastructure findings
 remain blocking.
 
-> **Amended 2026-10-19 by #3271:** Exact identity remains the only way an operator acceptance is
-> recorded. It is no longer the only way one applies: a finding the `remediate` judge binds to an
-> operator-accepted case is suppressed as carried acceptance, derived at read time and never
-> written to this store (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.5).
-> Unbound new findings still block. `findings` lists each carried finding with its origin finding,
-> lap, operator, and rationale. Decision 6's accepted-risk section lists each carried finding with
-> its id, rubric, and carried-from origin finding id and lap only; operator and rationale for
-> carried rows stay local.
-
 ### 3. Serialize the coordinator and CLI through one state transaction
 
 All reads and writes that join current findings with dispositions use one feature-local

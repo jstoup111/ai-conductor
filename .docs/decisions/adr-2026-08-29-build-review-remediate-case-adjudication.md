@@ -103,36 +103,6 @@ cannot write, broaden, or infer accepted risk. An operator disposition that beco
 the post-join path is running is re-read at every route, halt, and PASS exit, preserving the current
 late-acceptance rule.
 
-> **Amended 2026-10-19 by #3271:** Exact identity alone could not keep an operator acceptance
-> applied: drifting finding ids re-raised the same substance every lap, and a judge binding to the
-> accepted case then halted as a regression or a conflicting decision stop. A provider still never
-> writes or infers accepted risk, but the judge's existing case binding may now *extend* an
-> existing operator acceptance to a re-raised finding:
->
-> - **D2.1** When `remediate` binds a current finding through `existingCaseId` to a case holding at
->   least one source with an exact feature-scoped operator disposition, that finding is *carried*
->   operator acceptance. It counts as operator-resolved for the effective verdict and settles with no
->   action, deferral, escalation, decision stop, repeat or regression halt, or kickback charge,
->   whatever disposition the judge proposed for that case.
-> - **D2.2** Carried acceptance is derived, never copied. The operator disposition store remains the
->   only record of accepted risk and its operator-only write path is unchanged. One shared read-side
->   resolver computes carry from the case store's source links plus the disposition store, and every
->   consumer of accepted risk reads that resolver. No case field, source outcome, or disposition
->   record is added, and removing the origin disposition removes every carry derived from it.
-> - **D2.3** Carry never widens past the judge's binding. A finding of the accepting lap itself is
->   never carried, and neither is a source bound before the origin acceptance. Unbound findings,
->   findings bound to a case with no directly accepted source, and infrastructure results remain
->   blocking exactly as before. Acceptance stays scoped to the feature whose stores it reads.
-> - **D2.4** The prior-case context marks each case holding a directly accepted source as
->   operator-accepted, with origin finding ids and lap but no rationale. `remediate` binds by
->   substance only and still never asserts or creates acceptance.
-> - **D2.5** Every carry is one `build_review_disposition_carried` `ConductorEvent` naming the
->   feature, lap, finding, case, and origin finding and lap, registered with every sink (D9).
-> - **D2.6** A repeat or regression halt on an explicit `existingCaseId` binding first appends the
->   bound current sources to the reused case as links only, with no effect and no other field
->   changed, before halting. An operator who then accepts that finding has accepted a source of
->   that case, so a later re-raise bound to it carries. The halt itself is unchanged.
-
 ### D3 — One existing remediate dispatch owns the semantic fan-in
 
 A mechanically complete raw FAIL with at least one operator-unresolved content finding causes one

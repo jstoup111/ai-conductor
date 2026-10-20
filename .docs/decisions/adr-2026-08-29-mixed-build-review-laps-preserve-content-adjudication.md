@@ -89,13 +89,6 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   `refute` row (adr-2026-08-29-build-review-remediate-case-adjudication D7.1–D7.3) is a finalized
 >   permitted autonomous outcome for D3.3: it converts nothing about infrastructure, consumes no
 >   semantic kickback, and joins the deferred/rejected/merged set of D3.2.
->
-> **Amended 2026-10-19 by #3271:** A re-raised attempted or regressed case that the judge binds to
-> an operator-accepted case is neither a repeat nor a regression. That finding is carried operator
-> acceptance (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.5): for D3.3 it
-> counts as operator-resolved, it publishes no work order, and it consumes no semantic kickback,
-> whatever disposition the judge proposed. The repeat and regression halts of D3 and D3.4 still
-> apply to every case that holds no operator-accepted source.
 
 ### D4 — Grader confidence and an operator floor suppress a finding before it fails the gate
 
