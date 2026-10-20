@@ -35,7 +35,7 @@ async function sealedChildren(slug: string, git: GitRunner): Promise<readonly Ch
 type MergedMember = { readonly state?: unknown; readonly headRefOid?: unknown; readonly mergeCommit?: { readonly oid?: unknown } };
 
 /**
- * Covers: task:28. Delete only sealed child branches whose merged PR still
+ * Covers: task:rem-prd-audit-rem-v3-teardown-per-member. Delete only sealed child branches whose merged PR still
  * proves the exact local head.  This deliberately enumerates names from the
  * sealed positions ref: neither a prefix scan nor an unsealed child is a
  * deletion candidate.
@@ -66,26 +66,32 @@ export async function deleteStackChildren(
     }
     const head = typeof observed.headRefOid === 'string' ? observed.headRefOid : undefined;
     const merge = observed.mergeCommit?.oid;
-    if (observed.state !== 'MERGED' || !head || typeof merge !== 'string') {
-      kept = true;
-      continue;
-    }
+    // Earlier reachability observation is the authority for an unreachable
+    // member. A malformed or unexpectedly non-merged response here is not a
+    // reason to retain it: it is an unreadable deletion proof and must retry.
+    if (observed.state !== 'MERGED' || !head || typeof merge !== 'string') return { kind: 'failed' };
     try {
       const [onMain, local] = await Promise.all([
         dependencies.git(['merge-base', '--is-ancestor', merge, 'origin/main']),
-        dependencies.git(['rev-parse', '--verify', `refs/heads/${branch.branch}`]),
+        dependencies.git(['rev-parse', '--quiet', '--verify', `refs/heads/${branch.branch}`]),
       ]);
-      // A missing local branch is an already-completed delete. A failed probe
-      // is not evidence to keep it: stop and retry rather than recording a
-      // terminal teardown receipt.
+      // Exit 1 from merge-base means this one member is no longer reachable;
+      // preserve it while later independently-proven members remain eligible.
+      if (onMain.exitCode === 1) {
+        kept = true;
+        continue;
+      }
       if (onMain.exitCode !== 0 || local.exitCode > 1) return { kind: 'failed' };
+      // A missing local branch is an already-completed member deletion.
       if (local.exitCode === 1) continue;
       if (local.stdout.trim() !== head) {
         kept = true;
         continue;
       }
       const deleted = await dependencies.git(['update-ref', '-d', `refs/heads/${branch.branch}`, head]);
-      if (deleted.exitCode > 1) return { kind: 'failed' };
+      // This is the authority-changing compare-and-swap. A nonzero result is
+      // never a completed deletion, including a disappeared ref race.
+      if (deleted.exitCode !== 0) return { kind: 'failed' };
     } catch {
       return { kind: 'failed' };
     }

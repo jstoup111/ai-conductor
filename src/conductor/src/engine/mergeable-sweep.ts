@@ -830,41 +830,42 @@ export async function sweepMergeableLabels({
           );
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
-            // An unreachable-member receipt is the one terminal teardown
-            // outcome: it preserves the member and its operator evidence.
-            // A plain tornDown receipt, by contrast, is an incomplete cleanup
-            // checkpoint and must be retried on the next sweep.
+            // `tornDown` records completed worktree removal or a retained
+            // member. It is deliberately not a terminal receipt: the same
+            // record is the durable input for later per-member cleanup.
             const storedPublication = await readPublicationRecord(
               entry.repoCwd,
               entry.slug,
               publicationRecordDependencies,
             );
-            if (storedPublication.kind === 'record'
-              && storedPublication.record.tornDown === true
-              && storedPublication.record.unreachableReported === true) {
-              survivors.push(entry);
-              continue;
-            }
             if (canRemoveWorktree && !(await canRemoveWorktree(entry.slug))) {
               survivors.push(entry);
               continue;
             }
             try {
-              if (!teardownWorktree) {
-                throw new Error('worktree teardown dependency unavailable');
+              let publication: StoredPublicationRecord | undefined;
+              if (storedPublication.kind === 'record' && storedPublication.record.tornDown === true) {
+                // The worktree has already gone. Keep reading the receipt so
+                // a later per-member retry can finish its remaining children.
+                publication = storedPublication;
+              } else {
+                if (!teardownWorktree) {
+                  throw new Error('worktree teardown dependency unavailable');
+                }
+                await teardownWorktree(
+                  {
+                    path: join(entry.repoCwd, '.worktrees', entry.slug),
+                    branch: leafBranchFor(entry.slug),
+                  },
+                  false,
+                );
+                const reread = await readPublicationRecord(
+                  entry.repoCwd,
+                  entry.slug,
+                  publicationRecordDependencies,
+                );
+                publication = reread.kind === 'record' ? reread : undefined;
               }
-              await teardownWorktree(
-                {
-                  path: join(entry.repoCwd, '.worktrees', entry.slug),
-                  branch: leafBranchFor(entry.slug),
-                },
-                false,
-              );
-              const publication = await activePublicationRecord(
-                entry.repoCwd,
-                entry.slug,
-                publicationRecordDependencies,
-              );
               // A one-member publication is the ordinary leaf path.  Stack
               // lifecycle and child cleanup apply only once a second member
               // makes the receipt a real chained stack.
@@ -874,10 +875,9 @@ export async function sweepMergeableLabels({
                   gh,
                   repository,
                 });
-                // Child branches and the durable publication receipt must live
-                // until the dedicated stack teardown path consumes this proof.
-                // This sweep still reaps the feature worktree immediately once
-                // the ordinary shipped-record gate passes.
+                // A failed reachability observation cannot authorize any
+                // deletion. An unreachable member is retained, while the
+                // dedicated teardown still considers every other member.
                 if (reachability.kind === 'unreachable') {
                   if (publication.record.unreachableReported !== true) {
                     emitEvent({
@@ -890,18 +890,24 @@ export async function sweepMergeableLabels({
                       publication,
                       publicationRecordDependencies,
                     );
+                    const refreshed = await readPublicationRecord(
+                      entry.repoCwd,
+                      entry.slug,
+                      publicationRecordDependencies,
+                    );
+                    if (refreshed.kind === 'record') publication = refreshed;
                   }
                   log?.(
                     `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-unreachable`,
                   );
-                  survivors.push(entry);
                 } else if (reachability.kind === 'indeterminate') {
                   log?.(
                     `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
                   );
                   survivors.push(entry);
+                  continue;
                 }
-                if (reachability.kind === 'reachable' && repository) {
+                if (repository) {
                   const result = await deleteStackChildren(entry.repoCwd, entry.slug, publication.record, {
                     git: makeGitRunner(entry.repoCwd), gh, repository,
                   });
@@ -915,6 +921,8 @@ export async function sweepMergeableLabels({
                       tornDown: true,
                     }, publicationRecordDependencies);
                   }
+                  survivors.push(entry);
+                } else {
                   survivors.push(entry);
                 }
                 continue;
@@ -931,6 +939,10 @@ export async function sweepMergeableLabels({
               log?.(
                 `[mergeable-sweep] reap failed ${entry.slug} (${entry.prUrl}) — reason: shipped-record-on-main — error: ${detail}`,
               );
+              // A reap can have removed the worktree before a later stack
+              // member/ref operation fails. Keep the receipt and watch entry
+              // so the finite, per-member teardown resumes on the next sweep.
+              survivors.push(entry);
             }
           } else if (state.state === 'MERGED') {
             logDisposition(
