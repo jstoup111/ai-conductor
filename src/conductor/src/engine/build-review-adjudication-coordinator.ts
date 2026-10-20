@@ -25,7 +25,8 @@ import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildR
 import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import { BuildReviewDispositionStore, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
-import { resolveBuildReviewAcceptance } from './build-review-acceptance-resolver.js';
+import { resolveBuildReviewAcceptance, withProposedBuildReviewCaseSources } from './build-review-acceptance-resolver.js';
+import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from './tracker-client.js';
 import type { RemediationCaseDeferralEffect } from './remediation-case-artifact.js';
@@ -187,6 +188,17 @@ async function persistedCarriedEventKeys(projectRoot: string): Promise<Set<strin
 export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudicationCoordinatorInput): Promise<BuildReviewAdjudicationCoordinatorResult> {
   const sources = projectBuildReviewAggregateSources(input.aggregate);
   if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
+  const currentFindings = new Map<string, NonNullable<ReturnType<typeof canonicalizeBuildReviewFindingIdentity>>>();
+  for (const result of Object.values(input.aggregate.results)) {
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric: result.rubric, contractVersion: result.contractVersion,
+        concernKind: finding.concernKind, anchor: finding.anchor,
+      });
+      if (identity) currentFindings.set(identity.id, identity);
+    }
+  }
   const carriedFindingIds = new Set<string>();
   const emittedCarriedKeys = await persistedCarriedEventKeys(input.projectRoot);
   // A carried case keeps its durable autonomous state intact, but its current
@@ -587,14 +599,41 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // not evidence that nothing is outstanding: an earlier lap's case can still
   // be open with a live work order. Settle durable state and route from what
   // survives, rather than reporting a route no one checked.
-  if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
-  }
   let currentSources = sources.filter((source) => !resolved.has(source.findingId));
   const prior = await store.read();
   if (!prior.ok) return failStore('case store', prior);
   const dispositionRead = await new BuildReviewDispositionStore(input.projectRoot).list(input.feature);
   if (!dispositionRead.ok) return fail('operator disposition state is unavailable');
+  // Recover an occurrence whose durable carried link survived a process crash.
+  // This deliberately precedes every resolved-source filter and terminal exit:
+  // a refresh may now mark all raw findings accepted, but it must not erase the
+  // event that records how that acceptance was extended.
+  let emittedCarriedOccurrence = false;
+  for (const source of sources) {
+    const finding = currentFindings.get(source.findingId);
+    if (!finding) continue;
+    const acceptance = resolveBuildReviewAcceptance(
+      input.feature, finding, dispositionRead, prior, input.aggregate.lapId,
+    );
+    if (acceptance.kind !== 'carried') continue;
+    carriedFindingIds.add(source.findingId);
+    carriedCaseIds.add(acceptance.caseId);
+    const eventKey = `${input.aggregate.lapId}\u0000${source.findingId}\u0000${acceptance.caseId}`;
+    if (emittedCarriedKeys.has(eventKey)) continue;
+    await input.emit?.({
+      type: 'build_review_disposition_carried', feature: input.feature.feature, lapId: input.aggregate.lapId,
+      findingId: source.findingId, caseId: acceptance.caseId,
+      originFindingId: acceptance.originFindingId, originLapId: acceptance.originLapId,
+    });
+    emittedCarriedKeys.add(eventKey);
+    emittedCarriedOccurrence = true;
+  }
+  // An emitted occurrence is an awaited delivery boundary: refresh authority
+  // after it, but retain the established read cadence when nothing was sent.
+  if (emittedCarriedOccurrence) resolved = await operatorResolvedFindingIds();
+  if (allOperatorResolved(resolved)) {
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
+  }
   // An exact source bound to a refutation with unfinished durable follow-up
   // is not new content for the judge. The reducer names that effect and
   // blocks PASS below.
@@ -697,56 +736,30 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     admittedTaskIds: planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
   });
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
-  // The binding, rather than a textual similarity, is the only authority that
-  // can extend an acceptance. Append it before any reuse check sees a repeat.
-  const directOriginsBySourceId = new Map<string, {
-    readonly findingId: string;
-    readonly lapId: string;
-    readonly acceptedAt: string;
-  }>();
-  for (const record of dispositionRead.records) {
-    const acceptance = resolveBuildReviewAcceptance(
-      input.feature, record.finding, dispositionRead, prior, input.aggregate.lapId,
-    );
-    if (acceptance.kind === 'direct') {
-      directOriginsBySourceId.set(buildReviewAdjudicationSourceId({
-        rubric: record.finding.canonicalPayload.rubric,
-        findingId: record.finding.id,
-      }), { findingId: record.finding.id, lapId: record.sourceLapId, acceptedAt: record.acceptedAt });
-    }
-  }
-  const acceptedOriginsByCaseId = new Map<string, {
-    readonly findingId: string;
-    readonly lapId: string;
-    readonly acceptedAt: string;
-    readonly linkRecordedAt: string;
-  }>();
-  for (const record of prior.state.cases) {
-    const originLink = record.sources.find((source) => directOriginsBySourceId.has(source.sourceId));
-    if (!originLink) continue;
-    const origin = directOriginsBySourceId.get(originLink.sourceId)!;
-    acceptedOriginsByCaseId.set(record.id, { ...origin, linkRecordedAt: originLink.recordedAt });
-  }
+  // Proposed links are resolved through the same shared resolver that every
+  // consumer uses.  Making the link visible in a virtual store preserves the
+  // strict binding timestamp rule without duplicating origin maps here.
   const carryRecordedAt = new Date().toISOString();
-  const isStrictlyLater = (left: string, right: string): boolean => Date.parse(left) > Date.parse(right);
+  const carryAcceptance = new Map<string, Extract<ReturnType<typeof resolveBuildReviewAcceptance>, { readonly kind: 'carried' }>>();
   const carried = graph.graph.cases.filter((proposed) => {
-    const origin = proposed.case.existingCaseId === undefined ? undefined : acceptedOriginsByCaseId.get(proposed.case.existingCaseId);
-    if (!origin || origin.lapId === input.aggregate.lapId) return false;
-    const existing = prior.state.cases.find((record) => record.id === proposed.case.existingCaseId);
-    // A binding is the acceptance boundary.  An old sibling link made before
-    // the operator accepted the origin cannot be swept in merely because the
-    // case later became accepted; a new link receives this reconciliation's
-    // timestamp and is eligible only under the resolver's strict-later rule.
-    return proposed.sources.every((source) => {
-      const link = existing?.sources.find((candidate) => candidate.sourceId === source.sourceId);
-      const recordedAt = link?.recordedAt ?? carryRecordedAt;
-      return isStrictlyLater(recordedAt, origin.acceptedAt) && isStrictlyLater(recordedAt, origin.linkRecordedAt);
+    if (proposed.case.existingCaseId === undefined) return false;
+    const virtual = withProposedBuildReviewCaseSources(prior, proposed.case.existingCaseId,
+      proposed.sources.map((source) => ({ ...source, recordedAt: carryRecordedAt })));
+    const acceptances = proposed.sources.map((source) => {
+      const sourceFinding = sources.find((candidate) => buildReviewAdjudicationSourceId(candidate) === source.sourceId);
+      const finding = sourceFinding === undefined ? undefined : currentFindings.get(sourceFinding.findingId);
+      return finding === undefined ? { kind: 'none' as const } : resolveBuildReviewAcceptance(
+        input.feature, finding, dispositionRead, virtual, input.aggregate.lapId,
+      );
     });
+    if (!acceptances.every((acceptance) => acceptance.kind === 'carried')) return false;
+    carryAcceptance.set(proposed.case.caseRef, acceptances[0]!);
+    return true;
   });
   if (carried.length > 0) {
     for (const proposed of carried) {
       const caseId = proposed.case.existingCaseId!;
-      const origin = acceptedOriginsByCaseId.get(caseId)!;
+      const origin = carryAcceptance.get(proposed.case.caseRef)!;
       carriedCaseIds.add(caseId);
       const appended = await appendCarriedRemediationCaseSources(store, { caseId, sources: proposed.sources, recordedAt: carryRecordedAt });
       if (!appended.ok) return failStore('case store', appended);
@@ -764,7 +777,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         if (emittedCarriedKeys.has(eventKey)) continue;
         await input.emit?.({
           type: 'build_review_disposition_carried', feature: input.feature.feature, lapId: input.aggregate.lapId,
-          findingId: finding.findingId, caseId, originFindingId: origin.findingId, originLapId: origin.lapId,
+          findingId: finding.findingId, caseId, originFindingId: origin.originFindingId, originLapId: origin.originLapId,
         });
         emittedCarriedKeys.add(eventKey);
       }

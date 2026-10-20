@@ -164,11 +164,12 @@ function carriedAcceptedRisk(
   records: readonly BuildReviewDispositionRecord[],
   findings: readonly BuildReviewAcceptedRiskFinding[],
   caseRead: RemediationCaseStoreReadResult,
+  currentLapId?: string,
 ): { carried: readonly BuildReviewCarriedAcceptedRisk[]; carriedAcceptanceUnavailable: boolean } {
   if (!caseRead.ok) return { carried: [], carriedAcceptanceUnavailable: true };
   return {
     carried: findings.flatMap((finding) => {
-      const resolved = resolveBuildReviewAcceptance(feature, finding, { ok: true, records }, caseRead);
+      const resolved = resolveBuildReviewAcceptance(feature, finding, { ok: true, records }, caseRead, currentLapId as never);
       return resolved.kind === 'carried' ? [{ findingId: finding.id, rubric: finding.canonicalPayload.rubric, originFindingId: resolved.originFindingId, originLapId: resolved.originLapId }] : [];
     }).sort((left, right) => left.findingId.localeCompare(right.findingId)),
     carriedAcceptanceUnavailable: false,
@@ -488,7 +489,7 @@ export function createProductionFinishPublicationCoordinator(
       .catch(() => undefined);
     const caseRead = await (deps.createCaseStore
       ?? ((root: string, caseFeature: BuildReviewFeatureIdentity) => new RemediationCaseStore(root, caseFeature)))(deps.projectRoot, feature).read();
-    const carried = carriedAcceptedRisk(feature, listed.records, acceptedRiskFindings(aggregate), caseRead);
+    const carried = carriedAcceptedRisk(feature, listed.records, acceptedRiskFindings(aggregate), caseRead, aggregate?.lapId);
     if (reducedCoverage.records.length > 0 && !aggregate) {
       throw new Error('accepted-risk projection: reduced build-review coverage has no renderable current-lap evidence');
     }

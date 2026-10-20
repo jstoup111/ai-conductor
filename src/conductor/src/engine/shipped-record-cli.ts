@@ -79,10 +79,10 @@ function acceptedRiskFindings(aggregate: ReturnType<typeof parseBuildReviewAggre
   return findings;
 }
 
-function carriedAcceptedRisk(feature: { readonly version: 'v1'; readonly repository: string; readonly feature: string }, records: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[], findings: readonly BuildReviewAcceptedRiskFinding[], caseRead: Awaited<ReturnType<RemediationCaseStore['read']>>): { carried: readonly BuildReviewCarriedAcceptedRisk[]; carriedAcceptanceUnavailable: boolean } {
+function carriedAcceptedRisk(feature: { readonly version: 'v1'; readonly repository: string; readonly feature: string }, records: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[], findings: readonly BuildReviewAcceptedRiskFinding[], caseRead: Awaited<ReturnType<RemediationCaseStore['read']>>, currentLapId?: string): { carried: readonly BuildReviewCarriedAcceptedRisk[]; carriedAcceptanceUnavailable: boolean } {
   if (!caseRead.ok) return { carried: [], carriedAcceptanceUnavailable: true };
   return { carried: findings.flatMap((finding) => {
-    const resolved = resolveBuildReviewAcceptance(feature, finding, { ok: true, records }, caseRead);
+    const resolved = resolveBuildReviewAcceptance(feature, finding, { ok: true, records }, caseRead, currentLapId as never);
     return resolved.kind === 'carried' ? [{ findingId: finding.id, rubric: finding.canonicalPayload.rubric, originFindingId: resolved.originFindingId, originLapId: resolved.originLapId }] : [];
   }).sort((left, right) => left.findingId.localeCompare(right.findingId)), carriedAcceptanceUnavailable: false };
 }
@@ -248,7 +248,7 @@ export async function dispatchShippedRecord(
         version: 'v1', repository, feature: identity.slug,
       }).read();
       const carried = carriedAcceptedRisk(
-        { version: 'v1', repository, feature: identity.slug }, dispositions.records, acceptedRiskFindings(aggregate), caseRead,
+        { version: 'v1', repository, feature: identity.slug }, dispositions.records, acceptedRiskFindings(aggregate), caseRead, aggregate?.lapId,
       );
       recordBody = appendBuildReviewAcceptedRisk(
         recordBody, dispositions.records, carried.carried, carried.carriedAcceptanceUnavailable,

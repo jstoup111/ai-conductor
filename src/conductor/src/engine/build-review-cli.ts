@@ -217,7 +217,7 @@ function acceptedDispositions(
   return effective.acceptedFindingIds.flatMap<AcceptedDisposition>((findingId) => {
     const identity = identities.get(findingId);
     if (!identity) return [];
-    const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records }, caseInput);
+    const acceptance = resolveBuildReviewAcceptance(feature, identity, { ok: true, records }, caseInput, aggregate.lapId);
     if (acceptance.kind === 'direct') {
       const disposition = records.find((record) =>
         record.feature.version === feature.version && record.feature.repository === feature.repository && record.feature.feature === feature.feature &&
