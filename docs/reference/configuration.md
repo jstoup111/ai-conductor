@@ -188,8 +188,9 @@ Validation is fail-closed at the top level: an unrecognized key is a hard load e
 | `harness_version` mismatch | `{ type: 'version_mismatch' }` (only when `loadConfig` is passed a `harnessVersion`) |
 | Malformed project config at run start | `process.exit(1)` |
 
-Only eight sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
+Only nine sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
 (`:708`), `auto_restart_on_stale_engine` (`:778`), `engine_refresh_min_interval_seconds` (`:807`),
+`supervisor_max_stale_hours`,
 the deprecated `step_heartbeat_stall_minutes` compatibility normalizer (`:852-859`),
 `provider_preparation_timeout_minutes` (`:875-878`), `teardown_timeout_seconds` at resolution,
 and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
@@ -230,6 +231,8 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `rebase_resolution_attempts` | number | `3` | [rebase_resolution_attempts](#rebase_resolution_attempts) |
 | `validation_concurrency` | number | `4` | [validation_concurrency](#validation_concurrency) |
 | `daemon_concurrency` | number | `1` | [daemon_concurrency](#daemon_concurrency) |
+| `executor_isolation` | `child` \| `in-process` | `child` | [executor_isolation](#executor_isolation) |
+| `supervisor_max_stale_hours` | number | `24` | [supervisor_max_stale_hours](#supervisor_max_stale_hours) |
 | `daemon_heap_limit_mb` | number | `4096` | [daemon_heap_limit_mb](#daemon_heap_limit_mb) |
 | `daemon_heap_dump_threshold_mb` | number | `3072` | [Daemon heap dump threshold](#daemon-heap-dump-threshold) |
 | `daemon_heap_dump_retention` | number | `3` | [Daemon heap dump threshold](#daemon-heap-dump-threshold) |
@@ -1400,8 +1403,9 @@ See [models](models.md).
 
 ## auto_restart_on_stale_engine
 
-Whether an idle daemon respawns itself when `dist/` points at a newer engine than the one it is running.
-Optional boolean, default `false` — written back into the config object (`config.ts:783-786`).
+Whether a continuous self-host daemon rebuilds its engine in the background and restarts a stale
+supervisor — one whose own engine is older than the build `dist/` points at. Optional boolean, default
+`false` — written back into the config object (`config.ts:783-786`).
 
 | Input | Result |
 | --- | --- |
@@ -1413,6 +1417,12 @@ Armed only when the build is also classified self-host:
 `(config?.auto_restart_on_stale_engine ?? false) && isSelfHost`
 (`src/conductor/src/daemon-cli.ts:759`; also `:1797`). Read at daemon startup, so a change requires a
 daemon restart.
+
+When armed, the supervisor restarts at its next natural idle (no feature in flight). While features
+are in flight it keeps claiming, and drains for restart only when it has been stale longer than
+[`supervisor_max_stale_hours`](#supervisor_max_stale_hours) or a child executor failed the protocol
+handshake. With [`executor_isolation: child`](#executor_isolation), new claims already run the
+current build, so the restart only refreshes the supervisor.
 
 User-level values apply when the project omits this key; see
 [Load order and precedence](#load-order-and-precedence).
@@ -2172,6 +2182,45 @@ process-global provider environment. To avoid concurrent environment mutation, i
 effective daemon concurrency above `1` before build dispatch and reports
 `LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL`. That compatibility-path refusal is not a clamp
 on the daemon's normal worker pool.
+
+## executor_isolation
+
+Selects the process boundary for each daemon feature dispatch. Optional, default `child`.
+
+```yaml
+executor_isolation: in-process
+```
+
+| Value | Behavior |
+| --- | --- |
+| `child` | Each claimed feature runs in a separate executor process forked from the immutable `dist-versions/<id>/` build that `dist` names at claim time. A merged engine change reaches the next claim without a daemon restart; in-flight features keep the build they were claimed on. |
+| `in-process` | Every feature runs inside the supervisor on the supervisor's boot build. Rollback mode; the daemon logs `[daemon] executor isolation: in-process; per-dispatch engine pinning is disabled`. |
+
+Any other value fails configuration loading with `executor_isolation must be one of: child |
+in-process`. Read at daemon startup, so a change requires a daemon restart.
+
+In `child` mode the pin falls back to the supervisor's own build when `dist` is dangling, its publish
+is incomplete, or its target is not a valid version id; `feature_dispatch_started` records the reason
+as `pinFallbackReason`. A child whose executor protocol version does not match the supervisor's is
+refused before it receives work and the feature is relaunched on the supervisor build; an
+[armed](#auto_restart_on_stale_engine) supervisor then drains for restart. Each running child has a
+`.daemon/executors/<slug>.json` record; see [artifacts](artifacts.md#daemon) and
+[`daemon status`](cli.md#daemon-status).
+
+## supervisor_max_stale_hours
+
+Maximum hours a stale supervisor may keep claiming work before it stops claiming and drains for
+restart. Optional number, default `24`. Applies only when
+[`auto_restart_on_stale_engine`](#auto_restart_on_stale_engine) is armed.
+
+| Input | Result |
+| --- | --- |
+| Absent | `24`, no warning |
+| Finite and `> 0` | As given |
+| Non-numeric, non-finite, zero, or negative | `24` plus one warning; never throws |
+
+Age is measured from the first time the supervisor was observed stale, not from the latest build. A
+smaller value reaches a fresh supervisor sooner but stops claims more often.
 
 ## daemon_heap_limit_mb
 

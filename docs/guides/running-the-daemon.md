@@ -833,6 +833,11 @@ rely on it. See
 
 ## Restart after an engine change
 
+With the default [`executor_isolation: child`](../reference/configuration.md#executor_isolation),
+each claimed feature already runs the engine build `dist` names at claim time, so a published engine
+change reaches new dispatches without a restart. Restart to update the supervisor itself, or when
+running with `executor_isolation: in-process`.
+
 ```bash
 ai-conductor daemon restart
 ```

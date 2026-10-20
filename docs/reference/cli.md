@@ -501,6 +501,16 @@ step event (`step_completed`, `step_failed`, `step_interrupted`, or `step_refuse
 execution id (by step name for ledgers without execution context); a `step_retry` keeps the original
 start time. Rows for a daemon that is not running omit these lines.
 
+A running daemon also prints its engine versions when it has a pidfile, executor records, or
+dispatch events:
+
+| Line | Source |
+| --- | --- |
+| `EXECUTOR ENGINE CURRENT: <id>` | The installed engine's `dist` target; `unknown` when unreadable. |
+| `SUPERVISOR ENGINE: <id>` | The supervisor's pidfile engine dir. Suffixed `(older than current)` when stale. |
+| `EXECUTOR [<slug>]: <id>` | A running child executor's `.daemon/executors/<slug>.json` pin, suffixed `(older than current)` when stale. An unreadable record prints `version unknown — record unreadable`. |
+| `DISPATCH [<slug>]: engine <id>` | Each `feature_dispatch_started` in `.daemon/events.jsonl`; dispatches from before per-dispatch pinning print `engine unknown`. |
+
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.
 
