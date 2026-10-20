@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-20T15:06:06.599Z
 Slug: stacked-features-cannot-be-published-reviewed-and-
 Class: protected-artifact
 Halting step: build
