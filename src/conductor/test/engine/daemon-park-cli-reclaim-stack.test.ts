@@ -48,7 +48,8 @@ const record = {
   version: 1 as const,
   members: [
     { position: 1, branch: 'feat/c1/demo', pr: 101 },
-    { position: 3, branch: 'feat/daemon-demo', pr: 500 },
+    { position: 3, branch: 'feat/c3/demo', pr: 103 },
+    { position: 5, branch: 'feat/daemon-demo', pr: 500 },
   ],
 };
 
@@ -99,9 +100,12 @@ describe('engine/daemon-park-cli reclaim-worktree stacked cleanup', () => {
       code: 0,
       calls: ['teardown', 'remove', 'record', 'shipped', 'reachability', 'delete'],
     });
+    expect(seams.deleteStackChildren).toHaveBeenCalledWith(root, 'demo', record, expect.objectContaining({
+      repository: 'acme/demo',
+    }));
   });
 
-  it('keeps children but retires their record when the shipped-record proof is absent', async () => {
+  it('keeps children and retires their record when closed-unmerged #500 has no shipped record on main', async () => {
     const root = await mkdtemp(join(tmpdir(), 'daemon-reclaim-stack-'));
     roots.push(root);
     const worktree = join(root, '.worktrees', 'demo');
@@ -131,5 +135,7 @@ describe('engine/daemon-park-cli reclaim-worktree stacked cleanup', () => {
       calls: ['teardown', 'remove', 'record', 'shipped', 'retire'],
       write: [[root, 'demo', stored, { ...record, tornDown: true }, expect.any(Object)]],
     });
+    expect(seams.deleteStackChildren).not.toHaveBeenCalled();
+    expect(seams.makeProductionGh).not.toHaveBeenCalled();
   });
 });

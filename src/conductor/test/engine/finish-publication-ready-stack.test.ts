@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
 import { allStackMembersReady, readyStackChildren } from '../../src/engine/finish-publication-production.js';
+import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
 import type { GithubOperationRequest, GithubOperationRunner, GithubOperationTarget } from '../../src/engine/github-operations.js';
 import { pushedTipRef } from '../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
@@ -40,9 +41,10 @@ function childBody(position: number, branch: string): string {
   });
 }
 
-function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean } = {}) {
+function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean; invalidChildBody?: boolean } = {}) {
   const drafts = new Map<number, boolean>([[101, !input.ready?.includes(101)], [103, !input.ready?.includes(103)], [500, !input.ready?.includes(500)]]);
   const bodies = new Map([[101, childBody(1, 'feat/c1/demo')], [103, childBody(3, 'feat/c3/demo')]]);
+  if (input.invalidChildBody) bodies.set(103, `${bodies.get(103)}\n\nCloses acme/demo#7`);
   const writes: string[] = [];
   const gh: GhRunner = async (args) => {
     if (args[0] === 'api' && args[1]?.includes('/stacks?pull_request=')) {
@@ -156,6 +158,30 @@ describe('readyStackChildren', () => {
       .rejects.toMatchObject({ reason: 'stack_tip_diverged' });
 
     expect(writes).toEqual([]);
+  });
+
+  it('keeps a child draft and returns a needs-human FINISH outcome when its body postconditions fail', async () => {
+    const { gh, operations, writes, drafts } = fixture({ invalidChildBody: true });
+    const snapshot: PublicationSnapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid', branchPushed: 'valid',
+      shippedRecord: 'valid', outcomeRecord: 'missing', stack: 'valid',
+      pr: { identity: 'one', url: leafUrl, prose: 'accepted', ready: false },
+    };
+
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: {
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+        repairPresentation: async () => readyStackChildren({ root, slug: 'demo', leafUrl, git, gh, operations }),
+      },
+    })).resolves.toMatchObject({
+      kind: 'human_required', reason: 'stack_publication_precondition_failed', detail: expect.stringContaining('feat/c3/demo'),
+    });
+
+    expect(writes).toEqual([]);
+    expect(drafts.get(103)).toBe(true);
   });
 
   it('reports a verified stack ready only after every member is non-draft', async () => {

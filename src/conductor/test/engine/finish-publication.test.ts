@@ -734,6 +734,24 @@ describe('finish-publication domain types', () => {
     } as PublicationSnapshot)).toBe('ready_pr');
   });
 
+  it('halts an observed diverged stack without selecting or invoking assembly', async () => {
+    const assembleStack = vi.fn(async () => undefined);
+
+    await expect(advanceFinishPublication({
+      observe: async () => ({
+        ...readyPublicationSnapshot({
+          pr: {
+            identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false,
+          },
+        }),
+        stack: 'diverged',
+      } as PublicationSnapshot),
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), assembleStack },
+    })).resolves.toEqual({ kind: 'human_required', reason: 'stack_tip_diverged' });
+
+    expect(assembleStack).not.toHaveBeenCalled();
+  });
+
   it('preserves the N=1 seven-transition selection sequence and its allowance', async () => {
     const module = await import('../../src/engine/finish-publication.js');
     const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (

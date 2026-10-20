@@ -71,6 +71,7 @@ function fixture(
   initialStack?: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] },
   stacksByMember: Readonly<Record<number, { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] }>> = {},
   bodies?: Map<number, string>,
+  createdStackHeadFor: Readonly<Record<number, string>> = {},
 ) {
   let stack: { number: number; pull_requests: readonly { number: number; head: { sha: string } }[] } | undefined = initialStack;
   const gh: GhRunner = async (args) => {
@@ -96,8 +97,16 @@ function fixture(
         base = (request.payload as { base: string }).base;
       } else if (request.operation === 'stack.create') {
         const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-        stack = { number: 44, pull_requests: (request.payload as { pullRequests: readonly number[] }).pullRequests.map((number) => ({ number, head: { sha: head } })) };
-        trace.push('stack:create');
+        stack = { number: 44, pull_requests: (request.payload as { pullRequests: readonly number[] }).pullRequests.map((number) => ({ number, head: { sha: createdStackHeadFor[number] ?? head } })) };
+        trace.push(`stack:create:${(request.payload as { pullRequests: readonly number[] }).pullRequests.join(',')}`);
+      } else if (request.operation === 'stack.add') {
+        if (!stack) throw new Error('stack.add without a native stack');
+        const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+        stack = {
+          ...stack,
+          pull_requests: [...stack.pull_requests, ...(request.payload as { pullRequests: readonly number[] }).pullRequests.map((number) => ({ number, head: { sha: head } }))],
+        };
+        trace.push(`stack:add:${(request.payload as { pullRequests: readonly number[] }).pullRequests.join(',')}`);
       } else if (request.operation === 'pull-request.edit') {
         const number = request.target.kind === 'pull-request' ? request.target.number : undefined;
         if (number === undefined || !bodies) throw new Error('missing body fixture');
@@ -117,6 +126,7 @@ function tracingGit(trace: string[]): GitRunner {
     if (args[0] === 'hash-object' && typeof options?.input === 'string') {
       const value = JSON.parse(options.input) as PublicationRecord;
       if (value.retarget) trace.push(`write:${value.retarget.phase}`);
+      if (value.stack) trace.push(`write:stack:${value.stack.number}:${value.stack.verified}`);
     }
     return git(args, options);
   };
@@ -137,6 +147,42 @@ afterEach(async () => {
 });
 
 describe('assembleStack leaf retarget journal', () => {
+  it('creates the ordered native stack, verifies its pushed tips, and records stack_assembled', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const events: unknown[] = [];
+    const { gh, operations } = fixture('main', trace);
+
+    await assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations, events: { emit: async (event) => { events.push(event); } },
+    });
+
+    expect(trace).toContain('stack:create:101,103,500');
+    expect(trace.filter((entry) => entry === 'read:api repos/acme/demo/stacks?pull_request=101')).toHaveLength(2);
+    await expect(record()).resolves.toMatchObject({ stack: { number: 44, verified: true } });
+    expect(events).toContainEqual({ type: 'stack_assembled', prs: [101, 103, 500] });
+  });
+
+  it('records a one-member prefix before adding its missing ordered members without creating another stack', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    const { gh, operations } = fixture('main', trace, {
+      number: 44, pull_requests: [{ number: 101, head: { sha: head } }],
+    });
+
+    await assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations,
+    });
+
+    expect(trace).toContain('stack:add:103,500');
+    expect(trace).not.toContain('stack:create:101,103,500');
+    expect(trace.indexOf('write:stack:44:false')).toBeLessThan(trace.indexOf('stack:add:103,500'));
+    await expect(record()).resolves.toMatchObject({ stack: { number: 44, verified: true } });
+  });
+
   it('CAS-writes intended, retargets #500 to feat/c3/demo, then CAS-writes observed in order', async () => {
     await writeRecord({ version: 1, members });
     const trace: string[] = [];
@@ -144,7 +190,7 @@ describe('assembleStack leaf retarget journal', () => {
 
     await assembleStack({ root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main', git: tracingGit(trace), gh, operations });
 
-    expect(trace.filter((entry) => entry.startsWith('write:') || entry.startsWith('retarget:'))).toEqual([
+    expect(trace.filter((entry) => (entry.startsWith('write:') && !entry.startsWith('write:stack:')) || entry.startsWith('retarget:'))).toEqual([
       'write:intended',
       'retarget:feat/c3/demo',
       'write:observed',
@@ -198,7 +244,7 @@ describe('assembleStack leaf retarget journal', () => {
 
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 1, 3, 5');
     expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [101, 103, 500] });
-    expect(trace).not.toContain('stack:create');
+    expect(trace.some((entry) => entry.startsWith('stack:create:'))).toBe(false);
   });
 
   it('discovers by member 1 and refuses a foreign stack before create or add', async () => {
@@ -238,7 +284,7 @@ describe('assembleStack leaf retarget journal', () => {
       'read:api repos/acme/demo/stacks?pull_request=103',
       'read:api repos/acme/demo/stacks?pull_request=500',
     ]));
-    expect(trace.filter((entry) => entry === 'stack:create' || entry === 'stack:add')).toEqual([]);
+    expect(trace.filter((entry) => entry.startsWith('stack:create:') || entry.startsWith('stack:add:'))).toEqual([]);
     await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 3');
     expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [103] });
   });
@@ -276,6 +322,55 @@ describe('assembleStack leaf retarget journal', () => {
       kind: 'publication_retry', transition: 'assemble_stack', reason: 'publication_transition_indeterminate',
     });
     expect(writes).toEqual([]);
+  });
+
+  it('halts a non-prefix native stack without creating or extending it', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    const { gh, operations } = fixture('feat/c3/demo', trace, {
+      number: 44,
+      pull_requests: [{ number: 101, head: { sha: head } }, { number: 500, head: { sha: head } }],
+    });
+
+    await expect(assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations,
+    })).rejects.toMatchObject({ reason: 'stack_tip_diverged' });
+
+    expect(trace.filter((entry) => entry.startsWith('stack:create:') || entry.startsWith('stack:add:'))).toEqual([]);
+  });
+
+  it('halts a wrongly ordered existing stack without creating or extending it', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    const { gh, operations } = fixture('feat/c3/demo', trace, {
+      number: 44,
+      pull_requests: [{ number: 103, head: { sha: head } }, { number: 101, head: { sha: head } }, { number: 500, head: { sha: head } }],
+    });
+
+    await expect(assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations,
+    })).rejects.toMatchObject({ reason: 'stack_tip_diverged' });
+
+    expect(trace.filter((entry) => entry.startsWith('stack:create:') || entry.startsWith('stack:add:'))).toEqual([]);
+  });
+
+  it('does not verify a stack whose assembled member head differs from its pushed receipt', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const events: unknown[] = [];
+    const { gh, operations } = fixture('main', trace, undefined, {}, undefined, { 103: 'f'.repeat(40) });
+
+    await expect(assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations, events: { emit: async (event) => { events.push(event); } },
+    })).rejects.toMatchObject({ reason: 'stack_tip_diverged', message: expect.stringContaining('position 3') });
+
+    await expect(record()).resolves.toMatchObject({ stack: { number: 44, verified: false } });
+    expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [103] });
   });
 
   it('re-renders every member from the template while preserving opaque child and captured leaf regions', async () => {
@@ -343,5 +438,27 @@ describe('assembleStack leaf retarget journal', () => {
     expect(bodies.get(500)).toContain('Closes acme/demo#7');
     expect(trace.filter((entry) => entry.startsWith('edit:'))).toEqual(['edit:101', 'edit:103', 'edit:500']);
     expect(events).toContainEqual({ type: 'stack_assembled', prs: [101, 103, 500] });
+    const captures = await readFile(join(root, '.pipeline', 'pr-body-region-captures.json'), 'utf8');
+    expect(captures).toContain(leafUrl);
+    expect(captures).not.toContain('/pull/101');
+    expect(captures).not.toContain('/pull/103');
+  });
+
+  it('checks a child re-render before edit and leaves it untouched when its body violates child postconditions', async () => {
+    await writeRecord({ version: 1, members });
+    const bodies = new Map<number, string>([
+      [101, `${regionTemplate}\n\nCloses acme/demo#7`],
+      [103, regionTemplate],
+      [500, '## Stack\n\n- #500 (current)'],
+    ]);
+    const trace: string[] = [];
+    const { gh, operations } = fixture('main', trace, undefined, {}, bodies);
+
+    await expect(assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations, refreshMemberBodies: true, template: regionTemplate,
+    })).rejects.toMatchObject({ reason: 'stack_publication_precondition_failed', message: expect.stringContaining('feat/c1/demo') });
+
+    expect(trace.filter((entry) => entry.startsWith('edit:'))).toEqual([]);
   });
 });
