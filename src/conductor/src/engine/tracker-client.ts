@@ -41,6 +41,8 @@ import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGhAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { resolvePrivateGhObserverPassthrough } from '../execution/gh-observer-passthrough.js';
+import { validateStackPayload } from './stack-publication.js';
+import type { PublicationRecord } from './stack-publication-record.js';
 
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
 
@@ -60,6 +62,16 @@ export type GhRunner = (
 export interface GithubMutationExecutionContext {
   readonly provenance: MutationProvenanceRequest;
   readonly dependencies: GithubMutationAuthorizationDependencies;
+}
+
+/**
+ * Feature-local stack publication evidence supplied by the CLI composition
+ * root.  The runner owns its ordering: payload binding and the remote-tip
+ * fence both complete before the generic owner gate or `gh` transport.
+ */
+export interface GithubStackPublicationExecutionContext {
+  readonly record: PublicationRecord;
+  readonly guardTips: () => Promise<GithubOperationRunnerRefusal | undefined>;
 }
 
 /** Fresh, independently authorized pre-spec intake write context. */
@@ -98,6 +110,8 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly cwd: string;
   /** Absent context refuses every mutation while retaining discovery reads. */
   readonly mutation?: GithubMutationExecutionContext;
+  /** Record-bound validation for native-stack and retarget operations. */
+  readonly stackPublication?: GithubStackPublicationExecutionContext;
   /** Absent context refuses every existing pre-spec intake mutation. */
   readonly intake?: GithubIntakeMutationExecutionContext;
   /** Transaction-scoped authority for a newly created issue and its metadata. */
@@ -106,6 +120,28 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly shared?: GithubSharedMutationExecutionContext;
   /** Existing event spine for best-effort refusal telemetry. */
   readonly events?: GithubOperationEventEmitter;
+}
+
+function isStackPublicationOperation(request: GithubOperationRequest): boolean {
+  return request.operation === 'stack.read'
+    || request.operation === 'stack.create'
+    || request.operation === 'stack.add'
+    || request.operation === 'pull-request.retarget';
+}
+
+function validateStackPublicationRequest(
+  record: PublicationRecord,
+  request: GithubOperationRequest,
+): GithubOperationRunnerRefusal | undefined {
+  const validation = validateStackPayload(record, request);
+  if (validation.kind === 'refused') return validation;
+  // `stack.read` retains the member-number payload so GitHub can locate the
+  // stack, but a stack-number target still must name the recorded stack.
+  if (request.operation === 'stack.read' && request.target.kind === 'stack'
+    && (record.stack === undefined || request.target.number !== record.stack.number)) {
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
+  return undefined;
 }
 
 /** Ownership context used by the GitHub TrackerClient's structured requests. */
@@ -327,7 +363,14 @@ export function createGuardedGithubOperationRunner(
     async run(request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> {
       if (request.access === undefined) {
         return { kind: 'refused', reason: 'missing-provenance' };
-      } else if (request.access === 'read') {
+      }
+      if (isStackPublicationOperation(request) && options.stackPublication !== undefined) {
+        const payloadRefusal = validateStackPublicationRequest(options.stackPublication.record, request);
+        if (payloadRefusal !== undefined) return payloadRefusal;
+        const tipRefusal = await options.stackPublication.guardTips();
+        if (tipRefusal !== undefined) return tipRefusal;
+      }
+      if (request.access === 'read') {
         // Discovery reads need no ownership grant.
       } else if (options.creation) {
         const decision = await options.creation.authorize(request, options.cwd);
