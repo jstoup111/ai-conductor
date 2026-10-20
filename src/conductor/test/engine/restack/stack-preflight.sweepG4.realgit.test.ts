@@ -406,7 +406,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
     let published = false;
     const { result, records } = await withPersistedEvents(subject.repo, async (events) => {
       events.on('restack_applied', async (event) => {
-        if (event.cause !== 'feature-repair' || published) return;
+        if (event.type !== 'restack_applied' || event.cause !== 'feature-repair' || published) return;
         published = true;
         await writePublicationRecord(subject.repo, 'demo', undefined, {
           version: 1,

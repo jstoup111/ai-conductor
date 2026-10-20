@@ -6,7 +6,7 @@ import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
-import { enrollWatch, readWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
+import { enrollWatch, readWatch, sweepMergeableLabels, type SweepOpts } from '../../src/engine/mergeable-sweep.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { shippedRecordOnMain } from '../../src/engine/shipped-record-on-main.js';
 import { readPublicationRecord, writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
@@ -160,7 +160,7 @@ describe('stacked mergeable sweep shipping', () => {
     const gh = vi.fn(async (args: string[]) => ({
       stdout: JSON.stringify({ state: 'MERGED', mergeCommit: { oid: new Map([[101, c1], [103, c3], [500, c5]]).get(Number(args[2])) } }),
     }));
-    const options = {
+    const options: SweepOpts = {
       projectRoot: worktree,
       runGh: gh,
       tracker: { readPullRequestMergeState: async () => ({ state: 'MERGED' as const, mergeable: 'UNKNOWN' as const, hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none' as const, isDraft: false }) },
@@ -215,7 +215,7 @@ describe('stacked mergeable sweep shipping', () => {
       if (response === undefined) throw new Error('GitHub read failed');
       return { stdout: JSON.stringify(response) };
     });
-    const options = {
+    const options: SweepOpts = {
       projectRoot: worktree,
       runGh,
       tracker: { readPullRequestMergeState: async () => ({ state: 'MERGED', mergeable: 'UNKNOWN', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none', isDraft: false }) },
