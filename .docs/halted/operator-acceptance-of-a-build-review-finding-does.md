@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-20T01:07:51.578Z
 Slug: operator-acceptance-of-a-build-review-finding-does
 Class: needs-human
 Halting step: unknown
