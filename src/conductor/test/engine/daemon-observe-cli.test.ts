@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:11
+// Covers: task:6, task:7, task:11, task:24
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,12 +8,23 @@ import { acquire, readPidRecord, type KillProbe } from '../../src/engine/daemon-
 import { openDaemonLog } from '../../src/engine/daemon-log.js';
 import {
   computeStatusRow,
+  renderExecutorVersionsSection,
   runDaemonStatus,
   runDaemonLogs,
   detectDaemonObserveCommand,
 } from '../../src/engine/daemon-observe-cli.js';
+import { writeExecutorRecord } from '../../src/engine/executor-records.js';
 import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
+
+const executorVersionSeam = vi.hoisted(() => ({ currentTarget: vi.fn() }));
+vi.mock('../../src/engine/engine-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/engine-store.js')>(),
+  currentTarget: executorVersionSeam.currentTarget,
+}));
+
+const ENGINE_V1 = '20261019T120000Z-aaaaaaaaaaaa';
+const ENGINE_V2 = '20261020T120000Z-bbbbbbbbbbbb';
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
 const ALIVE: KillProbe = () => {};
@@ -91,6 +102,7 @@ describe('engine/daemon-observe-cli', () => {
   let root: string;
 
   beforeEach(async () => {
+    executorVersionSeam.currentTarget.mockReset().mockResolvedValue(ENGINE_V2);
     root = await mkdtemp(join(tmpdir(), 'daemon-observe-'));
   });
 
@@ -199,6 +211,66 @@ describe('engine/daemon-observe-cli', () => {
       const out: string[] = [];
       await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
       expect(out.join('\n')).toContain('version:version-unknown');
+    });
+  });
+
+  describe('executor engine versions (Task 24)', () => {
+    async function writeExecutor(repo: string, slug: string, engineVersionId: string): Promise<void> {
+      await writeExecutorRecord(repo, slug, {
+        pid: 99,
+        engineDir: `/engine-store/dist-versions/${engineVersionId}`,
+        engineVersionId,
+        startedAt: '2026-10-20T12:00:00.000Z',
+      });
+    }
+
+    it('renders live executor pins and an older stale supervisor against current v2', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 42, engineDir: `/engine-store/dist-versions/${ENGINE_V1}` });
+      await writeExecutor(repo, 'v1-feature', ENGINE_V1);
+      await writeExecutor(repo, 'v2-feature', ENGINE_V2);
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toEqual([
+        `  EXECUTOR ENGINE CURRENT: ${ENGINE_V2}`,
+        `  SUPERVISOR ENGINE: ${ENGINE_V1} (older than current)`,
+        `  EXECUTOR [v1-feature]: ${ENGINE_V1} (older than current)`,
+        `  EXECUTOR [v2-feature]: ${ENGINE_V2}`,
+      ]);
+    });
+
+    it('keeps readable executor rows when another executor record is unreadable', async () => {
+      const repo = join(root, 'repo');
+      await writeExecutor(repo, 'healthy', ENGINE_V2);
+      await mkdir(join(repo, '.daemon', 'executors'), { recursive: true });
+      await writeFile(join(repo, '.daemon', 'executors', 'broken.json'), '{not json', 'utf8');
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toContain('  EXECUTOR [broken]: version unknown — record unreadable');
+      expect(out).toContain(`  EXECUTOR [healthy]: ${ENGINE_V2}`);
+    });
+
+    it('renders an unresolvable current engine and legacy dispatches as unknown without older markers', async () => {
+      executorVersionSeam.currentTarget.mockRejectedValueOnce(new Error('dist unavailable'));
+      const repo = join(root, 'repo');
+      await writeExecutor(repo, 'supervisor-fallback', ENGINE_V2);
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writeFile(join(repo, '.daemon', 'events.jsonl'), JSON.stringify({
+        type: 'feature_dispatch_started', slug: 'legacy-feature', kind: 'initial',
+      }) + '\n', 'utf8');
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toContain('  EXECUTOR ENGINE CURRENT: unknown');
+      expect(out).toContain(`  EXECUTOR [supervisor-fallback]: ${ENGINE_V2}`);
+      expect(out).toContain('  DISPATCH [legacy-feature]: engine unknown');
+      expect(out.join('\n')).not.toContain('older than current');
     });
   });
 

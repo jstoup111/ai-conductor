@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, task:rem-as-built-rem-vg-5
+// Covers: task:1, task:2, task:4, task:26, task:27, task:rem-as-built-rem-vg-5
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';

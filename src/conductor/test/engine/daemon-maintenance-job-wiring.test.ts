@@ -1,4 +1,4 @@
-// Covers: task:4, task:7, task:9, task:11
+// Covers: task:4, task:7, task:9, task:11, task:29
 import { describe, expect, it, vi } from 'vitest';
 
 import { runDaemon, type BacklogItem, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
