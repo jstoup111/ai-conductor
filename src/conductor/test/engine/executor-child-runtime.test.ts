@@ -38,7 +38,14 @@ function lifecycle(
     daemon: true,
     project: 'repo',
     projectRoot: root,
-    shipmentEvidence: vi.fn(async () => ({ kind: 'valid' as const })),
+    shipmentEvidence: vi.fn(async (input) => ({
+      kind: 'valid' as const,
+      slug: input.slug,
+      pr: input.implementationPr,
+      recordPath: '.docs/shipped/feature.md',
+      hash: 'a'.repeat(64),
+      commit: input.candidateCommit,
+    })),
     ...overrides,
   };
 }
