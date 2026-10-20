@@ -1,4 +1,4 @@
-// Covers: task:21
+// Covers: task:21, task:rem-prd-audit-rem-v3-divergence-mapping
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -141,7 +141,7 @@ describe('published stack tip guard', () => {
     expect(calls[0]).toEqual(['ls-remote', '--heads', 'origin', 'refs/heads/feat/c1/demo', 'refs/heads/feat/c3/demo', 'refs/heads/feat/daemon-demo']);
   });
 
-  it('refuses a rewritten source or a rewritten member without moving the destination', async () => {
+  it('carries mismatched stack positions through a guard refusal without moving the destination', async () => {
     const { repository, origin, child1, leaf } = await fixture();
     const calls: string[][] = [];
     await git(origin, ['update-ref', 'refs/heads/feat/c3/demo', child1]);
@@ -150,7 +150,11 @@ describe('published stack tip guard', () => {
     await expect(executeRemoteGit(
       ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo'],
       dependencies(repository, calls),
-    )).resolves.toMatchObject({ kind: 'refused', reason: 'stack-tip-mismatch' });
+    )).resolves.toMatchObject({
+      kind: 'refused',
+      reason: 'stack-tip-mismatch',
+      members: [{ pr: 103, position: c3 }],
+    });
 
     expect(await sha(origin, 'refs/heads/feat/daemon-demo')).toBe(leaf);
     expect(calls).toHaveLength(1);

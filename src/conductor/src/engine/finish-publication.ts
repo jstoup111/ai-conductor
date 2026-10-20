@@ -1803,6 +1803,9 @@ async function advanceFinishPublicationUnreconciled(
       });
 
       const draftPr = await openShipDraftPr(input.effects.establishPr);
+      if (draftPr.outcome === 'stack-tip-diverged') {
+        return { kind: 'human_required', reason: 'stack_tip_diverged', detail: draftPr.reason };
+      }
       if (draftPr.outcome !== 'published') {
         return {
           kind: 'publication_retry',

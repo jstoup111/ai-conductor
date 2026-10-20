@@ -123,12 +123,14 @@ export async function recordUnreachableMemberReport(
 /** Persist the operator-owned divergence stop and mirror it on the event spine. */
 export async function haltStackTipDiverged(
   root: string,
-  members: readonly { readonly pr: number }[],
+  members: readonly { readonly pr: number; readonly position?: number }[],
   events?: { emit(event: Extract<ConductorEvent, { type: 'stack_tip_diverged' }>): Promise<void> },
   detail?: string,
 ): Promise<void> {
   const prs = members.map((member) => member.pr);
-  await writeHaltMarker(root, `${detail ?? 'published stack tip diverged'} for PRs: ${prs.join(', ')}\n`, 'stack-tip-diverged');
+  const positions = members.flatMap((member) => member.position === undefined ? [] : [member.position]);
+  const subject = positions.length > 0 ? `positions: ${positions.join(', ')}` : `PRs: ${prs.join(', ')}`;
+  await writeHaltMarker(root, `${detail ?? 'published stack tip diverged'} for ${subject}\n`, 'stack-tip-diverged');
   await events?.emit({ type: 'stack_tip_diverged', prs });
 }
 

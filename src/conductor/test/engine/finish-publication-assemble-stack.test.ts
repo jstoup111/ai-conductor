@@ -1,5 +1,5 @@
-// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template, task:rem-prd-audit-rem-v3-read-indeterminate
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template, task:rem-prd-audit-rem-v3-read-indeterminate, task:rem-prd-audit-rem-v3-divergence-mapping
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -185,6 +185,22 @@ describe('assembleStack leaf retarget journal', () => {
     await expect(record()).resolves.toMatchObject({ retarget: { phase: 'observed' } });
   });
 
+  it('maps an observed retarget-base divergence to a retained stack-tip halt', async () => {
+    await writeRecord({ version: 1, members });
+    const trace: string[] = [];
+    const events: unknown[] = [];
+    const { gh, operations } = fixture('unexpected-base', trace);
+
+    await expect(assembleStack({
+      root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
+      git: tracingGit(trace), gh, operations, events: { emit: async (event) => { events.push(event); } },
+    })).rejects.toMatchObject({ reason: 'stack_tip_diverged', message: expect.stringContaining('retained leaf pull request base diverged') });
+
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 1, 3, 5');
+    expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [101, 103, 500] });
+    expect(trace).not.toContain('stack:create');
+  });
+
   it('discovers by member 1 and refuses a foreign stack before create or add', async () => {
     await writeRecord({ version: 1, members });
     const trace: string[] = [];
@@ -211,9 +227,10 @@ describe('assembleStack leaf retarget journal', () => {
       103: { number: 91, pull_requests: [{ number: 103, head: { sha: head } }] },
     });
 
+    const events: unknown[] = [];
     await expect(assembleStack({
       root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main',
-      git: tracingGit(trace), gh, operations,
+      git: tracingGit(trace), gh, operations, events: { emit: async (event) => { events.push(event); } },
     })).rejects.toMatchObject({ reason: 'stack_tip_diverged', message: 'native stack membership diverged at position 3' });
 
     expect(trace).toEqual(expect.arrayContaining([
@@ -222,6 +239,8 @@ describe('assembleStack leaf retarget journal', () => {
       'read:api repos/acme/demo/stacks?pull_request=500',
     ]));
     expect(trace.filter((entry) => entry === 'stack:create' || entry === 'stack:add')).toEqual([]);
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 3');
+    expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [103] });
   });
 
   it('retries a timed-out stack.read without recording a pull-request.ready write', async () => {

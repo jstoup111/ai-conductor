@@ -20,6 +20,7 @@ import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushedTipSource, type PreparedPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
+import type { PublicationMember } from './stack-publication-record.js';
 import { makeGitRunner } from './rebase.js';
 import { hasDurableChildState } from './child-cursor.js';
 
@@ -58,6 +59,8 @@ export type RemoteGitExecutionResult =
     readonly kind: 'refused';
     readonly reason: GithubOperationRefusalReason;
     readonly target?: RemoteGitDestination;
+    /** Present for the published-stack refusal so FINISH can name positions. */
+    readonly members?: readonly PublicationMember[];
   }
   | { readonly kind: 'failed'; readonly error: string; readonly targets: readonly RemoteGitDestination[] };
 
@@ -155,7 +158,7 @@ async function guardPublishedStackPushes(
   remote: string,
   destinations: readonly RemoteGitDestination[],
   dependencies: RemoteGitOperationDependencies,
-): Promise<{ readonly kind: 'allow'; readonly args: readonly string[] } | { readonly kind: 'refuse'; readonly members: readonly { readonly pr: number }[] }> {
+): Promise<{ readonly kind: 'allow'; readonly args: readonly string[] } | { readonly kind: 'refuse'; readonly members: readonly PublicationMember[] }> {
   const candidates = featurePushSources(args, destinations);
   let guardedArgs = [...args];
   const localGit: PushLeaseGitRunner = dependencies.pushLeaseGit ?? (async (localArgs, input) => {
@@ -328,7 +331,12 @@ export async function executeRemoteGit(
     // This low-level choke point has no authority to decide a feature's
     // terminal state. Return the typed refusal; FINISH records the halt while
     // halt-record and post-finish maintenance merely skip their write.
-    return { kind: 'refused', reason: 'stack-tip-mismatch', target: resolution.targets[0] };
+    return {
+      kind: 'refused',
+      reason: 'stack-tip-mismatch',
+      target: resolution.targets[0],
+      members: guarded.members,
+    };
   }
 
   const preparation = await preparePushRecordings(guarded.args, resolution.targets, dependencies);

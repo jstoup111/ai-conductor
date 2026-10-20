@@ -9,11 +9,11 @@
 import { access, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
+import type { ConductorEvent, ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './step-runner-types.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
-import { decodeGithubOperationRequest, executeGithubOperation, type GithubOperationEventEmitter, type GithubOperationRunner, type GithubOperationTarget } from './github-operations.js';
+import { decodeGithubOperationRequest, executeGithubOperation, type GithubOperationRunner, type GithubOperationTarget } from './github-operations.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
@@ -146,7 +146,7 @@ export interface ProductionFinishPublicationDeps {
   /** Test-only terminal remote-Git seam; production uses executeRemoteGit. */
   remoteGit?: typeof executeRemoteGit;
   /** Canonical event spine; required for D9 warned operator-credential fallback. */
-  events?: GithubOperationEventEmitter;
+  events?: { emit(event: ConductorEvent): Promise<void> };
   /**
    * Production composition owns the ordered presentation repair.  Callers
    * inject the existing halt-rehabilitation/floor/ready composition so this
@@ -395,6 +395,15 @@ function parseNativeStackMembers(value: unknown): readonly NativeStackMember[] |
   return members.some((member) => member === undefined) ? undefined : members as NativeStackMember[];
 }
 
+/** A divergent publication fact is terminal: persist the operator stop before it reaches the coordinator. */
+async function haltAndThrowStackTipDiverged(input: {
+  root: string;
+  events?: { emit(event: ConductorEvent): Promise<void> };
+}, members: readonly { readonly pr: number; readonly position?: number }[], detail: string): Promise<never> {
+  await haltStackTipDiverged(input.root, members, input.events, detail);
+  throw new StackPublicationHaltError('stack_tip_diverged', detail);
+}
+
 /**
  * Re-read the native stack immediately before a ready flip. The durable record
  * supplies the required order while pushed-tip refs bind each native PR head to
@@ -570,7 +579,7 @@ export async function assembleStack(input: {
   refreshMemberBodies?: boolean;
   /** Template defaults are the child-body postcondition authority. */
   template?: string;
-  events?: { emit(event: unknown): Promise<void> };
+  events?: { emit(event: ConductorEvent): Promise<void> };
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
   if (!leaf || !input.operations) throw new Error('stack leaf retarget boundary unavailable');
@@ -605,7 +614,7 @@ export async function assembleStack(input: {
   const topChild = stored.record.members[leafIndex - 1]!;
   const existing = stored.record.retarget;
   if (existing && (existing.from !== input.baseBranch || existing.to !== topChild.branch)) {
-    throw new Error('stack publication retarget journal diverged');
+    await haltAndThrowStackTipDiverged(input, stored.record.members, 'stack publication retarget journal diverged');
   }
 
   const writePhase = async (phase: 'intended' | 'observed'): Promise<void> => {
@@ -623,11 +632,13 @@ export async function assembleStack(input: {
   if (actualBase === topChild.branch) {
     if (stored.record.retarget?.phase !== 'observed') await writePhase('observed');
   } else if (actualBase !== input.baseBranch) {
-    throw new Error(`retained leaf pull request base diverged: expected ${input.baseBranch} or ${topChild.branch}, got ${actualBase}`);
+    await haltAndThrowStackTipDiverged(input, stored.record.members,
+      `retained leaf pull request base diverged: expected ${input.baseBranch} or ${topChild.branch}, got ${actualBase}`);
   } else {
     if (stored.record.retarget === undefined) await writePhase('intended');
     if (stored.record.retarget?.phase === 'observed') {
-    throw new Error('observed stack leaf retarget does not match the retained leaf base');
+      await haltAndThrowStackTipDiverged(input, stored.record.members,
+        'observed stack leaf retarget does not match the retained leaf base');
     }
 
     // Retarget is a GitHub write, not a push, so it does not cross
@@ -655,7 +666,7 @@ export async function assembleStack(input: {
       },
     });
     if (guard.kind === 'refuse') {
-      await haltStackTipDiverged(input.root, guard.members, input.events as Parameters<typeof haltStackTipDiverged>[2],
+      await haltStackTipDiverged(input.root, guard.members, input.events,
         `published stack tip diverged at positions: ${guard.members.map((member) => member.position).join(', ')}`);
       throw new StackPublicationHaltError('stack_tip_diverged', 'published stack tip diverged before leaf retarget');
     }
@@ -670,7 +681,9 @@ export async function assembleStack(input: {
     });
 
     const observedBase = await readLeafBase();
-    if (observedBase !== topChild.branch) throw new Error('retained leaf retarget was not observed');
+    if (observedBase !== topChild.branch) {
+      await haltAndThrowStackTipDiverged(input, stored.record.members, 'retained leaf retarget was not observed');
+    }
     await writePhase('observed');
   }
 
@@ -712,10 +725,8 @@ export async function assembleStack(input: {
   const foreignIndex = memberships.findIndex((membership) =>
     membership !== undefined && (native === undefined || membership.number !== native.number));
   if (foreignIndex >= 0) {
-    throw new StackPublicationHaltError(
-      'stack_tip_diverged',
-      `native stack membership diverged at position ${publication.record.members[foreignIndex]!.position}`,
-    );
+    const member = publication.record.members[foreignIndex]!;
+    await haltAndThrowStackTipDiverged(input, [member], `native stack membership diverged at position ${member.position}`);
   }
   if (!native) {
     await executeValidatedStackOperation({
@@ -735,7 +746,8 @@ export async function assembleStack(input: {
   const isOrderedPrefix = native.members.length <= publication.record.members.length
     && native.members.every((member, index) => member.number === publication.record.members[index]?.pr);
   if (!isOrderedPrefix) {
-    throw new StackPublicationHaltError('stack_tip_diverged', 'native stack belongs to another stack or is not an ordered publication prefix');
+    await haltAndThrowStackTipDiverged(input, publication.record.members,
+      'native stack belongs to another stack or is not an ordered publication prefix');
   }
 
   if (publication.record.stack?.number !== native.number) {
@@ -760,12 +772,12 @@ export async function assembleStack(input: {
   }
   if (!native || native.members.length !== publication.record.members.length
     || native.members.some((member, index) => member.number !== publication.record.members[index]?.pr)) {
-    throw new StackPublicationHaltError('stack_tip_diverged', 'native stack membership or order diverged');
+    return haltAndThrowStackTipDiverged(input, publication.record.members, 'native stack membership or order diverged');
   }
   for (const [index, member] of publication.record.members.entries()) {
     const pushed = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, member.branch)]);
     if (pushed.exitCode !== 0 || pushed.stdout.trim() !== native.members[index]!.head) {
-      throw new StackPublicationHaltError('stack_tip_diverged', `native stack head diverged at position ${member.position}`);
+      await haltAndThrowStackTipDiverged(input, [member], `native stack head diverged at position ${member.position}`);
     }
     const stdout = await runTrackerRepositoryRead(
       input.gh, input.root, 'pull-request.read', leaf.repository,
@@ -781,7 +793,7 @@ export async function assembleStack(input: {
       : undefined;
     const expectedBase = index === 0 ? input.baseBranch : publication.record.members[index - 1]!.branch;
     if (base !== expectedBase || head !== pushed.stdout.trim()) {
-      throw new StackPublicationHaltError('stack_tip_diverged', `native stack base or head diverged at position ${member.position}`);
+      await haltAndThrowStackTipDiverged(input, [member], `native stack base or head diverged at position ${member.position}`);
     }
   }
   const verified = await writePublicationRecord(input.root, input.slug, publication, {
@@ -857,7 +869,7 @@ async function establishChildPrs(input: {
   remoteMutation?: GithubMutationExecutionContext;
   remoteMutationForTarget?: (target: Extract<GithubOperationTarget, { kind: 'remote-ref' }>) => GithubMutationExecutionContext | undefined;
   remoteGit?: typeof executeRemoteGit;
-  events?: GithubOperationEventEmitter;
+  events?: { emit(event: ConductorEvent): Promise<void> };
 }): Promise<void> {
   const leaf = repositoryAndNumber(input.leafUrl);
   if (!leaf || !input.operations || !input.remoteMutation) throw new Error('stack child publication boundary unavailable');
@@ -890,12 +902,13 @@ async function establishChildPrs(input: {
       return { number: candidate.number as number, isDraft: candidate.isDraft, state: candidate.state, base: candidate.baseRefName };
     });
   };
-  const choose = (prs: ChildPullRequest[], branch: string, expectedBase: string): ChildPullRequest | undefined => {
+  const choose = async (prs: ChildPullRequest[], branch: string, expectedBase: string, position: number): Promise<ChildPullRequest | undefined> => {
     if (prs.length > 1) throw new Error(`ambiguous child pull request for ${branch}`);
     const pr = prs[0];
     if (!pr) return undefined;
     if (pr.state !== 'OPEN' || !pr.isDraft || pr.base !== expectedBase) {
-      throw new StackPublicationHaltError('stack_tip_diverged', `diverged child pull request at position ${branch}`);
+      return haltAndThrowStackTipDiverged(input, [{ pr: pr.number, position }],
+        `diverged child pull request at position ${position}`);
     }
     return pr;
   };
@@ -904,7 +917,7 @@ async function establishChildPrs(input: {
   // the loop below is deliberate: it is the ambiguity recovery fence after a
   // create response is lost.
   await Promise.all(children.map((child, index) => list(child.branch).then((prs) =>
-    choose(prs, child.branch, index === 0 ? input.baseBranch : children[index - 1]!.branch))));
+    choose(prs, child.branch, index === 0 ? input.baseBranch : children[index - 1]!.branch, child.position))));
   const rawPrior = await readPublicationRecord(input.root, input.slug, { git: stackGit });
   const prior = rawPrior.kind === 'record' ? rawPrior : undefined;
   // A torn-down receipt is only the CAS predecessor for a new publication.
@@ -914,7 +927,7 @@ async function establishChildPrs(input: {
   const reusingTornDownReceipt = prior?.record.tornDown === true;
   if (prior && !reusingTornDownReceipt
     && prior.record.members.some((member, index) => member.position !== [...children.map((child) => child.position), leafPosition][index])) {
-    await haltStackTipDiverged(input.root, prior.record.members, input.events as never, 'published stack tip diverged at sealed position');
+    await haltStackTipDiverged(input.root, prior.record.members, input.events, 'published stack tip diverged at sealed position');
     throw new StackPublicationHaltError('stack_tip_diverged', 'publication record has divergent sealed positions');
   }
   const leafView = await list(leafBranchFor(input.slug));
@@ -963,18 +976,18 @@ async function establishChildPrs(input: {
       remoteGit: input.remoteGit,
     });
     if (pushed.kind === 'diverged') {
-      await haltStackTipDiverged(input.root, stored?.record.members ?? [{ pr: leaf.number }], input.events as never, `published stack tip diverged at position ${child.position}`);
+      await haltStackTipDiverged(input.root, stored?.record.members ?? [{ pr: leaf.number, position: child.position }], input.events, `published stack tip diverged at position ${child.position}`);
       throw new StackPublicationHaltError('stack_tip_diverged', `child closure diverged at position ${child.position}`);
     }
     if (pushed.kind === 'read-failed') throw new Error(`child closure read failed at ${child.position}`);
-    let member = choose(await list(child.branch), child.branch, base);
+    let member = await choose(await list(child.branch), child.branch, base, child.position);
     if (!member) {
       const created = await executeGithubOperation({ operation: 'pull-request.create', repository: leaf.repository,
         resource: { kind: 'repository', repository: leaf.repository }, context: { actor: 'finish-publication' },
         payload: { title: presentation.slice.name, body, head: child.branch, base, draft: true } },
       input.operationsForTarget?.({ repository: leaf.repository, kind: 'repository' }) ?? input.operations);
       if (created.kind !== 'executed') throw new Error(`could not create child pull request for ${child.branch}`);
-      member = choose(await list(child.branch), child.branch, base);
+      member = await choose(await list(child.branch), child.branch, base, child.position);
       if (!member) throw new Error(`created child pull request is not discoverable for ${child.branch}`);
     }
     const members = [...(freshMembership ? [] : stored?.record.members ?? []).filter((candidate) => candidate.position !== child.position),
@@ -1593,7 +1606,7 @@ export function createProductionFinishPublicationCoordinator(
                 onDiverged: async (members, detail) => haltStackTipDiverged(
                   deps.projectRoot,
                   members,
-                  deps.events as Parameters<typeof haltStackTipDiverged>[2],
+                  deps.events,
                   detail,
                 ),
               });
@@ -1739,7 +1752,7 @@ export function createProductionFinishPublicationCoordinator(
               operationsForTarget,
               refreshMemberBodies: true,
               template: deps.prTemplateBytes,
-              events: deps.events as never,
+              events: deps.events,
             });
           },
           repairPresentation: async () => {
@@ -1771,7 +1784,7 @@ export function createProductionFinishPublicationCoordinator(
                 gh: deps.gh,
                 operations: prOperations,
                 operationsForTarget,
-                events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
+                events: deps.events,
                 position: leafMember.position,
               });
             }
@@ -1798,7 +1811,7 @@ export function createProductionFinishPublicationCoordinator(
               gh: deps.gh,
               operations: prOperations,
               operationsForTarget,
-              events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
+              events: deps.events,
               stacked: publicationRecord?.record.stack?.verified === true,
             });
             if (!state.feature_desc) throw new Error('missing shipment identity');
