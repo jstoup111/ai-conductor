@@ -678,3 +678,29 @@ Task 5 ──> Task 12
 **Done when:**
 - adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-5k is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-5l: build-review-adjudication-coordinator.ts: build currentFindings from every projected source, including custom-rubric sources from aggregate.customResults/currentCustomRubrics. Reuse the identity canonicalization the effective verdict and findings CLI use for custom rubrics, so carry classification and crash-event recovery cover custom findings.
+**Gate:** prd-audit
+**Rationale:** Verified (99%) at build-review-adjudication-coordinator.ts:191-201: currentFindings iterates only input.aggregate.results, while projectBuildReviewAggregateSources (build-review-aggregate.ts:481-487) also yields currentCustomRubrics sources. Custom-rubric findings therefore resolve to none in the coordinator, while the effective verdict, findings CLI and accepted-risk renderer report them carried. The approved architecture is unchanged; this is implementation drift plus a parity test that checks source strings instead of behavior. Task 5 (the coordinator settles carried bindings) and Task 11 (behavioral consumer parity) admit the repair. The fix keeps every existing built-in carry expectation (rem-prd-audit-5a/6a/12b, rem-as-built-6e/5k).
+**Criterion:** S8.1
+**Parent task:** 11
+**Done when:**
+- [test] S8.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-5l is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-11b: build-review-acceptance-consumers.test.ts: replace the source-grep parity checks with behavioral calls. Against one shared fixture holding a built-in and a custom-rubric finding bound to an accepted case, call the effective verdict, coordinator accepted set, reuse partition, decision-stop partition, adjudication context, findings output and accepted-risk renderer. Each must report both findings carried with the same origin finding id and lap, and any disagreement must fail naming the consumer. Keep the matchesBuildReviewDisposition static guard.
+**Gate:** prd-audit
+**Rationale:** Verified (99%) at build-review-adjudication-coordinator.ts:191-201: currentFindings iterates only input.aggregate.results, while projectBuildReviewAggregateSources (build-review-aggregate.ts:481-487) also yields currentCustomRubrics sources. Custom-rubric findings therefore resolve to none in the coordinator, while the effective verdict, findings CLI and accepted-risk renderer report them carried. The approved architecture is unchanged; this is implementation drift plus a parity test that checks source strings instead of behavior. Task 5 (the coordinator settles carried bindings) and Task 11 (behavioral consumer parity) admit the repair. The fix keeps every existing built-in carry expectation (rem-prd-audit-5a/6a/12b, rem-as-built-6e/5k).
+**Criterion:** S8.1
+**Parent task:** 11
+**Done when:**
+- [test] S8.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-11b is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-5m: build-review-adjudication-coordinator.test.ts: a custom-rubric finding bound to an operator-accepted case settles carried, with no halt-regression/repeat, effect or charge. After a crash between the carried-link append and emission, replay persists exactly one build_review_disposition_carried event for that custom finding, and a second replay emits nothing.
+**Gate:** as-built
+**Rationale:** Same verified defect as S8.1, seen from ADR decision 2. The built-in-only currentFindings map makes carry classification (coordinator.ts:750-753) and crash-event recovery (:613-614) skip custom-rubric findings. Decision 2 is authoritative and needs no clarification, so this is conforming implementation work in BUILD, admitted by Task 5 (carry settlement) and the carried-event recovery work (rem-as-built-rem-as-built-5j/5k). The coordinator fix is shared with S8.1; this disposition adds coordinator-level coverage for custom findings.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-5m is committed and its targeted tests pass.
