@@ -1531,8 +1531,13 @@ export async function runDaemon(
       // generation permanently in `paused`.
       if (maintenance.isDraining()) {
         maintenance.endDrain();
-        maintenanceJob.reopen();
       }
+      // A natural-idle restart closes the same job before it awaits the
+      // handoff, but does not create a drain state. A declined handoff must
+      // therefore reopen independently of `isDraining()`; otherwise every
+      // later completion and idle boundary silently loses its maintenance
+      // trigger for the rest of this daemon generation.
+      maintenanceJob.reopen();
       restartPending = false;
     };
     if (!staleGatesArmed || !deps.staleEngineChecker) {
@@ -1996,6 +2001,16 @@ export async function runDaemon(
     // maintenance sweep below.
     await Promise.resolve();
     if (completedWorker) {
+      // Keep the width-one cadence observable even when a feature settles in
+      // the same microtask turn. The historical serial dispatcher performed a
+      // scheduler turn between dispatch and collection; bypassing it changes
+      // the ordering of refresh/sweep work and makes one-shot drains skip all
+      // busy polling. A zero-delay turn avoids delaying an already-complete
+      // feature by the regular idle interval.
+      if (concurrency === 1 && maxIdlePolls !== 0) {
+        await sleep(0);
+        await yieldToEventLoop();
+      }
       await collectOne();
       continue;
     }
@@ -2049,10 +2064,12 @@ export async function runDaemon(
   // provider windows; await it so shutdown never orphans a root mutation.
   // Its result is discarded — no dispatch follows.
   if (refreshJob) await refreshJob;
-  // Final teardown must not orphan a background reconciler. Closing first
-  // suppresses a coalesced rerun before waiting for the active pass.
-  maintenanceJob.close();
+  // A terminal collection is itself a maintenance trigger. Let its already
+  // requested coalesced pass finish before sealing the job; closing first
+  // would drop the terminal sweep during one-shot drains and at max-item
+  // boundaries.
   await maintenanceJob.settled();
+  maintenanceJob.close();
 
   // Dispose all remaining watchers before exiting
   for (const dispose of watchers.values()) {
