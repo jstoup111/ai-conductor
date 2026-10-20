@@ -1479,6 +1479,16 @@ export async function runDaemon(
     }
   };
 
+  // Width one awaits the drain observation only once a bounded fallback is
+  // already due; an unconditional await adds scheduler turns that let a
+  // settled serial worker skip its busy poll.
+  const serialBusyDrainDue = (): boolean =>
+    !maintenance.isDraining()
+    && inFlight.size > 0
+    && (deps.protocolMismatchPending?.() === true
+      || supervisorStaleness.restartReason === 'protocol-mismatch'
+      || supervisorStaleness.capExceeded(staleAgeCapHours));
+
   const observeBusyDrainRequest = async (): Promise<void> => {
     if (maintenance.isDraining() || inFlight.size === 0) return;
 
@@ -1491,11 +1501,25 @@ export async function runDaemon(
       return;
     }
 
-    // The operator-marker drain already has its own idle-boundary admission
-    // path. Keep its historical serial behavior (one durable read at idle),
-    // while still observing the D7 stale-age and protocol-mismatch fallbacks
-    // at width one below.
-    if (maintenance.busyMaintenanceEnabled() && deps.hasRestartPending) {
+    if (!maintenance.busyMaintenanceEnabled()) {
+      // Width one keeps the serial lifecycle: the operator marker and fresh
+      // staleness samples stay at the claim and idle boundaries. A busy serial
+      // pool drains only for the bounded fallback, the age cap measured from
+      // staleness those boundaries already recorded.
+      if (supervisorStaleness.restartReason === 'protocol-mismatch') {
+        await beginDrain('stale-engine');
+        return;
+      }
+      if (!supervisorStaleness.capExceeded(staleAgeCapHours)) return;
+      if (deps.isSuppressed) {
+        const target = deps.staleEngineChecker?.targetIdentity?.() ?? null;
+        if (await deps.isSuppressed(target)) return;
+      }
+      await beginDrain('stale-engine');
+      return;
+    }
+
+    if (deps.hasRestartPending) {
       try {
         if (await deps.hasRestartPending()) {
           await beginDrain('restart-pending');
@@ -1797,12 +1821,8 @@ export async function runDaemon(
           async (episodeActive): Promise<DaemonStopReason | null> => {
             if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
               try {
-                // A busy-pool observation has already made the pending marker
-                // authoritative for this generation. Do not re-read it at the
-                // drained boundary: apart from needless I/O, a changed marker
-                // could make an episode-deferred restart disappear.
                 const hasRestart =
-                  restartPending || restartPendingDeferredByEpisode || (await deps.hasRestartPending());
+                  restartPendingDeferredByEpisode || (await deps.hasRestartPending());
                 if (hasRestart) {
                 restartPending = true;
                 maintenanceJob.close();
@@ -1986,6 +2006,12 @@ export async function runDaemon(
       await emitTick();
     }
 
+    // Observe restart conditions only after the claim attempt. A drain begun
+    // here stops the next free slot from being filled after a worker settles.
+    // A serial pool still needs to observe an age cap or protocol mismatch;
+    // the active child is what must drain before a handoff can occur.
+    if (maintenance.busyMaintenanceEnabled() || serialBusyDrainDue()) await observeBusyDrainRequest();
+
     // Workers are running. Race their completion against the poll timer so
     // busy pools still execute the scheduler-owned periodic sweep; a timer
     // tick never mutates an in-flight WorkOrder. This is outside the free-slot
@@ -1994,19 +2020,10 @@ export async function runDaemon(
     // busy-pool timer; a genuinely busy pool still reaches the periodic
     // maintenance sweep below.
     await Promise.resolve();
-    await Promise.resolve();
     if (completedWorker) {
-      // Do not wait on the caller-owned poll seam for an already-settled
-      // worker. HALT-clear tests deliberately inject a sleep that never
-      // resolves; collection registers the watch that is meant to wake it.
       await collectOne();
       continue;
     }
-    // Observe restart conditions only for a genuinely busy pool. A worker
-    // that already settled during the dispatch turn has no active executor to
-    // drain, and probing it here adds a second stale-engine observation to the
-    // serial lifecycle without any intervening busy period.
-    await observeBusyDrainRequest();
     // An immediate-idle-boundary run has no poll interval to observe. Collect
     // directly so its injected sleep cannot become an accidental scheduler
     // side effect. Once mode still uses busy polling while workers are active:
@@ -2025,11 +2042,6 @@ export async function runDaemon(
       void sleep(idlePollMs).then(resolve, reject);
     });
     wakeBusyPoll = resolveBusyPoll;
-    // The completion observer can publish between the early check above and
-    // installing this poll's wake callback. Do not lose that edge: injected
-    // sleeps used by the HALT-clear path intentionally never resolve, so a
-    // settled worker must wake this poll even when it beat the assignment.
-    if (completedWorker) resolveBusyPoll();
     await busyPoll;
     // A busy lap must be a real event-loop turn, never a microtask-only lap.
     // `sleep` is injectable, and an immediately-resolved one leaves this whole
@@ -2062,12 +2074,10 @@ export async function runDaemon(
   // provider windows; await it so shutdown never orphans a root mutation.
   // Its result is discarded — no dispatch follows.
   if (refreshJob) await refreshJob;
-  // A terminal collection is itself a maintenance trigger. Let its already
-  // requested coalesced pass finish before sealing the job; closing first
-  // would drop the terminal sweep during one-shot drains and at max-item
-  // boundaries.
-  await maintenanceJob.settled();
+  // Final teardown must not orphan a background reconciler. Closing first
+  // suppresses a coalesced rerun before waiting for the active pass.
   maintenanceJob.close();
+  await maintenanceJob.settled();
 
   // Dispose all remaining watchers before exiting
   for (const dispose of watchers.values()) {

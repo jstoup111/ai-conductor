@@ -515,6 +515,71 @@ describe('engine/daemon-maintenance', () => {
     });
   });
 
+  it('drains a width-one pool once its busy worker outlives the stale-age cap', async () => {
+    let clock = 0;
+    let restarts = 0;
+    let releaseWorker: (() => void) | undefined;
+    let observeDrain: (() => void) | undefined;
+    let observeBusyPoll: (() => void) | undefined;
+    const workerReleased = new Promise<void>((resolve) => {
+      releaseWorker = resolve;
+    });
+    const drainObserved = new Promise<void>((resolve) => {
+      observeDrain = resolve;
+    });
+    const busyPollObserved = new Promise<void>((resolve) => {
+      observeBusyPoll = resolve;
+    });
+    const logs: string[] = [];
+
+    const run = runDaemon(
+      {
+        discoverBacklog: async () => [{ slug: 'long-running' }],
+        runFeature: async (item) => {
+          // The claim boundary recorded staleness at t=0; the worker now
+          // runs past the one-hour cap.
+          clock = 2 * 3_600_000;
+          await workerReleased;
+          return { slug: item.slug, status: 'done' as const };
+        },
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        // The predispatch handoff declines, so the feature is claimed on the
+        // stale engine; the drained-boundary handoff then fires.
+        requestRestart: async () => ({ fired: restarts++ > 0 }),
+        now: () => clock,
+        log: (line) => {
+          logs.push(line);
+          if (line === '[daemon] drain started: stale-engine') observeDrain?.();
+        },
+        sleep: async () => {
+          observeBusyPoll?.();
+          await workerReleased;
+        },
+      },
+      {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        supervisorMaxStaleHours: 1,
+        idlePollMs: 0,
+        maxIdlePolls: 0,
+      },
+    );
+
+    const firstBoundary = await Promise.race([
+      drainObserved.then(() => 'drain-started' as const),
+      busyPollObserved.then(() => 'busy-poll' as const),
+    ]);
+    releaseWorker?.();
+    await run;
+    expect(firstBoundary).toBe('drain-started');
+  });
+
   it('refuses a feature that becomes eligible during drain, then lets the restarted daemon claim it', async () => {
     const firstRunClaimAttempts: string[] = [];
     const firstRunStarted: string[] = [];

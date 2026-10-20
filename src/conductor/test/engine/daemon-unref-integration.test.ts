@@ -122,10 +122,10 @@ describe('runDaemon - process exit without blocking on idle sleep (Task 11)', ()
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Scenario 4: Once mode collects already-settled workers directly, without
-  // entering either a busy or idle poll after the backlog drains.
+  // Scenario 4: Once mode keeps busy-pool maintenance alive, but does not
+  // enter an idle poll after the backlog drains.
   // ───────────────────────────────────────────────────────────────────────────
-  it('once: true (drain) collects settled workers before polling', async () => {
+  it('once: true (drain) uses busy polls but exits before idle polling', async () => {
     let sleepCallCount = 0;
     const deps: DaemonDeps = {
       discoverBacklog: async () => items(2),
@@ -144,9 +144,8 @@ describe('runDaemon - process exit without blocking on idle sleep (Task 11)', ()
 
     expect(result.stoppedReason).toBe('backlog_drained');
     expect(result.processed).toHaveLength(2);
-    // A completion observed during the dispatch turn is collected before the
-    // caller-owned poll seam. This is necessary because a HALT-clear watcher
-    // may intentionally provide a sleep that never resolves.
-    expect(sleepCallCount).toBe(0);
+    // One busy-pool tick follows each in-flight feature. These are scheduler
+    // polls (needed for concurrent free-slot refresh/sweeps), not idle polls.
+    expect(sleepCallCount).toBe(2);
   });
 });
