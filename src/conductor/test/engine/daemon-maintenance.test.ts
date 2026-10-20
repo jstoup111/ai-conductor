@@ -436,6 +436,7 @@ describe('engine/daemon-maintenance', () => {
     let observeDrain: (() => void) | undefined;
     let observeBusyPoll: (() => void) | undefined;
     let staleChecks = 0;
+    let protocolMismatchPending = false;
     const drainObserved = new Promise<void>((resolve) => {
       observeDrain = resolve;
     });
@@ -454,6 +455,10 @@ describe('engine/daemon-maintenance', () => {
       {
         discoverBacklog: async () => [{ slug: 'first' }, { slug: 'second' }],
         runFeature: async (item) => {
+          // An already-known mismatch restarts at the natural idle boundary
+          // before a claim. Surface it only after the second worker starts so
+          // this fixture exercises the busy-pool drain boundary.
+          if (item.slug === 'second') protocolMismatchPending = true;
           await workersReleased;
           return { slug: item.slug, status: 'done' as const };
         },
@@ -473,7 +478,7 @@ describe('engine/daemon-maintenance', () => {
           recordRootMutation('restart');
           return { fired: true };
         },
-        protocolMismatchPending: () => true,
+        protocolMismatchPending: () => protocolMismatchPending,
         log: (line) => {
           logs.push(line);
           if (line === '[daemon] drain started: stale-engine') {
