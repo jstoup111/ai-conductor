@@ -1,4 +1,4 @@
-// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-R8, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template, task:rem-prd-audit-rem-v3-read-indeterminate, task:rem-prd-audit-rem-v3-divergence-mapping
+// Covers: task:11, task:rem-prd-audit-R7, task:rem-prd-audit-R7-2, task:rem-prd-audit-R7-3, task:rem-prd-audit-R7-4, task:rem-prd-audit-R8, task:rem-prd-audit-rem-v3-foreign-stack, task:rem-prd-audit-rem-v3-rerender-template, task:rem-prd-audit-rem-v3-read-indeterminate, task:rem-prd-audit-rem-v3-divergence-mapping, task:rem-as-built-rem-asbuilt-d5-intended-retarget-recovery
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { assembleStack } from '../../src/engine/finish-publication-production.js';
 import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
+import { observeStackDimension } from '../../src/engine/stack-publication.js';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import {
@@ -86,7 +87,7 @@ function fixture(
       const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
       const memberBase = number === 101 ? 'main' : number === 103 ? 'feat/c1/demo' : base;
       if (args.at(-1) === 'body') return { stdout: JSON.stringify({ body: bodies?.get(number) }) };
-      return { stdout: JSON.stringify({ baseRefName: memberBase, headRefOid: head }) };
+      return { stdout: JSON.stringify({ state: 'OPEN', isDraft: true, baseRefName: memberBase, headRefOid: head }) };
     }
     return { stdout: JSON.stringify({ baseRefName: base }) };
   };
@@ -224,6 +225,32 @@ describe('assembleStack leaf retarget journal', () => {
     });
     const trace: string[] = [];
     const { gh, operations } = fixture('feat/c3/demo', trace);
+
+    await assembleStack({ root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main', git: tracingGit(trace), gh, operations });
+
+    expect(trace.filter((entry) => entry.startsWith('retarget:'))).toEqual([]);
+    await expect(record()).resolves.toMatchObject({ retarget: { phase: 'observed' } });
+  });
+
+  it('recovers a retarget GitHub applied before the observed CAS instead of halting at observation', async () => {
+    await writeRecord({
+      version: 1,
+      retarget: { from: 'main', to: 'feat/c3/demo', phase: 'intended' },
+      members,
+    });
+    const positions = await git(['hash-object', '-w', '--stdin'], { input: '[1,3,5]' });
+    await git(['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
+    const trace: string[] = [];
+    const { gh, operations } = fixture('feat/c3/demo', trace);
+    const diverged: string[] = [];
+
+    await expect(observeStackDimension(root, 'demo', {
+      kind: 'active', child: c5, position: c5, isLeaf: true, branch: 'feat/daemon-demo',
+    }, {
+      git, gh, repository: 'acme/demo', baseBranch: 'main',
+      onDiverged: async (_members, detail) => { diverged.push(detail); },
+    })).resolves.toBe('unassembled');
+    expect(diverged).toEqual([]);
 
     await assembleStack({ root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main', git: tracingGit(trace), gh, operations });
 

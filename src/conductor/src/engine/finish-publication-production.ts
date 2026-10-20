@@ -1609,6 +1609,7 @@ export function createProductionFinishPublicationCoordinator(
                 git: publicationRecordGit(deps.git, deps.projectRoot),
                 gh: deps.gh,
                 repository: match[1],
+                baseBranch: deps.baseBranch,
                 onDiverged: async (members, detail) => haltStackTipDiverged(
                   deps.projectRoot,
                   members,

@@ -150,6 +150,12 @@ export interface ObserveStackDimensionDependencies extends PublicationRecordDepe
   readonly repository?: string;
   /** Production FINISH persists a confirmed observation as an operator halt. */
   readonly onDiverged?: (members: readonly PublicationMember[], detail: string) => Promise<void>;
+  /**
+   * The resolved pre-stack base the first child and the unretargeted leaf
+   * target, supplied by the FINISH composition root. Without it (and without a
+   * retarget journal naming it) member bases are indeterminate, never guessed.
+   */
+  readonly baseBranch?: string;
 }
 
 function hasDurableChildState(cursor: ActiveChildResolution): boolean {
@@ -367,6 +373,31 @@ function recordHasEveryPosition(
   return positions.length === members.length && positions.every((position, index) => members[index]?.position === position);
 }
 
+/**
+ * The bases a recorded member may legitimately target. The first child sits
+ * on the pre-stack base and each later child on its predecessor. The retained
+ * leaf starts on the pre-stack base and moves to its predecessor through the
+ * retarget journal: once observed only the predecessor is valid, while an
+ * intended retarget admits both journaled bases, because GitHub may have
+ * applied it before the observed CAS (crash recovery runs in assemble_stack).
+ * Undefined means the base cannot be established (indeterminate).
+ */
+function expectedMemberBases(
+  index: number,
+  members: readonly PublicationMember[],
+  record: PublicationRecord,
+  preStackBase: string | undefined,
+): readonly string[] | undefined {
+  const predecessor = index === 0 ? undefined : members[index - 1]?.branch;
+  if (index === 0) return preStackBase === undefined ? undefined : [preStackBase];
+  if (index !== members.length - 1) return predecessor === undefined ? undefined : [predecessor];
+  if (predecessor === undefined) return undefined;
+  const retarget = record.retarget;
+  if (retarget?.phase === 'observed') return [predecessor];
+  if (retarget?.phase === 'intended') return [retarget.from, retarget.to];
+  return preStackBase === undefined ? undefined : [preStackBase];
+}
+
 async function observeMembers(
   root: string,
   slug: string,
@@ -376,7 +407,9 @@ async function observeMembers(
   record: PublicationRecord,
   git: GitRunner,
   requireDraft: boolean,
+  baseBranch: string | undefined,
 ): Promise<'healthy' | 'diverged' | 'indeterminate'> {
+  const preStackBase = record.retarget?.from ?? baseBranch;
   for (const [index, member] of members.entries()) {
     if (member.lastSeen !== undefined) return 'diverged';
     try {
@@ -393,17 +426,10 @@ async function observeMembers(
       if (requireDraft && !isDraft) return 'diverged';
       const base = (parsed as { baseRefName?: unknown }).baseRefName;
       const head = (parsed as { headRefOid?: unknown }).headRefOid;
-      // The retained leaf starts on the pre-stack base and moves to its
-      // predecessor only after the retarget journal is observed. Children
-      // retain their existing predecessor-base checks.
-      const expectedBase = index === members.length - 1
-        ? record.retarget?.phase === 'observed'
-          ? members[index - 1]?.branch
-          : record.retarget?.from ?? 'main'
-        : index === 0 ? record.retarget?.from ?? 'main' : members[index - 1]?.branch;
       if (typeof head !== 'string') return 'indeterminate';
-      if (expectedBase === undefined) return 'indeterminate';
-      if (typeof base !== 'string' || base !== expectedBase) return 'diverged';
+      const expectedBases = expectedMemberBases(index, members, record, preStackBase);
+      if (expectedBases === undefined) return 'indeterminate';
+      if (typeof base !== 'string' || !expectedBases.includes(base)) return 'diverged';
       const pushed = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, member.branch)]);
       if (pushed.exitCode !== 0) return 'indeterminate';
       if (pushed.stdout.trim() !== head) return 'diverged';
@@ -478,6 +504,7 @@ export async function observeStackDimension(
   if (gh === undefined || repository === undefined) return 'indeterminate';
   const members = await observeMembers(
     root, slug, repository, gh, stored.record.members, stored.record, git, stored.record.stack?.verified !== true,
+    dependencies.baseBranch,
   );
   if (members !== 'healthy') {
     if (members === 'diverged') await dependencies.onDiverged?.(stored.record.members, 'published stack member diverged');

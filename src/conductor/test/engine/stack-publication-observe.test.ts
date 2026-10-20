@@ -1,4 +1,4 @@
-// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify, task:rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base, task:rem-as-built-rem-as-built-rem-v4-first-child-base
+// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify, task:rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base, task:rem-as-built-rem-as-built-rem-v4-first-child-base, task:rem-as-built-rem-asbuilt-d5-intended-retarget-recovery, task:rem-as-built-rem-asbuilt-d5-actual-prestack-base
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
@@ -42,7 +42,10 @@ function fixture(options: {
   readonly memberBases?: Readonly<Record<number, string>>;
   readonly memberHeads?: Readonly<Record<number, string>>;
   readonly stackRead?: 'ok' | 'timeout';
+  /** Resolved pre-stack base supplied to the observer; null omits it. */
+  readonly baseBranch?: string | null;
 } = {}): Fixture {
+  const baseBranch = options.baseBranch === null ? undefined : options.baseBranch ?? 'main';
   const gitArgs: string[][] = [];
   const ghArgs: string[][] = [];
   const positions = options.positions ?? [1, 3, 5];
@@ -76,9 +79,9 @@ function fixture(options: {
       const baseRefName = index === members.length - 1
         ? record?.retarget?.phase === 'observed'
           ? members[index - 1]!.branch
-          : record?.retarget?.from ?? 'main'
+          : record?.retarget?.from ?? baseBranch ?? 'main'
         : index === 0
-          ? record?.retarget?.from ?? 'main'
+          ? record?.retarget?.from ?? baseBranch ?? 'main'
           : members[index - 1]!.branch;
       return { stdout: JSON.stringify({
         state,
@@ -95,7 +98,7 @@ function fixture(options: {
     }
     throw new Error(`unexpected gh argv: ${args.join(' ')}`);
   };
-  return { gitArgs, ghArgs, dependencies: { git, gh, repository }, setRecord(next) { record = next; } };
+  return { gitArgs, ghArgs, dependencies: { git, gh, repository, baseBranch }, setRecord(next) { record = next; } };
 }
 
 function record(overrides: Partial<PublicationRecord> = {}): PublicationRecord {
@@ -175,6 +178,46 @@ describe('observeStackDimension', () => {
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
       .resolves.toBe('unassembled');
+  });
+
+  it('admits either journaled leaf base while a retarget is only intended', async () => {
+    const intended = record({
+      retarget: { from: 'main', to: 'feat/c3/demo', phase: 'intended' },
+      stack: { number: 42, verified: false },
+    });
+    // GitHub applied the retarget, but the observed CAS never landed.
+    const applied = fixture({ record: intended, memberBases: { 500: 'feat/c3/demo' } });
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, applied.dependencies))
+      .resolves.toBe('unassembled');
+
+    const pending = fixture({ record: intended, memberBases: { 500: 'main' } });
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, pending.dependencies))
+      .resolves.toBe('unassembled');
+
+    const unrelated = fixture({ record: intended, memberBases: { 500: 'feat/c1/demo' } });
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, unrelated.dependencies))
+      .resolves.toBe('diverged');
+  });
+
+  it('verifies the first child and unretargeted leaf against the supplied non-main base', async () => {
+    const onDevelop = fixture({ record: record({ stack: { number: 42, verified: false } }), baseBranch: 'develop' });
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, onDevelop.dependencies))
+      .resolves.toBe('unassembled');
+
+    const onMain = fixture({
+      record: record({ stack: { number: 42, verified: false } }),
+      baseBranch: 'develop',
+      memberBases: { 101: 'main' },
+    });
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, onMain.dependencies))
+      .resolves.toBe('diverged');
+  });
+
+  it('returns indeterminate when no pre-stack base can be established', async () => {
+    const subject = fixture({ record: record({ stack: { number: 42, verified: false } }), baseBranch: null });
+
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
+      .resolves.toBe('indeterminate');
   });
 
   it('dispatches child establishment then assembly for a valid three-member stack', async () => {
