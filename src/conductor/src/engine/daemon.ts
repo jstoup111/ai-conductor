@@ -1547,6 +1547,24 @@ export async function runDaemon(
     if (protocolMismatch || capExceeded) await beginDrain('stale-engine');
   };
 
+  // Every scheduler collection path goes through here. A fallback child may
+  // record its protocol mismatch as it settles, after the busy observation
+  // in the loop (for example during the busy poll or a direct awaited
+  // collection). Wait for the settled worker, then record that request while
+  // its claim is still active, so collection cannot reopen a slot before the
+  // drain starts. Without a mismatch source and nothing due, a serial pool
+  // collects directly with no added scheduler turn, keeping its recorded N=1
+  // ordering.
+  const collectObservingDrain = (): Promise<void> => {
+    const mayObserve = maintenance.busyMaintenanceEnabled() || deps.protocolMismatchPending !== undefined;
+    if (!mayObserve && !serialBusyDrainDue()) return collectOne();
+    return (async () => {
+      if (mayObserve && !completedWorker && nextWorkerCompletion) await nextWorkerCompletion;
+      if (maintenance.busyMaintenanceEnabled() || serialBusyDrainDue()) await observeBusyDrainRequest();
+      await collectOne();
+    })();
+  };
+
   /** Request a handoff only at a natural idle or after a forced drain. */
   const restartStaleSupervisor = async (): Promise<boolean> => {
     const abandonDrain = () => {
@@ -2027,11 +2045,7 @@ export async function runDaemon(
     // maintenance sweep below.
     await Promise.resolve();
     if (completedWorker) {
-      // A fallback child may report its mismatch as it settles, after the
-      // first busy observation above. Record that request while the claim is
-      // still active so collection cannot open a replacement slot first.
-      if (maintenance.busyMaintenanceEnabled() || serialBusyDrainDue()) await observeBusyDrainRequest();
-      await collectOne();
+      await collectObservingDrain();
       continue;
     }
     // An immediate-idle-boundary run has no poll interval to observe. Collect
@@ -2040,7 +2054,7 @@ export async function runDaemon(
     // the scheduler must be able to refresh a free slot and sweep in-flight
     // work before the one-shot drain completes.
     if (maxIdlePolls === 0) {
-      await collectOne();
+      await collectObservingDrain();
       continue;
     }
     // A worker completion wakes this one poll waiter; timer ticks only resolve
@@ -2073,7 +2087,7 @@ export async function runDaemon(
       continue;
     }
 
-    await collectOne();
+    await collectObservingDrain();
   }
 
   // Drain remaining workers before returning (in-flight features finish).

@@ -3322,6 +3322,85 @@ describe('engine/daemon — runDaemon', () => {
         drainLogs: ['[daemon] drain started: stale-engine'],
       });
     });
+
+    // A width-two pool where a fallback child settles while another executor
+    // is still alive. Whichever collection path picks it up, the mismatch it
+    // recorded must start the claim-stop drain before its slot can reopen.
+    async function runFallbackSettlesWhileSiblingAlive(path: 'busy-poll' | 'direct-collect') {
+      let mismatchPending = false;
+      const started: string[] = [];
+      const logs: string[] = [];
+      let releaseLong!: () => void;
+      const longReleased = new Promise<void>((resolve) => { releaseLong = resolve; });
+      let releaseFallback!: () => void;
+      const fallbackReleased = new Promise<void>((resolve) => { releaseFallback = resolve; });
+      let sleeps = 0;
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const result = await runDaemon({
+        discoverBacklog: staticBacklog([{ slug: 'long' }, { slug: 'fallback-child' }, { slug: 'must-not-claim' }]),
+        runFeature: async (item) => {
+          started.push(item.slug);
+          if (item.slug === 'must-not-claim') releaseLong();
+          if (item.slug === 'long') await longReleased;
+          if (item.slug === 'fallback-child') {
+            if (path === 'busy-poll') await fallbackReleased;
+            else await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            mismatchPending = true;
+          }
+          return { slug: item.slug, status: 'done' as const };
+        },
+        staleEngineChecker: {
+          check: () => 'current',
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        protocolMismatchPending: () => mismatchPending,
+        requestRestart,
+        sleep: async () => {
+          sleeps += 1;
+          if (sleeps === 1) releaseFallback();
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        },
+        log: (line) => {
+          logs.push(line);
+          if (line === '[daemon] drain started: stale-engine') releaseLong();
+        },
+      }, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: path === 'busy-poll' ? 1 : 0,
+      });
+
+      return {
+        started,
+        stopReason: result.stoppedReason,
+        requestRestartCalls: requestRestart.mock.calls.length,
+        drainLogs: logs.filter((line) => line === '[daemon] drain started: stale-engine'),
+      };
+    }
+
+    // Covers: task:rem-as-built-R2
+    it('drains before reopening a slot when a fallback child settles during the busy poll while a sibling is alive', async () => {
+      expect(await runFallbackSettlesWhileSiblingAlive('busy-poll')).toEqual({
+        started: ['long', 'fallback-child'],
+        stopReason: 'engine_restart',
+        requestRestartCalls: 1,
+        drainLogs: ['[daemon] drain started: stale-engine'],
+      });
+    });
+
+    // Covers: task:rem-as-built-R2
+    it('drains before reopening a slot when a fallback child settles during a direct collection while a sibling is alive', async () => {
+      expect(await runFallbackSettlesWhileSiblingAlive('direct-collect')).toEqual({
+        started: ['long', 'fallback-child'],
+        stopReason: 'engine_restart',
+        requestRestartCalls: 1,
+        drainLogs: ['[daemon] drain started: stale-engine'],
+      });
+    });
   });
 });
 
