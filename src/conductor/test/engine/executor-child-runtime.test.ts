@@ -1,3 +1,4 @@
+// Covers: task:rem-as-built-rem-vg-1
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
