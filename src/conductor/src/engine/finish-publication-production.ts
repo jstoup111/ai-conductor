@@ -39,6 +39,7 @@ import {
   COVERAGE_BINDING_COMPLETION_STATUSES,
   projectChildOwnership,
   readCoverageBindingEnvelope,
+  type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
 import { splitStoryBlocks } from './story-criteria.js';
 import { gateSatisfied } from './selector.js';
@@ -86,6 +87,14 @@ import {
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
 import { runTrackerAmbientRead, runTrackerRepositoryRead, runTrackerUrlRead } from './tracker-client.js';
+
+/** FINISH only reads the sealed coverage evidence; writes remain step-runner owned. */
+const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  mkdir: async () => { throw new Error('finish publication coverage evidence is read-only'); },
+  writeFile: async () => { throw new Error('finish publication coverage evidence is read-only'); },
+  rename: async () => { throw new Error('finish publication coverage evidence is read-only'); },
+};
 
 export interface ProductionFinishPublicationCoordinator {
   requiresArtifactValidation: true;
@@ -237,7 +246,7 @@ async function sealedChildPresentation(input: {
   base: string;
   git: GitRunner;
 }): Promise<{ slice: { position: number; name: string; taskIds: readonly string[]; storyIds: readonly string[] }; stories: readonly { id: string; title: string }[]; diffstat: string }> {
-  const envelope = await readCoverageBindingEnvelope(input.root).catch(() => null);
+  const envelope = await readCoverageBindingEnvelope(input.root, coverageBindingFilesystem).catch(() => null);
   if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
     throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack coverage evidence is unreadable');
   }
