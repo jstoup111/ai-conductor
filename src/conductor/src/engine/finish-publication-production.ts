@@ -433,21 +433,16 @@ async function verifyStackBeforeReadyFlip(input: {
       context: { actor: 'finish-publication' }, payload: { pullRequest: input.leaf.number },
     },
   });
-  let members: readonly NativeStackMember[] | undefined;
-  try {
-    const stdout = await runTrackerRepositoryRead(
-      input.gh, input.root, 'repository.read', input.leaf.repository, { kind: 'repository' },
-      ['api', `repos/${input.leaf.repository}/stacks?pull_request=${input.leaf.number}`],
-    );
-    members = parseNativeStackMembers(JSON.parse(stdout));
-  } catch {
-    members = undefined;
-  }
+  const stdout = await runTrackerRepositoryRead(
+    input.gh, input.root, 'repository.read', input.leaf.repository, { kind: 'repository' },
+    ['api', `repos/${input.leaf.repository}/stacks?pull_request=${input.leaf.number}`],
+  );
+  const members = parseNativeStackMembers(JSON.parse(stdout));
+  if (!members) throw new Error(`native stack membership is unreadable before position ${input.position}`);
   const expected = stored.record.members;
-  const matchesMembers = members !== undefined
-    && members.length === expected.length
+  const matchesMembers = members.length === expected.length
     && members.every((member, index) => member.number === expected[index]?.pr);
-  if (!matchesMembers || members === undefined) {
+  if (!matchesMembers) {
     await haltStackTipDiverged(input.root, expected, input.events, `published stack tip diverged before position ${input.position}`);
     throw new StackPublicationHaltError('stack_tip_diverged', `native stack membership diverged before position ${input.position}`);
   }

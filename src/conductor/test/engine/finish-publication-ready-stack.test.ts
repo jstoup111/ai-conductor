@@ -1,6 +1,7 @@
 // Covers: task:15
 // Covers: task:rem-prd-audit-rem-v3-ready-target-binding
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+// Covers: task:rem-as-built-rem-as-built-rem-v4-second-read-indeterminate
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +15,7 @@ import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
 import { renderChildBody } from '../../src/engine/stack-member-body.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 
 const c1 = parseChildId(1)!;
 const c3 = parseChildId(3)!;
@@ -41,7 +43,7 @@ function childBody(position: number, branch: string): string {
   });
 }
 
-function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean; invalidChildBody?: boolean } = {}) {
+function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean; invalidChildBody?: boolean; nativeMembers?: readonly number[] } = {}) {
   const drafts = new Map<number, boolean>([[101, !input.ready?.includes(101)], [103, !input.ready?.includes(103)], [500, !input.ready?.includes(500)]]);
   const bodies = new Map([[101, childBody(1, 'feat/c1/demo')], [103, childBody(3, 'feat/c3/demo')]]);
   if (input.invalidChildBody) bodies.set(103, `${bodies.get(103)}\n\nCloses acme/demo#7`);
@@ -51,7 +53,7 @@ function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean; i
       return {
         stdout: JSON.stringify([{
           number: 44,
-          pull_requests: members.map((member) => ({
+          pull_requests: members.filter((member) => input.nativeMembers?.includes(member.pr) ?? true).map((member) => ({
             number: member.pr,
             head: { sha: input.mismatchedHead && member.pr === 103 ? 'f'.repeat(40) : head },
           })),
@@ -160,6 +162,15 @@ describe('readyStackChildren', () => {
     expect(writes).toEqual([]);
   });
 
+  it('halts before a child flip when parsed native membership diverges from the publication record', async () => {
+    const { gh, operations, writes } = fixture({ nativeMembers: [101, 500] });
+
+    await expect(readyStackChildren({ root, slug: 'demo', leafUrl, git, gh, operations }))
+      .rejects.toMatchObject({ reason: 'stack_tip_diverged' });
+
+    expect(writes).toEqual([]);
+  });
+
   it('keeps a child draft and returns a needs-human FINISH outcome when its body postconditions fail', async () => {
     const { gh, operations, writes, drafts } = fixture({ invalidChildBody: true });
     const snapshot: PublicationSnapshot = {
@@ -182,6 +193,56 @@ describe('readyStackChildren', () => {
 
     expect(writes).toEqual([]);
     expect(drafts.get(103)).toBe(true);
+  });
+
+  it.each([
+    ['times out', () => { throw new Error('native stack reread timed out'); }],
+    ['returns unparseable JSON', () => ({ stdout: '{not json' })],
+  ])('retries publication when the native stack reread after validation %s', async (_description, indeterminateRead) => {
+    const { gh: fixtureGh } = fixture();
+    const operationsSeen: string[] = [];
+    const events: ConductorEvent[] = [];
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'api' && args[1]?.includes('/stacks?pull_request=')) {
+        return indeterminateRead();
+      }
+      return fixtureGh(args);
+    };
+    const readyWrites: string[] = [];
+    const operations: GithubOperationRunner = {
+      run: async (request) => {
+        operationsSeen.push(request.operation);
+        if (request.operation === 'stack.read') return {};
+        if (request.operation === 'pull-request.ready') readyWrites.push(request.operation);
+        throw new Error(`unexpected operation: ${request.operation}`);
+      },
+    };
+    const snapshot: PublicationSnapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid', branchPushed: 'valid',
+      shippedRecord: 'valid', outcomeRecord: 'missing', stack: 'valid',
+      pr: { identity: 'one', url: leafUrl, prose: 'accepted', ready: false },
+    };
+
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: {
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+        repairPresentation: async () => readyStackChildren({
+          root, slug: 'demo', leafUrl, git, gh, operations,
+          events: { emit: async (event: ConductorEvent) => { events.push(event); } } as never,
+        }),
+      },
+    })).resolves.toEqual({
+      kind: 'publication_retry', transition: 'ready_pr', reason: 'presentation_repair_failed',
+    });
+
+    expect(operationsSeen).toEqual(['stack.read']);
+    expect(operationsSeen).not.toContain('pull-request.ready');
+    expect(readyWrites).toEqual([]);
+    expect(events.filter((event) => event.type === 'stack_tip_diverged')).toEqual([]);
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('reports a verified stack ready only after every member is non-draft', async () => {
