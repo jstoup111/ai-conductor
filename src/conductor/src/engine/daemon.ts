@@ -1257,7 +1257,12 @@ export async function runDaemon(
           ? await deps.refreshEngineSource()
           : undefined;
         const sourceRefreshSkipped = sourceRefresh?.status === 'skipped';
-        const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({ refresh: true }));
+        // `refreshEngineSource` owns fetch/fast-forward cadence. Once it was
+        // skipped (including throttle), discovery must remain local or it
+        // silently performs the very fetch the throttle refused.
+        const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({
+          refresh: sourceRefreshSkipped ? false : true,
+        }));
         if (refreshed !== undefined) {
           refreshedBacklog = refreshed;
           // Wake a busy poll so the result is folded promptly. The idle waker
@@ -1477,6 +1482,15 @@ export async function runDaemon(
   const observeBusyDrainRequest = async (): Promise<void> => {
     if (maintenance.isDraining() || inFlight.size === 0) return;
 
+    // A recorded protocol mismatch is a process-boundary incompatibility, not
+    // an inference from the current staleness sample. Drain immediately even
+    // if the pinned engine now happens to match the target.
+    if (deps.protocolMismatchPending?.()) {
+      supervisorStaleness.markProtocolMismatch();
+      await beginDrain('stale-engine');
+      return;
+    }
+
     if (deps.hasRestartPending) {
       try {
         if (await deps.hasRestartPending()) {
@@ -1490,17 +1504,33 @@ export async function runDaemon(
       }
     }
 
-    if (!observeSupervisorStaleness()) return;
+    const stale = observeSupervisorStaleness();
+    // markProtocolMismatch is applied by the observation itself and remains
+    // restart authority even if the sampled engine now looks current.
+    if (!stale && supervisorStaleness.restartReason !== 'protocol-mismatch') return;
     // Normal staleness is adopted at natural idle. A protocol mismatch or the
     // age cap is the deliberately bounded drain fallback.
-    if (
-      supervisorStaleness.restartReason === 'protocol-mismatch' ||
-      supervisorStaleness.capExceeded(staleAgeCapHours)
-    ) await beginDrain('stale-engine');
+    const protocolMismatch = supervisorStaleness.restartReason === 'protocol-mismatch';
+    const capExceeded = supervisorStaleness.capExceeded(staleAgeCapHours);
+    if (!protocolMismatch && capExceeded && deps.isSuppressed) {
+      const target = deps.staleEngineChecker?.targetIdentity?.() ?? null;
+      if (await deps.isSuppressed(target)) return;
+    }
+    if (protocolMismatch || capExceeded) await beginDrain('stale-engine');
   };
 
   /** Request a handoff only at a natural idle or after a forced drain. */
   const restartStaleSupervisor = async (): Promise<boolean> => {
+    const abandonDrain = () => {
+      // Every non-restart exit from a forced drain restores normal claiming.
+      // Without this, a transient suppression/staleness change wedges the
+      // generation permanently in `paused`.
+      if (maintenance.isDraining()) {
+        maintenance.endDrain();
+        maintenanceJob.reopen();
+      }
+      restartPending = false;
+    };
     if (!staleGatesArmed || !deps.staleEngineChecker) {
       // Task 9 (TI-4 HP3): self-heal is disabled (non-self-host, or the flag
       // is off) — the checker/rebuild/restart chain never runs, but still
@@ -1521,27 +1551,30 @@ export async function runDaemon(
     }
     if (inFlight.size !== 0) return false;
 
-    if (!observeSupervisorStaleness()) return false;
+    // A recorded protocol mismatch is itself restart authority even if a
+    // later staleness sample looks current.
+    const recordedMismatch = supervisorStaleness.restartReason === 'protocol-mismatch';
+    if (!recordedMismatch && !observeSupervisorStaleness()) {
+      abandonDrain();
+      return false;
+    }
 
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
-    if (supervisorStaleness.restartReason !== 'protocol-mismatch' && deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
-    if (inFlight.size !== 0) return false; // re-verify after the async suppression check
+    if (!recordedMismatch && deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) {
+      abandonDrain();
+      return false;
+    }
+    if (inFlight.size !== 0) { abandonDrain(); return false; } // re-verify after async suppression check
 
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
-    if (!deps.requestRestart) return false;
+    if (!deps.requestRestart) { abandonDrain(); return false; }
     restartPending = true;
     log(`[daemon] stale supervisor at idle — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
     maintenanceJob.close();
     await maintenanceJob.settled();
     await refreshJob;
     const result = await deps.requestRestart({ fromIdentity, targetIdentity });
-    if (!result.fired && !deps.shouldStop?.()) {
-      restartPending = false;
-      // A forced drain owns the same claim gate. A failed handoff must give it
-      // back, otherwise this generation remains permanently unable to claim.
-      maintenance.endDrain();
-      maintenanceJob.reopen();
-    }
+    if (!result.fired && !deps.shouldStop?.()) abandonDrain();
     return result.fired;
   };
 
@@ -1942,7 +1975,9 @@ export async function runDaemon(
 
     // Observe restart conditions only after the claim attempt. A drain begun
     // here stops the next free slot from being filled after a worker settles.
-    if (maintenance.busyMaintenanceEnabled()) await observeBusyDrainRequest();
+    // A serial pool still needs to observe an age cap or protocol mismatch;
+    // the active child is what must drain before a handoff can occur.
+    await observeBusyDrainRequest();
 
     // Workers are running. Race their completion against the poll timer so
     // busy pools still execute the scheduler-owned periodic sweep; a timer

@@ -23,6 +23,7 @@ import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type Pr
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { readState } from './state.js';
+import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { ExecutorChildRunInput } from './executor-child.js';
 
@@ -84,11 +85,17 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     skillNameRoot: await resolveHarnessRoot(),
   });
   const stateFilePath = join(pipelineDir, 'conduct-state.json');
+  const stateStore = resolveConductorStateStore(
+    stateFilePath,
+    undefined,
+    createStepStatusWriteRefusalDiagnostics(events),
+  );
   const baseBranch = (await originDefaultBranch(makeGitRunner(worktree.path))) ?? 'main';
   const git = makeProductionGit();
   const waitControllers = new Set<AbortController>();
   const conductor = new Conductor({
     stateFilePath,
+    stateStore,
     stepRunner,
     events,
     mode: 'auto',
@@ -112,6 +119,10 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
       observeReleaseReadiness: createProductionReleaseReadinessObserver({ projectRoot: worktree.path, config }),
     }),
     worktreeBranch: worktree.branch,
+    log: input.log,
+    // This must be the supervisor's decision, not a child-side path guess:
+    // self-host dispatches use the brokered live-boundary coordinator.
+    selfHost: order.selfHost === true,
     baseBranch,
     resume: true,
     daemon: true,

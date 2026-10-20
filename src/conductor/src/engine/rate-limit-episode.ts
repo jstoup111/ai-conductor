@@ -52,6 +52,8 @@ export interface RateLimitEpisode {
    * the original behavioral contract.
    */
   snapshot?(): RateLimitEpisodeSnapshot;
+  /** Emits after an authoritative mutation so isolated executors stay in sync. */
+  subscribe?(listener: () => void): () => void;
 }
 
 export interface RateLimitEpisodeSnapshot {
@@ -112,12 +114,15 @@ export function create(options?: CreateOptions): RateLimitEpisode {
 
   const setTimer = options?.setTimer ?? defaultSetTimer;
   const getRandom = options?.rng ?? (() => Math.random());
+  const subscribers = new Set<() => void>();
+  const notify = () => { for (const listener of subscribers) listener(); };
 
   return {
     enter(untilMs: number): void {
       // Guard 1: Non-finite values (Infinity, NaN) → clear
       if (!isFinite(untilMs)) {
         deadline = null;
+        notify();
         return;
       }
 
@@ -125,6 +130,7 @@ export function create(options?: CreateOptions): RateLimitEpisode {
       const now = getNow();
       if (untilMs <= now) {
         deadline = null;
+        notify();
         return;
       }
 
@@ -135,6 +141,7 @@ export function create(options?: CreateOptions): RateLimitEpisode {
           escalationStartDeadline = untilMs; // Track the new deadline for grace period
         }
         deadline = untilMs;
+        notify();
       }
       // else: earlier deadline ignored, no-op
     },
@@ -156,6 +163,7 @@ export function create(options?: CreateOptions): RateLimitEpisode {
       // Reset escalation counter and tracking when clearing
       escalationCounter = 0;
       escalationStartDeadline = null;
+      notify();
 
       // If signal is already aborted, resolve immediately
       if (signal?.aborted) {
@@ -193,6 +201,7 @@ export function create(options?: CreateOptions): RateLimitEpisode {
           if (deadline === null || now >= deadline) {
             if (deadline !== null && now >= deadline) {
               deadline = null;
+              notify();
             }
             cleanup();
             resolve();
@@ -241,6 +250,7 @@ export function create(options?: CreateOptions): RateLimitEpisode {
         if (deadline !== null) {
           escalationStartDeadline = deadline;
         }
+        notify();
         return base;
       }
 
@@ -254,6 +264,7 @@ export function create(options?: CreateOptions): RateLimitEpisode {
 
       // Increment counter for next call
       escalationCounter += 1;
+      notify();
 
       return waitSeconds;
     },
@@ -263,6 +274,10 @@ export function create(options?: CreateOptions): RateLimitEpisode {
         deadline: deadline ?? undefined,
         escalationCounter,
       };
+    },
+    subscribe(listener: () => void): () => void {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
     },
   };
 }

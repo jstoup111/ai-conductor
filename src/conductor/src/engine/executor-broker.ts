@@ -54,6 +54,10 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
   const providerSnapshot = () => deps.providerAvailability.snapshot?.()
     ?? Object.fromEntries([...providerWindows].filter(([, until]) => until > now()));
   const broadcastState = () => { broadcast('rate-limit', rateSnapshot()); broadcast('provider', providerSnapshot()); };
+  // The supervisor can mutate either service directly; child IPC is not the
+  // sole writer. Broadcast those authoritative changes to every replica.
+  deps.rateLimitEpisode.subscribe?.(() => broadcast('rate-limit', rateSnapshot()));
+  deps.providerAvailability.subscribe?.(() => broadcast('provider', providerSnapshot()));
 
   return {
     attach(slug, port, engineVersionId) {
@@ -98,12 +102,14 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           if (method === 'rate-limit.clear') {
             const abort = new AbortController();
             pendingRateLimitClears.set(requestId, abort);
-            // clear() resets the authoritative escalation state before it starts
-            // waiting. Replicate that immediately while preserving its deadline.
-            escalationCounter = 0;
-            broadcast('rate-limit', rateSnapshot());
             try {
-              await deps.rateLimitEpisode.clear(abort.signal);
+              // clear() synchronously resets the authoritative escalation
+              // state before beginning its wait. Broadcast only after that
+              // reset, never from a speculative local counter.
+              const cleared = deps.rateLimitEpisode.clear(abort.signal);
+              escalationCounter = 0;
+              broadcast('rate-limit', rateSnapshot());
+              await cleared;
               if (closed) return;
               if (!deps.rateLimitEpisode.active()) rateDeadline = undefined;
               broadcast('rate-limit', rateSnapshot());

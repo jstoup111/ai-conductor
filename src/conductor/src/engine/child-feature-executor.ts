@@ -11,6 +11,9 @@ import { removeExecutorRecord, writeExecutorRecord } from './executor-records.js
 
 export interface ForkedExecutor extends ExecutorIpcPort {
   pid?: number;
+  /** Present when Node forks with `silent: true`. */
+  stdout?: NodeJS.ReadableStream | null;
+  stderr?: NodeJS.ReadableStream | null;
   kill(signal?: NodeJS.Signals): boolean;
   once(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
 }
@@ -62,6 +65,22 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     };
     const modulePath = join(engineDir, 'index.js');
     const child = fork(modulePath, ['executor-child'], { silent: true });
+    // Piped output must be drained even when the child uses console.log rather
+    // than the IPC console tee; otherwise a full OS pipe can deadlock it.
+    const forwardOutput = (stream: NodeJS.ReadableStream | null | undefined, level: 'stdout' | 'stderr') => {
+      if (!stream) return;
+      let remainder = '';
+      stream.on('data', (chunk: Buffer | string) => {
+        remainder += String(chunk);
+        const lines = remainder.split(/\r?\n/);
+        remainder = lines.pop() ?? '';
+        for (const line of lines) deps.log?.(`[executor ${order.slug} ${level}] ${line}`);
+      });
+      stream.on('end', () => { if (remainder) deps.log?.(`[executor ${order.slug} ${level}] ${remainder}`); });
+      stream.resume();
+    };
+    forwardOutput(child.stdout, 'stdout');
+    forwardOutput(child.stderr, 'stderr');
     const attachment = deps.attachBroker(order.slug, child, launchedOrder.engineVersionId);
     const entry: RunningChild = { child, order: launchedOrder, attachment };
     running.add(entry);
@@ -71,29 +90,29 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     // module.  Exit cleanup below waits for this promise, so an exit racing a
     // slow write can never leave a newly-written stale record behind.
     let recordFailure: Error | undefined;
+    let ended = false;
+    let terminationTimer: ReturnType<typeof setTimeout> | undefined;
+    const requestTermination = () => {
+      child.kill('SIGTERM');
+      // A record publication failure is no less terminal than a failed
+      // handshake: it must use the same bounded TERM→KILL path.
+      terminationTimer ??= setTimeout(() => {
+        if (!ended) child.kill('SIGKILL');
+      }, teardownTimeoutMs);
+    };
     const recordPublished = writeExecutorRecord(deps.projectRoot, order.slug, {
       pid: child.pid ?? -1, engineDir, engineVersionId: launchedOrder.engineVersionId, startedAt: new Date().toISOString(),
     }).catch((error: unknown) => {
       recordFailure = error instanceof Error ? error : new Error(String(error));
       deps.log?.(`[executor ${order.slug}] could not publish executor record: ${recordFailure.message}`);
-      child.kill('SIGTERM');
+      requestTermination();
     });
-    let ended = false;
     let outcome: FeatureExecutionOutcome | undefined;
     let handshake: 'accepted' | 'failed' | 'missing' | undefined;
     let handshakeFailure: string | undefined;
     let protocolMismatchEvent: Promise<void> | undefined;
     let workOrderSent = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let terminationTimer: ReturnType<typeof setTimeout> | undefined;
-    const requestTermination = () => {
-      child.kill('SIGTERM');
-      // SIGTERM is cooperative. Never wait indefinitely for a wedged child
-      // before releasing its durable record and admitting a successor.
-      terminationTimer ??= setTimeout(() => {
-        if (!ended) child.kill('SIGKILL');
-      }, teardownTimeoutMs);
-    };
     const finish = async (result: FeatureExecutionOutcome): Promise<FeatureExecutionOutcome> => {
       if (ended) return outcome ?? result;
       ended = true; outcome = result;

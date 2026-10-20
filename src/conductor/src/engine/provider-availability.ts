@@ -12,6 +12,8 @@ export interface ProviderAvailability {
   isAvailable(provider: string): boolean;
   /** Current authoritative suppression windows, for child-process replicas. */
   snapshot?(): Record<string, number>;
+  /** Emits after an authoritative mutation so isolated executors stay in sync. */
+  subscribe?(listener: () => void): () => void;
 }
 
 interface SuppressionWindow {
@@ -55,6 +57,8 @@ export function createProviderAvailability({
   now,
 }: CreateProviderAvailabilityOptions): ProviderAvailability {
   const suppressedUntil = new Map<string, SuppressionWindow>();
+  const subscribers = new Set<() => void>();
+  const notify = () => { for (const listener of subscribers) listener(); };
 
   return {
     suppress(provider: string, untilMs: number): void {
@@ -64,6 +68,7 @@ export function createProviderAvailability({
       if (boundedUntil <= openedAtMs) return;
       if (existingUntil === undefined || boundedUntil > existingUntil.untilMs) {
         suppressedUntil.set(provider, { untilMs: boundedUntil, openedAtMs });
+        notify();
       }
     },
 
@@ -78,6 +83,7 @@ export function createProviderAvailability({
       // arbitrarily long refusal. Treat a pre-open observation as elapsed.
       if (currentMs < window.openedAtMs) {
         suppressedUntil.delete(provider);
+        notify();
         return true;
       }
       if (currentMs < Math.min(window.untilMs, window.openedAtMs + MAX_PROVIDER_SUPPRESSION_MS)) {
@@ -87,6 +93,7 @@ export function createProviderAvailability({
       // Expiry is self-contained: once observed, the old window cannot affect
       // a later exhaustion cycle and no operator-triggered clearing is needed.
       suppressedUntil.delete(provider);
+      notify();
       return true;
     },
     snapshot(): Record<string, number> {
@@ -98,6 +105,10 @@ export function createProviderAvailability({
         }
       }
       return result;
+    },
+    subscribe(listener: () => void): () => void {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
     },
   };
 }

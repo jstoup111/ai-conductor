@@ -35,6 +35,8 @@ export interface WorkOrder {
   pinFallbackReason?: EnginePinFallbackReason;
   /** Supervisor pool width, retained for child-mode legacy safety guards. */
   effectiveConcurrency?: number;
+  /** Whether this order was issued by the harness self-host supervisor. */
+  selfHost?: boolean;
   manifest: ManifestEntry[];
   /** Executor inputs formerly recovered from dispatcher-local bookkeeping. */
   tier?: ComplexityTier;
@@ -78,6 +80,8 @@ export interface BuildWorkOrderInput {
   enginePin: EnginePin;
   /** Supervisor pool width retained for child-mode legacy safety guards. */
   effectiveConcurrency?: number;
+  /** Preserve the supervisor's self-host mode across the process boundary. */
+  selfHost?: boolean;
   documentRefs: readonly string[];
   tier?: ComplexityTier;
   sourceRef?: string;
@@ -122,6 +126,7 @@ export async function buildWorkOrder(
     engineVersionId: input.enginePin.engineVersionId,
     ...(input.enginePin.fallbackReason === undefined ? {} : { pinFallbackReason: input.enginePin.fallbackReason }),
     ...(input.effectiveConcurrency === undefined ? {} : { effectiveConcurrency: input.effectiveConcurrency }),
+    ...(input.selfHost === undefined ? {} : { selfHost: input.selfHost }),
     manifest,
     ...(input.tier ? { tier: input.tier } : {}),
     ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),

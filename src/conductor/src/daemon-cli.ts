@@ -2308,6 +2308,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         baseSha,
         enginePin,
         effectiveConcurrency: daemonConcurrency.concurrency,
+        selfHost: isSelfHost,
         documentRefs: [
           item.storiesPath ?? `.docs/stories/${item.slug}.md`,
           item.planPath ?? `.docs/plans/${item.slug}.md`,

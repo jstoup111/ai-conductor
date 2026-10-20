@@ -222,8 +222,12 @@ describe('engine/daemon — background root refresh (#2275)', () => {
 
   it('still discovers origin backlog when the engine source refresh is skipped, but never rebuilds', async () => {
     let rebuilds = 0;
+    let localDiscoveries = 0;
     const h = harness({
-      local: () => [{ slug: 'sibling' }],
+      local: () => {
+        localDiscoveries++;
+        return [{ slug: 'sibling' }, { slug: 'merged-on-origin' }];
+      },
       refresh: async () => [{ slug: 'sibling' }, { slug: 'merged-on-origin' }],
       extra: {
         refreshEngineSource: async () => ({ status: 'skipped', cause: 'dirty' }),
@@ -248,7 +252,12 @@ describe('engine/daemon — background root refresh (#2275)', () => {
       h.sibling.resolve({ slug: 'sibling', status: 'done' });
       await daemon;
     }
-    expect(h.refreshCalls()).toBeGreaterThan(0);
+    // A throttled source refresh must not be bypassed by discovery.  The
+    // local scan still proceeds and admits already-visible backlog changes.
+    // The one startup refresh predates the throttled busy pass; no additional
+    // origin fetch is allowed inside the interval.
+    expect(h.refreshCalls()).toBe(1);
+    expect(localDiscoveries).toBeGreaterThan(1);
     expect(rebuilds).toBe(0);
   });
 

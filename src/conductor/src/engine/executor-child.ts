@@ -32,6 +32,8 @@ export interface ExecutorChildBaseRunInput {
   effectiveConcurrency?: number;
   events: ConductorEventEmitter;
   signal: AbortSignal;
+  /** Feature-scoped logger forwarded to the supervisor-owned daemon sink. */
+  log?: (line: string) => void;
 }
 
 export interface ExecutorChildRunInput extends ExecutorChildBaseRunInput {
@@ -64,6 +66,7 @@ export function withExecutorBrokerProxies(
       try {
         return await run({
           ...input,
+          log: deps.log,
           rateLimitEpisode: createRateLimitEpisodeProxy(client),
           providerAvailability: createProviderAvailabilityProxy(client),
           liveBoundaryCoordinator: createLiveBoundaryProxy(client, deps.liveBoundaryEnabled ?? false),

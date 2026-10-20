@@ -883,7 +883,10 @@ async function dispatchCliCommand(): Promise<void> {
           supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
         });
       },
+      // The WorkOrder is the supervisor's authority for self-host mode.  The
+      // detector is only a compatibility fallback for pre-field orders.
       liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
+      log: (line) => { process.send?.({ kind: 'log', level: 'info', message: line }); },
       exit: (code) => { process.exitCode = code; },
     }));
     return;

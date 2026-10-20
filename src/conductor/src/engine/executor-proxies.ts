@@ -26,6 +26,7 @@ export function createExecutorRequestClient(port: ExecutorIpcPort): ExecutorRequ
   let closed: Error | undefined;
   const pending = new Map<string, { resolve: (value: unknown) => void; reject: (reason: unknown) => void }>();
   const stateListeners = new Set<(state: State) => void>();
+  const latestStates = new Map<State['name'], State>();
   const rejectPending = (reason: Error) => {
     closed = reason;
     for (const entry of pending.values()) entry.reject(reason);
@@ -44,7 +45,9 @@ export function createExecutorRequestClient(port: ExecutorIpcPort): ExecutorRequ
       return;
     }
     if (message.kind === 'state' && (message.name === 'rate-limit' || message.name === 'provider')) {
-      for (const listener of stateListeners) listener(message as State);
+      const state = message as State;
+      latestStates.set(state.name, state);
+      for (const listener of stateListeners) listener(state);
     }
   };
   const onDisconnect = () => rejectPending(new Error('executor supervisor channel disconnected'));
@@ -70,7 +73,12 @@ export function createExecutorRequestClient(port: ExecutorIpcPort): ExecutorRequ
       port.off?.('message', onMessage);
       port.off?.('disconnect', onDisconnect);
     },
-    onState(listener) { stateListeners.add(listener); },
+    onState(listener) {
+      stateListeners.add(listener);
+      // The broker can announce a snapshot before a proxy is composed. Replay
+      // it synchronously so replicas never start from an invented empty state.
+      for (const state of latestStates.values()) listener(state);
+    },
   };
 }
 
@@ -168,10 +176,12 @@ export function createWorktreeLifecycleProxy(client: ReturnType<typeof createExe
 
 /** Send child log lines over IPC; the supervisor owns the actual daemon sink. */
 export function teeExecutorConsole(port: ExecutorIpcPort): () => void {
+  const originalLog = console.log;
   const originalWarn = console.warn;
   const originalError = console.error;
   const forward = (level: string, values: unknown[]) => port.send({ kind: 'log', level, message: values.map(String).join(' ') });
   console.warn = (...values: unknown[]) => forward('warn', values);
   console.error = (...values: unknown[]) => forward('error', values);
-  return () => { console.warn = originalWarn; console.error = originalError; };
+  console.log = (...values: unknown[]) => forward('info', values);
+  return () => { console.log = originalLog; console.warn = originalWarn; console.error = originalError; };
 }

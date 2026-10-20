@@ -141,6 +141,20 @@ describe('executor broker', () => {
     expect(proxyB.active()).toBe(false);
   });
 
+  it('broadcasts supervisor-originated state changes to already-attached replicas', () => {
+    const fixture = brokerFixture();
+    const channel = pair();
+    const proxy = createRateLimitEpisodeProxy(createExecutorRequestClient(channel.child), () => 1_000);
+    fixture.broker.attach('child', channel.supervisor);
+    channel.flush();
+
+    // No child request and no new attachment: the authoritative supervisor
+    // mutation alone must update this existing replica.
+    fixture.episode.enter(2_000);
+    channel.flush();
+    expect(proxy.active()).toBe(true);
+  });
+
   it('rejects a child rate-limit clear when the supervisor aborts all executors', async () => {
     const fixture = brokerFixture();
     const channel = pair();
@@ -214,6 +228,24 @@ describe('executor broker', () => {
     now = 2_001;
     expect(proxyB.isAvailable('codex')).toBe(true);
     expect(proxyLate.isAvailable('codex')).toBe(true);
+  });
+
+  it('broadcasts a supervisor-originated provider suppression to attached replicas', () => {
+    let now = 1_000;
+    const availability = createProviderAvailability({ now: () => now });
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => now }),
+      providerAvailability: availability,
+      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {}, now: () => now,
+    });
+    const channel = pair();
+    const proxy = createProviderAvailabilityProxy(createExecutorRequestClient(channel.child), () => now);
+    broker.attach('child', channel.supervisor);
+    channel.flush();
+
+    availability.suppress('codex', 2_000);
+    channel.flush();
+    expect(proxy.isAvailable('codex')).toBe(false);
   });
 
   it('holds a root mutation behind a child live-boundary window', async () => {

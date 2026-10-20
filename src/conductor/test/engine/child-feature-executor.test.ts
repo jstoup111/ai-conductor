@@ -3,6 +3,7 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createChildProcessFeatureExecutor, type ForkedExecutor } from '../../src/engine/child-feature-executor.js';
@@ -24,6 +25,34 @@ let root: string | undefined;
 afterEach(async () => { if (root) await rm(root, { recursive: true, force: true }); root = undefined; });
 
 describe('child feature executor dispatch lifecycle', () => {
+  it('drains piped stdout and stderr into the slug-tagged daemon sink', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const log = vi.fn();
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: new ConductorEventEmitter(),
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 41, stdout, stderr,
+        send() { return true; }, on() { return this; }, once(_event, listener) { exit = listener; return this; }, kill() { return true; },
+      }),
+      log,
+    });
+
+    const run = executor.execute(order);
+    stdout.write('feature line\n');
+    stderr.write('console line\n');
+    await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[executor feature stdout] feature line'));
+    expect(log).toHaveBeenCalledWith('[executor feature stderr] console line');
+    exit?.(0, null);
+    await run;
+  });
+
   it('publishes its immutable pin at fork, sends the order only after hello, and removes it only on exit', async () => {
     root = await mkdtemp(join(tmpdir(), 'child-executor-'));
     const messages = new Map<string, Array<(value?: unknown) => void>>();
