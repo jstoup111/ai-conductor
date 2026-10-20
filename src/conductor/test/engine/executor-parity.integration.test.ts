@@ -1,4 +1,4 @@
-// Covers: rem-prd-audit-rem-vg-2
+// Covers: task:rem-prd-audit-rem-vg-2, task:rem-prd-audit-rem-vg-3
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -124,6 +124,22 @@ async function ledgerTypes(root: string): Promise<string[]> {
   const events = (await readFile(join(root, '.worktrees', ORDER.slug, '.pipeline', 'events.jsonl'), 'utf8'))
     .trim().split('\n').map((line) => JSON.parse(line) as { type: string });
   return events.map((event) => event.type).filter((type) => type !== 'executor_started');
+}
+
+async function normalizedLedger(root: string): Promise<unknown[]> {
+  const events = (await readFile(join(root, '.worktrees', ORDER.slug, '.pipeline', 'events.jsonl'), 'utf8'))
+    .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+  return events
+    .filter((event) => event.type !== 'executor_started')
+    .map((event) => stripVolatileLedgerFields(event));
+}
+
+function stripVolatileLedgerFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripVolatileLedgerFields);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => key !== 'ts' && key !== 'runId' && key !== 'occurredAt')
+    .map(([key, nested]) => [key, stripVolatileLedgerFields(nested)]));
 }
 
 async function ledgerStepSequence(root: string): Promise<string[]> {
@@ -303,5 +319,49 @@ describe('executor parity', () => {
       })).resolves.toEqual([ORDER.slug]);
       await expect(readFile(halt, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     }
+  });
+
+  it('keeps gate-halt markers, ledger events, and terminal effects identical', async () => {
+    const inProcessRoot = await mkdtemp(join(tmpdir(), 'executor-parity-in-process-'));
+    const childRoot = await mkdtemp(join(tmpdir(), 'executor-parity-child-'));
+    roots.push(inProcessRoot, childRoot);
+    const reason = 'build_review gate requires operator remediation';
+    const gateHalt = async (input: Pick<ExecutorChildRunInput, 'events' | 'rateLimitEpisode'> & { worktree: string }): Promise<FeatureExecutionOutcome> => {
+      await input.events.emit({ type: 'step_started', step: 'build_review', index: 0 });
+      await input.events.emit({ type: 'loop_halt', step: 'build_review', reason, tier: 'S' });
+      await writeFile(join(input.worktree, '.pipeline', 'HALT'), `${reason}\n`);
+      return {
+        slug: ORDER.slug,
+        status: 'halted',
+        reason,
+        terminalEffects: {
+          engineerSignal: {
+            outcome: { slug: ORDER.slug, status: 'halted', reason },
+            eventsContent: 'captured before teardown\n',
+          },
+          sweep: true,
+        },
+      };
+    };
+
+    const inProcess = await runInProcess(inProcessRoot, episodeFixture().episode, gateHalt);
+    const child = await runChildProcess(childRoot, episodeFixture().episode, gateHalt);
+    const halt = (root: string) => readFile(join(root, '.worktrees', ORDER.slug, '.pipeline', 'HALT'), 'utf8');
+
+    await expect(halt(childRoot)).resolves.toBe(`${reason}\n`);
+    await expect(halt(inProcessRoot)).resolves.toBe(await halt(childRoot));
+    expect(await normalizedLedger(childRoot)).toEqual(await normalizedLedger(inProcessRoot));
+    expect(await normalizedLedger(childRoot)).toEqual([
+      { type: 'step_started', step: 'build_review', index: 0 },
+      { type: 'loop_halt', step: 'build_review', reason, tier: 'S' },
+    ]);
+    expect(child).toEqual(inProcess);
+    expect(child).toMatchObject({
+      status: 'halted',
+      terminalEffects: {
+        engineerSignal: { outcome: { status: 'halted', reason } },
+        sweep: true,
+      },
+    });
   });
 });
