@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { execa } from 'execa';
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './conductor.js';
 import { loadConfig } from './config.js';
@@ -12,6 +13,10 @@ import { createProvenanceGuardedFinishPresentationRepair } from './finish-presen
 import { makeProductionGit } from './pr-labels.js';
 import { isOperatorParked } from './park-marker.js';
 import { DefaultStepRunner } from './step-runners.js';
+import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
+import { readWorktreeOutcome } from './daemon-deps.js';
+import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
+import { runSetupFailureTriage } from './setup-triage.js';
 import { PluginRegistry } from './plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './plugin-loader.js';
 import { discoverInstalledProviders } from './provider-discovery.js';
@@ -22,10 +27,44 @@ import { validateConfiguredProviderModels } from './provider-model-probe.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
-import { readState } from './state.js';
 import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { ExecutorChildRunInput } from './executor-child.js';
+
+export interface ExecutorChildFeatureRunnerInput {
+  order: ExecutorChildRunInput['order'];
+  worktree: FeatureWorktree;
+  events: ExecutorChildRunInput['events'];
+  log?: (message: string) => void;
+}
+
+/**
+ * Bind the daemon's canonical one-feature lifecycle to the worktree already
+ * created by the child entrypoint. `deferTerminalEffects` is essential: the
+ * runner describes root-owned effects, and the supervisor applies them only
+ * after collecting this outcome.
+ */
+export function makeExecutorChildFeatureRunner(
+  input: ExecutorChildFeatureRunnerInput,
+  lifecycle: FeatureRunnerDeps,
+): () => Promise<FeatureExecutionOutcome> {
+  const run = makeRunFeature({
+    ...lifecycle,
+    createWorktree: async () => input.worktree,
+    deferTerminalEffects: true,
+  });
+  return () => run({
+    slug: input.order.slug,
+    ...(input.order.tier ? { tier: input.order.tier } : {}),
+    ...(input.order.sourceRef ? { sourceRef: input.order.sourceRef } : {}),
+    ...(input.order.track ? { track: input.order.track } : {}),
+    ...(input.order.band ? { band: input.order.band } : {}),
+    ...(input.order.resolutionMode ? { resolutionMode: input.order.resolutionMode } : {}),
+    ...(input.order.applicabilityDeclarations ? { applicabilityDeclarations: input.order.applicabilityDeclarations } : {}),
+    ...(input.order.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: input.order.applicabilityBaseContentSha256 } : {}),
+    ...(input.order.applicabilityIgnored ? { applicabilityIgnored: input.order.applicabilityIgnored } : {}),
+  });
+}
 
 /**
  * The child owns a normal feature Conductor, while the supervisor keeps every
@@ -151,40 +190,90 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   let shutdown: Promise<void> | undefined;
   const beginShutdown = () => shutdown ??= closeForShutdown();
   signal.addEventListener('abort', () => { void beginShutdown(); }, { once: true });
-  if (signal.aborted) {
-    await beginShutdown();
-    return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
-  }
-  try {
-    await conductor.run();
-  } catch (error) {
-    // An aborted rate-limit clear may reject its in-flight attempt while the
-    // conductor is draining. Shutdown itself is authoritative in that case.
-    if (!signal.aborted) throw error;
-  }
-  if (signal.aborted) {
-    await beginShutdown();
-    return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
-  }
-  // A park can arrive through the root marker between conductor admissions;
-  // it is semantically distinct from a gate halt even though neither has a
-  // PR URL. Preserve it for supervisor collection and future unpark.
-  if (await isOperatorParked(projectRoot, order.slug)) {
-    return { slug: order.slug, status: 'parked', reason: 'operator parked' };
-  }
-  const state = await readState(stateFilePath);
-  // Root-owned effects travel back as declarative terminal effects and are
-  // applied by daemon collection, exactly as in-process deferred execution.
-  // The child must never write root ledgers or watch state itself.
-  if (state.ok && state.value.pr_url) {
-    return {
-      slug: order.slug, status: 'done', prUrl: state.value.pr_url,
-      terminalEffects: {
-        markProcessed: { prUrl: state.value.pr_url },
-        enrollWatch: { prUrl: state.value.pr_url },
-        sweep: true,
+  const runner = makeExecutorChildFeatureRunner({ order, worktree, events, log: input.log }, {
+    createWorktree: async () => worktree,
+    prepareWorktree: async (featureWorktree, featureLog, featureEvents) => prepareWorktree(
+      featureWorktree.path,
+      featureLog,
+      {
+        baseSha: order.baseSha,
+        events: featureEvents,
+        dispatchStart: true,
+        skillNameRoot: await resolveHarnessRoot(),
       },
-    };
+    ),
+    runSetupTriage: async (
+      error,
+      featureWorktree,
+      item,
+      execution = providerExecution,
+      featureLog = input.log,
+      featureEvents,
+    ) => {
+      const runPrepare = async () => prepareWorktree(featureWorktree.path, featureLog, {
+        force: true,
+        baseSha: order.baseSha,
+        events: featureEvents,
+        dispatchStart: true,
+        skillNameRoot: await resolveHarnessRoot(),
+      });
+      const triageRuntime = execution.runtimes.get(execution.configuredProviders[0]);
+      if (!triageRuntime) throw new Error('executor child requires a configured provider runtime');
+      return runSetupFailureTriage(
+        makeGitRunner(featureWorktree.path),
+        featureWorktree.path,
+        item.slug,
+        error,
+        runPrepare,
+        async () => new DefaultStepRunner(triageRuntime.provider, uuidv4(), featureWorktree.path, {
+          featureDesc: `setup-fix-${item.slug}`,
+          config,
+          modelPolicy: triageRuntime.policy,
+          mode: 'auto',
+          providerExecution: execution,
+          log: featureLog,
+          skillNameRoot: await resolveHarnessRoot(),
+        }).resolveSetupFailure({
+          worktreePath: featureWorktree.path,
+          outputTail: error.outputTail,
+          slug: item.slug,
+        }),
+        featureLog ? { log: featureLog } : undefined,
+        featureEvents,
+      );
+    },
+    runConductor: async () => {
+      if (signal.aborted) return { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } };
+      try {
+        return await conductor.run();
+      } catch (error) {
+        // An aborted rate-limit clear may reject its in-flight attempt while
+        // the conductor is draining. Shutdown is authoritative in that case.
+        if (!signal.aborted) throw error;
+        await beginShutdown();
+        return { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } };
+      }
+    },
+    readOutcome: (featureWorktree) => readWorktreeOutcome(featureWorktree.path),
+    teardownWorktree: async (featureWorktree, keep) => {
+      if (keep) return;
+      await runProjectTeardown(featureWorktree.path, input.log);
+      await input.worktreeLifecycle.run(() => execa(
+        'git', ['worktree', 'remove', '--force', featureWorktree.path], { cwd: projectRoot },
+      ).catch(() => {}));
+    },
+    // Deferred terminal effects make this unreachable in the child. It keeps
+    // the canonical runner contract complete without permitting a root write.
+    markProcessed: async () => {},
+    daemon: true,
+    providerExecution: () => providerExecution,
+    project: basename(projectRoot),
+    log: input.log,
+  });
+  const result = await runner();
+  if (signal.aborted && result.status !== 'parked') {
+    await beginShutdown();
+    return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
   }
-  return { slug: order.slug, status: 'halted', terminalEffects: { sweep: true } };
+  return result;
 }
