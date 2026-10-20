@@ -1491,7 +1491,11 @@ export async function runDaemon(
       return;
     }
 
-    if (deps.hasRestartPending) {
+    // The operator-marker drain already has its own idle-boundary admission
+    // path. Keep its historical serial behavior (one durable read at idle),
+    // while still observing the D7 stale-age and protocol-mismatch fallbacks
+    // at width one below.
+    if (maintenance.busyMaintenanceEnabled() && deps.hasRestartPending) {
       try {
         if (await deps.hasRestartPending()) {
           await beginDrain('restart-pending');
@@ -1788,8 +1792,12 @@ export async function runDaemon(
           async (episodeActive): Promise<DaemonStopReason | null> => {
             if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
               try {
+                // A busy-pool observation has already made the pending marker
+                // authoritative for this generation. Do not re-read it at the
+                // drained boundary: apart from needless I/O, a changed marker
+                // could make an episode-deferred restart disappear.
                 const hasRestart =
-                  restartPendingDeferredByEpisode || (await deps.hasRestartPending());
+                  restartPending || restartPendingDeferredByEpisode || (await deps.hasRestartPending());
                 if (hasRestart) {
                 restartPending = true;
                 maintenanceJob.close();

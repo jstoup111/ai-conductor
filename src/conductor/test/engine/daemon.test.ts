@@ -1202,7 +1202,7 @@ describe('engine/daemon — runDaemon', () => {
     // Process the feature, then idle → trigger fails, but daemon continues idling
     expect(res.processed).toHaveLength(1);
     expect(res.stoppedReason).toBe('idle_timeout'); // hit max idle polls, didn't crash
-    expect(slept).toBe(3); // one serial completion wait plus two idle cycles
+    expect(slept).toBe(2); // two idle cycles; the timeout boundary itself does not sleep
     expect(triggerAttempts).toBeGreaterThanOrEqual(1); // attempted at least once
   });
 
