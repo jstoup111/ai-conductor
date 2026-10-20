@@ -3322,7 +3322,7 @@ export class DefaultStepRunner implements StepRunner {
         customEntries.length,
         async (_id, entry) => {
           try {
-            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir);
+            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir, executionContext);
           } finally {
             lapGate?.arrive(entry.id);
           }
@@ -3742,6 +3742,7 @@ export class DefaultStepRunner implements StepRunner {
     lapGate?: BuildReviewLapGate,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
     pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline'),
+    executionContext?: ExecutionContext,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -3803,7 +3804,7 @@ export class DefaultStepRunner implements StepRunner {
     let result: ProviderExecutionResult;
     try {
       result = await executeAuxiliaryProviderCandidates({
-      step: 'build_review', memberId: entry.id, policy: entry.policy,
+      step: 'build_review', executionContext, memberId: entry.id, policy: entry.policy,
       runtimes: this.providerRuntimes, sessions: this.sessionStore.beginBranch(`build-review:${entry.id}`),
       config: this.config, runId: this.runId, tier,
       nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build_review'),
