@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-20T14:00:31.372Z
 Slug: stacked-features-cannot-be-published-reviewed-and-
 Class: needs-human
 Halting step: prd_audit
