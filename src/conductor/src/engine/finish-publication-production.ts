@@ -407,6 +407,8 @@ async function verifyStackBeforeReadyFlip(input: {
   git: PublicationRecordGitRunner;
   gh: GhRunner;
   operations: GithubOperationRunner;
+  /** The native stack read is a repository-targeted operation, not a leaf-PR operation. */
+  operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
   events?: Parameters<typeof haltStackTipDiverged>[2];
   position: number;
 }): Promise<void> {
@@ -416,6 +418,7 @@ async function verifyStackBeforeReadyFlip(input: {
   }
   await executeValidatedStackOperation({
     root: input.root, slug: input.slug, git: input.git, operations: input.operations,
+    operationsForTarget: input.operationsForTarget,
     request: {
       operation: 'stack.read', repository: input.leaf.repository, resource: { kind: 'repository' },
       context: { actor: 'finish-publication' }, payload: { pullRequest: input.leaf.number },
@@ -457,8 +460,8 @@ export async function readyStackChildren(input: {
   git: PublicationRecordGitRunner;
   gh: GhRunner;
   operations?: GithubOperationRunner;
-  /** Each child ready write needs its own exact pull-request provenance target. */
-  operationsForPullRequest?: (pr: number) => Promise<GithubOperationRunner | undefined>;
+  /** Each stack read and child ready write needs its own exact provenance target. */
+  operationsForTarget?: (target: GithubOperationTarget) => GithubOperationRunner | undefined;
   events?: Parameters<typeof haltStackTipDiverged>[2];
   /** The coordinator already proved durable child state before reading the receipt. */
   stacked?: boolean;
@@ -474,7 +477,8 @@ export async function readyStackChildren(input: {
   for (const member of [...stored.record.members].slice(0, -1).reverse()) {
     await verifyStackBeforeReadyFlip({
       root: input.root, slug: input.slug, leaf, git: input.git, gh: input.gh,
-      operations: input.operations, events: input.events, position: member.position,
+      operations: input.operations, operationsForTarget: input.operationsForTarget,
+      events: input.events, position: member.position,
     });
     const stdout = await runTrackerRepositoryRead(
       input.gh, input.root, 'pull-request.read', leaf.repository, { kind: 'pull-request', number: member.pr },
@@ -494,7 +498,9 @@ export async function readyStackChildren(input: {
     if (!draft) continue;
     const postcondition = checkChildBodyPostconditions(body, input.template, member.branch);
     if (!postcondition.ok) throw new StackPublicationHaltError('stack_publication_precondition_failed', postcondition.reason);
-    const memberOperations = await input.operationsForPullRequest?.(member.pr) ?? input.operations;
+    const memberOperations = input.operationsForTarget?.({
+      repository: leaf.repository, kind: 'pull-request', number: member.pr,
+    }) ?? input.operations;
     if (!memberOperations) {
       throw new StackPublicationHaltError('stack_publication_precondition_failed', `child ready boundary unavailable at position ${member.position}`);
     }
@@ -1764,6 +1770,7 @@ export function createProductionFinishPublicationCoordinator(
                 git: stackGit,
                 gh: deps.gh,
                 operations: prOperations,
+                operationsForTarget,
                 events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
                 position: leafMember.position,
               });
@@ -1790,9 +1797,7 @@ export function createProductionFinishPublicationCoordinator(
               git: stackGit,
               gh: deps.gh,
               operations: prOperations,
-              operationsForPullRequest: async (pr) => leaf === undefined
-                ? undefined
-                : retainedOperations(`https://github.com/${leaf.repository}/pull/${pr}`),
+              operationsForTarget,
               events: deps.events as Parameters<typeof haltStackTipDiverged>[2],
               stacked: publicationRecord?.record.stack?.verified === true,
             });

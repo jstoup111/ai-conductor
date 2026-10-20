@@ -2,11 +2,11 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
 import { allStackMembersReady, readyStackChildren } from '../../src/engine/finish-publication-production.js';
-import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
+import type { GithubOperationRequest, GithubOperationRunner, GithubOperationTarget } from '../../src/engine/github-operations.js';
 import { pushedTipRef } from '../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { writePublicationRecord, type PublicationRecord } from '../../src/engine/stack-publication-record.js';
@@ -99,6 +99,37 @@ afterEach(async () => {
 });
 
 describe('readyStackChildren', () => {
+  it('uses target-bound runners for every stack read and child ready flip', async () => {
+    const { gh, writes, drafts } = fixture();
+    const fallback: GithubOperationRunner = {
+      run: async () => { throw new Error('unbound operation runner must not execute'); },
+    };
+    const targets: GithubOperationTarget[] = [];
+    const operationsForTarget = vi.fn((target: GithubOperationTarget): GithubOperationRunner => ({
+      run: async (request: GithubOperationRequest) => {
+        targets.push(target);
+        expect(request.target).toEqual(target);
+        if (request.operation === 'stack.read') return {};
+        if (request.operation !== 'pull-request.ready' || target.kind !== 'pull-request') {
+          throw new Error(`unexpected target-bound operation: ${request.operation}`);
+        }
+        writes.push(`ready:${target.number}`);
+        drafts.set(target.number, false);
+        return {};
+      },
+    }));
+
+    await readyStackChildren({ root, slug: 'demo', leafUrl, git, gh, operations: fallback, operationsForTarget });
+
+    expect(targets).toEqual([
+      { repository: 'acme/demo', kind: 'repository' },
+      { repository: 'acme/demo', kind: 'pull-request', number: 103 },
+      { repository: 'acme/demo', kind: 'repository' },
+      { repository: 'acme/demo', kind: 'pull-request', number: 101 },
+    ]);
+    expect(writes).toEqual(['ready:103', 'ready:101']);
+  });
+
   it('flips only draft children from the highest position to the lowest', async () => {
     const { gh, operations, writes, drafts } = fixture();
 
