@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
+// Covers: task:28, task:rem-prd-audit-R13, task:rem-prd-audit-R13-2, task:rem-prd-audit-rem-v3-teardown-per-member, task:rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

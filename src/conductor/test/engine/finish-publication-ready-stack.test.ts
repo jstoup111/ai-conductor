@@ -1,4 +1,5 @@
 // Covers: task:15
+// Covers: task:rem-prd-audit-R9, task:rem-prd-audit-R9-2, task:rem-prd-audit-R9-3
 // Covers: task:rem-prd-audit-rem-v3-ready-target-binding
 // Covers: task:rem-as-built-rem-as-built-rem-v4-second-read-indeterminate
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';

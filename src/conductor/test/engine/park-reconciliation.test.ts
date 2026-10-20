@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:rem-as-built-rem-v3-park-reclaim-order
+// Covers: task:1, task:2, task:3, task:4, task:5, task:29, task:rem-prd-audit-R12, task:rem-prd-audit-R12-2, task:rem-as-built-rem-v3-park-reclaim-order
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
