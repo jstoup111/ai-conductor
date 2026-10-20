@@ -393,10 +393,14 @@ async function observeMembers(
       if (requireDraft && !isDraft) return 'diverged';
       const base = (parsed as { baseRefName?: unknown }).baseRefName;
       const head = (parsed as { headRefOid?: unknown }).headRefOid;
-      // The first child is rooted at the journaled pre-stack base; every
-      // later member is rooted at its immediate predecessor. These identity
-      // checks fence every recorded draft before assembly can mutate it.
-      const expectedBase = index === 0 ? record.retarget?.from : members[index - 1]!.branch;
+      // The retained leaf starts on the pre-stack base and moves to its
+      // predecessor only after the retarget journal is observed. Children
+      // retain their existing predecessor-base checks.
+      const expectedBase = index === members.length - 1
+        ? record.retarget?.phase === 'observed'
+          ? members[index - 1]!.branch
+          : record.retarget?.from ?? 'main'
+        : index === 0 ? record.retarget?.from : members[index - 1]!.branch;
       if (typeof head !== 'string') return 'indeterminate';
       if (expectedBase !== undefined && (typeof base !== 'string' || base !== expectedBase)) return 'diverged';
       const pushed = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, member.branch)]);

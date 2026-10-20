@@ -1,8 +1,9 @@
-// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify
+// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify, task:rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { ActiveChildResolution } from '../../src/engine/child-cursor.js';
+import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
 import { observeStackDimension } from '../../src/engine/stack-publication.js';
 import type { PublicationRecord } from '../../src/engine/stack-publication-record.js';
 
@@ -30,6 +31,7 @@ interface Fixture {
   readonly gitArgs: string[][];
   readonly ghArgs: string[][];
   readonly dependencies: Parameters<typeof observeStackDimension>[3];
+  setRecord(record: PublicationRecord): void;
 }
 
 function fixture(options: {
@@ -37,13 +39,14 @@ function fixture(options: {
   readonly record?: PublicationRecord;
   readonly memberStates?: Readonly<Record<number, 'OPEN' | 'CLOSED' | 'MERGED'>>;
   readonly memberDrafts?: Readonly<Record<number, boolean>>;
+  readonly memberBases?: Readonly<Record<number, string>>;
   readonly memberHeads?: Readonly<Record<number, string>>;
   readonly stackRead?: 'ok' | 'timeout';
 } = {}): Fixture {
   const gitArgs: string[][] = [];
   const ghArgs: string[][] = [];
   const positions = options.positions ?? [1, 3, 5];
-  const record = options.record;
+  let record = options.record;
   const publicationBlob = 'a'.repeat(40);
   const git = async (args: string[]) => {
     gitArgs.push(args);
@@ -70,11 +73,18 @@ function fixture(options: {
       const isDraft = options.memberDrafts?.[number] ?? true;
       const member = members.find((candidate) => candidate.pr === number)!;
       const index = members.indexOf(member);
+      const baseRefName = index === members.length - 1
+        ? record?.retarget?.phase === 'observed'
+          ? members[index - 1]!.branch
+          : record?.retarget?.from ?? 'main'
+        : index === 0
+          ? record?.retarget?.from ?? 'main'
+          : members[index - 1]!.branch;
       return { stdout: JSON.stringify({
         state,
         isDraft,
         headRefOid: options.memberHeads?.[number] ?? tips[member.branch],
-        ...(index === 0 ? {} : { baseRefName: members[index - 1]!.branch }),
+        baseRefName: options.memberBases?.[number] ?? baseRefName,
       }) };
     }
     if (args[0] === 'api') {
@@ -85,7 +95,7 @@ function fixture(options: {
     }
     throw new Error(`unexpected gh argv: ${args.join(' ')}`);
   };
-  return { gitArgs, ghArgs, dependencies: { git, gh, repository } };
+  return { gitArgs, ghArgs, dependencies: { git, gh, repository }, setRecord(next) { record = next; } };
 }
 
 function record(overrides: Partial<PublicationRecord> = {}): PublicationRecord {
@@ -135,6 +145,55 @@ describe('observeStackDimension', () => {
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
       .resolves.toBe('unassembled');
+  });
+
+  it('accepts the retained leaf on its predecessor after the journal records an observed retarget', async () => {
+    const subject = fixture({ record: record({
+      retarget: { from: 'main', to: 'feat/c3/demo', phase: 'observed' },
+      stack: { number: 42, verified: false },
+    }) });
+
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
+      .resolves.toBe('unassembled');
+  });
+
+  it('dispatches child establishment then assembly for a valid three-member stack', async () => {
+    const subject = fixture();
+    const transitions: string[] = [];
+    const observe = async (): Promise<PublicationSnapshot> => ({
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid', branchPushed: 'valid',
+      pr: { identity: 'one', url: 'https://github.com/acme/demo/pull/500', prose: 'accepted', ready: false },
+      shippedRecord: 'valid', outcomeRecord: 'missing',
+      stack: await observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies),
+    });
+    const effects = {
+      dispatchJudgment: async () => ({ kind: 'accepted' }),
+      establishChildPrs: async () => {
+        transitions.push('establish_child_prs');
+        subject.setRecord(record({ stack: { number: 42, verified: false } }));
+      },
+      assembleStack: async () => {
+        transitions.push('assemble_stack');
+        subject.setRecord(record({ stack: { number: 42, verified: true } }));
+      },
+    };
+
+    await advanceFinishPublication({ observe, effects: effects as never });
+    await advanceFinishPublication({ observe, effects: effects as never });
+
+    expect(transitions).toEqual(['establish_child_prs', 'assemble_stack']);
+  });
+
+  it('returns diverged for a retained leaf on an unexpected base before stack assembly', async () => {
+    const subject = fixture({
+      record: record({ stack: { number: 42, verified: false } }),
+      memberBases: { 500: 'release' },
+    });
+
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
+      .resolves.toBe('diverged');
   });
 
   it('returns diverged for a changed draft member before stack assembly', async () => {
