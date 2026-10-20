@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
@@ -37,6 +37,7 @@ function fixture(options: {
   readonly record?: PublicationRecord;
   readonly memberStates?: Readonly<Record<number, 'OPEN' | 'CLOSED' | 'MERGED'>>;
   readonly memberDrafts?: Readonly<Record<number, boolean>>;
+  readonly memberHeads?: Readonly<Record<number, string>>;
   readonly stackRead?: 'ok' | 'timeout';
 } = {}): Fixture {
   const gitArgs: string[][] = [];
@@ -72,7 +73,7 @@ function fixture(options: {
       return { stdout: JSON.stringify({
         state,
         isDraft,
-        headRefOid: tips[member.branch],
+        headRefOid: options.memberHeads?.[number] ?? tips[member.branch],
         ...(index === 0 ? {} : { baseRefName: members[index - 1]!.branch }),
       }) };
     }
@@ -134,6 +135,18 @@ describe('observeStackDimension', () => {
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
       .resolves.toBe('unassembled');
+  });
+
+  it('returns diverged for a changed draft member before stack assembly', async () => {
+    const subject = fixture({
+      record: record({ stack: { number: 42, verified: false } }),
+      memberHeads: { 103: 'd'.repeat(40) },
+    });
+
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
+      .resolves.toBe('diverged');
+
+    expect(subject.ghArgs.some((args) => args[0] === 'api')).toBe(false);
   });
 
   it('returns valid only after it observes a verified stack', async () => {
