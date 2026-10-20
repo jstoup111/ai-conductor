@@ -30,12 +30,34 @@ import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { ExecutorChildRunInput } from './executor-child.js';
+import { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ExecutorChildFeatureRunnerInput {
   order: ExecutorChildRunInput['order'];
   worktree: FeatureWorktree;
   events: ExecutorChildRunInput['events'];
+  /** The child's feature-local provider routing state for the runner scope. */
+  providerExecution: ProviderExecutionContext;
   log?: (message: string) => void;
+}
+
+/**
+ * Event types the supervisor alone emits, once per claim, around the whole
+ * child launch (ADR D4). The shared runner emits them on its scope's root bus,
+ * so the child scope's root bus drops them and forwards everything else
+ * (for example `feature_shipped`) onto the child-owned spine.
+ */
+const SUPERVISOR_OWNED_EVENTS: ReadonlySet<string> = new Set(['feature_dispatch_started', 'feature_dispatch_ended']);
+
+function withoutSupervisorOwnedEvents(events: ConductorEventEmitter): ConductorEventEmitter {
+  const filtered = new ConductorEventEmitter();
+  filtered.emit = async (event) => {
+    if (!SUPERVISOR_OWNED_EVENTS.has(event.type)) await events.emit(event);
+  };
+  filtered.emitOrThrow = async (event) => {
+    if (!SUPERVISOR_OWNED_EVENTS.has(event.type)) await events.emitOrThrow(event);
+  };
+  return filtered;
 }
 
 /**
@@ -51,6 +73,16 @@ export function makeExecutorChildFeatureRunner(
   const run = makeRunFeature({
     ...lifecycle,
     createWorktree: async () => input.worktree,
+    // The child entrypoint already owns this feature's event persistence and
+    // forwarding; bind that bus as the runner scope so setup, triage,
+    // shipment and termination events reach the child spine (ADR D4).
+    beginFeatureRun: async () => ({
+      events: input.events,
+      rootEvents: withoutSupervisorOwnedEvents(input.events),
+      providerExecution: input.providerExecution,
+      ...(input.log ? { log: input.log } : {}),
+      stop: () => {},
+    }),
     deferTerminalEffects: true,
   });
   return () => run({
@@ -190,7 +222,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   let shutdown: Promise<void> | undefined;
   const beginShutdown = () => shutdown ??= closeForShutdown();
   signal.addEventListener('abort', () => { void beginShutdown(); }, { once: true });
-  const runner = makeExecutorChildFeatureRunner({ order, worktree, events, log: input.log }, {
+  const runner = makeExecutorChildFeatureRunner({ order, worktree, events, providerExecution, log: input.log }, {
     createWorktree: async () => worktree,
     prepareWorktree: async (featureWorktree, featureLog, featureEvents) => prepareWorktree(
       featureWorktree.path,
