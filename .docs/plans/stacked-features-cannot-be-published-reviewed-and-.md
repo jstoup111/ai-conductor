@@ -1652,3 +1652,35 @@ Each task's `**Dependencies:**` line is authoritative.
 **Done when:**
 - adr-2026-10-17-stacked-feature-publication-as-native-stack decision 12 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-rem-v4-teardown-keep-vs-fail is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d1-durable-ref-detection: Per amended ADR decision 1, make child-cursor.ts stacked-child detection and the remote-git-operations.ts:176 guard gate use durable refs/conductor/<slug>/ refs, so a recreated worktree with surviving refs keeps published-stack protection; add a regression test with no child directories or envelope
+**Gate:** as-built
+**Rationale:** The ADR decision 1 amendment (commit 92bb0bd81d, ADR lines 184-187) is already on this branch and resolves the architecture: local read-only refs/conductor/<slug>/ probes are excluded from N=1 argv parity, and durable child refs decide the stack even without disposable metadata. That makes this conforming implementation and test drift, so it goes to BUILD. Three changes are needed. remote-git-operations.ts:176 must stop skipping the guard. child-cursor.ts hasStackedChildEvidence must detect surviving durable refs. The N=1 golden test must record probes separately instead of prohibiting them. Confidence 95% (verified against the ADR text).
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d1-durable-ref-detection is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d1-n1-golden-probe-list: Update test/engine/n1-golden-renderings.test.ts (around lines 443, 544-545, 569-570): record local read-only refs/conductor probes in a separate list and pin byte-identical argv only for remote and mutating Git commands, as the amended decision 1 requires
+**Gate:** as-built
+**Rationale:** The ADR decision 1 amendment (commit 92bb0bd81d, ADR lines 184-187) is already on this branch and resolves the architecture: local read-only refs/conductor/<slug>/ probes are excluded from N=1 argv parity, and durable child refs decide the stack even without disposable metadata. That makes this conforming implementation and test drift, so it goes to BUILD. Three changes are needed. remote-git-operations.ts:176 must stop skipping the guard. child-cursor.ts hasStackedChildEvidence must detect surviving durable refs. The N=1 golden test must record probes separately instead of prohibiting them. Confidence 95% (verified against the ADR text).
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d1-n1-golden-probe-list is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d5-intended-retarget-recovery: In stack-publication.ts observation, when retarget.phase is 'intended', accept the leaf base equal to either retarget.from or retarget.to and reject any other base as diverged; add a crash-after-apply test proving finish-publication-production.ts retarget recovery runs instead of a divergence halt
+**Gate:** as-built
+**Rationale:** Verified at stack-publication.ts:399-403. The leaf's expected base is the predecessor only when retarget.phase is 'observed'. A crash after GitHub applies the retarget but before the observed CAS leaves the phase 'intended' with the base already at retarget.to, and observation then halts as diverged. ADR decision 5 recovery semantics are clear, so this is a BUILD fix in the observation code. Confidence 95%.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d5-intended-retarget-recovery is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-d5-actual-prestack-base: Replace the hardcoded 'main' fallback in stack-publication.ts observation with the actual pre-stack base, either recorded at establishment in finish-publication-production.ts or supplied by the caller from input.baseBranch; return indeterminate when that base cannot be established; add a non-main base test
+**Gate:** as-built
+**Rationale:** Verified at stack-publication.ts:402-403: `record.retarget?.from ?? 'main'` hardcodes main for the first child and the unretargeted leaf. Establishment uses input.baseBranch and records membership without retarget metadata, so a non-main resolved base falsely diverges. This is a conforming fix under ADR decision 5, so it goes to BUILD. Confidence 95%.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-d5-actual-prestack-base is committed and its targeted tests pass.
