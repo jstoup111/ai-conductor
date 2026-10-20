@@ -6,8 +6,8 @@ Class: protected-artifact
 Halting step: build
 Phase: BUILD
 Branch: feat/daemon-stacked-features-cannot-be-published-reviewed-and-
-Head SHA: bb8f17f1b25f45b4df351c84eba625d2d1e1b8a2
-Halted at: 2026-10-20T15:04:10.606Z
+Head SHA: 4051e5636a0b7078f9bc3fc528e45003c1714016
+Halted at: 2026-10-20T15:04:14.221Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
