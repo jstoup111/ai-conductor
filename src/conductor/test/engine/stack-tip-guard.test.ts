@@ -1,4 +1,4 @@
-// Covers: task:21, task:rem-prd-audit-rem-v3-divergence-mapping
+// Covers: task:21, task:rem-prd-audit-rem-v3-divergence-mapping, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -71,9 +71,6 @@ async function fixture() {
   await git(repository, ['checkout', '-b', 'feat/daemon-demo']);
   const leaf = await commit(repository, 'leaf');
   await git(repository, ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo']);
-  const childrenDirectory = join(repository, '.pipeline', 'children');
-  await mkdir(childrenDirectory, { recursive: true });
-  await writeFile(join(childrenDirectory, 'c1'), '');
 
   const record: PublicationRecord = {
     version: 1,

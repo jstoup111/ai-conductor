@@ -386,7 +386,7 @@ describe('runRestack (real local Git)', () => {
     await expect(git(['merge-base', '--is-ancestor', haltRecord, repaired])).resolves.toMatchObject({ stdout: '' });
   });
 
-  it('keeps ref-only child state on the N=1 path when its sealed envelope is absent', async () => {
+  it('refuses a durable child stack without its sealed envelope', async () => {
     const subject = await fixture();
     await rm(join(subject.repo, '.pipeline', 'coverage-binding.json'));
 
@@ -396,7 +396,7 @@ describe('runRestack (real local Git)', () => {
       cause: 'base-refresh',
       newDefault: subject.advancedDefault,
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'unavailable', detail: 'cannot resolve restack cursor: no-child' });
+    })).resolves.toEqual({ kind: 'unavailable', detail: 'cannot resolve restack cursor: envelope-missing' });
   });
 
   it('persists a merge audit after flattening an uncarried side of a child range', async () => {

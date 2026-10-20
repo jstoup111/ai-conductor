@@ -85,27 +85,6 @@ function positionsFromEnvelope(
     .sort((left, right) => left - right);
 }
 
-/**
- * Cheap non-Git evidence that a feature is a stack. This is deliberately
- * separate from durable-state recovery: ordinary N=1 pushes must not probe
- * refs merely to establish their historical flat path.
- */
-export async function hasStackedChildEvidence(worktree: string): Promise<boolean> {
-  try {
-    if ((await readdir(join(worktree, '.pipeline', 'children'))).length > 0) return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
-  }
-  try {
-    const envelope = await readCoverageBindingEnvelope(worktree, envelopeFilesystem);
-    return envelope?.storyOwnership !== undefined && positionsFromEnvelope(envelope).length > 1;
-  } catch {
-    // Preserve the cursor's existing fail-closed behavior for unreadable
-    // evidence by delegating to durable-state recovery.
-    return true;
-  }
-}
-
 /** Returns the terminal position declared by the completed sealed envelope. */
 export async function resolveSealedLeaf(worktree: string): Promise<ChildId | undefined> {
   let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>>;
@@ -298,9 +277,10 @@ export async function resolveActiveChild(
   dependencies: ActiveChildDependencies = {},
 ): Promise<ActiveChildResolution> {
   const git = dependencies.git ?? makeGitRunner(worktree);
-  // Ordinary N=1 callers must decide their flat path from non-Git evidence
-  // before durable-state recovery can inspect local refs.
-  if (!(await hasStackedChildEvidence(worktree))) return { kind: 'no-child' };
+  // Durable ref detection runs whether or not disposable metadata (child
+  // directory, envelope) survives: a recreated worktree keeps its child refs
+  // (ADR 2026-10-17 D1 amendment). hasDurableChildState preserves the flat path
+  // for fixtures without a Git boundary.
   const artifacts = await hasDurableChildState(worktree, slug, { git });
   if (artifacts === 'git-error') return { kind: 'git-error' };
 
