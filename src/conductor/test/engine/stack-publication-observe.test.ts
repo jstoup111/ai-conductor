@@ -1,4 +1,4 @@
-// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify, task:rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base
+// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify, task:rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base, task:rem-as-built-rem-as-built-rem-v4-first-child-base
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
@@ -142,6 +142,26 @@ describe('observeStackDimension', () => {
 
   it('returns unassembled while all members exist but the stack is unverified', async () => {
     const subject = fixture({ record: record({ stack: { number: 42, verified: false } }) });
+
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
+      .resolves.toBe('unassembled');
+  });
+
+  it('returns diverged when the first member no longer targets its journaled pre-stack base', async () => {
+    const subject = fixture({
+      record: record({ stack: { number: 42, verified: false } }),
+      memberBases: { 101: 'release' },
+    });
+
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
+      .resolves.toBe('diverged');
+  });
+
+  it('keeps an unverified stack healthy when its first member targets its journaled pre-stack base', async () => {
+    const subject = fixture({
+      record: record({ stack: { number: 42, verified: false } }),
+      memberBases: { 101: 'main' },
+    });
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
       .resolves.toBe('unassembled');

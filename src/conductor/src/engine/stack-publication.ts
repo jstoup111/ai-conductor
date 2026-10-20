@@ -398,11 +398,12 @@ async function observeMembers(
       // retain their existing predecessor-base checks.
       const expectedBase = index === members.length - 1
         ? record.retarget?.phase === 'observed'
-          ? members[index - 1]!.branch
+          ? members[index - 1]?.branch
           : record.retarget?.from ?? 'main'
-        : index === 0 ? record.retarget?.from : members[index - 1]!.branch;
+        : index === 0 ? record.retarget?.from ?? 'main' : members[index - 1]?.branch;
       if (typeof head !== 'string') return 'indeterminate';
-      if (expectedBase !== undefined && (typeof base !== 'string' || base !== expectedBase)) return 'diverged';
+      if (expectedBase === undefined) return 'indeterminate';
+      if (typeof base !== 'string' || base !== expectedBase) return 'diverged';
       const pushed = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, member.branch)]);
       if (pushed.exitCode !== 0) return 'indeterminate';
       if (pushed.stdout.trim() !== head) return 'diverged';
