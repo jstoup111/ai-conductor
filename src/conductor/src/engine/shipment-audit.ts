@@ -564,17 +564,6 @@ async function auditSource(
 
   if (candidates.length === 1) return auditImplementationCandidate(options, source, plan, candidates[0]!);
 
-  const stackChildPullRequest = associations.find(({ pullRequest, association }) =>
-    association.kind === 'not-applicable' && association.classification === 'stack-child'
-      && extractPlanStems(pullRequest.body).includes(plan.slug))?.pullRequest;
-  if (stackChildPullRequest) {
-    return row(
-      source,
-      'absent',
-      `merged PR #${stackChildPullRequest.number} is not applicable (stack-child)`,
-    );
-  }
-
   if (candidates.length === 0) return row(source, 'absent', 'no exact associated merged implementation PR');
   if (candidates.length > 1) return row(source, 'ambiguous', 'multiple exact associated merged implementation PRs');
 

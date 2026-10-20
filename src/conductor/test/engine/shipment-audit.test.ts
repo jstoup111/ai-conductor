@@ -1,4 +1,4 @@
-// Covers: task:19, task:rem-as-built-R16
+// Covers: task:19, task:rem-as-built-R16, task:rem-as-built-rem-v3-audit-child-exclusion
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,7 +62,7 @@ describe('shipment audit', () => {
     }
   });
 
-  it('reports a plan-bearing child as stack-child instead of a repair candidate', async () => {
+  it('excludes a plan-bearing child from deciding plan absence', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'shipment-audit-stack-child-'));
     const runGh = vi.fn(async (args: string[]) => {
       if (args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'acme/conductor' }) };
@@ -106,7 +106,7 @@ describe('shipment audit', () => {
 
       expect(report.rows[0]).toMatchObject({
         classification: 'absent',
-        reason: 'merged PR #503 is not applicable (stack-child)',
+        reason: 'no exact associated merged implementation PR',
       });
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -147,12 +147,68 @@ describe('shipment audit', () => {
     try {
       const report = await runShipmentAudit({
         cwd, runGh, runGit,
-        evaluateEvidence: async () => ({ kind: 'valid', shippedRecordPath: '.docs/shipped/demo.md' }),
+        evaluateEvidence: async () => ({
+          kind: 'valid',
+          slug: 'demo',
+          pr: 'https://github.com/acme/conductor/pull/500',
+          recordPath: '.docs/shipped/demo.md',
+          hash: 'a'.repeat(64),
+          commit: 'a'.repeat(40),
+        }),
       });
 
       expect(report.rows[0]).toMatchObject({
         classification: 'aligned',
         implementationPr: { number: 500, url: 'https://github.com/acme/conductor/pull/500' },
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('excludes a plan-bearing child before classifying two leaf candidates as ambiguous', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-audit-child-before-ambiguous-leaves-'));
+    const runGh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'acme/conductor' }) };
+      return {
+        stdout: JSON.stringify({
+          data: { repository: { pullRequests: { nodes: [
+            {
+              number: 503, url: 'https://github.com/acme/conductor/pull/503',
+              body: 'Plan: `.docs/plans/demo.md`', mergedAt: '2026-10-19T00:00:00Z',
+              headRefOid: 'b'.repeat(40), headRefName: 'feat/c3/demo',
+              files: { nodes: [{ path: 'src/conductor/src/engine/demo.ts' }], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+            {
+              number: 500, url: 'https://github.com/acme/conductor/pull/500',
+              body: 'Plan: `.docs/plans/demo.md`', mergedAt: '2026-10-20T00:00:00Z',
+              headRefOid: 'a'.repeat(40), headRefName: 'feat/daemon-demo',
+              files: { nodes: [{ path: 'src/conductor/src/engine/demo.ts' }], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+            {
+              number: 501, url: 'https://github.com/acme/conductor/pull/501',
+              body: 'Plan: `.docs/plans/demo.md`', mergedAt: '2026-10-21T00:00:00Z',
+              headRefOid: 'c'.repeat(40), headRefName: 'feat/daemon-demo-alternate',
+              files: { nodes: [{ path: 'src/conductor/src/engine/demo.ts' }], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          ], pageInfo: { hasNextPage: false, endCursor: null } } } },
+        }),
+      };
+    });
+    const runGit = vi.fn(async (args: string[]) => {
+      if (args[0] === 'log' && args.includes('--all')) return { stdout: '.docs/plans/demo.md\n' };
+      if (args[0] === 'rev-parse') return { stdout: 'audit-head\n' };
+      if (args[0] === 'ls-tree') return { stdout: '.docs/plans/demo.md\n' };
+      if (args[0] === 'show') return { stdout: '# Demo\n' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+
+    try {
+      const report = await runShipmentAudit({ cwd, runGh, runGit });
+
+      expect(report.rows[0]).toMatchObject({
+        classification: 'ambiguous',
+        reason: 'multiple exact associated merged implementation PRs',
       });
     } finally {
       await rm(cwd, { recursive: true, force: true });
