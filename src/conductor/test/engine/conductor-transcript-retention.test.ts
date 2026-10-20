@@ -22,6 +22,7 @@ import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { transcriptOwnerDirectory } from '../../src/engine/self-host/transcript-harvest.js';
 import { transcriptOwnerStep, transcriptSettlementKey } from '../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ExecutionContext, TranscriptOwner } from '../../src/types/events.js';
 
 // @ts-expect-error A rubric is a member identity, never a lifecycle StepName.
 transcriptSettlementKey({ step: 'rubric-security', runId: 'review', attempt: 1 });
@@ -72,7 +73,7 @@ describe('conductor transcript retention wiring', () => {
   });
 
   // Covers: task:rem-prd-audit-rem-aux-failed-settle-uses-capture-owner
-  it.each([
+  const auxiliaryCaptureOwners = [
     {
       label: 'registered-step',
       owner: { kind: 'registered-step' as const, step: 'build_review' },
@@ -94,7 +95,13 @@ describe('conductor transcript retention wiring', () => {
         },
       },
     },
-  ])('retains a failed auxiliary rubric capture through a later success for $label ownership', async ({ owner, executionContext }) => {
+  ] as const satisfies readonly {
+    readonly label: string;
+    readonly owner: TranscriptOwner;
+    readonly executionContext?: ExecutionContext;
+  }[];
+
+  it.each(auxiliaryCaptureOwners)('retains a failed auxiliary rubric capture through a later success for $label ownership', async ({ owner, executionContext }) => {
     const root = await mkdtemp(join(tmpdir(), 'conductor-transcript-auxiliary-failure-'));
     const events = new ConductorEventEmitter();
     const lifecycle: Array<{ type: string; path: string }> = [];

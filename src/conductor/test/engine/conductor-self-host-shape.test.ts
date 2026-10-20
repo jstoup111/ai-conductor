@@ -212,7 +212,7 @@ describe('conductor self-host catalog shape', () => {
       const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] } as ProviderExecutionContext;
       let claudeEnv: NodeJS.ProcessEnv | undefined;
       const runner: StepRunner = { run: async () => {
-        const prepared = await providerExecution.prepareCandidateSelfHost!(candidate('claude', 'opus'), runtimes.get('claude') as never, { step: 'build', runId: 'catalog-shape', attempt: 0, member: 'testQuality' });
+        const prepared = await providerExecution.prepareCandidateSelfHost!(candidate('claude', 'opus'), runtimes.get('claude') as never, { step: 'build', runId: 'catalog-shape', attempt: 0, auxiliaryMember: 'testQuality' });
         claudeEnv = prepared!.env;
         await prepared!.teardown();
         return { success: true };
