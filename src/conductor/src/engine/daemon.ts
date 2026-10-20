@@ -1986,12 +1986,6 @@ export async function runDaemon(
       await emitTick();
     }
 
-    // Observe restart conditions only after the claim attempt. A drain begun
-    // here stops the next free slot from being filled after a worker settles.
-    // A serial pool still needs to observe an age cap or protocol mismatch;
-    // the active child is what must drain before a handoff can occur.
-    await observeBusyDrainRequest();
-
     // Workers are running. Race their completion against the poll timer so
     // busy pools still execute the scheduler-owned periodic sweep; a timer
     // tick never mutates an in-flight WorkOrder. This is outside the free-slot
@@ -2001,19 +1995,20 @@ export async function runDaemon(
     // maintenance sweep below.
     await Promise.resolve();
     if (completedWorker) {
-      // Keep the width-one cadence observable even when a feature settles in
-      // the same microtask turn. The historical serial dispatcher performed a
-      // scheduler turn between dispatch and collection; bypassing it changes
-      // the ordering of refresh/sweep work and makes one-shot drains skip all
-      // busy polling. A zero-delay turn avoids delaying an already-complete
-      // feature by the regular idle interval.
-      if (concurrency === 1 && maxIdlePolls !== 0) {
-        await sleep(0);
-        await yieldToEventLoop();
-      }
+      // Preserve a scheduler turn between dispatch and collection without
+      // treating it as an idle poll. `sleep` is the caller-owned poll seam and
+      // may intentionally never resolve while a HALT-clear watcher is expected
+      // to wake the daemon; awaiting `sleep(0)` here would then prevent the
+      // settled feature from being collected and its watcher from registering.
+      await yieldToEventLoop();
       await collectOne();
       continue;
     }
+    // Observe restart conditions only for a genuinely busy pool. A worker
+    // that already settled during the dispatch turn has no active executor to
+    // drain, and probing it here adds a second stale-engine observation to the
+    // serial lifecycle without any intervening busy period.
+    await observeBusyDrainRequest();
     // An immediate-idle-boundary run has no poll interval to observe. Collect
     // directly so its injected sleep cannot become an accidental scheduler
     // side effect. Once mode still uses busy polling while workers are active:
