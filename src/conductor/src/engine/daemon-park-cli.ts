@@ -35,7 +35,6 @@ import { verifyMemberReachability } from './stack-publication.js';
 import { makeGitRunner } from './rebase.js';
 import { parseGithubUrl } from './github-target.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
-import { runTrackerRepositoryRead } from './tracker-client.js';
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -277,62 +276,15 @@ export async function dispatchDaemonPark(
         out(`Could not reclaim-worktree '${cmd.slug}': in-progress`);
         return 1;
       }
-      // Match the sweep's stack cleanup proof before removing the worktree.
-      // A closed-but-unmerged leaf is deliberately non-destructive: preserve
-      // its child branches and record the operator-visible teardown state.
-      const publication = await activePublicationRecord(worktreePath, cmd.slug, { git: makeGitRunner(worktreePath) });
-      if (publication && publication.record.members.length > 1) {
-        const stateText = await readFile(join(worktreePath, '.pipeline', 'conduct-state.json'), 'utf8').catch(() => '');
-        let prUrl: string | undefined;
-        try {
-          const parsed: unknown = JSON.parse(stateText);
-          prUrl = parsed && typeof parsed === 'object' && typeof (parsed as { pr_url?: unknown }).pr_url === 'string'
-            ? (parsed as { pr_url: string }).pr_url : undefined;
-        } catch { /* no usable leaf identity */ }
-        const target = parseGithubUrl(prUrl);
-        const gh = deps.runGh ?? makeProductionGh();
-        if (!target) {
-          out(`Could not reclaim-worktree '${cmd.slug}': stack-leaf-unreadable`);
-          return 1;
-        }
-        const leaf = publication.record.members.at(-1)!;
-        let leafState: string | undefined;
-        try {
-          leafState = JSON.parse(await runTrackerRepositoryRead(
-            gh,
-            worktreePath,
-            'pull-request.read',
-            target.repository,
-            { kind: 'pull-request', number: leaf.pr },
-            ['pr', 'view', String(leaf.pr), '-R', target.repository, '--json', 'state'],
-          )).state;
-        } catch {
-          out(`Could not reclaim-worktree '${cmd.slug}': stack-leaf-unreadable`);
-          return 1;
-        }
-        if (leafState === 'CLOSED') {
-          await writePublicationRecord(worktreePath, cmd.slug, publication, { ...publication.record, tornDown: true }, { git: makeGitRunner(worktreePath) });
-        } else {
-          const shipped = await shippedRecordOnMain(resolvedRoot, cmd.slug, deps.runGit ?? makeProductionGit());
-          if (shipped !== 'present') {
-            out(`Could not reclaim-worktree '${cmd.slug}': shipped-record-not-on-main`);
-            return 1;
-          }
-          const reachability = await verifyMemberReachability(worktreePath, publication.record, { gh, repository: target.repository, git: makeGitRunner(worktreePath) });
-          if (reachability.kind !== 'reachable') {
-            out(`Could not reclaim-worktree '${cmd.slug}': stack-members-${reachability.kind}`);
-            return 1;
-          }
-          const deleted = await deleteStackChildren(worktreePath, cmd.slug, publication.record, { gh, repository: target.repository, git: makeGitRunner(worktreePath) });
-          if (deleted.kind === 'failed') {
-            out(`Could not reclaim-worktree '${cmd.slug}': stack-teardown-failed`);
-            return 1;
-          }
-          if (deleted.kind === 'kept') {
-            await writePublicationRecord(worktreePath, cmd.slug, publication, { ...publication.record, tornDown: true }, { git: makeGitRunner(worktreePath) });
-          }
-        }
-      }
+      // Preserve the leaf URL while the worktree still exists. The proof and
+      // every child/ref mutation happen only after its removal below.
+      const stateText = await readFile(join(worktreePath, '.pipeline', 'conduct-state.json'), 'utf8').catch(() => '');
+      let prUrl: string | undefined;
+      try {
+        const parsed: unknown = JSON.parse(stateText);
+        prUrl = parsed && typeof parsed === 'object' && typeof (parsed as { pr_url?: unknown }).pr_url === 'string'
+          ? (parsed as { pr_url: string }).pr_url : undefined;
+      } catch { /* no usable leaf identity */ }
       out(`Reclaiming retained worktree: ${worktreePath}`);
       const configResult = await loadConfig(resolvedRoot);
       const teardownTimeoutSeconds = deps.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
@@ -342,6 +294,42 @@ export async function dispatchDaemonPark(
       await runProjectTeardown(worktreePath, out, { timeoutSeconds: teardownTimeoutSeconds, verbose });
       await (deps.removeWorktree ?? removeWorktree)(resolvedRoot, worktreePath);
       out(`Removed retained worktree '${cmd.slug}': ${worktreePath}`);
+
+      // Reclaiming the checkout is unconditional once its own guard passes.
+      // Stack branch deletion is a later, independently proven cleanup step.
+      const git = makeGitRunner(resolvedRoot);
+      const publication = await activePublicationRecord(resolvedRoot, cmd.slug, { git });
+      if (publication && publication.record.members.length > 1) {
+        const target = parseGithubUrl(prUrl);
+        let deleted = false;
+        if (target) {
+          const shipped = await shippedRecordOnMain(resolvedRoot, cmd.slug, deps.runGit ?? makeProductionGit());
+          if (shipped === 'present') {
+            const gh = deps.runGh ?? makeProductionGh();
+            const reachability = await verifyMemberReachability(resolvedRoot, publication.record, {
+              gh,
+              repository: target.repository,
+              git,
+            });
+            if (reachability.kind === 'reachable') {
+              deleted = (await deleteStackChildren(resolvedRoot, cmd.slug, publication.record, {
+                gh,
+                repository: target.repository,
+                git,
+              })).kind === 'deleted';
+            }
+          }
+        }
+        if (!deleted) {
+          await writePublicationRecord(
+            resolvedRoot,
+            cmd.slug,
+            publication,
+            { ...publication.record, tornDown: true },
+            { git },
+          );
+        }
+      }
       return 0;
     }
 
