@@ -2544,6 +2544,19 @@ export class Conductor {
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.transcriptRetention = new TranscriptRetention(this.projectRoot, this.events);
+    if (this.providerExecution) {
+      const previousAuxiliaryFailure = this.providerExecution.onAuxiliaryAttemptFailed;
+      this.providerExecution.onAuxiliaryAttemptFailed = async (identity) => {
+        await previousAuxiliaryFailure?.(identity);
+        if (!('owner' in identity) || identity.owner === undefined) return;
+        await this.transcriptRetention.settleAttempt({
+          owner: identity.owner,
+          runId: identity.runId,
+          attempt: asTranscriptCaptureDispatchIdentity(identity.attempt),
+          ...(identity.auxiliaryMember === undefined ? {} : { auxiliaryMember: identity.auxiliaryMember }),
+        }, 'failed');
+      };
+    }
     // Transcript capture completes in provider teardown before these terminal
     // lifecycle events.  Keeping settlement on the existing event spine makes
     // every ordinary terminal route (including configured steps) share it.
@@ -5884,17 +5897,18 @@ export class Conductor {
     }
 
     const transcriptOwner = this.transcriptOwner(name, executionContext);
-    const previousCaptureAttempt = this.currentTranscriptCaptureAttempt(transcriptOwner);
+    const transcriptRunId = this.stepRunner.selfHostRunId?.() ?? this.featureSlug ?? state.feature_desc ?? 'unknown-run';
     const captureAttempt = this.nextTranscriptCaptureAttempt(
       transcriptOwner,
-      this.stepRunner.selfHostRunId?.() ?? this.featureSlug ?? state.feature_desc ?? 'unknown-run',
+      transcriptRunId,
     );
     // A newly admitted dispatch is conclusive evidence that the preceding
     // capture did not produce this result. This also covers non-consuming
     // provider retries, which do not emit a retry-budget transition.
-    if (previousCaptureAttempt !== undefined) {
-      await this.settleTranscriptAttempt(transcriptOwner, previousCaptureAttempt, 'failed');
-    }
+    await this.transcriptRetention.settleBeforeRetry({
+      owner: transcriptOwner,
+      runId: transcriptRunId,
+    });
 
     // Compatibility seam for injected/legacy runners which do not route via
     // ProviderExecutionContext. Real entrypoints always take the candidate

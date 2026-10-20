@@ -361,6 +361,8 @@ export interface ProviderExecutionContext {
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
+  /** Settle a failed auxiliary capture before any later auxiliary dispatch can prune it. */
+  onAuxiliaryAttemptFailed?: (identity: TranscriptCaptureSource) => void | Promise<void>;
   onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
@@ -1485,6 +1487,8 @@ export interface ExecuteAuxiliaryProviderCandidatesInput<MemberId extends string
   policy: ResolvedBuildReviewRubricPolicy;
   /** Allocates a capture-only dispatch sequence; it must not affect escalation. */
   nextCaptureAttempt?: () => number;
+  /** Lifecycle-owned settlement for an auxiliary capture that failed this dispatch. */
+  onAuxiliaryAttemptFailed?: ProviderExecutionContext['onAuxiliaryAttemptFailed'];
 }
 
 export async function executeAuxiliaryProviderCandidates<MemberId extends string>(
@@ -1495,6 +1499,7 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
     : [input.policy.llm_provider];
   let last: ProviderExecutionResult | undefined;
   for (let attempt = 1; attempt <= input.policy.max_retries; attempt += 1) {
+    const captureAttempt = input.nextCaptureAttempt?.() ?? attempt;
     const result = await executeProviderCandidates({
       ...input,
       configuredProviders,
@@ -1505,10 +1510,16 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       effortOverride: input.policy.effort,
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
-      ...(input.nextCaptureAttempt === undefined
-        ? {}
-        : { captureAttempt: input.nextCaptureAttempt() }),
+      captureAttempt,
     });
+    if (!result.success && input.runId !== undefined) {
+      await input.onAuxiliaryAttemptFailed?.(transcriptCaptureSource({
+        owner: { kind: 'configured-group-member', parentGroup: input.step, member: input.memberId },
+        runId: input.runId,
+        attempt: captureAttempt,
+        auxiliaryMember: input.memberId,
+      }));
+    }
     // A setup-only exhaustion is terminal for this logical dispatch: retrying
     // repeats the same verified capability checks without ever invoking a
     // provider.

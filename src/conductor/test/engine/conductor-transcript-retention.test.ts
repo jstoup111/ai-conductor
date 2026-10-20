@@ -1,4 +1,4 @@
-// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3, task:rem-as-built-rem-ab-capture-dispatch-seq, task:rem-as-built-rem-ab-settle-by-dispatch
+// Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3, task:rem-as-built-rem-ab-capture-dispatch-seq, task:rem-as-built-rem-ab-settle-by-dispatch, task:rem-prd-audit-rem-settle-aux-captures-per-dispatch
 import { describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
