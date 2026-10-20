@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-20T11:10:24.015Z
 Slug: preserve-self-build-provider-transcripts-on-failed
 Class: needs-human
 Halting step: prd_audit
