@@ -22,7 +22,7 @@ import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
 import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import type { PublicationMember } from './stack-publication-record.js';
 import { makeGitRunner } from './rebase.js';
-import { hasDurableChildState } from './child-cursor.js';
+import { hasDurableChildState, hasStackedChildEvidence } from './child-cursor.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
@@ -173,6 +173,7 @@ async function guardPublishedStackPushes(
     const destination = destinations.find((value) => value.operation === 'remote-ref.push'
       && value.ref === `refs/heads/${candidate.branch}`);
     if (destination === undefined) continue;
+    if (!(await hasStackedChildEvidence(dependencies.cwd))) continue;
     const durableChildState = await hasDurableChildState(dependencies.cwd, candidate.slug, { git: childStateGit });
     // N=1 takes the historical unguarded push path. An unreadable topology is
     // not evidence that a published stack may be written without its lease.

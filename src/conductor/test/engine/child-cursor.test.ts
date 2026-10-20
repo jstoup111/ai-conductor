@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
+// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -210,9 +210,9 @@ describe('resolveActiveChild', () => {
     });
   });
 
-  it('fails closed for child state without a sealed envelope, detached HEAD, and git errors', async () => {
+  it('keeps ref-only state off the N=1 path, then fails closed for sealed child state errors', async () => {
     await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'no-child' });
 
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);

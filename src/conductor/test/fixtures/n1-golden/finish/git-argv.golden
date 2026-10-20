@@ -9,16 +9,6 @@
     "remote.origin.url"
   ],
   [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
-  ],
-  [
     "rev-parse",
     "--symbolic-full-name",
     "@{u}"
@@ -28,16 +18,6 @@
     "--is-ancestor",
     "HEAD",
     "refs/remotes/origin/feat/daemon-n1-golden"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
   ],
   [
     "rev-parse",
@@ -59,16 +39,6 @@
     "remote.origin.url"
   ],
   [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
-  ],
-  [
     "rev-parse",
     "--symbolic-full-name",
     "@{u}"
@@ -78,16 +48,6 @@
     "--is-ancestor",
     "HEAD",
     "refs/remotes/origin/feat/daemon-n1-golden"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
   ],
   [
     "rev-parse",
@@ -107,16 +67,6 @@
     "config",
     "--get",
     "remote.origin.url"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
   ],
   [
     "rev-parse",
@@ -134,16 +84,6 @@
     "--git-common-dir"
   ],
   [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
-  ],
-  [
     "rev-parse",
     "--symbolic-full-name",
     "@{u}"
@@ -163,16 +103,6 @@
     "remote.origin.url"
   ],
   [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
-  ],
-  [
     "rev-parse",
     "--symbolic-full-name",
     "@{u}"
@@ -182,16 +112,6 @@
     "--is-ancestor",
     "HEAD",
     "refs/remotes/origin/feat/daemon-n1-golden"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
   ],
   [
     "rev-parse",
@@ -211,16 +131,6 @@
     "config",
     "--get",
     "remote.origin.url"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/heads/feat"
-  ],
-  [
-    "for-each-ref",
-    "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
   ],
   [
     "rev-parse",

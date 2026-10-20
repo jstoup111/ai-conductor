@@ -1,10 +1,11 @@
-// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate
+// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { execa } from 'execa';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -22,6 +23,7 @@ import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 import { runTaskStart } from '../../src/engine/task-cli.js';
+import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import { BASE_SHA, CELLS, expectGolden, normalizeGolden, RECORD, withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
@@ -539,7 +541,32 @@ describe('N=1 golden renderings', () => {
     const leaf = await execFile('git', ['rev-parse', 'HEAD'], { cwd: root });
     expect(pushed.stdout.trim()).toBe(leaf.stdout.trim());
     expect(gitArgv).toContainEqual(expect.arrayContaining(['push', 'origin', `HEAD:refs/heads/${branch}`]));
+    expect(gitArgv.some((args) => args[0] === 'for-each-ref')).toBe(false);
     expect(JSON.stringify(gitArgv)).not.toContain('refs/conductor/n1-push/publication');
     expect(gitArgv.some((args) => args[0] === 'ls-remote')).toBe(false);
+
+    const localArgv: string[][] = [];
+    await expect(executeRemoteGit(['push', 'origin', `HEAD:refs/heads/${branch}`], {
+      cwd: root,
+      config: async () => ({ stdout: 'https://github.com/acme/widget.git\n' }),
+      mutation: {
+        provenance: {
+          repository: 'acme/widget', defaultBranch: 'main', specBranch: branch,
+          featureMarker: '.docs/intake/n1-push.md', publication: 'initial',
+        },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-user' }),
+          provenanceDiscovery: { readCommittedRecords: async () => [{ path: '.docs/intake/n1-push.md', content: 'Owner: test-user\n' }] },
+        },
+      },
+      pushLeaseGit: async (args, input) => {
+        localArgv.push([...args]);
+        const result = await execa('git', args, { cwd: root, input, reject: false });
+        return { stdout: result.stdout, exitCode: result.exitCode ?? 1 };
+      },
+      runRemoteGit: async () => ({ stdout: '' }),
+    })).resolves.toMatchObject({ kind: 'executed' });
+    expect(localArgv.some((args) => args[0] === 'for-each-ref')).toBe(false);
+    expect(JSON.stringify(localArgv)).not.toContain('refs/conductor/n1-push/publication');
   });
 });
