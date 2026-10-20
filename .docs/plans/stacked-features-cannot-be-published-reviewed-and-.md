@@ -33,7 +33,7 @@ Paths below are under `src/conductor/src/engine/` unless they say otherwise.
   - `conduct-state.json`;
   - the shipped record's Cost block, plus the Time block's structure.
 
-  Every later task must leave these goldens passing unchanged (ADR decision 1, umbrella decision 14).
+  Every later task must leave these goldens passing unchanged (ADR decision 1, umbrella decision 14). Per the 2026-10-20 amendment to decision 1, local read-only `refs/conductor/<slug>/` probes are recorded apart from the pinned remote and mutating git argv.
 - **Durable state (Tasks 2–3).**
   - `stack-publication-record.ts` owns `refs/conductor/<slug>/publication`, a compare-and-swap ref
     blob `{version, retarget?, stack?, members[], tornDown?}`.
@@ -165,7 +165,7 @@ Each task's `**Dependencies:**` line is authoritative.
 
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
-| adr-2026-10-17-stacked-feature-publication-as-native-stack#D1 | task | task-4, task-5, task-1 | adding no git or gh command to that observation's recorded argv |
+| adr-2026-10-17-stacked-feature-publication-as-native-stack#D1 | task | task-4, task-5, task-1 | adding no gh command and no remote or mutating git command to that observation's recorded argv; local read-only `refs/conductor/<slug>/` probes are admitted (2026-10-20 amendment) |
 | adr-2026-10-17-stacked-feature-publication-as-native-stack#D2 | task | task-3 | is a compare-and-swap: a write whose expected old value no longer matches is refused and the ref is unchanged |
 | adr-2026-10-17-stacked-feature-publication-as-native-stack#D3 | task | task-5 | with stack `members-missing` after `establish_pr` it selects `establish_child_prs` |
 | adr-2026-10-17-stacked-feature-publication-as-native-stack#D4 | task | task-10, task-8 | one `establish_child_prs` effect pushes `feat/c1/demo` then `feat/c3/demo` |
