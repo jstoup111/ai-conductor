@@ -1,11 +1,14 @@
-// Covers: task:22
+// Covers: task:22, task:rem-prd-audit-rem-v3-postfinish-refusal
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
+import { parseChildId } from '../../src/engine/child-context.js';
 import { refreshPostFinishShippedRecord } from '../../src/engine/post-finish-shipped-record.js';
+import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
+import { writePublicationRecord } from '../../src/engine/stack-publication-record.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 
 const roots: string[] = [];
@@ -38,8 +41,14 @@ async function fixture(): Promise<string> {
   await git(root, ['config', 'user.name', 'Test User']);
   await mkdir(join(root, '.docs/plans'), { recursive: true });
   await writeFile(join(root, '.docs/plans/demo.md'), '# Demo\n');
+  await mkdir(join(root, '.pipeline/children'), { recursive: true });
+  await writeFile(join(root, '.pipeline/children/active'), 'active\n');
   await git(root, ['add', '.']);
   await git(root, ['commit', '-m', 'seed']);
+  await expect(writePublicationRecord(root, 'demo', undefined, {
+    version: 1,
+    members: [{ position: parseChildId(1)!, branch: 'feat/daemon-demo', pr: 1 }],
+  })).resolves.toEqual({ kind: 'updated' });
   return root;
 }
 
@@ -56,7 +65,11 @@ describe('post-finish shipped-record refresh', () => {
       runGit: (args, { cwd: commandCwd }) => git(commandCwd, args),
       gh: vi.fn(),
       remoteMutation: mutation(),
-      remoteGit: async () => ({ kind: 'failed', error: 'published stack tip mismatch', targets: [] }),
+      remoteGit: (args, dependencies) => executeRemoteGit(args, {
+        ...dependencies,
+        config: async () => ({ stdout: 'git@github.com:acme/demo.git\n' }),
+        runRemoteGit: async () => ({ stdout: '' }),
+      }),
       events: { emit: vi.fn(async () => {}) },
       log: (message) => logs.push(message),
     });
