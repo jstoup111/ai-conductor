@@ -1058,3 +1058,19 @@ Task 31 <- Task 14
 **Done when:**
 - adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7 is satisfied by this task.
 - The repair for task rem-as-built-rem-vg-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-R1: src/conductor/src/engine/executor-child-runtime.ts: supply beginFeatureRun in makeExecutorChildFeatureRunner and the production lifecycle deps so the child-owned forwarded events bus is the feature-run scope at daemon-runner.ts:419. Keep feature_dispatch_started/ended supervisor-owned. Add a RED test asserting that shipment, setup/triage, shipment-refusal and termination events reach the forwarded bus and that no dispatch-start/end is emitted from the child.
+**Gate:** as-built
+**Rationale:** Verified (95%): makeExecutorChildFeatureRunner in executor-child-runtime.ts takes input.events but the makeRunFeature deps it builds supply no beginFeatureRun. The production lifecycle deps (~:193) and index.ts omit it too (grep finds no beginFeatureRun there), so daemon-runner.ts:419 runs with no feature event scope. That drops shipment, setup/triage, refusal and termination events. ADR D4 stays authoritative and the repair is clear wiring, so no architecture decision is needed. Bind the child-owned forwarded bus as the runner's feature scope. Dispatch-start/end stay supervisor-owned and are not re-emitted from the child (Task 19). Admitted by Task 12 (forward executor events to the proxy feature bus), Task 14 (child entrypoint composition) and Task 30 (child-mode parity).
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: src/conductor/src/engine/daemon.ts: route every collection path (immediate completedWorker, the maxIdlePolls===0 direct collect, and the post-busy-poll collect) through one helper that observes any pending protocol-mismatch drain request before collectOne can reopen a slot. Add a RED scheduler test: with another executor alive, a fallback child completes during the busy wait and no new feature is claimed before the drain starts.
+**Gate:** as-built
+**Rationale:** Verified (95%): in daemon.ts, observeBusyDrainRequest runs only before the immediate completedWorker collection (~:2033). The maxIdlePolls===0 direct collectOne (~:2043) and the post-busy-poll collectOne (~:2076) skip it. A fallback child that completes during the wait can free a slot, and claiming refills it before the protocol mismatch is recorded. ADR D7 is clear: the mismatch must be honored before claiming reopens. This is conforming implementation drift admitted by Task 27 (age-cap and protocol-mismatch drain restarts) and Task 29 (a pending restart stops new maintenance/claims).
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
