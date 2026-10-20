@@ -455,12 +455,14 @@ export function makeProductionGh(dependencies: {
   execFile?: typeof execFileCb;
   readCredential?: typeof readGithubBotCredential;
   readToken?: typeof readGithubBotToken;
+  assertRealExecAllowed?: typeof assertRealExecAllowed;
 } = {}): GhRunner {
   const execFileP = promisify(dependencies.execFile ?? execFileCb);
   const readCredential = dependencies.readCredential ?? readGithubBotCredential;
   const readToken = dependencies.readToken ?? readGithubBotToken;
+  const assertAllowed = dependencies.assertRealExecAllowed ?? assertRealExecAllowed;
   return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' | 'bot' }) => {
-    assertRealExecAllowed('gh');
+    assertAllowed('gh');
     let env: NodeJS.ProcessEnv | undefined;
     let botToken: string | undefined;
     if (opts.credential === 'write' || opts.credential === 'bot') {

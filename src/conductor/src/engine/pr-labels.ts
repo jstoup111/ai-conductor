@@ -123,16 +123,25 @@ async function runMutation(
 // ── Production factories ──────────────────────────────────────────────────────
 
 /** Construct the real git runner used in production. */
-export function makeProductionGit(): GitRunner {
+export function makeProductionGit(dependencies: {
+  execFile?: typeof execFileCb;
+  readCredential?: typeof readGithubBotCredential;
+  readToken?: typeof readGithubBotToken;
+  assertRealExecAllowed?: typeof assertRealExecAllowed;
+} = {}): GitRunner {
+  const execFile = dependencies.execFile ?? execFileCb;
+  const readCredential = dependencies.readCredential ?? readGithubBotCredential;
+  const readToken = dependencies.readToken ?? readGithubBotToken;
+  const assertAllowed = dependencies.assertRealExecAllowed ?? assertRealExecAllowed;
   return async (args: string[], opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh'; input?: string }) => {
-    assertRealExecAllowed('git');
+    assertAllowed('git');
     let env: NodeJS.ProcessEnv | undefined;
     let botToken: string | undefined;
     if (opts.credential === 'write') {
-      const credential = await readGithubBotCredential();
+      const credential = await readCredential();
       if (credential.kind === 'configured') {
         if (opts.endpoint === 'ssh') throw new GithubBotAuthRefusalError('unsupported-remote-transport');
-        const token = await readGithubBotToken(credential.tokenFile);
+        const token = await readToken(credential.tokenFile);
         if (token.kind === 'unavailable') throw new GithubBotAuthRefusalError('token-unavailable');
         botToken = token.token;
         env = { ...process.env, GH_TOKEN: botToken, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.https://github.com.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' };
@@ -140,7 +149,7 @@ export function makeProductionGit(): GitRunner {
     }
     try {
       const result = await new Promise<{ stdout: string | Buffer }>((resolve, reject) => {
-        const child = execFileCb(
+        const child = execFile(
           'git',
           args,
           { cwd: opts.cwd, maxBuffer: 32 * 1024 * 1024, ...(env === undefined ? {} : { env }) },
