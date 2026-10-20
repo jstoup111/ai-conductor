@@ -123,7 +123,7 @@ beforeEach(async () => {
   await writeFile(join(root, 'leaf.txt'), 'leaf\n');
   await git(['add', 'leaf.txt']);
   await git(['commit', '-qm', 'leaf']);
-  await git(['init', '--bare', '-q', origin]);
+  await git(['init', '--bare', '-b', 'main', '-q', origin]);
   await git(['remote', 'add', 'origin', origin]);
   await sealStack();
 });

@@ -57,6 +57,7 @@ async function fixture() {
   const origin = join(root, 'origin.git');
   await mkdir(repository);
   await initTestRepo(repository);
+  await writeFile(join(repository, '.gitignore'), '.pipeline/\n');
   await commit(repository, 'seed');
   await git(root, ['init', '--bare', '--initial-branch=main', origin]);
   await git(repository, ['remote', 'add', 'origin', origin]);
@@ -70,6 +71,9 @@ async function fixture() {
   await git(repository, ['checkout', '-b', 'feat/daemon-demo']);
   const leaf = await commit(repository, 'leaf');
   await git(repository, ['push', 'origin', 'HEAD:refs/heads/feat/daemon-demo']);
+  const childrenDirectory = join(repository, '.pipeline', 'children');
+  await mkdir(childrenDirectory, { recursive: true });
+  await writeFile(join(childrenDirectory, 'c1'), '');
 
   const record: PublicationRecord = {
     version: 1,
