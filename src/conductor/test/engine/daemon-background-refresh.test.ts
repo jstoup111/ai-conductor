@@ -220,6 +220,38 @@ describe('engine/daemon — background root refresh (#2275)', () => {
     expect(swept).toEqual(['bbb']);
   });
 
+  it('still discovers origin backlog when the engine source refresh is skipped, but never rebuilds', async () => {
+    let rebuilds = 0;
+    const h = harness({
+      local: () => [{ slug: 'sibling' }],
+      refresh: async () => [{ slug: 'sibling' }, { slug: 'merged-on-origin' }],
+      extra: {
+        refreshEngineSource: async () => ({ status: 'skipped', cause: 'dirty' }),
+        rebuildEngine: async () => {
+          rebuilds++;
+        },
+        staleEngineChecker: { check: () => 'current' },
+      },
+    });
+
+    const daemon = runDaemon(h.deps, {
+      concurrency: 2,
+      once: false,
+      idlePollMs: 0,
+      isSelfHost: true,
+      autoRestartOnStaleEngine: true,
+    });
+    try {
+      expect(await eventually(() => h.dispatched.includes('merged-on-origin'))).toBe(true);
+    } finally {
+      h.stop();
+      h.sibling.resolve({ slug: 'sibling', status: 'done' });
+      await daemon;
+    }
+    expect(h.refreshCalls()).toBeGreaterThan(0);
+    expect(rebuilds).toBe(0);
+  });
+
   it('awaits a refresh still in flight at shutdown instead of orphaning it', async () => {
     const heldRefresh = deferred<BacklogItem[]>();
     let refreshSettled = false;

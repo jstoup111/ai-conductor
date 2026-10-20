@@ -1251,11 +1251,12 @@ export async function runDaemon(
         // a merged engine change into the checkout that rebuildEngine reads.
         // A skipped/failed fast-forward deliberately suppresses the rebuild:
         // building a dirty or diverged root would publish an untrustworthy
-        // engine version for later children.
+        // engine version for later children.  Discovery still runs: a skipped
+        // refresh must never stall backlog pickup.
         const sourceRefresh = staleGatesArmed && deps.refreshEngineSource
           ? await deps.refreshEngineSource()
           : undefined;
-        if (sourceRefresh?.status === 'skipped') return;
+        const sourceRefreshSkipped = sourceRefresh?.status === 'skipped';
         const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({ refresh: true }));
         if (refreshed !== undefined) {
           refreshedBacklog = refreshed;
@@ -1268,7 +1269,7 @@ export async function runDaemon(
         // rebuild may safely publish a new `dist` while executors are busy.
         // This stays inside the existing single-flight refresh job; no second
         // timer or maintenance lane is introduced.
-        if (refreshed !== undefined && staleGatesArmed && deps.rebuildEngine) {
+        if (refreshed !== undefined && !sourceRefreshSkipped && staleGatesArmed && deps.rebuildEngine) {
           try {
             await deps.rebuildEngine();
           } catch (err) {
