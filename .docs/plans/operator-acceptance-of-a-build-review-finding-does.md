@@ -646,3 +646,35 @@ Task 5 ──> Task 12
 **Done when:**
 - adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
 - The repair for task rem-as-built-5i is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-6d: build-review-acceptance-resolver.ts and build-review-adjudication-coordinator.ts: move carry classification into resolveBuildReviewAcceptance, covering the binding-link strict-later rule, origin-lap exclusion and transitive origin. Delete the coordinator's directOriginsBySourceId and acceptedOriginsByCaseId maps and its isStrictlyLater check, and have the coordinator take carried cases, origins and accepted ids from the resolver result
+**Gate:** as-built
+**Rationale:** Verified in source: build-review-adjudication-coordinator.ts:702-742 builds directOriginsBySourceId and acceptedOriginsByCaseId itself and classifies carry with its own lap and strict-later timestamp comparisons. It calls resolveBuildReviewAcceptance only for direct origins. ADR adr-2026-08-13 decision 2 (as amended) requires the shared resolver. This is conforming implementation drift that rem-as-built-6b left partly done, not an architecture decision, so it goes to BUILD.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-6d is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-6e: build-review-adjudication-coordinator.test.ts: for each binding scenario, the coordinator's carried set matches resolveBuildReviewAcceptance: an old sibling link before acceptance is not carried, a same-lap binding is not carried, and a lap-3 transitive carry names the lap-1 origin. Keep the rem-prd-audit-5a/6a/12b expectations unchanged
+**Gate:** as-built
+**Rationale:** Verified in source: build-review-adjudication-coordinator.ts:702-742 builds directOriginsBySourceId and acceptedOriginsByCaseId itself and classifies carry with its own lap and strict-later timestamp comparisons. It calls resolveBuildReviewAcceptance only for direct origins. ADR adr-2026-08-13 decision 2 (as amended) requires the shared resolver. This is conforming implementation drift that rem-as-built-6b left partly done, not an architecture decision, so it goes to BUILD.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-6e is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-5j: build-review-adjudication-coordinator.ts: before the all-operator-resolved finalize and the other early exits, and before resolved sources are filtered, emit build_review_disposition_carried for every current-lap finding the resolver classifies as carried that has no persisted event (dedupe on lapId, findingId, caseId)
+**Gate:** as-built
+**Rationale:** Verified in source: carried-event recovery (emittedCarriedKeys loop) runs only inside the post-judge `carried` loop. The earlier exits (all-operator-resolved finalize at ~:590, later exits at ~:641/:687) and the resolved-source filter at ~:593 return before it. So a crash after the durable append and before emission leaves the occurrence permanently missing once the refresh treats the finding as resolved. The approved ADR decision 2 carry-event requirement covers this. Implementation work: plan task 2 and rem-as-built-5h admit it.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-5j is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-5k: build-review-adjudication-coordinator.test.ts: after a crash between the carried-link append and emission, replay where the refreshed acceptance now marks every source resolved still persists exactly one build_review_disposition_carried event per carried finding through the existing EventPersister, with no duplicate link, effect or charge; a second replay emits nothing
+**Gate:** as-built
+**Rationale:** Verified in source: carried-event recovery (emittedCarriedKeys loop) runs only inside the post-judge `carried` loop. The earlier exits (all-operator-resolved finalize at ~:590, later exits at ~:641/:687) and the resolved-source filter at ~:593 return before it. So a crash after the durable append and before emission leaves the occurrence permanently missing once the refresh treats the finding as resolved. The approved ADR decision 2 carry-event requirement covers this. Implementation work: plan task 2 and rem-as-built-5h admit it.
+**Governing clause:** adr-2026-08-13-stable-build-review-finding-dispositions decision 2
+**Done when:**
+- adr-2026-08-13-stable-build-review-finding-dispositions decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-5k is committed and its targeted tests pass.
