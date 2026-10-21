@@ -36,6 +36,7 @@ import {
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
   readGrowthAccounting,
+  projectPendingGrowth,
   recordPendingRepair,
   discardPendingRepair,
   settlePendingRepair,
@@ -86,6 +87,74 @@ describe('kickback-ledger', () => {
 
   it('returns an empty ledger when the ledger file is absent', async () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it.each([
+    ['projects charged growth in stored gate order and identifies the gate that crosses the cap', 0, {
+      prd_audit: { laps: 1, growth: 3 },
+      architecture_review_as_built: { laps: 1, growth: 8 },
+    }, 10, {
+      total: 11,
+      byGate: { prd_audit: 3, architecture_review_as_built: 8 },
+      projected: 11,
+      minimumRaise: 1,
+      exceedingGate: 'architecture_review_as_built',
+    }],
+    ['includes settled growth when calculating the required raise', 9, {
+      prd_audit: { laps: 1, growth: 3 },
+      architecture_review_as_built: { laps: 1, growth: 2 },
+    }, 13, {
+      total: 5,
+      byGate: { prd_audit: 3, architecture_review_as_built: 2 },
+      projected: 14,
+      minimumRaise: 1,
+      exceedingGate: 'architecture_review_as_built',
+    }],
+    ['reports the first charged gate when settled growth is already at the cap', 10, {
+      prd_audit: { laps: 1, growth: 2 },
+    }, 10, {
+      total: 2,
+      byGate: { prd_audit: 2 },
+      projected: 12,
+      minimumRaise: 2,
+      exceedingGate: 'prd_audit',
+    }],
+    ['keeps a zero raise and no exceeding gate when projected growth fits', 2, {
+      prd_audit: { laps: 1, growth: 3 },
+    }, 10, {
+      total: 3,
+      byGate: { prd_audit: 3 },
+      projected: 5,
+      minimumRaise: 0,
+    }],
+    ['omits laps-only charges from pending growth below the cap', 2, {
+      prd_audit: { laps: 1, growth: 0 },
+      architecture_review_as_built: { laps: 1, growth: 0 },
+    }, 10, {
+      total: 0,
+      byGate: {},
+      projected: 2,
+      minimumRaise: 0,
+    }],
+    ['identifies a laps-only gate when settled growth already exceeds the cap', 11, {
+      prd_audit: { laps: 1, growth: 0 },
+    }, 10, {
+      total: 0,
+      byGate: {},
+      projected: 11,
+      minimumRaise: 1,
+      exceedingGate: 'prd_audit',
+    }],
+    ['returns undefined without a pending repair', 2, undefined, 10, undefined],
+    ['does not calculate a minimum raise without a cap', 2, {
+      prd_audit: { laps: 1, growth: 3 },
+    }, null, {
+      total: 3,
+      byGate: { prd_audit: 3 },
+      projected: 5,
+    }],
+  ] as const)('projectPendingGrowth %s', (_description, added, charges, cap, expected) => {
+    expect(projectPendingGrowth(added, charges, cap)).toEqual(expected);
   });
 
   it('round-trips an optional pending repair with its per-gate charges and task ids', async () => {
