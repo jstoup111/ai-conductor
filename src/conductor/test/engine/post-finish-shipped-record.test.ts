@@ -10,6 +10,7 @@ import { refreshPostFinishShippedRecord } from '../../src/engine/post-finish-shi
 import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import { writePublicationRecord } from '../../src/engine/stack-publication-record.js';
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import type { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const roots: string[] = [];
 
@@ -70,7 +71,7 @@ describe('post-finish shipped-record refresh', () => {
         config: async () => ({ stdout: 'git@github.com:acme/demo.git\n' }),
         runRemoteGit: async () => ({ stdout: '' }),
       }),
-      events: { emit: vi.fn(async () => {}) },
+      events: { emit: vi.fn(async () => {}) } as unknown as ConductorEventEmitter,
       log: (message) => logs.push(message),
     });
 

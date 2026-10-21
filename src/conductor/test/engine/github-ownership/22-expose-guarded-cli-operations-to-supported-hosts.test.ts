@@ -619,7 +619,8 @@ describe('github-operation CLI', () => {
         if (publication === undefined) throw Object.assign(new Error('not found'), { code: 1 });
         return { stdout: `${blob}\n` };
       }
-      if (joined === `cat-file -p ${blob}`) return { stdout: publication };
+      // Reached only after the rev-parse branch above proved publication present.
+      if (joined === `cat-file -p ${blob}`) return { stdout: publication as string };
       throw new Error(`unexpected git command: ${joined}`);
     });
     const gh = vi.fn();

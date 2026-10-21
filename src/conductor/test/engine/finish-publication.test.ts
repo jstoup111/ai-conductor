@@ -190,6 +190,8 @@ interface AdvanceFinishPublicationInput {
     createShippedRecord?: () => Promise<void>;
     repairPresentation?: () => Promise<void>;
     establishPr?: OpenShipDraftPrDeps;
+    establishChildPrs?: () => Promise<void>;
+    assembleStack?: () => Promise<void>;
   };
 }
 

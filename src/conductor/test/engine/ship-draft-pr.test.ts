@@ -135,7 +135,7 @@ describe('openShipDraftPr', () => {
         events: { emit: async (event) => { events.push(event); } },
         remoteGit: async () => ({
           kind: 'refused', reason: 'stack-tip-mismatch',
-          members: [{ pr: 103, position: parseChildId(3)! }],
+          members: [{ pr: 103, position: parseChildId(3)!, branch: 'feat/c3/widget-import-flow' }],
         }),
       })).resolves.toEqual({ outcome: 'stack-tip-diverged', reason: 'guarded remote publication refused: stack-tip-mismatch' });
 

@@ -63,7 +63,7 @@ describe('stack teardown', () => {
     await writeFile(join(worktree, 'retained-until-reap.txt'), 'present\n');
 
     const teardownWorktree = vi.fn(async ({ path }: { path: string }) => rm(path, { recursive: true, force: true }));
-    const gh = vi.fn(async (args: string[]) => ({
+    const gh = vi.fn(async (_args: string[]) => ({
       stdout: JSON.stringify({
         state: 'MERGED',
         headRefOid: tip,
@@ -275,7 +275,7 @@ describe('stack teardown', () => {
     const lock = join(root, '.git', 'refs', 'heads', 'feat', 'c3', 'demo.lock');
     await mkdir(join(root, '.git', 'refs', 'heads', 'feat', 'c3'), { recursive: true });
     await writeFile(lock, 'locked\n');
-    const gh = vi.fn(async (args: string[]) => ({
+    const gh = vi.fn(async (_args: string[]) => ({
       stdout: JSON.stringify({
         state: 'MERGED',
         headRefOid: tip,

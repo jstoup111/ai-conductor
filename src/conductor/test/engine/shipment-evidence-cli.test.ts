@@ -211,7 +211,7 @@ describe('shipment-evidence CLI', () => {
   it('does not repair a merged child whose metadata declares a plan', async () => {
     const pr = 'https://github.com/org/repo/pull/1';
     const reports: string[] = [];
-    const runGh = vi.fn(async () => ({
+    const runGh = vi.fn(async (_args: string[]) => ({
       stdout: JSON.stringify({
         url: pr,
         body: 'Plan: `.docs/plans/feature.md`',

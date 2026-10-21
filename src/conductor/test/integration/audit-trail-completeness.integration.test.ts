@@ -275,6 +275,13 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   remediation_rerouted: 'not-audited-by-design',
   routed_repair_phase: 'not-audited-by-design',
   child_revalidated: 'not-audited-by-design',
+  // Stack-publication occurrences persist on the spine but are not audited (event-sinks audit: false).
+  stack_member_published: 'not-audited-by-design',
+  stack_member_redrafted: 'not-audited-by-design',
+  stack_assembled: 'not-audited-by-design',
+  stack_member_lifecycle: 'not-audited-by-design',
+  stack_members_unreachable: 'not-audited-by-design',
+  stack_tip_diverged: 'not-audited-by-design',
 };
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
@@ -1017,6 +1024,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   step_inapplicable_refused: {
     type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late', priorStatus: 'failed',
   },
+  stack_member_published: { type: 'stack_member_published', child: parseChildId(1)!, pr: 101 },
+  stack_member_redrafted: { type: 'stack_member_redrafted', child: parseChildId(1)!, pr: 101 },
+  stack_assembled: { type: 'stack_assembled', prs: [101, 500] },
+  stack_member_lifecycle: {
+    type: 'stack_member_lifecycle', child: parseChildId(1)!, pr: 101, state: 'merged', eventId: 'stack-lifecycle-1',
+  },
+  stack_members_unreachable: { type: 'stack_members_unreachable', child: parseChildId(1)!, pr: 101 },
+  stack_tip_diverged: { type: 'stack_tip_diverged', prs: [101] },
 };
 
 async function loadWriter(): Promise<Record<string, any>> {
