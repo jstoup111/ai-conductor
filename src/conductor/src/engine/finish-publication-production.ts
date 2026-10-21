@@ -405,6 +405,20 @@ async function haltAndThrowStackTipDiverged(input: {
   throw new StackPublicationHaltError('stack_tip_diverged', detail);
 }
 
+/**
+ * For a divergence whose detail does not itself name a position: the thrown
+ * text becomes FINISH's final HALT reason, so it must name the mismatched
+ * member positions just as the member-specific HALT does (ADR decision 11).
+ */
+async function haltAndThrowStackTipDivergedAtPositions(
+  input: Parameters<typeof haltAndThrowStackTipDiverged>[0],
+  members: readonly PublicationMember[],
+  detail: string,
+): Promise<never> {
+  return haltAndThrowStackTipDiverged(input, members,
+    `${detail} at positions: ${members.map((member) => member.position).join(', ')}`);
+}
+
 function mismatchedNativeMembers(
   expected: readonly PublicationMember[],
   observed: readonly NativeStackMember[] | undefined,
@@ -623,7 +637,7 @@ export async function assembleStack(input: {
   const topChild = stored.record.members[leafIndex - 1]!;
   const existing = stored.record.retarget;
   if (existing && (existing.from !== input.baseBranch || existing.to !== topChild.branch)) {
-    await haltAndThrowStackTipDiverged(input, [stored.record.members[leafIndex]!], 'stack publication retarget journal diverged');
+    await haltAndThrowStackTipDivergedAtPositions(input, [stored.record.members[leafIndex]!], 'stack publication retarget journal diverged');
   }
 
   const writePhase = async (phase: 'intended' | 'observed'): Promise<void> => {
@@ -641,12 +655,12 @@ export async function assembleStack(input: {
   if (actualBase === topChild.branch) {
     if (stored.record.retarget?.phase !== 'observed') await writePhase('observed');
   } else if (actualBase !== input.baseBranch) {
-    await haltAndThrowStackTipDiverged(input, [stored.record.members[leafIndex]!],
+    await haltAndThrowStackTipDivergedAtPositions(input, [stored.record.members[leafIndex]!],
       `retained leaf pull request base diverged: expected ${input.baseBranch} or ${topChild.branch}, got ${actualBase}`);
   } else {
     if (stored.record.retarget === undefined) await writePhase('intended');
     if (stored.record.retarget?.phase === 'observed') {
-      await haltAndThrowStackTipDiverged(input, [stored.record.members[leafIndex]!],
+      await haltAndThrowStackTipDivergedAtPositions(input, [stored.record.members[leafIndex]!],
         'observed stack leaf retarget does not match the retained leaf base');
     }
 
@@ -692,7 +706,7 @@ export async function assembleStack(input: {
 
     const observedBase = await readLeafBase();
     if (observedBase !== topChild.branch) {
-      await haltAndThrowStackTipDiverged(input, [stored.record.members[leafIndex]!], 'retained leaf retarget was not observed');
+      await haltAndThrowStackTipDivergedAtPositions(input, [stored.record.members[leafIndex]!], 'retained leaf retarget was not observed');
     }
     await writePhase('observed');
   }
@@ -756,7 +770,7 @@ export async function assembleStack(input: {
   const isOrderedPrefix = native.members.length <= publication.record.members.length
     && native.members.every((member, index) => member.number === publication.record.members[index]?.pr);
   if (!isOrderedPrefix) {
-    await haltAndThrowStackTipDiverged(input, mismatchedNativeMembers(publication.record.members, native.members),
+    await haltAndThrowStackTipDivergedAtPositions(input, mismatchedNativeMembers(publication.record.members, native.members),
       'native stack belongs to another stack or is not an ordered publication prefix');
   }
 
@@ -782,7 +796,7 @@ export async function assembleStack(input: {
   }
   if (!native || native.members.length !== publication.record.members.length
     || native.members.some((member, index) => member.number !== publication.record.members[index]?.pr)) {
-    return haltAndThrowStackTipDiverged(input, mismatchedNativeMembers(publication.record.members, native?.members), 'native stack membership or order diverged');
+    return haltAndThrowStackTipDivergedAtPositions(input, mismatchedNativeMembers(publication.record.members, native?.members), 'native stack membership or order diverged');
   }
   for (const [index, member] of publication.record.members.entries()) {
     const pushed = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, member.branch)]);

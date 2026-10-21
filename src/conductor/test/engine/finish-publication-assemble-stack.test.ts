@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
 import { assembleStack } from '../../src/engine/finish-publication-production.js';
-import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
+import { advanceFinishPublication, routeFinishPublicationDisposition, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
 import { observeStackDimension } from '../../src/engine/stack-publication.js';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
@@ -487,5 +487,69 @@ describe('assembleStack leaf retarget journal', () => {
     })).rejects.toMatchObject({ reason: 'stack_publication_precondition_failed', message: expect.stringContaining('feat/c1/demo') });
 
     expect(trace.filter((entry) => entry.startsWith('edit:'))).toEqual([]);
+  });
+});
+
+describe('assembleStack divergence final HALT names the mismatched positions', () => {
+  // The thrown detail is forwarded verbatim into the human_required route, whose
+  // reason becomes the conductor's final HALT and overwrites the member HALT.
+  async function expectFinalHaltNames(run: () => Promise<unknown>, cause: string, positions: string): Promise<void> {
+    let thrown: unknown;
+    await run().catch((error: unknown) => { thrown = error; });
+    expect(thrown).toMatchObject({ reason: 'stack_tip_diverged' });
+    const detail = (thrown as Error).message;
+    expect(detail).toMatch(new RegExp(`^${cause}.* at positions: ${positions}$`));
+    const route = routeFinishPublicationDisposition({ kind: 'human_required', reason: 'stack_tip_diverged', detail });
+    expect(route).toMatchObject({ kind: 'halt', haltClass: 'stack-tip-diverged' });
+    expect((route as { reason: string }).reason).toMatch(new RegExp(`positions: ${positions}$`));
+  }
+
+  const assemble = (gh: GhRunner, operations: GithubOperationRunner) => assembleStack({
+    root, slug: 'demo', leafUrl: 'https://github.com/acme/demo/pull/500', baseBranch: 'main', git, gh, operations,
+  });
+
+  it('names the leaf for a diverged retarget journal', async () => {
+    await writeRecord({ version: 1, members, retarget: { from: 'develop', to: 'feat/c3/demo', phase: 'intended' } });
+    const { gh, operations } = fixture('main', []);
+    await expectFinalHaltNames(() => assemble(gh, operations), 'stack publication retarget journal diverged', '5');
+  });
+
+  it('names the leaf for an unexpected retained leaf base', async () => {
+    await writeRecord({ version: 1, members });
+    const { gh, operations } = fixture('unexpected-base', []);
+    await expectFinalHaltNames(() => assemble(gh, operations), 'retained leaf pull request base diverged', '5');
+  });
+
+  it('names the leaf when an observed retarget does not match the leaf base', async () => {
+    await writeRecord({ version: 1, members, retarget: { from: 'main', to: 'feat/c3/demo', phase: 'observed' } });
+    const { gh, operations } = fixture('main', []);
+    await expectFinalHaltNames(() => assemble(gh, operations), 'observed stack leaf retarget does not match', '5');
+  });
+
+  it('names the leaf when its retarget is not observed', async () => {
+    await writeRecord({ version: 1, members });
+    const { gh, operations } = fixture('main', []);
+    const ignoringRetarget: GithubOperationRunner = {
+      run: async (request) => request.operation === 'pull-request.retarget' ? {} : operations.run(request),
+    };
+    await expectFinalHaltNames(() => assemble(gh, ignoringRetarget), 'retained leaf retarget was not observed', '5');
+  });
+
+  it('names only the members outside an ordered native prefix', async () => {
+    await writeRecord({ version: 1, members });
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    const { gh, operations } = fixture('main', [], {
+      number: 91, pull_requests: [{ number: 101, head: { sha: head } }, { number: 999, head: { sha: head } }],
+    });
+    await expectFinalHaltNames(() => assemble(gh, operations), 'native stack belongs to another stack', '3, 5');
+  });
+
+  it('names only the members missing after the native stack is extended', async () => {
+    await writeRecord({ version: 1, members });
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    const prefix = { number: 44, pull_requests: [{ number: 101, head: { sha: head } }] };
+    // Member 1's re-read never reflects the add, so members 3 and 5 stay missing.
+    const { gh, operations } = fixture('main', [], { ...prefix }, { 101: prefix });
+    await expectFinalHaltNames(() => assemble(gh, operations), 'native stack membership or order diverged', '3, 5');
   });
 });
