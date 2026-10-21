@@ -207,7 +207,7 @@ remains the single owner of the wire format and vocabulary.
 - Given the remediate skill, when it is read for gap planning, then it explains the HALT categories, the implementation-only routing rule, the recorded-red exception obligation, the sealed artifact set including `.docs/decisions/`, the environmental-stall rule, plan-coverage judgment, and low-confidence HALT.
 - Given the remediation planner agent definition, when it is read, then it carries the same judgment guidance, including rejecting contradictory dispositions and treating `plan` as terminal in daemon runs, and none of the machine contract.
 - Given a human invoking the skill interactively outside a managed run, when they ask for a remediation plan, then they receive a human-readable plan, and it is not presented as a managed persisted result.
-- Given the PRD-widening and case adjudication sections, when the skill is read, then those sections are unchanged.
+- Given the PRD-widening and case adjudication sections, when the skill is read, then that change leaves those sections unchanged.
 - Given supplied plan-contract and prior-attempt pointers, when the skill is read, then its guidance to read the referenced files before planning, and its fallback paths, remain as mode-neutral judgment outside the gap-plan sections the audit guards.
 
 #### Negative Paths

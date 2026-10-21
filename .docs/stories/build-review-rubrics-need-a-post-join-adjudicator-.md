@@ -248,7 +248,7 @@ an effective PASS or route never hides what the rubrics reported.
 
 #### Negative Paths
 
-- Given any required case/effect is missing, reserved, failed, contradictory, or unrenderable, when the effective verdict is derived, then it cannot PASS or partially route and names the blocking state.
+- Given any required case/effect is missing, reserved, failed, contradictory, or unrenderable, when the effective verdict is derived, then it cannot PASS or partially route and names the blocking state, except an action case the shared settlement predicate retires because every source is operator-accepted, carried, or no longer raised on a mechanically healthy lap (adr-2026-10-20-operator-acceptance-is-durable-case-state D5).
 - Given raw evidence contains a below-allowance infrastructure failure or an exhausted failure without exact operator reduced coverage, when effective derivation is attempted, then autonomous case state cannot convert that mechanical blocker into PASS.
 
 ### Done When

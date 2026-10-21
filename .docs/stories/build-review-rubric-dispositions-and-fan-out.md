@@ -509,14 +509,17 @@ artifacts so that shipping evidence includes the operator's explicit decisions.
 #### Happy Path
 
 - Given one or more valid accepted dispositions, when finish updates the retained implementation PR
-  and writes the final shipped record, then both contain every finding identifier, rubric, rationale,
-  operator, and acceptance time from one deterministic rendering contract.
+  and writes the final shipped record, then both contain every accepted finding identifier and rubric,
+  every carried finding with its carried-from origin id and lap, and every operator-resolved case with
+  its case id and source ids, from one deterministic rendering contract, with no rationale, operator,
+  summary, or time (#1614, adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
 
 #### Negative Paths
 
 - Given a known accepted record is malformed, unreadable, or cannot be rendered into either required
   destination, when publication is attempted, then finish blocks rather than silently omitting or
-  fabricating accepted risk.
+  fabricating accepted risk; an unreadable remediation case store instead renders every direct row,
+  fabricates no carried row, and reports the unreadable state (adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
 - Given publication is retried, when the accepted-risk section already exists, then it is updated
   idempotently rather than duplicated.
 
