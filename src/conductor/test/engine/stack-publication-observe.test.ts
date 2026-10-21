@@ -5,7 +5,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import type { ActiveChildResolution } from '../../src/engine/child-cursor.js';
 import { advanceFinishPublication, type PublicationSnapshot } from '../../src/engine/finish-publication.js';
 import { observeStackDimension } from '../../src/engine/stack-publication.js';
-import type { PublicationRecord } from '../../src/engine/stack-publication-record.js';
+import type { PublicationMember, PublicationRecord } from '../../src/engine/stack-publication-record.js';
 
 const c1 = parseChildId(1)!;
 const c3 = parseChildId(3)!;
@@ -161,7 +161,22 @@ describe('observeStackDimension', () => {
     });
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
-      .resolves.toBe('diverged');
+      .resolves.toMatchObject({ dimension: 'diverged' });
+  });
+
+  it('reports only the members whose remote tips diverged', async () => {
+    const subject = fixture({
+      record: record({ stack: { number: 42, verified: true } }),
+      memberHeads: { 103: 'x'.repeat(40), 500: 'y'.repeat(40) },
+    });
+    const reported: PublicationMember[] = [];
+
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, {
+      ...subject.dependencies,
+      onDiverged: async (mismatched) => { reported.push(...mismatched); },
+    })).resolves.toEqual({ dimension: 'diverged', members: [members[1], members[2]] });
+
+    expect(reported).toEqual([members[1], members[2]]);
   });
 
   it('keeps an unverified stack healthy when its first member targets its journaled pre-stack base', async () => {
@@ -200,7 +215,7 @@ describe('observeStackDimension', () => {
 
     const unrelated = fixture({ record: intended, memberBases: { 500: 'feat/c1/demo' } });
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, unrelated.dependencies))
-      .resolves.toBe('diverged');
+      .resolves.toMatchObject({ dimension: 'diverged' });
   });
 
   it('verifies the first child and unretargeted leaf against the supplied non-main base', async () => {
@@ -214,7 +229,7 @@ describe('observeStackDimension', () => {
       memberBases: { 101: 'main' },
     });
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, onMain.dependencies))
-      .resolves.toBe('diverged');
+      .resolves.toMatchObject({ dimension: 'diverged' });
   });
 
   it('returns indeterminate when no pre-stack base can be established', async () => {
@@ -227,14 +242,17 @@ describe('observeStackDimension', () => {
   it('dispatches child establishment then assembly for a valid three-member stack', async () => {
     const subject = fixture();
     const transitions: string[] = [];
-    const observe = async (): Promise<PublicationSnapshot> => ({
+    const observe = async (): Promise<PublicationSnapshot> => {
+      const stack = await observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies);
+      return {
       mode: 'daemon',
       intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
       implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid', branchPushed: 'valid',
       pr: { identity: 'one', url: 'https://github.com/acme/demo/pull/500', prose: 'accepted', ready: false },
       shippedRecord: 'valid', outcomeRecord: 'missing',
-      stack: await observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies),
-    });
+      stack: typeof stack === 'string' ? stack : stack.dimension,
+      };
+    };
     const effects = {
       dispatchJudgment: async () => ({ kind: 'accepted' }),
       establishChildPrs: async () => {
@@ -260,7 +278,7 @@ describe('observeStackDimension', () => {
     });
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
-      .resolves.toBe('diverged');
+      .resolves.toMatchObject({ dimension: 'diverged' });
   });
 
   it('returns diverged for a changed draft member before stack assembly', async () => {
@@ -270,7 +288,7 @@ describe('observeStackDimension', () => {
     });
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
-      .resolves.toBe('diverged');
+      .resolves.toMatchObject({ dimension: 'diverged' });
 
     expect(subject.ghArgs.some((args) => args[0] === 'api')).toBe(false);
   });
@@ -289,7 +307,7 @@ describe('observeStackDimension', () => {
     });
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
-      .resolves.toBe('diverged');
+      .resolves.toMatchObject({ dimension: 'diverged' });
   });
 
   it('returns diverged when an unverified member was made ready before stack verification', async () => {
@@ -299,7 +317,7 @@ describe('observeStackDimension', () => {
     });
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
-      .resolves.toBe('diverged');
+      .resolves.toMatchObject({ dimension: 'diverged' });
   });
 
   it('returns indeterminate when its stack read times out', async () => {

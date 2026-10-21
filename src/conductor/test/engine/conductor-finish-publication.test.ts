@@ -218,6 +218,52 @@ describe('Conductor FINISH publication routing', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it('preserves only server-rebased #c3 and #500 positions through the final stack-tip halt', async () => {
+    const events = new ConductorEventEmitter();
+    const divergences: number[][] = [];
+    events.on('stack_tip_diverged', (event) => {
+      if (event.type === 'stack_tip_diverged') divergences.push([...event.prs]);
+    });
+    const snapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid', branchPushed: 'valid',
+      shippedRecord: 'valid', outcomeRecord: 'missing', stack: 'diverged',
+      stackDivergenceDetail: 'published stack tip diverged at positions: 3, 5',
+      pr: { identity: 'one', url: 'https://github.com/acme/demo/pull/500', prose: 'accepted', ready: false },
+    } as const satisfies PublicationSnapshot;
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      await events.emit({ type: 'stack_tip_diverged', prs: [103, 500] });
+      const result = await advanceFinishPublication({
+        observe: async () => snapshot,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      });
+      return result.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: result.transition }
+        : result;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('positions: 3, 5');
+    expect(halt).not.toContain('positions: 1');
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('stack-tip-diverged');
+    expect(divergences).toEqual([[103, 500]]);
+  });
+
   it('restores an authoring-omitted captured region before the prose judge observes the revision', async () => {
     const prUrl = 'https://github.com/acme/widget/pull/42';
     const owner = 'compliance-attest';

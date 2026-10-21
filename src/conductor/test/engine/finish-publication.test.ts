@@ -745,9 +745,14 @@ describe('finish-publication domain types', () => {
           },
         }),
         stack: 'diverged',
+        stackDivergenceDetail: 'published stack tip diverged at positions: 3, 5',
       } as PublicationSnapshot),
       effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), assembleStack },
-    })).resolves.toEqual({ kind: 'human_required', reason: 'stack_tip_diverged' });
+    })).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'stack_tip_diverged',
+      detail: 'published stack tip diverged at positions: 3, 5',
+    });
 
     expect(assembleStack).not.toHaveBeenCalled();
   });
@@ -1351,6 +1356,26 @@ describe('observePublicationSnapshot', () => {
     await expect(
       observePublicationSnapshot(observationInput(observerPorts({ pr }))),
     ).resolves.toMatchObject({ pr: expected });
+  });
+
+  it('carries observed divergent stack positions into the FINISH snapshot', async () => {
+    const ports = {
+      ...observerPorts(),
+      stack: {
+        observeStackDimension: async () => ({
+          dimension: 'diverged' as const,
+          members: [
+            { position: 3, branch: 'feat/c3/widget', pr: 103 },
+            { position: 5, branch: 'feat/widget', pr: 500 },
+          ],
+        }),
+      },
+    };
+
+    await expect(observePublicationSnapshot(observationInput(ports))).resolves.toMatchObject({
+      stack: 'diverged',
+      stackDivergenceDetail: 'published stack tip diverged at positions: 3, 5',
+    });
   });
 });
 

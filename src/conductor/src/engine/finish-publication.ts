@@ -7,7 +7,7 @@ import type {
   FinishPublicationTransition,
 } from '../types/events.js';
 import { isRegionRestoreError } from './region-restore-error.js';
-import type { StackDimension } from './stack-publication.js';
+import type { StackDimension, StackObservation } from './stack-publication.js';
 
 /** Typed effect failure: retrying would mutate a diverged or unsafe stack. */
 export class StackPublicationHaltError extends Error {
@@ -17,6 +17,14 @@ export class StackPublicationHaltError extends Error {
   ) {
     super(message);
     this.name = 'StackPublicationHaltError';
+  }
+}
+
+/** A bounded stack observation is incomplete but safe to retry on FINISH. */
+export class StackPublicationRetryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackPublicationRetryError';
   }
 }
 
@@ -98,6 +106,8 @@ type PublicationEvidence = {
   outcomeRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   /** Stack state is absent until the production observer is wired. */
   stack?: StackDimension;
+  /** Positions from the same authoritative observation that found divergence. */
+  stackDivergenceDetail?: string;
   pr: PublicationPullRequest;
 };
 
@@ -199,7 +209,7 @@ export interface PublicationObservationPorts {
   };
   /** Optional while N=1 callers retain their byte-for-byte publication path. */
   stack?: {
-    observeStackDimension(): Promise<StackDimension>;
+    observeStackDimension(): Promise<StackObservation>;
   };
 }
 
@@ -242,9 +252,15 @@ export async function observePublicationSnapshot(
   const readiness = mapReleaseReadiness(
     await safelyObserve(releaseReadiness.observeReleaseReadiness),
   );
-  const stackDimension = stack === undefined
+  const stackObservation = stack === undefined
     ? undefined
     : await safelyObserve(stack.observeStackDimension);
+  const stackDimension = typeof stackObservation === 'object' && stackObservation !== null
+    ? stackObservation.dimension
+    : stackObservation;
+  const stackDivergenceDetail = typeof stackObservation === 'object' && stackObservation !== null
+    ? `published stack tip diverged at positions: ${stackObservation.members.map((member) => member.position).join(', ')}`
+    : undefined;
 
   return {
     mode: input.mode,
@@ -258,7 +274,10 @@ export async function observePublicationSnapshot(
     outcomeRecord,
     ...(stackDimension === undefined || stackDimension === 'unavailable'
       ? {}
-      : { stack: stackDimension }),
+      : {
+          stack: stackDimension,
+          ...(stackDivergenceDetail === undefined ? {} : { stackDivergenceDetail }),
+        }),
   } as PublicationSnapshot;
 }
 
@@ -733,6 +752,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
   ready_pr: [
     'publication_transition_indeterminate',
     'presentation_repair_effect_unavailable',
+    'presentation_repair_partial',
     'presentation_repair_failed',
     'presentation_not_verified_after_repair',
   ],
@@ -1785,7 +1805,11 @@ async function advanceFinishPublicationUnreconciled(
   // A changed native stack is terminal. Never route it through assembly,
   // which could turn an external change into another stack mutation.
   if (stackDimension(snapshot) === 'diverged') {
-    return { kind: 'human_required', reason: 'stack_tip_diverged' };
+    return {
+      kind: 'human_required',
+      reason: 'stack_tip_diverged',
+      ...(snapshot.stackDivergenceDetail === undefined ? {} : { detail: snapshot.stackDivergenceDetail }),
+    };
   }
 
   if (nextFinishPublicationTransition(snapshot) === 'establish_pr') {
@@ -2143,6 +2167,14 @@ async function advanceFinishPublicationUnreconciled(
       } catch (error) {
         if (error instanceof StackPublicationHaltError) {
           return { kind: 'human_required', reason: error.reason, detail: error.message };
+        }
+        if (error instanceof StackPublicationRetryError) {
+          return {
+            kind: 'publication_retry',
+            transition: 'ready_pr',
+            reason: 'presentation_repair_partial',
+            detail: error.message,
+          };
         }
         if (isRegionRestoreError(error)) {
           return {

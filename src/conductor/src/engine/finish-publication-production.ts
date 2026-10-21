@@ -18,7 +18,7 @@ import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
-import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
+import { ensureShipReady, hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
 import { readState, replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import { readAllVerdicts, readVerdict } from './gate-verdicts.js';
 import { resolveActiveChild } from './child-cursor.js';
@@ -54,6 +54,7 @@ import {
   resolveInteractivePublicationIntent,
   resolveUnattendedPublicationIntent,
   StackPublicationHaltError,
+  StackPublicationRetryError,
   type PublicationDisposition,
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
@@ -469,6 +470,9 @@ export async function readyStackChildren(input: {
   events?: Parameters<typeof haltStackTipDiverged>[2];
   /** The coordinator already proved durable child state before reading the receipt. */
   stacked?: boolean;
+  /** Injected by tests so bounded ready retries never depend on wall time. */
+  sleep?: (ms: number) => Promise<void>;
+  log?: (message: string) => void;
 }): Promise<void> {
   if (input.stacked === false) return;
   const stored = await activePublicationRecord(input.root, input.slug, { git: input.git });
@@ -508,19 +512,18 @@ export async function readyStackChildren(input: {
     if (!memberOperations) {
       throw new StackPublicationHaltError('stack_publication_precondition_failed', `child ready boundary unavailable at position ${member.position}`);
     }
-    const flip = await executeGithubOperation({
-      operation: 'pull-request.ready', repository: leaf.repository,
-      resource: { kind: 'pull-request', number: member.pr }, context: { actor: 'finish-publication' },
-    }, memberOperations);
-    if (flip.kind !== 'executed') throw new StackPublicationHaltError('stack_publication_precondition_failed', `could not ready child position ${member.position}`);
-    const verified = await runTrackerRepositoryRead(
-      input.gh, input.root, 'pull-request.read', leaf.repository, { kind: 'pull-request', number: member.pr },
-      ['pr', 'view', String(member.pr), '-R', leaf.repository, '--json', 'isDraft,state'],
+    const childUrl = input.leafUrl.replace(/\/pull\/\d+$/, `/pull/${member.pr}`);
+    const outcome = await ensureShipReady(
+      input.gh, input.root, childUrl, input.log, input.sleep, memberOperations,
     );
-    const observed: unknown = JSON.parse(verified);
-    if (!observed || typeof observed !== 'object' || (observed as { state?: unknown }).state !== 'OPEN'
-      || (observed as { isDraft?: unknown }).isDraft !== false) {
-      throw new StackPublicationHaltError('stack_publication_precondition_failed', `child ready flip was not observed at position ${member.position}`);
+    if (outcome === 'refused') {
+      throw new StackPublicationHaltError('stack_publication_precondition_failed', `could not ready child position ${member.position}`);
+    }
+    // A partial guarded mutation is deliberately non-terminal. Its next
+    // observation remains not-ready, which selects ready_pr again without
+    // manufacturing a precondition halt from an eventually consistent read.
+    if (outcome === 'partial') {
+      throw new StackPublicationRetryError(`child ready flip remains unobserved at position ${member.position}`);
     }
   }
 }

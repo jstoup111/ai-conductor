@@ -44,12 +44,22 @@ function childBody(position: number, branch: string): string {
   });
 }
 
-function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean; invalidChildBody?: boolean; nativeMembers?: readonly number[] } = {}) {
+function fixture(input: {
+  ready?: readonly number[];
+  mismatchedHead?: boolean;
+  invalidChildBody?: boolean;
+  nativeMembers?: readonly number[];
+  /** Number of guarded ready writes needed before GitHub reports the PR ready. */
+  readyAfterAttempts?: Readonly<Record<number, number>>;
+} = {}) {
   const drafts = new Map<number, boolean>([[101, !input.ready?.includes(101)], [103, !input.ready?.includes(103)], [500, !input.ready?.includes(500)]]);
   const bodies = new Map([[101, childBody(1, 'feat/c1/demo')], [103, childBody(3, 'feat/c3/demo')]]);
   if (input.invalidChildBody) bodies.set(103, `${bodies.get(103)}\n\nCloses acme/demo#7`);
   const writes: string[] = [];
+  const ghCalls: string[][] = [];
+  const readyAttempts = new Map<number, number>();
   const gh: GhRunner = async (args) => {
+    ghCalls.push(args);
     if (args[0] === 'api' && args[1]?.includes('/stacks?pull_request=')) {
       return {
         stdout: JSON.stringify([{
@@ -61,7 +71,10 @@ function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean; i
         }]),
       };
     }
-    const number = Number(args[2]);
+    const reference = args[2] ?? '';
+    const number = /^\d+$/.test(reference)
+      ? Number(reference)
+      : Number(reference.split('/').at(-1));
     return {
       stdout: JSON.stringify({
         body: bodies.get(number),
@@ -77,11 +90,15 @@ function fixture(input: { ready?: readonly number[]; mismatchedHead?: boolean; i
         throw new Error(`unexpected write: ${request.operation}`);
       }
       writes.push(`ready:${request.target.number}`);
-      drafts.set(request.target.number, false);
+      const attempt = (readyAttempts.get(request.target.number) ?? 0) + 1;
+      readyAttempts.set(request.target.number, attempt);
+      if (attempt >= (input.readyAfterAttempts?.[request.target.number] ?? 1)) {
+        drafts.set(request.target.number, false);
+      }
       return {};
     },
   };
-  return { gh, operations, writes, drafts };
+  return { gh, operations, writes, drafts, ghCalls };
 }
 
 beforeEach(async () => {
@@ -106,7 +123,7 @@ afterEach(async () => {
 
 describe('readyStackChildren', () => {
   it('uses target-bound runners for every stack read and child ready flip', async () => {
-    const { gh, writes, drafts } = fixture();
+    const { gh, writes, drafts, ghCalls } = fixture();
     const fallback: GithubOperationRunner = {
       run: async () => { throw new Error('unbound operation runner must not execute'); },
     };
@@ -134,6 +151,7 @@ describe('readyStackChildren', () => {
       { repository: 'acme/demo', kind: 'pull-request', number: 101 },
     ]);
     expect(writes).toEqual(['ready:103', 'ready:101']);
+    expect(ghCalls.some((args) => args.includes('ready'))).toBe(false);
   });
 
   it('flips only draft children from the highest position to the lowest', async () => {
@@ -152,6 +170,45 @@ describe('readyStackChildren', () => {
     await readyStackChildren({ root, slug: 'demo', leafUrl, git, gh, operations });
 
     expect(writes).toEqual(['ready:101']);
+  });
+
+  it('retries a child ready flip until GitHub observes it ready', async () => {
+    const { gh, operations, writes, drafts } = fixture({ readyAfterAttempts: { 103: 2 } });
+
+    await readyStackChildren({
+      root, slug: 'demo', leafUrl, git, gh, operations,
+      sleep: async () => {},
+    });
+
+    expect(writes).toEqual(['ready:103', 'ready:103', 'ready:101']);
+    expect(drafts.get(103)).toBe(false);
+  });
+
+  it('leaves a persistently draft child for a retry instead of halting FINISH', async () => {
+    const { gh, operations, writes, drafts } = fixture({ readyAfterAttempts: { 103: Number.POSITIVE_INFINITY } });
+    const snapshot: PublicationSnapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid', branchPushed: 'valid',
+      shippedRecord: 'valid', outcomeRecord: 'missing', stack: 'valid',
+      pr: { identity: 'one', url: leafUrl, prose: 'accepted', ready: false },
+    };
+
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: {
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+        repairPresentation: async () => readyStackChildren({
+          root, slug: 'demo', leafUrl, git, gh, operations, sleep: async () => {},
+        }),
+      },
+    })).resolves.toEqual({
+      kind: 'publication_retry', transition: 'ready_pr', reason: 'presentation_repair_partial',
+      detail: 'child ready flip remains unobserved at position 3',
+    });
+
+    expect(writes).toEqual(['ready:103', 'ready:103', 'ready:103']);
+    expect(drafts.get(103)).toBe(true);
   });
 
   it('halts before a child flip when a native member head no longer matches its pushed receipt', async () => {
@@ -207,7 +264,7 @@ describe('readyStackChildren', () => {
       if (args[0] === 'api' && args[1]?.includes('/stacks?pull_request=')) {
         return indeterminateRead();
       }
-      return fixtureGh(args);
+      return fixtureGh(args, { cwd: root });
     };
     const readyWrites: string[] = [];
     const operations: GithubOperationRunner = {

@@ -143,6 +143,10 @@ export type StackDimension =
   | 'diverged'
   | 'indeterminate';
 
+/** A divergence retains the affected durable members for the FINISH halt. */
+export type StackObservation = Exclude<StackDimension, 'diverged'>
+  | { readonly dimension: 'diverged'; readonly members: readonly PublicationMember[] };
+
 export interface ObserveStackDimensionDependencies extends PublicationRecordDependencies {
   /** Read-only GitHub transport supplied by the FINISH composition root. */
   readonly gh?: GhRunner;
@@ -408,36 +412,52 @@ async function observeMembers(
   git: GitRunner,
   requireDraft: boolean,
   baseBranch: string | undefined,
-): Promise<'healthy' | 'diverged' | 'indeterminate'> {
+): Promise<{ kind: 'healthy' } | { kind: 'diverged'; members: readonly PublicationMember[] } | { kind: 'indeterminate' }> {
   const preStackBase = record.retarget?.from ?? baseBranch;
+  const mismatched: PublicationMember[] = [];
   for (const [index, member] of members.entries()) {
-    if (member.lastSeen !== undefined) return 'diverged';
+    if (member.lastSeen !== undefined) {
+      mismatched.push(member);
+      continue;
+    }
     try {
       const stdout = await runTrackerRepositoryRead(
         gh, root, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
         ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state,isDraft,baseRefName,headRefOid'],
       );
       const parsed: unknown = JSON.parse(stdout);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'indeterminate';
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'indeterminate' };
       const state = (parsed as { state?: unknown }).state;
-      if (state !== 'OPEN') return state === 'CLOSED' || state === 'MERGED' ? 'diverged' : 'indeterminate';
+      if (state !== 'OPEN') {
+        if (state === 'CLOSED' || state === 'MERGED') {
+          mismatched.push(member);
+          continue;
+        }
+        return { kind: 'indeterminate' };
+      }
       const isDraft = (parsed as { isDraft?: unknown }).isDraft;
-      if (typeof isDraft !== 'boolean') return 'indeterminate';
-      if (requireDraft && !isDraft) return 'diverged';
+      if (typeof isDraft !== 'boolean') return { kind: 'indeterminate' };
+      if (requireDraft && !isDraft) {
+        mismatched.push(member);
+        continue;
+      }
       const base = (parsed as { baseRefName?: unknown }).baseRefName;
       const head = (parsed as { headRefOid?: unknown }).headRefOid;
-      if (typeof head !== 'string') return 'indeterminate';
+      if (typeof head !== 'string') return { kind: 'indeterminate' };
       const expectedBases = expectedMemberBases(index, members, record, preStackBase);
-      if (expectedBases === undefined) return 'indeterminate';
-      if (typeof base !== 'string' || !expectedBases.includes(base)) return 'diverged';
+      if (expectedBases === undefined) return { kind: 'indeterminate' };
+      if (typeof base !== 'string' || !expectedBases.includes(base)) {
+        mismatched.push(member);
+        continue;
+      }
       const pushed = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, member.branch)]);
-      if (pushed.exitCode !== 0) return 'indeterminate';
-      if (pushed.stdout.trim() !== head) return 'diverged';
+      if (pushed.exitCode !== 0) return { kind: 'indeterminate' };
+      if (pushed.stdout.trim() !== head) mismatched.push(member);
     } catch {
-      return 'indeterminate';
+      return { kind: 'indeterminate' };
     }
   }
-  return 'healthy';
+  return mismatched.length === 0 ? { kind: 'healthy' } : { kind: 'diverged', members: mismatched };
 }
 
 async function observeVerifiedStack(
@@ -447,7 +467,7 @@ async function observeVerifiedStack(
   gh: GhRunner,
   record: PublicationRecord,
   git: GitRunner,
-): Promise<'valid' | 'diverged' | 'indeterminate'> {
+): Promise<{ kind: 'valid' } | { kind: 'diverged'; members: readonly PublicationMember[] } | { kind: 'indeterminate' }> {
   try {
     const stdout = await runTrackerRepositoryRead(
       gh, root, 'repository.read', repository, { kind: 'repository' },
@@ -455,26 +475,38 @@ async function observeVerifiedStack(
     );
     const parsed: unknown = JSON.parse(stdout);
     const stack = Array.isArray(parsed) ? parsed[0] : parsed;
-    if (!stack || typeof stack !== 'object' || Array.isArray(stack)) return 'indeterminate';
+    if (!stack || typeof stack !== 'object' || Array.isArray(stack)) return { kind: 'indeterminate' };
     const rawMembers = (stack as { pull_requests?: unknown; pullRequests?: unknown }).pull_requests
       ?? (stack as { pullRequests?: unknown }).pullRequests;
-    if (!Array.isArray(rawMembers) || rawMembers.length !== record.members.length) return 'diverged';
+    if (!Array.isArray(rawMembers)) return { kind: 'indeterminate' };
+    const mismatched: PublicationMember[] = [];
     for (const [index, expected] of record.members.entries()) {
       const value = rawMembers[index];
-      if (!value || typeof value !== 'object' || Array.isArray(value)) return 'indeterminate';
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        mismatched.push(expected);
+        continue;
+      }
       const member = value as { number?: unknown; head?: { sha?: unknown }; headRefOid?: unknown; head_sha?: unknown };
       const head = typeof member.head?.sha === 'string' ? member.head.sha
         : typeof member.headRefOid === 'string' ? member.headRefOid
           : typeof member.head_sha === 'string' ? member.head_sha : undefined;
-      if (member.number !== expected.pr) return 'diverged';
-      if (typeof head !== 'string' || head.length === 0) return 'indeterminate';
+      if (member.number !== expected.pr) {
+        mismatched.push(expected);
+        continue;
+      }
+      if (typeof head !== 'string' || head.length === 0) return { kind: 'indeterminate' };
       const pushed = await git(['rev-parse', '--verify', '--quiet', pushedTipRef(slug, expected.branch)]);
-      if (pushed.exitCode !== 0) return 'indeterminate';
-      if (pushed.stdout.trim() !== head) return 'diverged';
+      if (pushed.exitCode !== 0) return { kind: 'indeterminate' };
+      if (pushed.stdout.trim() !== head) mismatched.push(expected);
     }
-    return 'valid';
+    if (rawMembers.length > record.members.length && mismatched.length === 0) {
+      // An appended foreign member has no durable position of its own. The
+      // record is still the only safe subject for the operator halt.
+      mismatched.push(...record.members);
+    }
+    return mismatched.length === 0 ? { kind: 'valid' } : { kind: 'diverged', members: mismatched };
   } catch {
-    return 'indeterminate';
+    return { kind: 'indeterminate' };
   }
 }
 
@@ -488,7 +520,7 @@ export async function observeStackDimension(
   slug: string,
   cursor: ActiveChildResolution,
   dependencies: ObserveStackDimensionDependencies = {},
-): Promise<StackDimension> {
+): Promise<StackObservation> {
   if (cursor.kind === 'no-child') return 'not-applicable';
   if (!hasDurableChildState(cursor)) return 'indeterminate';
 
@@ -506,12 +538,18 @@ export async function observeStackDimension(
     root, slug, repository, gh, stored.record.members, stored.record, git, stored.record.stack?.verified !== true,
     dependencies.baseBranch,
   );
-  if (members !== 'healthy') {
-    if (members === 'diverged') await dependencies.onDiverged?.(stored.record.members, 'published stack member diverged');
-    return members;
+  if (members.kind !== 'healthy') {
+    if (members.kind === 'diverged') {
+      await dependencies.onDiverged?.(members.members, 'published stack member diverged');
+      return { dimension: 'diverged', members: members.members };
+    }
+    return 'indeterminate';
   }
   if (stored.record.stack?.verified !== true) return 'unassembled';
   const observed = await observeVerifiedStack(root, slug, repository, gh, stored.record, git);
-  if (observed === 'diverged') await dependencies.onDiverged?.(stored.record.members, 'published stack membership or tip diverged');
-  return observed;
+  if (observed.kind === 'diverged') {
+    await dependencies.onDiverged?.(observed.members, 'published stack membership or tip diverged');
+    return { dimension: 'diverged', members: observed.members };
+  }
+  return observed.kind === 'valid' ? 'valid' : 'indeterminate';
 }
