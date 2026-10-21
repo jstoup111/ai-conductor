@@ -146,10 +146,26 @@ export async function hasDurableChildState(
   // The feature-owned conductor namespace is durable across worktree
   // recreation.  Do not restrict this probe to closure receipts: a published
   // positions/publication receipt is itself enough to keep the stack guard on.
+  // Only stack-owned refs count. Every ordinary N=1 push records
+  // `pushed/<branch>` (and transiently `push-intent/<branch>`), and routing
+  // owns `routes`, `rejected`, `revalidate`, `repairing` and `red`; none of
+  // those prove a stack exists.
   const conductorRefs = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/`]);
   if (!conductorRefs || conductorRefs.exitCode !== 0) return 'git-error';
-  if (conductorRefs.stdout.trim() !== '') return true;
-  return false;
+  const prefix = `refs/conductor/${slug}/`;
+  return conductorRefs.stdout.split('\n').some((line) => {
+    const ref = line.trim();
+    return ref.startsWith(prefix) && isStackOwnedConductorRef(ref.slice(prefix.length));
+  });
+}
+
+/** Stack-owned names under `refs/conductor/<slug>/`: exact refs and ref directories. */
+const STACK_OWNED_CONDUCTOR_REFS = ['positions', 'publication', 'leaf-moved', 'cascades'] as const;
+const STACK_OWNED_CONDUCTOR_REF_DIRS = ['closed/', 'restack/'] as const;
+
+function isStackOwnedConductorRef(name: string): boolean {
+  return (STACK_OWNED_CONDUCTOR_REFS as readonly string[]).includes(name) ||
+    STACK_OWNED_CONDUCTOR_REF_DIRS.some((dir) => name.startsWith(dir));
 }
 
 async function closedChildren(slug: string, positions: readonly ChildId[], git: GitRunner): Promise<ClosedChild[] | 'git-error'> {
