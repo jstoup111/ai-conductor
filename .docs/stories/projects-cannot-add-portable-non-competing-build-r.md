@@ -363,7 +363,7 @@ As an operator, I want accepted custom-policy repairs to receive fresh verificat
 
 #### Negative Paths
 
-- Given an attempted or regressed case is reported again with equivalent substance despite wording or code movement, when the judgement binds that unrefuted recurrence to the prior case by `existingCaseId` and again proposes action, then it follows the existing repeated-case stop rather than granting a fresh repair allowance.
+- Given an attempted or regressed case that holds no operator acceptance and no operator resolution is reported again with equivalent substance despite wording or code movement, when the judgement binds that unrefuted recurrence to the prior case by `existingCaseId` and again proposes action, then it follows the existing repeated-case stop rather than granting a fresh repair allowance.
 - Given the cumulative bound is exhausted or a policy is renamed, updated, disabled, and re-enabled, when new repair routing is evaluated, then those changes do not reset the feature's accumulated charges or authorize an over-limit route.
 - Given repair completes but invalidated test or review evidence is stale, missing, or failing, when progression is attempted, then the feature cannot proceed on the pre-repair success and the known failure remains blocking.
 
@@ -412,7 +412,7 @@ As an operator, I want my explicit risk decisions preserved without allowing aut
 
 #### Negative Paths
 
-- Given an automated rejection, deferral, merge, suppression, or escalation occurs, when it is recorded, then it cannot create, replace, or broaden an operator accepted-risk or reduced-coverage decision.
+- Given an automated rejection, deferral, merge, suppression, or escalation occurs, when it is recorded, then it cannot create, replace, or broaden an operator accepted-risk or reduced-coverage decision; a finding the judgement binds by `existingCaseId` to a case holding an operator acceptance settles as carried, writes no disposition, and is listed as carried in the accepted-risk section (adr-2026-10-20-operator-acceptance-is-durable-case-state D3, D8).
 - Given risk acceptance belongs to different effective policy content, or reduced coverage belongs to a different validated declaration or closed failure reason, when current evidence is evaluated, then it cannot authorize the new finding or failure merely because its rubric name matches.
 - Given the operator records a disposition after adjudication starts but before effects apply, when the result is applied, then the current exact disposition is respected and cannot be overwritten by stale autonomous work; unrelated unresolved findings remain blocking.
 - Given a previously covered policy now produces a judged finding, or every rubric remains unjudged, when the aggregate is evaluated, then reduced coverage cannot suppress that finding or make the entirely unjudged lap pass; invalid declarations and non-operator callers cannot gain waiver authority.

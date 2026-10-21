@@ -344,7 +344,9 @@ a new defect under the same rubric.
 #### Happy Path
 
 - Given one finding is accepted and another finding has a different concern kind or logical anchor,
-  when the same or a later lap is evaluated, then only the exact accepted identity is non-blocking.
+  when the same or a later lap is evaluated, then only the exact accepted identity is non-blocking,
+  apart from a later-lap finding the `remediate` adjudicator binds by `existingCaseId` to a case
+  holding that acceptance, which settles as carried (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
 #### Negative Paths
 
