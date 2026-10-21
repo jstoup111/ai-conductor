@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-10-21T14:11:29.701Z
 Slug: stacked-features-cannot-be-published-reviewed-and-
 Class: needs-human
 Halting step: unknown
