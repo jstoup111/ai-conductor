@@ -8,6 +8,7 @@ import {
   type CriterionBoundRemediationGap,
 } from '../src/engine/remediation-append.js';
 import type { RemediationGap } from '../src/engine/artifacts.js';
+import { parseChildId } from '../src/engine/child-context.js';
 import { validatePlanDoneWhen } from '../src/engine/plan-done-when.js';
 
 describe('prd_audit remediation append', () => {
@@ -66,8 +67,9 @@ describe('prd_audit remediation append', () => {
       git: async () => { throw new Error('no host plans to read'); },
     });
 
-    expect(allocation[1]?.remTaskIds).toEqual(['rem-prd-audit-R7']);
-    expect(allocation[1]?.blockBodies).toHaveLength(1);
+    const host = allocation[parseChildId(1)!];
+    expect(host?.remTaskIds).toEqual(['rem-prd-audit-R7']);
+    expect(host?.blockBodies).toHaveLength(1);
   });
 
   it('renders one valid, idempotent Done-when block from every criterion-bound gap shape', () => {
