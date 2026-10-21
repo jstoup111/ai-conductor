@@ -1737,3 +1737,47 @@ Each task's `**Dependencies:**` line is authoritative.
 **Done when:**
 - adr-2026-10-17-stacked-feature-publication-as-native-stack decision 3 is satisfied by this task.
 - The repair for task rem-as-built-rem-asbuilt-malformed-stack-member-indeterminate is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts: child-cursor.ts hasDurableChildState: count only child-specific conductor refs (closed/, publication, positions, leaf-moved, pushed/ and push-intent/ for child branches). Exclude pushed/ and push-intent/ receipts for the leaf feat/daemon-<slug> branch so an N=1 feature that pushed its leaf still resolves no-child. Keep the recreated-worktree case (surviving child refs, no child dirs or envelope) detected. Add regression tests in test/engine for both cases.
+**Gate:** prd-audit
+**Rationale:** Verified (98%): child-cursor.ts:146-151 returns true for any ref under refs/conductor/<slug>/, and push-lease.ts:49-51 writes refs/conductor/<slug>/pushed/<branch> on every leaf push. So an ordinary N=1 feature looks stacked after its first push. Approved ADR D1, as amended, still governs: durable detection should key on child-specific refs, not on the leaf's own push receipts. This is conforming implementation drift, so it stays BUILD work on the owning task.
+**Criterion:** S1.1
+**Parent task:** rem-as-built-rem-asbuilt-d1-durable-ref-detection
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1-2-not-applicable-after-leaf-push: stack-publication.ts observeStackDimension test: on an N=1 fixture holding refs/conductor/<slug>/pushed/feat/daemon-<slug>, assert the stack dimension is not-applicable and observeStackReadiness does not report pr.ready false because a verified record is missing.
+**Gate:** prd-audit
+**Rationale:** Same root cause as S1.1: the leaf's pushed receipt makes resolveActiveChild return envelope-missing, so observeStackDimension reports indeterminate instead of not-applicable. The S1.1 repair fixes this. Coverage must also prove not-applicable on a fixture that holds a leaf pushed-tip ref.
+**Criterion:** S1.2
+**Parent task:** rem-as-built-rem-asbuilt-d1-durable-ref-detection
+**Done when:**
+- [test] S1.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1-2-not-applicable-after-leaf-push is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1-4-n1-golden-leaf-push: test/fixtures/n1-golden/finish + test/engine/n1-golden-renderings.test.ts: extend the N=1 FINISH golden so the fixture pushes the leaf through executeRemoteGit (recording the pushed-tip receipt). Regenerate git-argv.golden, events.golden and git-probe-argv.golden. Assert argv parity: no publication-ref rev-parse, and conductor-ref probes partitioned only as the D1 amendment allows.
+**Gate:** prd-audit
+**Rationale:** The owning task required an N=1 FINISH golden that actually pushes the leaf and asserts git argv parity. The current goldens (git-argv.golden has no push; refs/conductor/n1-golden/ is empty) do not do that. This is a clear test gap inside an existing task, so it is BUILD work.
+**Criterion:** S1.4
+**Parent task:** rem-prd-audit-rem-v3-n1-guard-gate
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1-4-n1-golden-leaf-push is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s1-6-resume-golden-pushed-receipt: Resume golden (resumed-events.golden) fixture: seed a leaf pushed-tip ref before resume. Assert that repairPresentation and observeStackReadiness take the flat N=1 path (no activePublicationRecord read) and that the stack dimension is not-applicable.
+**Gate:** prd-audit
+**Rationale:** The resumed N=1 path fails on the same leaf-receipt misdetection as S1.1. The resume golden misses it because its fixture has no pushed-tip ref. Fixing child detection (S1.1) plus resume coverage with a pushed receipt closes this within the owning task.
+**Criterion:** S1.6
+**Parent task:** rem-as-built-rem-asbuilt-d1-durable-ref-detection
+**Done when:**
+- [test] S1.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s1-6-resume-golden-pushed-receipt is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-d11-halt-positions-preserved: finish-publication-production.ts haltAndThrowStackTipDiverged: carry the affected member positions and PRs into StackPublicationHaltError (message plus structured field) for all six callers. Make finish-publication.ts (~2138) and conductor.ts (~11415/:890) keep those member identities in the final HALT text instead of overwriting the member-specific HALT. Add tests asserting the final HALT names the mismatched positions.
+**Gate:** as-built
+**Rationale:** Verified (95%): haltAndThrowStackTipDiverged (finish-publication-production.ts ~400-405) throws StackPublicationHaltError with detail only. finish-publication.ts forwards that text, and conductor.ts:890 overwrites the member-specific HALT. ADR D11 already requires affected identities in the final HALT, so this is implementation drift with no new architectural decision.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 11
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 11 is satisfied by this task.
+- The repair for task rem-as-built-rem-d11-halt-positions-preserved is committed and its targeted tests pass.
