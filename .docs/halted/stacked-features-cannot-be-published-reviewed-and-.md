@@ -1,21 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-20T15:06:06.599Z
+Status: halted
 Slug: stacked-features-cannot-be-published-reviewed-and-
-Class: protected-artifact
-Halting step: build
-Phase: BUILD
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-stacked-features-cannot-be-published-reviewed-and-
-Head SHA: 4051e5636a0b7078f9bc3fc528e45003c1714016
-Halted at: 2026-10-20T15:04:14.221Z
+Head SHA: 2b71e607ea1e3b2e17c378d4dca83608564564d5
+Halted at: 2026-10-21T13:48:17.742Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Protected artifact changed: .docs/decisions/adr-2026-10-17-stacked-feature-publication-as-native-stack.md
-Attribution: feature-authored (committed on this branch since merge-base 99df4e9105a4001ab0f03ec1912ee0ff8037ca98)
+build_review adjudication halted: uncovered build-review coverage failure
+scope-incomplete testQuality src/conductor/test/engine/finish-publication-ready-stack.test.ts:76-76 (unsupported test declaration wrapper): Region is an unsupported declaration wrapper (23 bytes) with no resolvable test body to associate with the obligations.
+route: halt
+bf22f933-ff65-423d-b4c5-b45f3383c6e5 [reject/resolved] sources: testQuality:sha256:44976b4134c1c1c15ab5482e71f17327a49d0ae86ed4264687af6601c4fd4889; effect: none
 ```
