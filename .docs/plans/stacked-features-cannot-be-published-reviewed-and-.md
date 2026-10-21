@@ -1711,3 +1711,21 @@ Each task's `**Dependencies:**` line is authoritative.
 **Done when:**
 - [test] S11.5 is satisfied by this task.
 - The repair for task rem-prd-audit-rem-s11-5-sweep-stale-torndown is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s6-1-child-ensure-ship-ready: finish-publication-production.ts readyStackChildren: after checkChildBodyPostconditions, replace the single executeGithubOperation('pull-request.ready') + one re-read with ensureShipReady(gh, root, childUrl, log, sleep, memberOperations). Treat 'flipped-ready'/'no-op' as success. Map 'partial' to a retryable publication outcome (no terminal halt; the snapshot stays not-ready, so ready_pr re-runs). Map 'refused' to the existing precondition halt. Delete the 'child ready flip was not observed' throw. Tests: a child that is still draft after the first flip is retried and becomes ready; a persistently draft child returns retryable, not human_required; no raw gh ready fallback when operations are supplied; S6.4-S6.6 tests still pass
+**Gate:** prd-audit
+**Rationale:** Verified (97%) in the current tree. finish-publication-production.ts:459-526 readyStackChildren still flips each draft child with one executeGithubOperation('pull-request.ready') and one re-read. At :523 it throws StackPublicationHaltError 'child ready flip was not observed', and at :519 a non-executed flip throws a precondition halt. halt-pr-rehabilitation.ts ensureShipReady (read, flip, verify, 3 attempts with backoff, non-fatal 'partial'/'refused') has no child caller. Story 6 happy path requires each child flip to run only its postconditions and ensureShipReady. Owner task rem-prd-audit-R9 is marked completed, but its ensureShipReady clause was not delivered. ADR decision 7 is unchanged, so this is conforming implementation drift and belongs in BUILD. Preserved coverage: keep the S6.4-S6.6 tests passing (skip non-draft children, pre-flip stack re-read halts, postcondition halt before any write). Only the flip/verify mechanism changes.
+**Criterion:** S6.1
+**Parent task:** rem-prd-audit-R9
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s6-1-child-ensure-ship-ready is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-s10-6-diverged-positions-halt: stack-publication.ts: make observeMembers/observeVerifiedStack return the mismatched members (MERGED/CLOSED, head or base mismatch, membership change) and call onDiverged with only those members. finish-publication.ts: carry the positions-naming detail in the stack_tip_diverged human_required disposition at :1788 and at every other stack_tip_diverged return, so routeFinishPublicationDisposition renders it. conductor.ts: ensure the final HALT written by haltSerialExecution for class stack-tip-diverged names those positions, not generic text. Tests: a server-side rebase of #c3 and #500 yields a HALT naming 'positions: 3, 5' (not 1) after the conductor halt path, with stack_tip_diverged emitted once with PRs c3 and 500
+**Gate:** prd-audit
+**Rationale:** Verified (95%) in the current tree. stack-publication.ts:510 and :515 call onDiverged(stored.record.members, ...) with every member, not with the mismatched ones. observeMembers/observeVerifiedStack return a bare 'diverged' with no member identity. finish-publication.ts:1788 returns {kind:'human_required', reason:'stack_tip_diverged'} without detail. routeFinishPublicationDisposition (:864-868) renders the generic renderHumanRequiredHaltReason text, and conductor.ts haltSerialExecution (:890) then rewrites the HALT marker with it, replacing the positions-naming HALT. Story 10 negative path requires the halt to name positions 3 and 5 (only the diverged members) and to emit stack_tip_diverged. Owner task rem-prd-audit-rem-v3-divergence-mapping is marked completed, but the observation-path naming and the final HALT text were not delivered. ADR decision 11 is unchanged, so this is BUILD work. Preserved coverage: keep the stack-tip-diverged halt-class, re-kick skip and S10.9/S10.10 refusal tests.
+**Criterion:** S10.6
+**Parent task:** rem-prd-audit-rem-v3-divergence-mapping
+**Done when:**
+- [test] S10.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-s10-6-diverged-positions-halt is committed and its targeted tests pass.
