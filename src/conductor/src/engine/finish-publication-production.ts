@@ -402,11 +402,7 @@ async function haltAndThrowStackTipDiverged(input: {
   events?: { emit(event: ConductorEvent): Promise<void> };
 }, members: readonly { readonly pr: number; readonly position?: number }[], detail: string): Promise<never> {
   await haltStackTipDiverged(input.root, members, input.events, detail);
-  const positions = members.flatMap((member) => member.position === undefined ? [] : [member.position]);
-  throw new StackPublicationHaltError(
-    'stack_tip_diverged',
-    positions.length === 0 ? detail : `${detail} at positions: ${positions.join(', ')}`,
-  );
+  throw new StackPublicationHaltError('stack_tip_diverged', detail);
 }
 
 function mismatchedNativeMembers(

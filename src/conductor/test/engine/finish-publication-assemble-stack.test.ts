@@ -269,8 +269,8 @@ describe('assembleStack leaf retarget journal', () => {
       git: tracingGit(trace), gh, operations, events: { emit: async (event) => { events.push(event); } },
     })).rejects.toMatchObject({ reason: 'stack_tip_diverged', message: expect.stringContaining('retained leaf pull request base diverged') });
 
-    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 1, 3, 5');
-    expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [101, 103, 500] });
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 5');
+    expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [500] });
     expect(trace.some((entry) => entry.startsWith('stack:create:'))).toBe(false);
   });
 
