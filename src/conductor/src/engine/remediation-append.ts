@@ -23,6 +23,8 @@
 //                                     completed and evidenced) is NEVER
 //                                     mutated; the new content gets an ordinal
 //                                     suffix (`…-2`, `…-3`, …) instead.
+//   Identity is judged against the plan as it stood BEFORE the round: several
+//   dispositions restating one id within a round resolve to one task.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
@@ -351,6 +353,7 @@ export async function allocateFrozenBlocks({
     if (host === undefined) throw new Error(`remediation-append: invalid frozen allocation host ${rawHost}`);
     const remTaskIds: string[] = [];
     const blockBodies: string[] = [];
+    const allocatedThisRound = new Set<string>();
     for (const { gap, gateSource } of items) {
       const source = sanitizeSegment(gateSource, 'gate source');
       const gapTasks = gap.tasks.length > 0 ? gap.tasks : [{ id: gap.id, title: gap.rationale }];
@@ -358,7 +361,10 @@ export async function allocateFrozenBlocks({
       for (const [taskIndex, task] of gapTasks.entries()) {
         const base = refusalIds?.[taskIndex]
           ?? sanitizeSegment(task.id !== '' ? task.id : gap.id, 'gap task id');
-        const id = nextFrozenId(`rem-${source}-${base}`, used);
+        const canonical = `rem-${source}-${base}`;
+        if (allocatedThisRound.has(canonical)) continue;
+        allocatedThisRound.add(canonical);
+        const id = nextFrozenId(canonical, used);
         const title = collapseToOneLine(task.title) ?? collapseToOneLine(gap.rationale) ?? '';
         remTaskIds.push(id);
         blockBodies.push(appendRouteLines(renderTaskBlock(
@@ -391,6 +397,8 @@ export function appendRemediationTasks(
 ): AppendRemediationResult {
   const defaultSource = sanitizeSegment(gateSource, 'gate source');
   const existing = existingTaskTitles(planText);
+  // canonical → id it resolved to earlier in THIS round.
+  const resolvedThisRound = new Map<string, string>();
 
   const ids: string[] = [];
   const blocks: string[] = [];
@@ -413,17 +421,28 @@ export function appendRemediationTasks(
       const canonical = `rem-${source}-${base}`;
       const title = collapseToOneLine(t.title) ?? collapseToOneLine(gap.rationale) ?? '';
 
+      const resolved = resolvedThisRound.get(canonical);
+      if (resolved !== undefined) {
+        // A restatement within one round is the same task, not drift.
+        ids.push(resolved);
+        continue;
+      }
+      const resolve = (id: string): void => {
+        resolvedThisRound.set(canonical, id);
+        ids.push(id);
+      };
+
       const existingTitle = existing.get(canonical);
       if (refusalIds !== undefined && existingTitle !== undefined) {
         // A refusal task is keyed by the durable refusal decision, not its
         // presentation wording. Later rounds may rename the finding or the
         // planner's title, but must still reopen the one canonical task.
-        ids.push(canonical);
+        resolve(canonical);
         continue;
       }
       if (existingTitle !== undefined && existingTitle === title) {
         // Idempotent re-round: exactly one task per logical gap.
-        ids.push(canonical);
+        resolve(canonical);
         continue;
       }
 
@@ -439,7 +458,7 @@ export function appendRemediationTasks(
         }
         id = `${canonical}-${ordinal}`;
         if (existing.get(id) === title) {
-          ids.push(id);
+          resolve(id);
           continue;
         }
       }
@@ -454,7 +473,7 @@ export function appendRemediationTasks(
         gap.governingClause,
       ));
       existing.set(id, title);
-      ids.push(id);
+      resolve(id);
     }
   }
 

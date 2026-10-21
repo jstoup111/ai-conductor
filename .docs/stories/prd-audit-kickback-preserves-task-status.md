@@ -411,6 +411,10 @@ is seeded, evidenced, and completed like any other task.
   `pending` in `task-status.json` and a trailer-stamped commit completes it end-to-end.
 - Given a second `/remediate` round with the same still-open gap producing the same deterministic
   id, when the upsert runs, then exactly one plan task exists (idempotent — no duplicate).
+- Given one round whose dispositions restate the same task id with varied titles, when the round
+  is appended (legacy or routed frozen allocation), then exactly one plan block exists for that id,
+  every restatement resolves to it, and the appended block count equals the round's plan-growth
+  `added` count — content drift is judged only against the plan as it stood before the round.
 
 #### Negative Paths
 - Given a remediation task already `completed` with evidence, when a later round re-derives the

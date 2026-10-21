@@ -2,11 +2,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  allocateFrozenBlocks,
   appendRemediationTasks,
   PRD_AUDIT_REMEDIATION_GATE_SOURCE,
   type CriterionBoundRemediationGap,
 } from '../src/engine/remediation-append.js';
 import type { RemediationGap } from '../src/engine/artifacts.js';
+import { parseChildId } from '../src/engine/child-context.js';
 import { validatePlanDoneWhen } from '../src/engine/plan-done-when.js';
 
 describe('prd_audit remediation append', () => {
@@ -23,6 +25,51 @@ describe('prd_audit remediation append', () => {
 
     expect(drifted.ids).toEqual(['rem-prd-audit-T1-2']);
     expect(drifted.planText).toContain('### Task rem-prd-audit-T1-2: Renamed repair');
+  });
+
+  it('appends one block per task id restated by several dispositions in one round', () => {
+    const plan = '### Task 7: Existing work\n';
+    const restated = appendRemediationTasks(plan, [
+      { id: 'D1', disposition: 'build', category: null, rationale: 'First wording.',
+        tasks: [{ id: 'R1', title: 'Build per-operation mutation contexts' }, { id: 'R3', title: 'Re-render stack' }] },
+      { id: 'D2', disposition: 'build', category: null, rationale: 'Second wording.',
+        tasks: [{ id: 'R1', title: 'Per-operation contexts matching each stacked write' }] },
+      { id: 'D3', disposition: 'build', category: null, rationale: 'Third wording.',
+        tasks: [{ id: 'R3', title: 'Re-render stack on every member' }, { id: 'R1', title: 'Mutation contexts, restated' }] },
+    ], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
+
+    expect(restated.ids).toEqual(['rem-prd-audit-R1', 'rem-prd-audit-R3']);
+    expect(restated.planText.match(/^### Task rem-/gm)).toHaveLength(2);
+    expect(restated.planText).not.toContain('rem-prd-audit-R1-2');
+
+    // A later round's drift still never mutates the earlier block.
+    const later = appendRemediationTasks(restated.planText, [
+      { id: 'D4', disposition: 'build', category: null, rationale: 'Residual gap.',
+        tasks: [{ id: 'R1', title: 'Residual mutation-context gap' }] },
+    ], PRD_AUDIT_REMEDIATION_GATE_SOURCE);
+    expect(later.ids).toEqual(['rem-prd-audit-R1-2']);
+    expect(later.planText.startsWith(restated.planText)).toBe(true);
+  });
+
+  it('allocates one frozen block per task id restated within one routed host in one round', async () => {
+    const allocation = await allocateFrozenBlocks({
+      itemsByHost: {
+        1: [
+          { gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE, gap: { id: 'D1', disposition: 'build', category: null,
+            rationale: 'First wording.', tasks: [{ id: 'R7', title: 'Fix the router' }] } },
+          { gateSource: PRD_AUDIT_REMEDIATION_GATE_SOURCE, gap: { id: 'D2', disposition: 'build', category: null,
+            rationale: 'Second wording.', tasks: [{ id: 'R7', title: 'Fix the router, restated' }] } },
+        ],
+      },
+      leafPlan: '### Task 1: Existing work\n',
+      hostPlans: [],
+      roundId: 'round-1',
+      git: async () => { throw new Error('no host plans to read'); },
+    });
+
+    const host = allocation[parseChildId(1)!];
+    expect(host?.remTaskIds).toEqual(['rem-prd-audit-R7']);
+    expect(host?.blockBodies).toHaveLength(1);
   });
 
   it('renders one valid, idempotent Done-when block from every criterion-bound gap shape', () => {
