@@ -143,9 +143,12 @@ export async function hasDurableChildState(
     const identity = parseFeatureRef(ref.trim());
     return identity.kind === 'child' && identity.slug === slug;
   })) return true;
-  const closures = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]);
-  if (!closures || closures.exitCode !== 0) return 'git-error';
-  if (closures.stdout.trim() !== '') return true;
+  // The feature-owned conductor namespace is durable across worktree
+  // recreation.  Do not restrict this probe to closure receipts: a published
+  // positions/publication receipt is itself enough to keep the stack guard on.
+  const conductorRefs = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/`]);
+  if (!conductorRefs || conductorRefs.exitCode !== 0) return 'git-error';
+  if (conductorRefs.stdout.trim() !== '') return true;
   return false;
 }
 

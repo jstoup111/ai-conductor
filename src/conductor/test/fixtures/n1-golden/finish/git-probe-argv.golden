@@ -8,7 +8,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -18,7 +18,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -28,7 +28,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -38,7 +38,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -48,7 +48,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -58,7 +58,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -68,7 +68,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -78,7 +78,7 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ],
   [
     "for-each-ref",
@@ -88,6 +88,6 @@
   [
     "for-each-ref",
     "--format=%(refname)",
-    "refs/conductor/n1-golden/closed/"
+    "refs/conductor/n1-golden/"
   ]
 ]

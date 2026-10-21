@@ -437,7 +437,7 @@ describe('N=1 golden renderings', () => {
     // probes are recorded separately; remote and mutating argv stay pinned.
     const normalGit = partitionConductorRefProbes(normal.gitArgv, 'n1-golden');
     await expectFinishGolden('git-argv', JSON.stringify(normalGit.parity, null, 2));
-    await expectFinishGolden('git-probe-argv', JSON.stringify(normalGit.probes, null, 2));
+    await expectFinishGolden('git-probe-argv', `${JSON.stringify(normalGit.probes, null, 2)}\n`);
     await expectFinishGolden('events', normal.events.map((event) => JSON.stringify(event)).join('\n'));
     await expectFinishGolden('shipped-record', normalizeRecord(normal.record));
     expect(normal.record).toMatch(/^## Cost\n[\s\S]*^## Time\n(?:state|active_ms):/m);
@@ -578,7 +578,7 @@ describe('N=1 golden renderings', () => {
     const localGit = partitionConductorRefProbes(localArgv, 'n1-push');
     expect(localGit.probes).toEqual(expect.arrayContaining([
       ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
-      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-push/closed/'],
+      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-push/'],
     ]));
     expect(JSON.stringify(localGit.parity)).not.toContain('refs/conductor/n1-push/publication');
   });

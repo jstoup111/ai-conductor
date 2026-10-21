@@ -482,10 +482,14 @@ async function observeVerifiedStack(
     const mismatched: PublicationMember[] = [];
     for (const [index, expected] of record.members.entries()) {
       const value = rawMembers[index];
-      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      // Missing entries are a confirmed membership change.  An entry at the
+      // expected index which cannot be decoded is only indeterminate evidence
+      // and must be retried rather than converted into a terminal divergence.
+      if (value === undefined) {
         mismatched.push(expected);
         continue;
       }
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return { kind: 'indeterminate' };
       const member = value as { number?: unknown; head?: { sha?: unknown }; headRefOid?: unknown; head_sha?: unknown };
       const head = typeof member.head?.sha === 'string' ? member.head.sha
         : typeof member.headRefOid === 'string' ? member.headRefOid

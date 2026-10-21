@@ -1,4 +1,4 @@
-// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify, task:rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base, task:rem-as-built-rem-as-built-rem-v4-first-child-base, task:rem-as-built-rem-asbuilt-d5-intended-retarget-recovery, task:rem-as-built-rem-asbuilt-d5-actual-prestack-base
+// Covers: task:4, task:rem-as-built-rem-v3-preassembly-verify, task:rem-prd-audit-rem-prd-audit-rem-v4-phase-aware-leaf-base, task:rem-as-built-rem-as-built-rem-v4-first-child-base, task:rem-as-built-rem-asbuilt-d5-intended-retarget-recovery, task:rem-as-built-rem-asbuilt-d5-actual-prestack-base, task:rem-prd-audit-rem-s10-6-diverged-positions-halt, task:rem-as-built-rem-asbuilt-malformed-stack-member-indeterminate
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
@@ -42,6 +42,7 @@ function fixture(options: {
   readonly memberBases?: Readonly<Record<number, string>>;
   readonly memberHeads?: Readonly<Record<number, string>>;
   readonly stackRead?: 'ok' | 'timeout';
+  readonly rawStackMembers?: readonly unknown[];
   /** Resolved pre-stack base supplied to the observer; null omits it. */
   readonly baseBranch?: string | null;
 } = {}): Fixture {
@@ -96,7 +97,7 @@ function fixture(options: {
     }
     if (args[0] === 'api') {
       if (options.stackRead === 'timeout') throw new Error('timed out');
-      return { stdout: JSON.stringify([{ number: record?.stack?.number, pull_requests: members.map((member) => ({
+      return { stdout: JSON.stringify([{ number: record?.stack?.number, pull_requests: options.rawStackMembers ?? members.map((member) => ({
         number: member.pr, head: { sha: tips[member.branch] },
       })) }]) };
     }
@@ -328,6 +329,47 @@ describe('observeStackDimension', () => {
 
     await expect(observeStackDimension('/worktree', 'demo', durableCursor, subject.dependencies))
       .resolves.toBe('indeterminate');
+  });
+
+  it.each([null, 17, ['not', 'a', 'member']])(
+    'retries a same-length malformed native stack entry without halting (%j)',
+    async (malformed) => {
+      const reported: PublicationMember[] = [];
+      const subject = fixture({
+        record: record({ stack: { number: 42, verified: true } }),
+        rawStackMembers: [
+          { number: 101, head: { sha: tips['feat/c1/demo'] } },
+          malformed,
+          { number: 500, head: { sha: tips['feat/daemon-demo'] } },
+        ],
+      });
+
+      await expect(observeStackDimension('/worktree', 'demo', durableCursor, {
+        ...subject.dependencies,
+        onDiverged: async (members) => { reported.push(...members); },
+      })).resolves.toBe('indeterminate');
+      expect(reported).toEqual([]);
+    },
+  );
+
+  it('names only the removed or substituted verified-stack member', async () => {
+    const substituted = fixture({
+      record: record({ stack: { number: 42, verified: true } }),
+      rawStackMembers: [
+        { number: 101, head: { sha: tips['feat/c1/demo'] } },
+        { number: 999, head: { sha: tips['feat/c3/demo'] } },
+        { number: 500, head: { sha: tips['feat/daemon-demo'] } },
+      ],
+    });
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, substituted.dependencies))
+      .resolves.toEqual({ dimension: 'diverged', members: [members[1]] });
+
+    const removed = fixture({
+      record: record({ stack: { number: 42, verified: true } }),
+      rawStackMembers: [{ number: 101, head: { sha: tips['feat/c1/demo'] } }],
+    });
+    await expect(observeStackDimension('/worktree', 'demo', durableCursor, removed.dependencies))
+      .resolves.toEqual({ dimension: 'diverged', members: [members[1], members[2]] });
   });
 
   it('ignores a torn-down record so a reused slug starts with missing members', async () => {

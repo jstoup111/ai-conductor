@@ -79,6 +79,16 @@ afterEach(async () => {
 });
 
 describe('resolveActiveChild', () => {
+  it('retains stacked protection from conductor refs after disposable child metadata is gone', async () => {
+    await rm(join(repository, '.pipeline', 'children'), { recursive: true, force: true });
+    await rm(join(repository, '.pipeline', 'coverage-binding-envelope.json'), { force: true });
+    const tip = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['update-ref', 'refs/conductor/demo/publication', tip]);
+
+    await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+  });
+
   it('selects the leaf after every non-leaf closure, independent of the checked-out branch', async () => {
     await seal(repository, [1, 2]);
     const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
