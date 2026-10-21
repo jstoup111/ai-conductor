@@ -1,3 +1,4 @@
+// Covers: task:rem-prd-audit-rem-s10-6-diverged-positions-halt
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,6 +25,9 @@ import * as gateVerdicts from '../../src/engine/gate-verdicts.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { writeRegionCapture } from '../../src/engine/pr-body-region-store.js';
 import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { haltStackTipDiverged, observeStackDimension } from '../../src/engine/stack-publication.js';
+import type { PublicationRecord } from '../../src/engine/stack-publication-record.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -216,6 +220,102 @@ describe('Conductor FINISH publication routing', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  // Covers: task:rem-as-built-rem-d11-halt-positions-preserved
+  it('preserves only server-rebased #c3 and #500 positions through the observer and final conductor halt', async () => {
+    const events = new ConductorEventEmitter();
+    const divergences: number[][] = [];
+    events.on('stack_tip_diverged', (event) => {
+      if (event.type === 'stack_tip_diverged') divergences.push([...event.prs]);
+    });
+    const c1 = parseChildId(1)!;
+    const c3 = parseChildId(3)!;
+    const c5 = parseChildId(5)!;
+    const members = [
+      { position: c1, branch: 'feat/c1/demo', pr: 101 },
+      { position: c3, branch: 'feat/c3/demo', pr: 103 },
+      { position: c5, branch: 'feat/daemon-demo', pr: 500 },
+    ] as const;
+    const record: PublicationRecord = { version: 1, members, stack: { number: 42, verified: true } };
+    const tips: Record<string, string> = {
+      'feat/c1/demo': '1'.repeat(40), 'feat/c3/demo': '3'.repeat(40), 'feat/daemon-demo': '5'.repeat(40),
+    };
+    const blob = 'a'.repeat(40);
+    const git = async (args: string[]) => {
+      if (args[0] === 'cat-file' && args[2] === 'refs/conductor/demo/positions') {
+        return { exitCode: 0, stdout: JSON.stringify([c1, c3, c5]), stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args.at(-1) === 'refs/conductor/demo/publication') {
+        return { exitCode: 0, stdout: `${blob}\n`, stderr: '' };
+      }
+      if (args[0] === 'cat-file' && args[2] === blob) return { exitCode: 0, stdout: JSON.stringify(record), stderr: '' };
+      if (args[0] === 'rev-parse' && args.at(-1)?.startsWith('refs/conductor/demo/pushed/')) {
+        const branch = args.at(-1)!.replace('refs/conductor/demo/pushed/', '');
+        return { exitCode: 0, stdout: `${tips[branch]}\n`, stderr: '' };
+      }
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+    const gh = async (args: string[]) => {
+      const number = Number(args[2]);
+      const member = members.find((candidate) => candidate.pr === number)!;
+      const index = members.indexOf(member);
+      return { stdout: JSON.stringify({
+        state: 'OPEN', isDraft: true,
+        baseRefName: index === 0 ? 'main' : index === 1 ? 'feat/c1/demo' : 'main',
+        // #c3 and #500 have been server-rebased; #c1 remains sound.
+        headRefOid: number === 101 ? tips[member.branch] : 'f'.repeat(40),
+      }) };
+    };
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const observed = await observeStackDimension(dir, 'demo', {
+        kind: 'active', child: c5, position: c5, isLeaf: true, branch: 'feat/daemon-demo',
+      }, {
+        git,
+        gh,
+        repository: 'acme/demo',
+        baseBranch: 'main',
+        onDiverged: (diverged, detail) => haltStackTipDiverged(dir, diverged, events, detail),
+      });
+      const snapshot = {
+        mode: 'daemon',
+        intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+        implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid', branchPushed: 'valid',
+        shippedRecord: 'valid', outcomeRecord: 'missing',
+        stack: typeof observed === 'string' ? observed : observed.dimension,
+        ...(typeof observed === 'string' ? {} : {
+          stackDivergenceDetail: `published stack tip diverged at positions: ${observed.members.map((member) => member.position).join(', ')}`,
+        }),
+        pr: { identity: 'one', url: 'https://github.com/acme/demo/pull/500', prose: 'accepted', ready: false },
+      } as const satisfies PublicationSnapshot;
+      const result = await advanceFinishPublication({
+        observe: async () => snapshot,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      });
+      return result.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: result.transition }
+        : result;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('positions: 3, 5');
+    expect(halt).not.toContain('positions: 1');
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('stack-tip-diverged');
+    expect(divergences).toEqual([[103, 500]]);
   });
 
   it('restores an authoring-omitted captured region before the prose judge observes the revision', async () => {
@@ -1410,7 +1510,9 @@ describe('Conductor FINISH publication routing', () => {
       baseBranch: 'main',
       git: async (args) => args[0] === 'rev-parse'
         ? { stdout: 'refs/remotes/origin/feat/finish-publication\n' }
-        : { stdout: '' },
+        : args[0] === 'cat-file'
+          ? { stdout: '', exitCode: 1 }
+          : { stdout: '' },
       gh: async (args) => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
         if (args[0] === 'pr' && args[1] === 'edit') {
@@ -1518,6 +1620,8 @@ describe('Conductor FINISH publication routing', () => {
       baseBranch: 'main',
       git: async (args) => args[0] === 'rev-parse'
         ? { stdout: 'refs/remotes/origin/feat/finish-publication\n' }
+        : args[0] === 'cat-file'
+          ? { stdout: '', exitCode: 1 }
         : { stdout: '' },
       gh: async (args) => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };

@@ -1,4 +1,4 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:4, task:18, task:19
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -118,7 +118,7 @@ describe('shipment-evidence CLI', () => {
         html_url: pr,
         body: 'Plan: `.docs/plans/feature.md`',
         base: { sha: base },
-        head: { sha: head },
+        head: { ref: 'feat/feature', sha: head },
       },
     }));
     const runGh = vi.fn(async () => {
@@ -162,6 +162,119 @@ describe('shipment-evidence CLI', () => {
     }
   });
 
+  it('skips shipped-record evidence for a child event even when its body declares a plan', async () => {
+    const pr = 'https://github.com/org/repo/pull/1';
+    const base = 'b'.repeat(40);
+    const head = 'a'.repeat(40);
+    const eventDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-child-event-'));
+    const eventPath = join(eventDir, 'event.json');
+    const reports: string[] = [];
+    const evaluateEvidence = vi.fn();
+
+    try {
+      await writeFile(eventPath, JSON.stringify({
+        pull_request: {
+          html_url: pr,
+          body: 'Plan: `.docs/plans/feature.md`',
+          base: { sha: base },
+          head: { ref: 'feat/c3/feature', sha: head },
+        },
+      }));
+      const code = await dispatchShipmentEvidence(
+        { kind: 'check', pr, eventPath },
+        '/repo',
+        {
+          runGh: vi.fn(async () => {
+            throw new Error('gh must not run for checked-out event evidence');
+          }),
+          runGit: vi.fn(async (args: string[]) => {
+            if (args[0] === 'diff') return { stdout: 'src/conductor/src/engine/feature.ts\n' };
+            if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: head };
+            throw new Error(`unexpected git args: ${args.join(' ')}`);
+          }),
+          listPlanStems: async () => ['feature'],
+          evaluateEvidence,
+          report: (message) => reports.push(message),
+        },
+      );
+
+      expect({ code, evaluateCalls: evaluateEvidence.mock.calls.length, reports }).toEqual({
+        code: 0,
+        evaluateCalls: 0,
+        reports: ['shipped-record: not applicable (stack-child)'],
+      });
+    } finally {
+      await rm(eventDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not repair a merged child whose metadata declares a plan', async () => {
+    const pr = 'https://github.com/org/repo/pull/1';
+    const reports: string[] = [];
+    const runGh = vi.fn(async (_args: string[]) => ({
+      stdout: JSON.stringify({
+        url: pr,
+        body: 'Plan: `.docs/plans/feature.md`',
+        files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+        headRefOid: 'a'.repeat(40),
+        headRefName: 'feat/c3/feature',
+      }),
+    }));
+    const runGit = vi.fn(async () => {
+      throw new Error('a stack child must not reach record-repair git operations');
+    });
+
+    const code = await dispatchShipmentEvidence(
+      { kind: 'reconcile', pr, shipped: '2026-10-19' },
+      '/repo',
+      { runGh, runGit, listPlanStems: async () => ['feature'], report: (message) => reports.push(message) },
+    );
+
+    expect({
+      code,
+      argv: runGh.mock.calls[0]?.[0],
+      gitCalls: runGit.mock.calls,
+      reports,
+    }).toEqual({
+      code: 0,
+      argv: ['pr', 'view', pr, '--json', 'url,body,files,headRefOid,headRefName'],
+      gitCalls: [],
+      reports: ['shipped-record: not applicable (stack-child)'],
+    });
+  });
+
+  it('reports a merged PR with no readable head ref as unclassified without repair', async () => {
+    const pr = 'https://github.com/org/repo/pull/1';
+    const reports: string[] = [];
+    const runGit = vi.fn(async () => {
+      throw new Error('an unclassified PR must not reach record-repair git operations');
+    });
+
+    const code = await dispatchShipmentEvidence(
+      { kind: 'reconcile', pr, shipped: '2026-10-19' },
+      '/repo',
+      {
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({
+            url: pr,
+            body: 'Plan: `.docs/plans/feature.md`',
+            files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+            headRefOid: 'a'.repeat(40),
+          }),
+        })),
+        runGit,
+        listPlanStems: async () => ['feature'],
+        report: (message) => reports.push(message),
+      },
+    );
+
+    expect({ code, gitCalls: runGit.mock.calls, reports }).toEqual({
+      code: 0,
+      gitCalls: [],
+      reports: ['shipped-record: unclassified (head ref unavailable)'],
+    });
+  });
+
   it('does not bind a quoted corrected body after the same immutable event identity previously bound a plan', async () => {
     const pr = 'https://github.com/org/repo/pull/1';
     const base = 'b'.repeat(40);
@@ -195,7 +308,7 @@ describe('shipment-evidence CLI', () => {
           html_url: pr,
           body: 'Plan: `.docs/plans/feature.md`',
           base: { sha: base },
-          head: { sha: head },
+          head: { ref: 'feat/feature', sha: head },
         },
       }));
       const originalCode = await dispatchShipmentEvidence(
@@ -209,7 +322,7 @@ describe('shipment-evidence CLI', () => {
           html_url: pr,
           body: '> Plan: `.docs/plans/feature.md`',
           base: { sha: base },
-          head: { sha: head },
+          head: { ref: 'feat/feature', sha: head },
         },
       }));
       const editedCode = await dispatchShipmentEvidence(
@@ -246,9 +359,9 @@ describe('shipment-evidence CLI', () => {
   });
 
   it.each([
-    ['URL', { body: 'Plan: `.docs/plans/feature.md`', base: { sha: 'b'.repeat(40) }, head: { sha: 'a'.repeat(40) } }],
-    ['base SHA', { html_url: 'https://github.com/org/repo/pull/1', body: 'Plan: `.docs/plans/feature.md`', head: { sha: 'a'.repeat(40) } }],
-    ['head SHA', { html_url: 'https://github.com/org/repo/pull/1', body: 'Plan: `.docs/plans/feature.md`', base: { sha: 'b'.repeat(40) } }],
+    ['URL', { body: 'Plan: `.docs/plans/feature.md`', base: { sha: 'b'.repeat(40) }, head: { ref: 'feature/x', sha: 'a'.repeat(40) } }],
+    ['base SHA', { html_url: 'https://github.com/org/repo/pull/1', body: 'Plan: `.docs/plans/feature.md`', head: { ref: 'feature/x', sha: 'a'.repeat(40) } }],
+    ['head SHA', { html_url: 'https://github.com/org/repo/pull/1', body: 'Plan: `.docs/plans/feature.md`', base: { sha: 'b'.repeat(40) }, head: { ref: 'feature/x' } }],
   ])('fails closed when the pull-request event lacks its %s', async (_field, pullRequest) => {
     const eventDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-incomplete-event-'));
     const eventPath = join(eventDir, 'event.json');
@@ -268,6 +381,40 @@ describe('shipment-evidence CLI', () => {
       expect({ code, errors, evaluateCalls: evaluateEvidence.mock.calls.length, ghCalls: runGh.mock.calls.length }).toEqual({
         code: 1,
         errors: [`shipped-record: pull-request event lacks URL or commit identity: ${eventPath}`],
+        evaluateCalls: 0,
+        ghCalls: 0,
+      });
+    } finally {
+      await rm(eventDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the pull-request event lacks its head ref', async () => {
+    const eventDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-missing-head-ref-'));
+    const eventPath = join(eventDir, 'event.json');
+    const errors: string[] = [];
+    const evaluateEvidence = vi.fn();
+    const runGh = vi.fn(async () => {
+      throw new Error('gh must not run for incomplete event evidence');
+    });
+    try {
+      await writeFile(eventPath, JSON.stringify({
+        pull_request: {
+          html_url: 'https://github.com/org/repo/pull/1',
+          body: 'Plan: `.docs/plans/feature.md`',
+          base: { sha: 'b'.repeat(40) },
+          head: { sha: 'a'.repeat(40) },
+        },
+      }));
+      const code = await dispatchShipmentEvidence(
+        { kind: 'check', pr: 'https://github.com/org/repo/pull/1', eventPath },
+        '/repo',
+        { evaluateEvidence, runGh, reportError: (message) => errors.push(message) },
+      );
+
+      expect({ code, errors, evaluateCalls: evaluateEvidence.mock.calls.length, ghCalls: runGh.mock.calls.length }).toEqual({
+        code: 1,
+        errors: [`shipped-record: pull-request event lacks head ref: ${eventPath}`],
         evaluateCalls: 0,
         ghCalls: 0,
       });

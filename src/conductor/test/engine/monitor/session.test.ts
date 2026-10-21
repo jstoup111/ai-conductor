@@ -27,6 +27,7 @@ const recoveryByDisposition = {
   mechanical: 'Follow the mechanical halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   'protected-artifact': 'Follow the protected-artifact halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   'plan-gap': 'Follow the plan-gap halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
+  'stack-tip-diverged': 'Follow the stack-tip-diverged halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   'kickback-cap': 'Follow the kickback-cap halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',
   'over-scope': 'Resolve every over-scope decision before clearing the halt.',
   legacy: 'Follow the legacy halt recovery in docs/runbooks/stalled-or-stuck-feature.md.',

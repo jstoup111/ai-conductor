@@ -57,6 +57,7 @@ const HALT_DISPOSITIONS: Readonly<Record<HaltDisposition, true>> = {
   mechanical: true,
   'protected-artifact': true,
   'plan-gap': true,
+  'stack-tip-diverged': true,
   'kickback-cap': true,
   'over-scope': true,
   legacy: true,
@@ -85,6 +86,8 @@ export function recoveryProcedure(haltClass: HaltDisposition): string {
       return 'Follow the protected-artifact halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
     case 'plan-gap':
       return 'Follow the plan-gap halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
+    case 'stack-tip-diverged':
+      return 'Follow the stack-tip-diverged halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
     case 'kickback-cap':
       return 'Follow the kickback-cap halt recovery in docs/runbooks/stalled-or-stuck-feature.md.';
     case 'over-scope':

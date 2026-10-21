@@ -34,6 +34,9 @@ export const PROTECTED_ARTIFACT_HALT_CLASS = 'protected-artifact';
 /** HALT class for an approved-plan insufficiency requiring human judgement. */
 export const PLAN_GAP_HALT_CLASS = 'plan-gap';
 
+/** A published stack's recorded remote tips no longer describe GitHub. */
+export const STACK_TIP_DIVERGED_HALT_CLASS = 'stack-tip-diverged';
+
 /**
  * Classification of a HALT: `needs-human` marks are those only an operator
  * can resolve; `mechanical` marks are those the daemon may safely re-kick.
@@ -42,7 +45,8 @@ export type HaltClass =
   | 'needs-human'
   | 'mechanical'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS
-  | typeof PLAN_GAP_HALT_CLASS;
+  | typeof PLAN_GAP_HALT_CLASS
+  | typeof STACK_TIP_DIVERGED_HALT_CLASS;
 
 /** Classification observed while reading a HALT sidecar. */
 export type HaltDisposition = HaltClass | 'kickback-cap' | 'over-scope' | 'legacy' | 'unclassified';
@@ -54,11 +58,13 @@ export function isOperatorActionHalt(
   | 'needs-human'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS
   | typeof PLAN_GAP_HALT_CLASS
+  | typeof STACK_TIP_DIVERGED_HALT_CLASS
   | 'unclassified' {
   return (
     haltClass === 'needs-human' ||
     haltClass === PROTECTED_ARTIFACT_HALT_CLASS ||
     haltClass === PLAN_GAP_HALT_CLASS ||
+    haltClass === STACK_TIP_DIVERGED_HALT_CLASS ||
     haltClass === 'unclassified'
   );
 }
@@ -294,7 +300,8 @@ export async function readHaltClass(worktreePath: string): Promise<HaltDispositi
       contents === 'mechanical' ||
       contents === 'legacy' ||
       contents === PROTECTED_ARTIFACT_HALT_CLASS ||
-      contents === PLAN_GAP_HALT_CLASS
+      contents === PLAN_GAP_HALT_CLASS ||
+      contents === STACK_TIP_DIVERGED_HALT_CLASS
     ) {
       return contents;
     }
@@ -324,7 +331,8 @@ export async function readHaltSidecarClassification(worktreePath: string): Promi
       contents === 'over-scope' ||
       contents === 'legacy' ||
       contents === PROTECTED_ARTIFACT_HALT_CLASS ||
-      contents === PLAN_GAP_HALT_CLASS
+      contents === PLAN_GAP_HALT_CLASS ||
+      contents === STACK_TIP_DIVERGED_HALT_CLASS
     ) return contents;
     return 'unclassified';
   } catch {

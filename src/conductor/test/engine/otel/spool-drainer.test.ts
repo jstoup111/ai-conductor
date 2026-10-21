@@ -49,15 +49,22 @@ async function drainUntilEmpty(drainer: SpoolDrainer, store: SpoolStore): Promis
   await draining;
 }
 
-async function waitForEmpty(store: SpoolStore): Promise<void> {
-  for (let turn = 0; turn < 1_000; turn += 1) {
-    const [traces, metrics] = await Promise.all([store.list('traces'), store.list('metrics')]);
-    if (traces.length === 0 && metrics.length === 0) {
-      return;
-    }
+async function waitFor(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
+  // Poll by wall-clock deadline rather than awaiting a fixture-owned signal
+  // forever. A loaded worker can defer either loop, but that must fail this
+  // test with its actual missing observation instead of timing out the file.
+  for (const deadline = Date.now() + 5_000; Date.now() < deadline;) {
+    if (await predicate()) return;
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
-  throw new Error('spool did not drain');
+  throw new Error(message);
+}
+
+async function waitForEmpty(store: SpoolStore): Promise<void> {
+  await waitFor(async () => {
+    const [traces, metrics] = await Promise.all([store.list('traces'), store.list('metrics')]);
+    return traces.length === 0 && metrics.length === 0;
+  }, 'spool did not drain');
 }
 
 afterEach(async () => {
@@ -525,8 +532,6 @@ describe('SpoolDrainer', () => {
     let releaseFirstTraceRetry: (() => void) | undefined;
     let signalFirstTraceRetry!: () => void;
     const firstTraceRetry = new Promise<void>((resolve) => { signalFirstTraceRetry = resolve; });
-    let signalMetricsDelivered!: () => void;
-    const metricsDelivered = new Promise<void>((resolve) => { signalMetricsDelivered = resolve; });
     const store = new SpoolStore(await temporaryDirectory(), { now: () => now });
     await store.write('traces', Buffer.from('oldest-trace'));
     now += 1;
@@ -549,7 +554,6 @@ describe('SpoolDrainer', () => {
         // The metrics loop is independent, but it must not win the shared
         // sleep seam before the trace retry has installed its test barrier.
         await firstTraceRetry;
-        signalMetricsDelivered();
         return new Response(undefined, { status: 200 });
       },
       now: () => now,
@@ -569,7 +573,10 @@ describe('SpoolDrainer', () => {
     const draining = drainer.drainUntilStopped();
 
     try {
-      await Promise.all([firstTraceRetry, metricsDelivered]);
+      await waitFor(async () => {
+        const [traces, metrics] = await Promise.all([store.list('traces'), store.list('metrics')]);
+        return traceAttempts === 1 && traces.length === 2 && metrics.length === 0;
+      }, 'initial trace retry and independent metrics delivery did not complete');
       expect(received.filter((entry) => entry.startsWith('/v1/traces:'))).toEqual(['/v1/traces:oldest-trace']);
       expect(await store.list('traces')).toHaveLength(2);
       expect(await store.list('metrics')).toEqual([]);

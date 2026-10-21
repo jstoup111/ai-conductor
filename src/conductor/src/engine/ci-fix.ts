@@ -28,6 +28,10 @@ import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import { makeProductionGh, type GhRunner, type GithubMutationExecutionContext } from './tracker-client.js';
+import { activePublicationRecord } from './stack-publication-record.js';
+
+/** Stable eligibility reason consumed by the sweep's published-stack escalation path. */
+export const PUBLISHED_STACK_CI_FIX_REASON = 'published-stack';
 
 export const CI_FIX_HINT_MAX_BYTES = 24_576;
 export const CI_FIX_METADATA_MAX_BYTES = 12_288;
@@ -330,6 +334,7 @@ export interface EligibilityResult {
  * Determine if a PR is eligible for CI fix dispatch.
  *
  * Checks all eligibility gates in this order:
+ *   0. The feature has no active published stack
  *   1. Attempts < 2 (cap gate)
  *   2. PR does not have needs-remediation label (sticky)
  *   3. PR mergeable !== 'CONFLICTING' (conflict resolution takes precedence)
@@ -359,6 +364,18 @@ export async function isEligibleForCiFix(
   now: Date,
   logger?: (msg: string) => void,
 ): Promise<EligibilityResult> {
+  // A published stack is immutable until a human resolves its red CI.  Read
+  // the durable publication record rather than child state: unpublished child
+  // branches remain eligible, while a torn-down record does not freeze a later
+  // flat feature with the same slug.
+  const publication = await activePublicationRecord(entry.repoCwd, entry.slug);
+  if (publication && publication.record.members.length > 0) {
+    const result = { eligible: false, reason: PUBLISHED_STACK_CI_FIX_REASON };
+    const log = logger ?? console.log;
+    logOutcome(log, entry.prUrl, 'eligibility', `skipped(${result.reason})`);
+    return result;
+  }
+
   const result = await evaluateEligibilityGates(entry, prState, cfg, now);
 
   if (!result.eligible) {

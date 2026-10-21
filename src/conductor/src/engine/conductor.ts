@@ -183,9 +183,12 @@ import { createRoutedConductStateStore, readConductStateOverlay } from './conduc
 import {
   isRegionStep,
   CHILD_REGION_STEPS,
+  listExistingChildren,
   pipelinePathFor,
   type ChildId,
 } from './child-context.js';
+import { activePublicationRecord } from './stack-publication-record.js';
+import { publishedStackRefusal } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
@@ -322,7 +325,7 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
-  FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
+  publicationProgressAllowance,
   nonRetryablePublicationReason,
   renderProseHumanRequiredDetail,
   routeFinishPublicationDisposition,
@@ -1307,6 +1310,20 @@ export class Conductor {
   ): Promise<void> {
     const log = this.log ?? console.warn;
     try {
+      // The normal retained draft has no halt presentation. Probe that common
+      // case before deriving remote publication authority: a branch lookup is
+      // a read path, so an N=1 lookup must not reach Git merely to discover
+      // that there is nothing to repair.
+      const initial = await makeRetainedPrPresentable({
+        gh: this.gh,
+        cwd: this.projectRoot,
+        prUrl,
+        featureDesc: state.feature_desc,
+        branch: state.worktree_branch,
+        log,
+      });
+      if (initial === 'not-halt-pr' || initial === 'gh-unavailable') return;
+
       let planPath: string | undefined;
       try {
         planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc);
@@ -4683,6 +4700,10 @@ export class Conductor {
           const declaredPositions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
             .filter((position) => Number.isSafeInteger(position) && position > 0).sort((a, b) => a - b) as ChildId[];
           if (declaredPositions.length > 1) {
+            if (await publishedStackRefusal(this.projectRoot, this.featureSlug)) {
+              await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+              return { kind: 'halt', haltClass: 'needs-human', detail: 'routing admission refused: published-stack' };
+            }
             const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
             if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
             const planText = activePlanText || await readFile(planPath, 'utf8');
@@ -6132,41 +6153,77 @@ export class Conductor {
     if (!head || head === 'HEAD' || !this.baseBranch) return undefined;
 
     try {
-      const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
-          'pr', 'list',
-          '--head', head,
-          '--base', this.baseBranch,
-          '--state', 'open',
-          '--json', 'url,state',
-          '--limit', '10',
-        ]);
-      const rows: unknown = JSON.parse(stdout);
-      if (!Array.isArray(rows)) return undefined;
-      const match = rows.find(
-        (row): row is { url: string; state: string } =>
-          typeof row === 'object' &&
-          row !== null &&
-          (row as { state?: unknown }).state === 'OPEN' &&
-          typeof (row as { url?: unknown }).url === 'string' &&
-          (row as { url: string }).url.length > 0,
-      );
-      if (!match) return undefined;
+      let prUrl = await this.findOpenRetainedShipDraftPrUrl(head, this.baseBranch);
+      if (!prUrl && (await listExistingChildren(this.projectRoot)).length > 0) {
+        const slug = this.featureSlug ?? this.featureDesc;
+        const record = slug === undefined
+          ? undefined
+          : await activePublicationRecord(this.projectRoot, slug, { git: this.publicationRecordGit() });
+        const retarget = record?.record.retarget;
+        if (retarget?.phase === 'observed') {
+          prUrl = await this.findOpenRetainedShipDraftPrUrl(head, retarget.to);
+        }
+      }
+      if (!prUrl) return undefined;
       await this.makeRetainedShipPrPresentable(
-        match.url,
+        prUrl,
         { worktree_branch: head, feature_desc: this.featureDesc },
         undefined,
       );
-      this.shipDraftPrUrl = match.url;
+      this.shipDraftPrUrl = prUrl;
       (this.log ?? console.warn)(
-        `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${match.url}`,
+        `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${prUrl}`,
       );
-      return match.url;
+      return prUrl;
     } catch (err) {
       (this.log ?? console.warn)(
         `[ship-draft-pr] branch lookup for ${head} could not resolve a retained draft PR: ${err}`,
       );
       return undefined;
     }
+  }
+
+  /** Adapts the injected production Git seam to ref-backed publication reads. */
+  private publicationRecordGit(): RebaseGitRunner {
+    return async (args, options) => {
+      try {
+        const result = await this.git(args, {
+          cwd: this.projectRoot,
+          ...(options?.credential === undefined ? {} : { credential: options.credential }),
+          ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        });
+        const observed = result as { stdout: string; exitCode?: unknown; stderr?: unknown };
+        return {
+          exitCode: typeof observed.exitCode === 'number' ? observed.exitCode : 0,
+          stdout: observed.stdout,
+          stderr: typeof observed.stderr === 'string' ? observed.stderr : '',
+        };
+      } catch (error) {
+        return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+      }
+    };
+  }
+
+  /** Match a retained draft only on one explicitly-authorized base branch. */
+  private async findOpenRetainedShipDraftPrUrl(head: string, base: string): Promise<string | undefined> {
+    const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
+      'pr', 'list',
+      '--head', head,
+      '--base', base,
+      '--state', 'open',
+      '--json', 'url,state',
+      '--limit', '10',
+    ]);
+    const rows: unknown = JSON.parse(stdout);
+    if (!Array.isArray(rows)) return undefined;
+    return rows.find(
+      (row): row is { url: string; state: string } =>
+        typeof row === 'object' &&
+        row !== null &&
+        (row as { state?: unknown }).state === 'OPEN' &&
+        typeof (row as { url?: unknown }).url === 'string' &&
+        (row as { url: string }).url.length > 0,
+    )?.url;
   }
 
   /**
@@ -6179,24 +6236,7 @@ export class Conductor {
     let prUrl = state.pr_url;
     if (!prUrl && state.worktree_branch && this.baseBranch) {
       try {
-        const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
-            'pr', 'list',
-            '--head', state.worktree_branch,
-            '--base', this.baseBranch,
-            '--state', 'open',
-            '--json', 'url,state',
-            '--limit', '10',
-          ]);
-        const rows: unknown = JSON.parse(stdout);
-        if (Array.isArray(rows)) {
-          prUrl = rows.find(
-            (row): row is { url: string; state: string } =>
-              typeof row === 'object' &&
-              row !== null &&
-              (row as { state?: unknown }).state === 'OPEN' &&
-              typeof (row as { url?: unknown }).url === 'string',
-          )?.url;
-        }
+        prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
       } catch (err) {
         (this.log ?? console.warn)(`[halt-pr-rehab] resume clear branch lookup failed: ${err}`);
       }
@@ -10087,6 +10127,7 @@ export class Conductor {
         // halted just because the fixed retry budget ran out.
         let progressAttempts = 0;
         let publicationProgressAttempts = 0;
+        let stackPublicationProgress = false;
         let lastPublicationTransition: PublicationTransition | undefined;
         let lastPublicationRetryDetail: string | undefined;
         const consumeFinishPublicationProgress = async (
@@ -10094,7 +10135,16 @@ export class Conductor {
         ): Promise<boolean> => {
           publicationProgressAttempts++;
           lastPublicationTransition = transition;
-          if (publicationProgressAttempts < FINISH_PUBLICATION_PROGRESS_ALLOWANCE) return true;
+          stackPublicationProgress ||= transition === 'establish_child_prs' || transition === 'assemble_stack';
+          // A stack always crosses establish_child_prs before any other
+          // stacked-only publication progress, so its observed transition is
+          // sufficient to select the sealed feature's nine-transition budget.
+          const allowance = publicationProgressAllowance({
+            stack: stackPublicationProgress
+              ? 'members-missing'
+              : 'not-applicable',
+          } as Parameters<typeof publicationProgressAllowance>[0]);
+          if (publicationProgressAttempts < allowance) return true;
 
           const baseReason =
             `FINISH publication progress allowance exhausted after ` +
@@ -11364,7 +11414,7 @@ export class Conductor {
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await this.haltSerialExecution({
                 reason: route.reason,
-                haltClass: 'needs-human',
+                haltClass: route.haltClass ?? 'needs-human',
                 persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
               });
               process.off('SIGINT', sigintHandler);
@@ -15036,6 +15086,10 @@ export class Conductor {
       if (preflight.kind !== 'available') return preflight;
     }
 
+    if (await publishedStackRefusal(this.projectRoot, slug)) {
+      await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+      return { kind: 'halted', reason: 'routing admission refused: published-stack' };
+    }
     const roundId = await nextRoundId(this.projectRoot, slug);
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
 
@@ -16048,6 +16102,10 @@ export class Conductor {
     // rebase observation for that whole-stack operation.
     const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
+      if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
+        await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+        return { success: true };
+      }
       const preflight = await runStackPreflight({
         worktree: this.projectRoot,
         slug: stackSlug,

@@ -294,9 +294,9 @@ const ROUTING_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
   'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'child_revalidated',
 ]);
 
-/** Only producer observations are replay-deduplicated; ordinary events still append. */
+/** Producer observations and at-least-once lifecycle events are replay-deduplicated; ordinary events still append. */
 function observationEventId(event: ConductorEvent): string | undefined {
-  return (OBSERVATION_EVENT_TYPES.has(event.type) || ROUTING_OCCURRENCE_TYPES.has(event.type))
+  return (OBSERVATION_EVENT_TYPES.has(event.type) || ROUTING_OCCURRENCE_TYPES.has(event.type) || event.type === 'stack_member_lifecycle')
     && 'eventId' in event
     && typeof event.eventId === 'string'
     ? event.eventId

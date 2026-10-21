@@ -1,4 +1,4 @@
-// Covers: task:24, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29, task:rem-prd-audit-rem-prd-audit-R30, task:rem-prd-audit-rem-prd-audit-R31
+// Covers: task:24, task:rem-prd-audit-rem-prd-audit-R28, task:rem-prd-audit-rem-prd-audit-R29, task:rem-prd-audit-rem-prd-audit-R30, task:rem-prd-audit-rem-prd-audit-R31, task:rem-prd-audit-rem-v3-intent-restack
 //
 // Crash-recovery tests driven by journals that a real `runRestack` left
 // behind. A wrapping Git runner simulates process death the moment the
@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
@@ -25,6 +26,7 @@ import {
 } from '../../../src/engine/restack/restack-journal.js';
 import { verifyRestackMove } from '../../../src/engine/restack/restack-move.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
+import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
 import { replayChildRange } from '../../../src/engine/restack/restack-replay.js';
 import { syncRestackedWorktree } from '../../../src/engine/restack/restack-sync.js';
 import { applyRestackTransition } from '../../../src/engine/restack/restack-transition.js';
@@ -433,6 +435,34 @@ async function recoverEventScenario(state: 'planned' | 'ready'): Promise<void> {
 }
 
 describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () => {
+  it('halts instead of launching an applied journal\'s published-stack follow-on', async () => {
+    const subject = await stackFixture();
+    await crashRestackAt(subject, (journal) => journal.state === 'applied');
+    const applied = await readRestackJournal(subject.repo, 'demo');
+    if (applied.kind !== 'journal') throw new Error('expected an applied journal');
+    const followOn = await writeRestackJournalBlob(subject.repo, {
+      ...applied.journal,
+      owner: DEAD_OWNER,
+      followOnCause: 'base-refresh',
+    });
+    await subject.git(['update-ref', journalRefFor('demo'), followOn, applied.blob]);
+    const child = parseChildId(1)!;
+    await expect(writePublicationRecord(subject.repo, 'demo', undefined, {
+      version: 1,
+      members: [{ position: child, branch: 'feat/c1/demo', pr: 101 }],
+    })).resolves.toEqual({ kind: 'updated' });
+    const events = new ConductorEventEmitter();
+    const refusals: unknown[] = [];
+    events.on('restack_refused', (event) => { refusals.push(event); });
+
+    await expect(recoverRestackJournal({
+      worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    expect(refusals).toEqual([expect.objectContaining({ reason: 'published-stack', child: 1 })]);
+    expect(await readJournal(subject.repo)).toMatchObject({ state: 'applied', followOnCause: 'base-refresh' });
+  });
+
   // Covers: task:24, task:rem-prd-audit-rem-prd-audit-R30
   it('resumes a planned crash from child 2 reusing child 1’s staged replay, and aborts without moving refs once feat/c2/demo moved', async () => {
     // Resume: inputs unchanged.

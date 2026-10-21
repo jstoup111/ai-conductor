@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1
+// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hasDurableChildState, resolveActiveChild } from '../../src/engine/child-cursor.js';
+import { observeStackDimension } from '../../src/engine/stack-publication.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import {
   writeCoverageBindingEnvelope,
@@ -79,6 +80,47 @@ afterEach(async () => {
 });
 
 describe('resolveActiveChild', () => {
+  it('retains stacked protection from conductor refs after disposable child metadata is gone', async () => {
+    await rm(join(repository, '.pipeline', 'children'), { recursive: true, force: true });
+    await rm(join(repository, '.pipeline', 'coverage-binding-envelope.json'), { force: true });
+    const tip = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['update-ref', 'refs/conductor/demo/publication', tip]);
+
+    await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+  });
+
+  // Covers: task:rem-prd-audit-rem-s1-2-not-applicable-after-leaf-push
+  it('keeps an ordinary N=1 feature flat after its leaf pushed-tip receipt is recorded', async () => {
+    const tip = (await git(['rev-parse', 'HEAD'])).trim();
+    // Every N=1 daemon push records a pushed-tip receipt; routing owns its own refs.
+    await git(['update-ref', 'refs/conductor/demo/pushed/feat/daemon-demo', tip]);
+    await git(['update-ref', 'refs/conductor/demo/push-intent/feat/daemon-demo', tip]);
+    await git(['update-ref', 'refs/conductor/demo/routes/1', tip]);
+    await git(['update-ref', 'refs/conductor/demo/rejected/1/1', tip]);
+    await git(['update-ref', 'refs/conductor/demo/revalidate', tip]);
+
+    await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(false);
+    const cursor = await resolveActiveChild(repository, 'demo');
+    expect(cursor).toEqual({ kind: 'no-child' });
+    await expect(observeStackDimension(repository, 'demo', cursor)).resolves.toBe('not-applicable');
+  });
+
+  it.each([
+    'refs/conductor/demo/positions',
+    'refs/conductor/demo/publication',
+    'refs/conductor/demo/closed/c1',
+    'refs/conductor/demo/pushed/feat/c1/demo',
+    'refs/conductor/demo/push-intent/feat/c1/demo',
+  ])('keeps the stack guard on for a recreated worktree holding only %s', async (ref) => {
+    const tip = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['update-ref', 'refs/conductor/demo/pushed/feat/daemon-demo', tip]);
+    await git(['update-ref', ref, tip]);
+
+    await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+  });
+
   it('selects the leaf after every non-leaf closure, independent of the checked-out branch', async () => {
     await seal(repository, [1, 2]);
     const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
@@ -210,7 +252,7 @@ describe('resolveActiveChild', () => {
     });
   });
 
-  it('fails closed for child state without a sealed envelope, detached HEAD, and git errors', async () => {
+  it('detects ref-only child state without disposable metadata, then fails closed for sealed child state errors', async () => {
     await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
 

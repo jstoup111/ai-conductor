@@ -76,6 +76,7 @@ interface MergedPullRequest {
   body: string;
   changedPaths: string[];
   headSha: string;
+  headRef: string;
   mergedAt: string;
 }
 
@@ -260,6 +261,7 @@ async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promi
         body: pullRequest.body,
         changedPaths: pullRequest.changedPaths,
         headSha: pullRequest.headSha,
+        headRef: pullRequest.headRef,
         mergedAt: pullRequest.mergedAt,
       });
     }
@@ -320,6 +322,7 @@ interface MergedPullRequestNode {
   url: string;
   body: string;
   headSha: string;
+  headRef: string;
   mergedAt: string;
   changedPaths: string[];
   filesPageInfo: GraphqlPageInfo;
@@ -335,6 +338,7 @@ query($owner: String!, $name: String!, $endCursor: String) {
         body
         mergedAt
         headRefOid
+        headRefName
         files(first: 100) {
           nodes { path }
           pageInfo { hasNextPage endCursor }
@@ -450,6 +454,10 @@ function mergedPullRequestFromNode(node: unknown): MergedPullRequestNode {
     url: requiredString(value.url, 'merged PR URL'),
     body: typeof value.body === 'string' ? value.body : '',
     headSha: requiredString(value.headRefOid, 'merged PR head SHA'),
+    // A historical API response without the head ref is not a transport
+    // failure. It is an unclassified association and must not authorize a
+    // record proposal.
+    headRef: typeof value.headRefName === 'string' ? value.headRefName.trim() : '',
     mergedAt: requiredString(value.mergedAt, 'merged PR merge timestamp'),
     changedPaths: requiredArray(files.nodes, 'merged PR changed-file nodes').map((file) =>
       requiredString(object(file, 'merged PR changed-file node').path, 'merged PR changed-file path')),
@@ -515,30 +523,59 @@ async function auditSource(
       reason: source.reason ?? 'canonical plan is unavailable',
     };
   }
+  const plan = source.plan;
 
-  const referencedByAmbiguousPr = mergedPullRequests.some((pullRequest) => {
+  const associations = mergedPullRequests.map((pullRequest) => ({
+    pullRequest,
+    association: classifyShipmentAssociation({
+      planStems,
+      pr: {
+        headRef: pullRequest.headRef,
+        metadataPlanStems: extractPlanStems(pullRequest.body),
+        changedPaths: pullRequest.changedPaths,
+      },
+    }),
+  }));
+  // Stack children intentionally carry the leaf's declaration. Filter them
+  // before any plan-level classification so a child mention cannot eclipse a
+  // legitimate leaf implementation candidate.
+  const nonChildren = associations.filter(({ association }) =>
+    !(association.kind === 'not-applicable' && association.classification === 'stack-child'));
+  const candidates = nonChildren.flatMap(({ pullRequest, association }) =>
+    association.kind === 'implementation' && association.slug === plan.slug ? [pullRequest] : []);
+
+  const referencedByAmbiguousPr = nonChildren.some(({ pullRequest }) => {
     const stems = extractPlanStems(pullRequest.body).filter((candidate) => planStems.includes(candidate));
-    return stems.includes(source.plan!.slug) && new Set(stems).size > 1;
+    return stems.includes(plan.slug) && new Set(stems).size > 1;
   });
   if (referencedByAmbiguousPr) {
     return row(source, 'ambiguous', 'merged PR metadata references multiple canonical plans');
   }
 
-  const candidates = mergedPullRequests.filter((pullRequest) => {
-    const association = classifyShipmentAssociation({
-      planStems,
-      pr: {
-        metadataPlanStems: extractPlanStems(pullRequest.body),
-        changedPaths: pullRequest.changedPaths,
-      },
-    });
-    return association.kind === 'implementation' && association.slug === source.plan!.slug;
-  });
+  const unclassifiedPullRequest = nonChildren.find(({ pullRequest }) =>
+    !pullRequest.headRef && extractPlanStems(pullRequest.body).includes(plan.slug));
+  if (unclassifiedPullRequest) {
+    return row(
+      source,
+      'unresolved',
+      `merged PR #${unclassifiedPullRequest.pullRequest.number} is unclassified: head ref is unavailable`,
+    );
+  }
+
+  if (candidates.length === 1) return auditImplementationCandidate(options, source, plan, candidates[0]!);
 
   if (candidates.length === 0) return row(source, 'absent', 'no exact associated merged implementation PR');
   if (candidates.length > 1) return row(source, 'ambiguous', 'multiple exact associated merged implementation PRs');
 
-  const implementationPr = candidates[0];
+  return row(source, 'absent', 'no exact associated merged implementation PR');
+}
+
+async function auditImplementationCandidate(
+  options: ShipmentAuditOptions,
+  source: AuditSource,
+  plan: { path: string; slug: string },
+  implementationPr: MergedPullRequest,
+): Promise<ShipmentAuditRow> {
   await ensureCommitAvailable(options, implementationPr.headSha);
   const pr = {
     number: implementationPr.number,
@@ -546,7 +583,7 @@ async function auditSource(
     mergedAt: implementationPr.mergedAt,
     headSha: implementationPr.headSha,
   };
-  const historicalVerdict = await evaluateHistoricalRecord(options, source.plan, implementationPr);
+  const historicalVerdict = await evaluateHistoricalRecord(options, plan, implementationPr);
   if (historicalVerdict?.kind === 'valid') {
     return { ...row(source, 'aligned', 'valid durable record is committed after implementation merge'), implementationPr: pr, verdict: historicalVerdict };
   }
@@ -561,7 +598,7 @@ async function auditSource(
   const verdict = await evaluateEvidence(
     {
       repoDir: options.cwd,
-      slug: source.plan.slug,
+      slug: plan.slug,
       implementationPr: implementationPr.url,
       candidateCommit: implementationPr.headSha,
     },
@@ -574,7 +611,7 @@ async function auditSource(
   if (verdict.kind === 'refusal' && verdict.code === 'shipped-record-missing') {
     let proposal: { path: string; content: string };
     try {
-      proposal = await expectedProposal(options, source.plan, implementationPr);
+      proposal = await expectedProposal(options, plan, implementationPr);
     } catch (error) {
       return {
         ...row(source, 'unresolved', `implementation head cannot prove record proposal: ${errorMessage(error)}`),

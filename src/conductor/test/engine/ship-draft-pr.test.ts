@@ -1,4 +1,4 @@
-// Covers: task:37
+// Covers: task:37, task:rem-prd-audit-rem-v3-divergence-mapping
 /**
  * Tests for the SHIP-phase-entry draft PR publisher (`openShipDraftPr`).
  *
@@ -9,6 +9,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   openShipDraftPr as openGuardedShipDraftPr,
   shipDraftPrBody,
@@ -18,6 +21,7 @@ import {
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { isEngineFlooredBody, PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 const CWD = '/repo';
 const BRANCH = 'feat/widget-import';
@@ -115,6 +119,33 @@ function createsGh(): { gh: GhRunner; calls: string[][] } {
 }
 
 describe('openShipDraftPr', () => {
+  it('maps a typed published-stack refusal to a retained halt naming the mismatched position', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ship-draft-stack-tip-'));
+    const { git } = aheadGit();
+    const { gh } = createsGh();
+    const events: unknown[] = [];
+    try {
+      await expect(openShipDraftPr({
+        gh,
+        git,
+        cwd: root,
+        branch: BRANCH,
+        baseBranch: BASE,
+        featureDesc: 'widget import flow',
+        events: { emit: async (event) => { events.push(event); } },
+        remoteGit: async () => ({
+          kind: 'refused', reason: 'stack-tip-mismatch',
+          members: [{ pr: 103, position: parseChildId(3)!, branch: 'feat/c3/widget-import-flow' }],
+        }),
+      })).resolves.toEqual({ outcome: 'stack-tip-diverged', reason: 'guarded remote publication refused: stack-tip-mismatch' });
+
+      await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('positions: 3');
+      expect(events).toContainEqual({ type: 'stack_tip_diverged', prs: [103] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('pushes the branch and opens a DRAFT PR against the base branch', async () => {
     const { git, calls: gitCalls } = aheadGit();
     const { gh, calls: ghCalls } = createsGh();

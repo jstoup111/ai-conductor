@@ -179,7 +179,7 @@ const EPOCH_MS_KEYS = [
  */
 export function normalizeTimestamp(value: unknown, root: string): unknown {
   if (typeof value === 'string') {
-    if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    if (/^\d{4}-\d{2}-\d{2}T/.exec(value) !== null) {
       return '<TIMESTAMP>';
     }
     return value.replaceAll(root, '<ROOT>');
@@ -240,6 +240,35 @@ export function normalizeGolden(text: string, root: string): string {
  * to the real binary resolved before PATH changes. Tests use this to prove an
  * N=1 path does not even probe routing-only refs.
  */
+/**
+ * Splits recorded Git argv into the local read-only conductor-ref probes that
+ * ADR 2026-10-17 decision 1 (amended 2026-10-20) excludes from N=1 parity and
+ * the remaining commands, which must stay byte-identical. A probe is a
+ * `for-each-ref` over the feature's child branches or `refs/conductor/<slug>/`,
+ * or a `rev-parse --verify` of a `refs/conductor/<slug>/` ref.
+ */
+export function partitionConductorRefProbes(argv: readonly string[][], slug: string): {
+  readonly probes: string[][];
+  readonly parity: string[][];
+} {
+  const conductorRef = (value: string) => value.startsWith(`refs/conductor/${slug}/`);
+  const isProbe = (args: readonly string[]) => {
+    if (args[0] === 'for-each-ref') {
+      const patterns = args.slice(1).filter((arg) => !arg.startsWith('-'));
+      return patterns.length > 0 && patterns.every((pattern) => pattern === 'refs/heads/feat' || conductorRef(pattern));
+    }
+    if (args[0] === 'rev-parse' && args.includes('--verify')) {
+      const refs = args.slice(1).filter((arg) => !arg.startsWith('-'));
+      return refs.length > 0 && refs.every(conductorRef);
+    }
+    return false;
+  };
+  const probes: string[][] = [];
+  const parity: string[][] = [];
+  for (const args of argv) (isProbe(args) ? probes : parity).push([...args]);
+  return { probes, parity };
+}
+
 export async function withGitArgvShim(root: string, fn: () => Promise<unknown>): Promise<string[][]> {
   const realGit = (await execFile('which', ['git'])).stdout.trim();
   if (realGit === '') throw new Error('git argv shim could not resolve git');

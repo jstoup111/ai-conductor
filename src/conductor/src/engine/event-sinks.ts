@@ -167,6 +167,14 @@ export const EVENT_SINKS = {
   finish_publication_transition: { render: true, persist: true, audit: false, otel: false },
   finish_publication_blocked: { render: true, persist: true, audit: false, otel: false },
   finish_publication_disposition: { render: true, persist: true, audit: false, otel: false },
+  // Stack publication is durable feature telemetry. The canonical event ledger
+  // is its sole reader path; later tasks own any renderer or audit projection.
+  stack_member_published: { render: false, persist: true, audit: false, otel: false },
+  stack_member_redrafted: { render: false, persist: true, audit: false, otel: false },
+  stack_assembled: { render: false, persist: true, audit: false, otel: false },
+  stack_member_lifecycle: { render: false, persist: true, audit: false, otel: false },
+  stack_members_unreachable: { render: false, persist: true, audit: false, otel: false },
+  stack_tip_diverged: { render: false, persist: true, audit: false, otel: false },
   feature_complete: { render: false, persist: true, audit: false, otel: true },
   dashboard_refresh: { render: false, persist: true, audit: false, otel: false },
   protected_artifact_rebaseline: { render: true, persist: true, audit: false, otel: false },

@@ -7,6 +7,28 @@ import type {
   FinishPublicationTransition,
 } from '../types/events.js';
 import { isRegionRestoreError } from './region-restore-error.js';
+import type { StackDimension, StackObservation } from './stack-publication.js';
+
+/** Typed effect failure: retrying would mutate a diverged or unsafe stack. */
+export class StackPublicationHaltError extends Error {
+  constructor(
+    readonly reason: Extract<HumanRequiredReason, 'stack_tip_diverged' | 'stack_publication_precondition_failed'>,
+    message: string,
+    /** Durable member identities survive coordinator and conductor routing. */
+    readonly members: readonly { readonly pr?: number; readonly position?: number }[] = [],
+  ) {
+    super(message);
+    this.name = 'StackPublicationHaltError';
+  }
+}
+
+/** A bounded stack observation is incomplete but safe to retry on FINISH. */
+export class StackPublicationRetryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StackPublicationRetryError';
+  }
+}
 
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
@@ -84,6 +106,10 @@ type PublicationEvidence = {
   branchPushed: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   shippedRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   outcomeRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
+  /** Stack state is absent until the production observer is wired. */
+  stack?: StackDimension;
+  /** Positions from the same authoritative observation that found divergence. */
+  stackDivergenceDetail?: string;
   pr: PublicationPullRequest;
 };
 
@@ -183,6 +209,10 @@ export interface PublicationObservationPorts {
   releaseReadiness: {
     observeReleaseReadiness(): Promise<ReleaseReadinessObservation>;
   };
+  /** Optional while N=1 callers retain their byte-for-byte publication path. */
+  stack?: {
+    observeStackDimension(): Promise<StackObservation>;
+  };
 }
 
 export type PublicationObservationContext =
@@ -210,6 +240,7 @@ export async function observePublicationSnapshot(
     github,
     shippedRecord,
     releaseReadiness,
+    stack,
   } = input.ports;
 
   const implementationEvidence = mapImplementationEvidence(
@@ -223,6 +254,15 @@ export async function observePublicationSnapshot(
   const readiness = mapReleaseReadiness(
     await safelyObserve(releaseReadiness.observeReleaseReadiness),
   );
+  const stackObservation = stack === undefined
+    ? undefined
+    : await safelyObserve(stack.observeStackDimension);
+  const stackDimension = typeof stackObservation === 'object' && stackObservation !== null
+    ? stackObservation.dimension
+    : stackObservation;
+  const stackDivergenceDetail = typeof stackObservation === 'object' && stackObservation !== null
+    ? `published stack tip diverged at positions: ${stackObservation.members.map((member) => member.position).join(', ')}`
+    : undefined;
 
   return {
     mode: input.mode,
@@ -234,6 +274,12 @@ export async function observePublicationSnapshot(
     pr,
     shippedRecord: shipped,
     outcomeRecord,
+    ...(stackDimension === undefined || stackDimension === 'unavailable'
+      ? {}
+      : {
+          stack: stackDimension,
+          ...(stackDivergenceDetail === undefined ? {} : { stackDivergenceDetail }),
+        }),
   } as PublicationSnapshot;
 }
 
@@ -402,16 +448,19 @@ export type PublicationTransitionDimensions = Record<
   | 'releaseReadiness'
   | 'pr.prose'
   | 'shippedRecord'
+  | 'stack'
   | 'pr.ready'
   | 'outcomeRecord'
 >;
 
 export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions = {
   establish_pr: 'pr.identity + branchPushed',
+  establish_child_prs: 'stack',
   verify_release_readiness: 'releaseReadiness',
   author_pr_prose: 'pr.prose',
   judge_pr_prose: 'pr.prose',
   write_shipped_record: 'shippedRecord',
+  assemble_stack: 'stack',
   ready_pr: 'pr.ready',
   record_outcome: 'outcomeRecord',
 };
@@ -421,6 +470,11 @@ export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions 
  * publication state requires operator review.
  */
 export const FINISH_PUBLICATION_PROGRESS_ALLOWANCE = 2 * 7;
+
+/** The bounded progress budget is derived from the selected feature shape. */
+export function publicationProgressAllowance(snapshot: PublicationSnapshot): number {
+  return 2 * (stackDimension(snapshot) === 'not-applicable' ? 7 : 9);
+}
 
 type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise<void>;
 
@@ -441,6 +495,10 @@ export function nextFinishPublicationTransition(
 
   if (snapshot.pr.identity !== 'one' || snapshot.branchPushed !== 'valid') {
     return 'establish_pr';
+  }
+
+  if (stackDimension(snapshot) === 'members-missing') {
+    return 'establish_child_prs';
   }
 
   if (snapshot.releaseReadiness !== 'valid') {
@@ -470,6 +528,10 @@ export function nextFinishPublicationTransition(
     return 'write_shipped_record';
   }
 
+  if (stackDimension(snapshot) !== 'not-applicable' && stackDimension(snapshot) !== 'valid') {
+    return 'assemble_stack';
+  }
+
   if (!snapshot.pr.ready) {
     return 'ready_pr';
   }
@@ -492,7 +554,9 @@ export type HumanRequiredReason =
   | 'unattended_intent_destructive_choice'
   | 'unattended_intent_unauthorized_outcome'
   | 'region_restore_refused'
-  | 'region_verification_mismatch';
+  | 'region_verification_mismatch'
+  | 'stack_tip_diverged'
+  | 'stack_publication_precondition_failed';
 
 export type PublicationDisposition =
   | { kind: 'complete' }
@@ -527,7 +591,7 @@ export type FinishPublicationRoute =
       evidence: string;
       unsatisfiedMembers: UnsatisfiedImplementationEvidenceMembers;
     }
-  | { kind: 'halt'; reason: string };
+  | { kind: 'halt'; reason: string; haltClass?: 'stack-tip-diverged' };
 
 const PUBLICATION_CONDITIONS = {
   publication_snapshot_incoherent: {
@@ -629,6 +693,14 @@ export const HUMAN_REQUIRED_REASONS = {
     message: 'A project-owned PR body region did not match its captured bytes after restoration.',
     nextAction: 'Review the named step and resolve the verification mismatch before retrying FINISH.',
   },
+  stack_tip_diverged: {
+    message: 'A published stack member no longer matches its recorded tip.',
+    nextAction: 'Inspect the named stack position and reconcile its remote history before resuming.',
+  },
+  stack_publication_precondition_failed: {
+    message: 'A stack publication precondition failed before another mutation could run.',
+    nextAction: 'Inspect the named stack position and resolve the publication evidence before resuming.',
+  },
 } satisfies Record<HumanRequiredReason, { message: string; nextAction: string }>;
 
 const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]> = {
@@ -647,6 +719,12 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'pr_url_persistence_failed',
     'pr_identity_not_verified_after_establish',
   ],
+  establish_child_prs: [
+    'publication_transition_indeterminate',
+    'publication_transition_unavailable',
+    'publication_transition_failed',
+    'publication_transition_not_verified_after_effect',
+  ],
   verify_release_readiness: ['publication_transition_indeterminate'],
   author_pr_prose: [
     'publication_transition_indeterminate',
@@ -660,6 +738,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'shipped_record_write_failed',
     'shipped_record_not_verified_after_write',
   ],
+  assemble_stack: ['publication_transition_indeterminate'],
   judge_pr_prose: [
     'publication_transition_indeterminate',
     'judgment_timed_out',
@@ -675,6 +754,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
   ready_pr: [
     'publication_transition_indeterminate',
     'presentation_repair_effect_unavailable',
+    'presentation_repair_partial',
     'presentation_repair_failed',
     'presentation_not_verified_after_repair',
   ],
@@ -803,7 +883,11 @@ export function routeFinishPublicationDisposition(
         unsatisfiedMembers: disposition.unsatisfiedMembers,
       };
     case 'human_required':
-      return { kind: 'halt', reason: renderHumanRequiredHaltReason(disposition) };
+      return {
+        kind: 'halt',
+        reason: renderHumanRequiredHaltReason(disposition),
+        ...(disposition.reason === 'stack_tip_diverged' ? { haltClass: 'stack-tip-diverged' as const } : {}),
+      };
   }
 }
 
@@ -876,8 +960,10 @@ function isExactDisposition(
 function isPublicationTransition(value: unknown): value is PublicationTransition {
   return (
     value === 'establish_pr' ||
+    value === 'establish_child_prs' ||
     value === 'verify_release_readiness' ||
     value === 'write_shipped_record' ||
+    value === 'assemble_stack' ||
     value === 'author_pr_prose' ||
     value === 'judge_pr_prose' ||
     value === 'ready_pr' ||
@@ -1300,6 +1386,15 @@ export interface AdvanceFinishPublicationInput {
      */
     establishPr?: OpenShipDraftPrDeps;
     /**
+     * Publish the immutable non-leaf closures and establish their chained
+     * draft pull requests.  It is deliberately a single effect: the durable
+     * publication record makes a resumed attempt adopt work already created
+     * before an interrupted response.
+     */
+    establishChildPrs?: () => Promise<void>;
+    /** Create or extend and verify the native stack after retargeting the leaf. */
+    assembleStack?: () => Promise<void>;
+    /**
      * Persist the authoritative URL returned by a successful draft-PR
      * establishment before the coordinator re-observes PR identity. The
      * composition root owns its durable feature-state representation.
@@ -1351,7 +1446,9 @@ export type AdvanceFinishPublicationResult =
         | 'publication_transition_unmoved'
         | 'publication_coordinator_unavailable'
         | 'ambiguous_pr_identity'
-        | 'invalid_shipped_record';
+        | 'invalid_shipped_record'
+        | 'stack_tip_diverged'
+        | 'stack_publication_precondition_failed';
       detail?: string;
     }
   | {
@@ -1511,6 +1608,7 @@ function hasIndeterminatePublicationEvidence(snapshot: PublicationSnapshot): boo
     snapshot.branchPushed === 'indeterminate' ||
     snapshot.shippedRecord === 'indeterminate' ||
     snapshot.outcomeRecord === 'indeterminate' ||
+    stackDimension(snapshot) === 'indeterminate' ||
     snapshot.pr.identity === 'indeterminate' ||
     (snapshot.pr.identity === 'one' && snapshot.pr.prose === 'indeterminate');
 }
@@ -1621,11 +1719,18 @@ function publicationTransitionDimensionValue(
       return publicationPrProse(snapshot);
     case 'shippedRecord':
       return snapshot.shippedRecord === 'indeterminate' ? undefined : snapshot.shippedRecord;
+    // Task 5 introduces the authoritative stack observation. These transitions
+    case 'stack':
+      return stackDimension(snapshot) === 'indeterminate' ? undefined : stackDimension(snapshot);
     case 'pr.ready':
       return publicationPrReady(snapshot);
     case 'outcomeRecord':
       return snapshot.outcomeRecord === 'indeterminate' ? undefined : snapshot.outcomeRecord;
   }
+}
+
+function stackDimension(snapshot: PublicationSnapshot): StackDimension {
+  return snapshot.stack ?? 'not-applicable';
 }
 
 function publicationPrProse(snapshot: PublicationSnapshot):
@@ -1699,6 +1804,16 @@ async function advanceFinishPublicationUnreconciled(
     return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
   }
 
+  // A changed native stack is terminal. Never route it through assembly,
+  // which could turn an external change into another stack mutation.
+  if (stackDimension(snapshot) === 'diverged') {
+    return {
+      kind: 'human_required',
+      reason: 'stack_tip_diverged',
+      ...(snapshot.stackDivergenceDetail === undefined ? {} : { detail: snapshot.stackDivergenceDetail }),
+    };
+  }
+
   if (nextFinishPublicationTransition(snapshot) === 'establish_pr') {
     return coalescePublicationEffect(input.effects, 'establish_pr', async () => {
       if (!input.effects.establishPr) {
@@ -1714,6 +1829,9 @@ async function advanceFinishPublicationUnreconciled(
       });
 
       const draftPr = await openShipDraftPr(input.effects.establishPr);
+      if (draftPr.outcome === 'stack-tip-diverged') {
+        return { kind: 'human_required', reason: 'stack_tip_diverged', detail: draftPr.reason };
+      }
       if (draftPr.outcome !== 'published') {
         return {
           kind: 'publication_retry',
@@ -1755,6 +1873,49 @@ async function advanceFinishPublicationUnreconciled(
         transition: 'establish_pr',
         reason: 'pr_identity_not_verified_after_establish',
       };
+    });
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'establish_child_prs') {
+    return coalescePublicationEffect(input.effects, 'establish_child_prs', async () => {
+      if (!input.effects.establishChildPrs) {
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_child_prs',
+          reason: 'publication_transition_unavailable',
+        };
+      }
+      await emitPublicationEvent(input.emit, {
+        type: 'finish_publication_transition', phase: 'started', transition: 'establish_child_prs',
+      });
+      try {
+        await input.effects.establishChildPrs();
+      } catch (error) {
+        if (error instanceof StackPublicationHaltError) {
+          return { kind: 'human_required', reason: error.reason, detail: error.message };
+        }
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_child_prs',
+          reason: 'publication_transition_failed',
+          detail: error instanceof Error ? error.message : String(error),
+        };
+      }
+      const observedAfterEstablish = await input.observe();
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'establish_child_prs',
+        snapshot,
+        observedAfterEstablish,
+      );
+      if (transition) return transition;
+      return stackDimension(observedAfterEstablish) !== 'members-missing'
+        ? { kind: 'advanced', transition: 'establish_child_prs' }
+        : {
+            kind: 'publication_retry',
+            transition: 'establish_child_prs',
+            reason: 'publication_transition_not_verified_after_effect',
+          };
     });
   }
 
@@ -1965,6 +2126,31 @@ async function advanceFinishPublicationUnreconciled(
     });
   }
 
+  if (nextFinishPublicationTransition(snapshot) === 'assemble_stack') {
+    if (!input.effects.assembleStack) {
+      return { kind: 'publication_retry', transition: 'assemble_stack', reason: 'publication_transition_indeterminate' };
+    }
+    return coalescePublicationEffect(input.effects, 'assemble_stack', async () => {
+      await emitPublicationEvent(input.emit, {
+        type: 'finish_publication_transition', phase: 'started', transition: 'assemble_stack',
+      });
+      try {
+        await input.effects.assembleStack!();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (error instanceof StackPublicationHaltError) {
+          return { kind: 'human_required', reason: error.reason, detail };
+        }
+        return { kind: 'publication_retry', transition: 'assemble_stack', reason: 'publication_transition_indeterminate', detail };
+      }
+      const observed = await input.observe();
+      const transition = await advancedPublicationTransition(input.emit, 'assemble_stack', snapshot, observed);
+      return transition ?? (stackDimension(observed) === 'valid'
+        ? { kind: 'advanced', transition: 'assemble_stack' }
+        : { kind: 'publication_retry', transition: 'assemble_stack', reason: 'publication_transition_indeterminate' });
+    });
+  }
+
   if (nextFinishPublicationTransition(snapshot) === 'ready_pr') {
     if (!input.effects.repairPresentation) {
       return {
@@ -1981,6 +2167,17 @@ async function advanceFinishPublicationUnreconciled(
       try {
         await input.effects.repairPresentation!();
       } catch (error) {
+        if (error instanceof StackPublicationHaltError) {
+          return { kind: 'human_required', reason: error.reason, detail: error.message };
+        }
+        if (error instanceof StackPublicationRetryError) {
+          return {
+            kind: 'publication_retry',
+            transition: 'ready_pr',
+            reason: 'presentation_repair_partial',
+            detail: error.message,
+          };
+        }
         if (isRegionRestoreError(error)) {
           return {
             kind: 'human_required',

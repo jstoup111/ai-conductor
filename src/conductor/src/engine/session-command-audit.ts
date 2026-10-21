@@ -129,8 +129,8 @@ export function auditShippedManagedSessionInstructionSource(input: SessionComman
 
 // A command name must stand on its own.  In particular, do not mistake the
 // `.ai-conductor/` configuration directory for an executable instruction.
-const COMMAND = /(?<![.\w/-])(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;
-const COMMAND_PREFIX = /(?<![.\w/-])(?:ai-conductor|conduct-ts)\b/;
+const COMMAND = /(?<![.\w/-])(?:ai-conductor|conduct-ts)(?!:)\s+([a-z][a-z0-9-]*)\b/g;
+const COMMAND_PREFIX = /(?<![.\w/-])(?:ai-conductor|conduct-ts)(?!:)\b/;
 const MAX_CONSTANT_EVALUATION_DEPTH = 32;
 
 interface SourceSegment {
