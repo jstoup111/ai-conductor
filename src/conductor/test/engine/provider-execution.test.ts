@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:5, task:7, task:8, task:13, task:14, task:16
+// Covers: task:2, task:3, task:4, task:5, task:7, task:8, task:13, task:14, task:16, task:rem-prd-audit-rem-settle-aux-captures-per-dispatch
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -615,8 +615,83 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      { runId: 'R', attempt: 0, member: 'security' },
+      {
+        owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' },
+        runId: 'R', attempt: 1,
+        auxiliaryMember: 'security',
+      },
     );
+  });
+
+  // Covers: task:rem-as-built-rem-ab-capture-dispatch-seq
+  it('uses a capture-only sequence for auxiliary retries without changing their escalation attempts', async () => {
+    const prepared: Array<{ owner: unknown; runId: string; attempt: number; auxiliaryMember: string }> = [];
+    await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'security', runId: 'R',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: true, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: async () => ({ success: false, output: 'retry', exitCode: 1 }) })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
+      prepareCandidateSelfHost: async (_candidate, _runtime, identity) => {
+        if (identity?.auxiliaryMember !== 'security') throw new Error('expected auxiliary capture identity');
+        if (!('owner' in identity) || identity.owner === undefined) throw new Error('expected current transcript owner identity');
+        prepared.push({
+          owner: identity.owner,
+          runId: identity.runId,
+          attempt: identity.attempt,
+          auxiliaryMember: identity.auxiliaryMember,
+        });
+        return { executable: '/resolved/codex', env: {}, args: [], teardown: async () => {} };
+      },
+    });
+
+    expect(prepared).toEqual([
+      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 1, auxiliaryMember: 'security' },
+      { owner: { kind: 'configured-group-member', parentGroup: 'build_review', member: 'security' }, runId: 'R', attempt: 2, auxiliaryMember: 'security' },
+    ]);
+  });
+
+  it('settles each failed auxiliary capture before its retry and after exhaustion', async () => {
+    const failed = vi.fn();
+
+    await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'security', runId: 'R',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: async () => ({ success: false, output: 'retry', exitCode: 1 }) })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
+      onAuxiliaryAttemptFailed: failed,
+    });
+
+    expect(failed).toHaveBeenCalledTimes(2);
+    expect(failed).toHaveBeenNthCalledWith(1, {
+      step: 'build_review', runId: 'R', attempt: 1, auxiliaryMember: 'security',
+    });
+    expect(failed).toHaveBeenNthCalledWith(2, {
+      step: 'build_review', runId: 'R', attempt: 2, auxiliaryMember: 'security',
+    });
+  });
+
+  it('settles a failed auxiliary capture without settling its successful retry', async () => {
+    const failed = vi.fn();
+    let invocations = 0;
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'security', runId: 'R',
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 2, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: async () => ({ success: ++invocations === 2, output: 'retry', exitCode: invocations === 2 ? 0 : 1 }) })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'review', cwd: '/workspace' },
+      nextCaptureAttempt: (() => { let sequence = 0; return () => ++sequence; })(),
+      onAuxiliaryAttemptFailed: failed,
+    });
+
+    expect(result.success).toBe(true);
+    expect(failed).toHaveBeenCalledExactlyOnceWith({
+      step: 'build_review', runId: 'R', attempt: 1, auxiliaryMember: 'security',
+    });
   });
 
   it('records a custom member setup skip and launches nothing when its provider has no read-only review mode', async () => {
@@ -1812,7 +1887,7 @@ describe('executeProviderCandidates', () => {
     expect(prepare).toHaveBeenCalledWith(
       expect.objectContaining({ providerKey: 'codex' }),
       expect.anything(),
-      expect.objectContaining({ attempt: 0 }),
+      undefined,
     );
     expect(claude.invoke).not.toHaveBeenCalled();
     expect(teardown).toHaveBeenCalledOnce();

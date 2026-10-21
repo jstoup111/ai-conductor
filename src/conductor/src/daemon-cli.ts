@@ -2723,12 +2723,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),
-      sweepProviderScratch: () => sweepFeatureWorktreeScratch({
-        worktreeBase,
-        events,
-        log,
-        startFeatureEventScope: (worktreePath, featureSlug) => startFeatureEventPersistence(worktreePath, events, featureSlug),
-      }),
+      sweepProviderScratch: async () => {
+        const { buildAuthTokenPath } = resolveSelfHostConfig(config);
+        const token = await readDaemonBuildToken(buildAuthTokenPath);
+        await sweepFeatureWorktreeScratch({
+          worktreeBase,
+          events,
+          log,
+          ...(token.state === 'ok' ? { daemonBuildToken: token.token } : {}),
+          startFeatureEventScope: (worktreePath, featureSlug) => startFeatureEventPersistence(worktreePath, events, featureSlug),
+        });
+      },
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
       // back to polling alone. Otherwise, the daemon uses event-driven re-kick

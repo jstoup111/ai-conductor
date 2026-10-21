@@ -285,6 +285,12 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   stack_member_lifecycle: 'not-audited-by-design',
   stack_members_unreachable: 'not-audited-by-design',
   stack_tip_diverged: 'not-audited-by-design',
+  provider_transcripts_captured: 'not-audited-by-design',
+  provider_transcripts_harvest_failed: 'not-audited-by-design',
+  provider_transcripts_retained: 'not-audited-by-design',
+  provider_transcripts_pruned: 'not-audited-by-design',
+  provider_transcripts_evicted: 'not-audited-by-design',
+  provider_transcripts_retention_failed: 'not-audited-by-design',
 };
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
@@ -1021,6 +1027,27 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   child_revalidated: {
     type: 'child_revalidated', eventId: 'route-4', occurredAt: '2030-01-01T00:00:00.000Z',
     child: parseChildId(1)!, generation: 1, closureSha: parseCommitSha('a'.repeat(40))!, outcome: 'passed',
+  },
+  provider_transcripts_captured: {
+    type: 'provider_transcripts_captured', step: 'build', runId: 'transcript-run', attempt: 1,
+    provider: 'codex', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+    files: 1, bytes: 1, interrupted: false, skipped: 0, omittedLines: 0,
+  },
+  provider_transcripts_harvest_failed: {
+    type: 'provider_transcripts_harvest_failed', step: 'build', runId: 'transcript-run', attempt: 1,
+    provider: 'codex', path: '.pipeline/transcripts/build/transcript-run-a1-codex', error: 'read failed',
+  },
+  provider_transcripts_retained: {
+    type: 'provider_transcripts_retained', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+  },
+  provider_transcripts_pruned: {
+    type: 'provider_transcripts_pruned', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+  },
+  provider_transcripts_evicted: {
+    type: 'provider_transcripts_evicted', path: '.pipeline/transcripts/build/transcript-run-a1-codex', reason: 'count',
+  },
+  provider_transcripts_retention_failed: {
+    type: 'provider_transcripts_retention_failed', path: '.pipeline/transcripts/build/transcript-run-a1-codex', action: 'prune', error: 'unlink failed',
   },
   acceptance_red: {
     type: 'acceptance_red',

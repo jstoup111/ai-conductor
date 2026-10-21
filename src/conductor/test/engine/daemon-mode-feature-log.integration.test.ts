@@ -142,9 +142,10 @@ describe('daemon-mode feature log integration', () => {
       '[feature-a] ▶ start feature-a',
       true,
     );
-    // The completed dispatch leaves the pool busy for one snapshot pass. That
-    // pass re-samples all dispatch blockers so its telemetry is current.
-    expect(buildAuthSpy.readDaemonBuildToken).toHaveBeenCalledTimes(2);
+    // The completed dispatch leaves the pool busy for one snapshot pass, which
+    // re-samples dispatch blockers (2 reads). Each of the run's two
+    // provider-scratch sweeps also reads the build token once.
+    expect(buildAuthSpy.readDaemonBuildToken).toHaveBeenCalledTimes(4);
     expect(persisted).not.toMatch(/\[daemon\]\[feature-a\]\[feature-a\]/);
 
     // step_started is one of the 19 TerminalSubscriber-rendered event types.

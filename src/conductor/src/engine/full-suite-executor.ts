@@ -9,6 +9,25 @@ import { resolveFullSuiteCommandEntries } from './full-suite-commands.js';
 export const DEFAULT_FULL_SUITE_TIMEOUT_MS = 30 * 60 * 1_000;
 const FULL_SUITE_TERMINATION_GRACE_MS = 100;
 
+/**
+ * A verifier may deliberately pass a sparse environment. During Vitest that
+ * must not strip the run-scoped temp root from shell fixtures it launches.
+ */
+function preserveVitestTmpEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const root = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+  if (root === undefined) return environment;
+  const inherited: NodeJS.ProcessEnv = {
+    AI_CONDUCTOR_TEST_TMP_ROOT: root,
+    TMPDIR: process.env.TMPDIR,
+    TMP: process.env.TMP,
+    TEMP: process.env.TEMP,
+  };
+  const missing = Object.fromEntries(
+    Object.entries(inherited).filter(([key]) => environment[key] === undefined),
+  );
+  return Object.keys(missing).length === 0 ? environment : { ...environment, ...missing };
+}
+
 export interface FullSuiteCommandRunnerOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -367,7 +386,7 @@ export async function executeFullSuite(
     try {
       const result = await runner(command, {
         cwd,
-        env: scrubTmuxEnvironment(environment),
+        env: preserveVitestTmpEnvironment(scrubTmuxEnvironment(environment)),
         shell: true,
         timeoutMs,
       });

@@ -381,6 +381,33 @@ Every reclaim, retention, and failed cleanup emits a `scratch_cleanup_reclaimed`
 `.pipeline/events.jsonl`) naming the path and the reason — see
 [`.pipeline/events.jsonl`](../reference/artifacts.md#pipelineeventsjsonl).
 
+### Provider transcripts
+
+Before a provider home is removed, by ordinary teardown or by the dead-owner sweep, the engine
+copies that provider's session transcripts into the worktree. This lets you read what a failed
+self-build actually did.
+
+- **What is copied.** Only regular files matching the provider's declared allowlist: Claude
+  `projects/**/*.jsonl`, Codex and Pi `sessions/**/*.jsonl`. Symlinks are never followed.
+- **Sanitizing.** Every string value passes through the safety redactor. Values under keys named
+  `api_key`, `token`, `secret`, `password`, `credential`, or `authorization` become `"[REDACTED]"`.
+  Secrets from the home's credential file and the daemon build token are masked. A line the
+  sanitizer cannot process is omitted and counted.
+- **Destination.** `<worktree>/.pipeline/transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/`.
+  `<step>` is the configured member name for a configured group member, or `unknown-step` for a
+  lease written before steps were recorded.
+- **Retention.** A capture is pruned only when its step completes with progress. A step that fails,
+  stalls, halts, is interrupted, retries, needs a human, or completes without progress keeps its
+  captures. So does a home recovered by the dead-owner sweep (`interrupted: true`), and so does any
+  capture still pending when the daemon died. At most 20 captures and 1 GiB are kept per worktree.
+  The oldest are evicted first, and the newest capture is never evicted.
+- **Failure.** A failed capture never blocks home removal. It emits
+  `provider_transcripts_harvest_failed` and the home is still retired.
+
+Each transition emits `provider_transcripts_captured`, `_retained`, `_pruned`, `_evicted`, or
+`_retention_failed` on `.pipeline/events.jsonl`. To read the kept captures, use
+[`ai-conductor transcripts`](../reference/cli.md#ai-conductor-transcripts).
+
 ### Pi self-host credential
 
 A `pi` self-host candidate gets a throwaway `PI_CODING_AGENT_DIR` holding one credential, not a copy

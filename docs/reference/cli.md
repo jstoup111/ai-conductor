@@ -1070,6 +1070,31 @@ Every other failure exits **0** with one warning and no record written, so the e
 used to detect success. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
 
+## `ai-conductor transcripts`
+
+```bash
+ai-conductor transcripts <slug> [--show <capture>]
+```
+
+A read-only command that inspects the self-host provider transcripts retained for a feature. See
+[self-hosting: provider transcripts](../guides/self-hosting.md#provider-transcripts). It resolves
+`<main repo root>/.worktrees/<slug>`, then folds `.pipeline/events.jsonl`. It lists only captures
+whose latest state is retained and whose directory still exists, newest first.
+
+| Form | Output (stdout) |
+| --- | --- |
+| `transcripts <slug>` | One line per capture: `step=<step> attempt=<n> member=<member\|-> provider=<id> interrupted=<bool> path=<path>`, or `no retained transcripts for <slug>`. |
+| `transcripts <slug> --show <capture>` | The final assistant message from the capture's most recently modified top-level session file (Claude subagent sessions are excluded), sanitized again. `<capture>` is a full capture path or its trailing path segment(s). |
+
+Exit codes: 0 on success, including an empty list. 1 when:
+
+- the arguments are malformed (prints the usage guide);
+- the slug contains `/` or `\` or is `.`/`..`, or no worktree exists for it (`no feature worktree for <slug>`);
+- the capture is ambiguous (`ambiguous capture «<capture>»: <paths>`);
+- the capture is missing or has no assistant message (`no assistant message in <capture>`).
+
+All errors go to stderr.
+
 ## `ai-conductor kpi`
 
 ```bash

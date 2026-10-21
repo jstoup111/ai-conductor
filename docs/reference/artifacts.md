@@ -588,6 +588,7 @@ To clear a halt safely, use the procedure in
 | `pipeline-events.jsonl` | Externally written `build_review` disposition and kickback-budget authorization events | Separate ledger — see below |
 | `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
+| `transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/` | Sanitized, allowlisted provider session transcripts captured before a self-host provider home is removed | Self-host only. Pruned after a step completes with progress; otherwise retained, capped at 20 captures / 1 GiB per worktree. Read with [`ai-conductor transcripts`](cli.md#ai-conductor-transcripts); see [provider transcripts](../guides/self-hosting.md#provider-transcripts) |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
 | `conduct.log` | Session narrative | Written only by the legacy bash CLI; `ai-conductor` never writes it. Read by `rate-limit-wait.sh` |
 | `progress.log` | Batch-boundary narrative | Appended by the `pipeline` skill |
@@ -835,6 +836,8 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_discovery`, `provider_attempt`,
 `provider_attempt_started`, `provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
+`provider_transcripts_captured`, `provider_transcripts_harvest_failed`, `provider_transcripts_retained`,
+`provider_transcripts_pruned`, `provider_transcripts_evicted`, `provider_transcripts_retention_failed`,
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `provider_suppressed`, `session_reset`,
