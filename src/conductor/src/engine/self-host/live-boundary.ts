@@ -183,6 +183,11 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
                                        // halt of custom-build-review-rubrics-cannot-run-off-linux-o.
                                        // Only the stamp is excluded: `policy-limits.json` itself is
                                        // policy config and stays fingerprinted.
+  'policy-limits.json.stamp.json.tmp.*', // atomic-write temp files the same refresh leaves behind
+  'policy-limits.json.signature.json',     // signature sidecar the CLI rewrites on its policy-limits
+  'policy-limits.json.signature-iat.json', // refresh; verified 2026-10-20 as the sole diff behind 4
+                                           // false halts across two self-host features (#3323).
+                                           // `policy-limits.json` itself stays fingerprinted.
   'remote-settings.json.synced-at',   // epoch-ms stamp the CLI rewrites on every remote-settings
                                        // sync; verified 2026-10-14 as the sole diff ("changed
                                        // remote-settings.json.synced-at") behind 2 false halts.
