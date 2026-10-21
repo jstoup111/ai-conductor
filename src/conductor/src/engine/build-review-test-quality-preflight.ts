@@ -55,6 +55,12 @@ export interface TautologyPreflightDependencies {
    * write fails ENOENT and takes the whole preflight down (#1961).
    */
   readonly ensureDir?: (path: string) => Promise<void>;
+  /**
+   * Exposes ignored dependency installations inside the reverted checkout.
+   * Runs after the merge-base restore, so a dependency path the diff added
+   * (#3317) is already gone and cannot collide with or remove the link.
+   */
+  readonly prepareDependencies?: (checkout: string) => Promise<void>;
   /** Executes precisely the supplied changed-test selectors; never an aggregate fallback. */
   readonly runScoped: (cwd: string, selectors: readonly string[], signal: AbortSignal) => Promise<TautologyScopedRunResult>;
   /** Removes the disposable checkout on every outcome. */
@@ -444,6 +450,7 @@ export async function materializeTautologyPreflight(
         break;
       }
     }
+    if (!result) await deps.prepareDependencies?.(checkout);
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
