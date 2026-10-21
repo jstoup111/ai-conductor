@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-21T23:53:26.267Z
 Slug: build-review-halts-when-a-judgement-re-raises-a-so
 Class: needs-human
 Halting step: unknown
