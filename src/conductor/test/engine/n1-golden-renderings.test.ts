@@ -30,6 +30,24 @@ const execFile = promisify(execFileCb);
 
 describe('N=1 golden renderings', () => {
   const roots: string[] = [];
+  const finishFixture = (name: string) => join(
+    import.meta.dirname,
+    '..',
+    'fixtures',
+    'n1-golden',
+    'finish',
+    `${name}.golden`,
+  );
+  const expectFinishGolden = async (name: string, actual: string) => {
+    const path = finishFixture(name);
+    if (RECORD) {
+      await mkdir(join(import.meta.dirname, '..', 'fixtures', 'n1-golden', 'finish'), { recursive: true });
+      await writeFile(path, `<!-- Recorded from ${BASE_SHA} -->\n${actual}`);
+      return;
+    }
+    const expected = (await readFile(path, 'utf8')).replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '');
+    expect(actual).toBe(expected);
+  };
 
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -287,24 +305,6 @@ describe('N=1 golden renderings', () => {
     const pipeline = join(root, '.pipeline');
     const prUrl = 'https://github.com/acme/widget/pull/42';
     const statePath = join(pipeline, 'conduct-state.json');
-    const finishFixture = (name: string) => join(
-      import.meta.dirname,
-      '..',
-      'fixtures',
-      'n1-golden',
-      'finish',
-      `${name}.golden`,
-    );
-    const expectFinishGolden = async (name: string, actual: string) => {
-      const path = finishFixture(name);
-      if (RECORD) {
-        await mkdir(join(import.meta.dirname, '..', 'fixtures', 'n1-golden', 'finish'), { recursive: true });
-        await writeFile(path, `<!-- Recorded from ${BASE_SHA} -->\n${actual}`);
-        return;
-      }
-      const expected = (await readFile(path, 'utf8')).replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '');
-      expect(actual).toBe(expected);
-    };
     const normalizeRecord = (record: string) => record
       .replace(/^shipped: \d{4}-\d{2}-\d{2}$/m, 'shipped: <DATE>')
       .replace(/^(active_ms|provider_active_ms|no_provider_active_ms): .+$/gm, '$1: <TIME_VALUE>');
@@ -444,6 +444,9 @@ describe('N=1 golden renderings', () => {
 
     await rm(join(root, '.docs', 'shipped'), { recursive: true, force: true });
     await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+    // A resumed real N=1 feature carries the pushed-tip receipt every daemon
+    // push records; it is not durable stack state and must not change FINISH.
+    await execFile('git', ['update-ref', 'refs/conductor/n1-golden/pushed/feat/daemon-n1-golden', 'HEAD'], { cwd: root });
     const resumed = await run(true);
     await expectFinishGolden('resumed-events', resumed.events.map((event) => JSON.stringify(event)).join('\n'));
     const resumedGit = partitionConductorRefProbes(resumed.gitArgv, 'n1-golden');
@@ -548,13 +551,25 @@ describe('N=1 golden renderings', () => {
     const leaf = await execFile('git', ['rev-parse', 'HEAD'], { cwd: root });
     expect(pushed.stdout.trim()).toBe(leaf.stdout.trim());
     const pushGit = partitionConductorRefProbes(gitArgv, 'n1-push');
+    // Commit SHAs carry fixture timestamps; every other argv byte is pinned.
+    const shaFree = (argv: readonly string[][]) => `${JSON.stringify(argv, null, 2).replace(/\b[0-9a-f]{40}\b/g, '<SHA>')}\n`;
+    await expectFinishGolden('push-git-argv', shaFree(pushGit.parity));
+    await expectFinishGolden('push-git-probe-argv', shaFree(pushGit.probes));
+    // The leaf push recorded the ordinary pushed-tip receipt, which is not stack state.
+    await execFile('git', ['rev-parse', '--verify', `refs/conductor/n1-push/pushed/${branch}`], { cwd: root });
     expect(pushGit.parity).toContainEqual(expect.arrayContaining(['push', 'origin', `HEAD:refs/heads/${branch}`]));
     expect(JSON.stringify(pushGit.parity)).not.toContain('refs/conductor/n1-push/publication');
     expect(pushGit.parity.some((args) => args[0] === 'ls-remote')).toBe(false);
     // The D11 guard always probes durable child refs; absent metadata is not proof of N=1.
     expect(pushGit.probes).toContainEqual(['for-each-ref', '--format=%(refname)', 'refs/heads/feat']);
 
+    // Resume: push a new leaf tip while that pushed-tip receipt exists. It must
+    // stay on the historical unguarded N=1 path (no ls-remote, no stack lease).
+    await writeFile(join(root, 'leaf-resume.txt'), 'leaf resume\n');
+    await execFile('git', ['add', 'leaf-resume.txt'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'leaf resume'], { cwd: root });
     const localArgv: string[][] = [];
+    const remoteArgv: string[][] = [];
     await expect(executeRemoteGit(['push', 'origin', `HEAD:refs/heads/${branch}`], {
       cwd: root,
       config: async () => ({ stdout: 'https://github.com/acme/widget.git\n' }),
@@ -573,9 +588,14 @@ describe('N=1 golden renderings', () => {
         const result = await execa('git', args, { cwd: root, input, reject: false });
         return { stdout: result.stdout, exitCode: result.exitCode ?? 1 };
       },
-      runRemoteGit: async () => ({ stdout: '' }),
+      runRemoteGit: async (args) => {
+        remoteArgv.push([...args]);
+        return { stdout: '' };
+      },
     })).resolves.toMatchObject({ kind: 'executed' });
     const localGit = partitionConductorRefProbes(localArgv, 'n1-push');
+    await expectFinishGolden('push-resumed-git-argv', shaFree([...localGit.parity, ...remoteArgv]));
+    await expectFinishGolden('push-resumed-git-probe-argv', shaFree(localGit.probes));
     expect(localGit.probes).toEqual(expect.arrayContaining([
       ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
       ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-push/'],
