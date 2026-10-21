@@ -31,7 +31,7 @@ import {
   verifyChildChainToLeaf,
   validateStackPayload,
 } from './stack-publication.js';
-import { activePublicationRecord, readPublicationRecord, writePublicationRecord } from './stack-publication-record.js';
+import { activePublicationRecord, readPublicationRecord, writePublicationRecord, type PublicationMember } from './stack-publication-record.js';
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
