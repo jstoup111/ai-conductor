@@ -1,6 +1,6 @@
 // Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11, task:12, task:17, task:rem-prd-audit-9, task:rem-prd-audit-9-2, task:rem-prd-audit-9-R1, task:rem-prd-audit-9-R2, task:rem-prd-audit-9-R3
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath, readdir, symlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -4480,7 +4480,12 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
-    it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
+    // #3317: a branch that commits a root `node_modules` symlink must not make
+    // the preflight's own root dependency link fail with EEXIST.
+    it.each([
+      ['an untracked root dependency path', false],
+      ['a tracked root node_modules symlink', true],
+    ])('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run with %s', async (_case, tracksRootDependencyLink) => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
       const selector = 'src/conductor/spec/example.test.mjs';
@@ -4513,6 +4518,10 @@ TIER: M`,
         await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
         await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nfunction it(_title, body) { body(); }\n// Covers: task:1\nit('loads checkout dependencies', () => { if (!uuidv4() || !execa || answer !== 2) { writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies').then(() => process.exit(1)); } });\n");
         await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
+        if (tracksRootDependencyLink) {
+          await symlink('src/conductor/node_modules', join(featureRoot, 'node_modules'));
+          await execa('git', ['add', 'node_modules'], { cwd: featureRoot });
+        }
         await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
         await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
         await writeFile(join(sourceDependencies, 'uuid/package.json'), '{"name":"uuid","type":"module","exports":"./index.mjs"}\n');

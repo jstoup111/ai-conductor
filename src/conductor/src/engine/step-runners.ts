@@ -5058,6 +5058,8 @@ export class DefaultStepRunner implements StepRunner {
       createCheckout: async (path, headSha) => {
         const result = await this.mutateWorktree(() => this.gitRunner(['worktree', 'add', '--detach', path, headSha]));
         if (result.exitCode !== 0) throw new Error(result.stderr);
+      },
+      prepareDependencies: async (path) => {
         // A detached worktree contains tracked files only.  The source
         // worktree's dependency installation is deliberately ignored by git,
         // so expose it by reference rather than copying or tracking it.

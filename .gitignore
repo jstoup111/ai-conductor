@@ -11,7 +11,7 @@
 /src/conductor/.vitest-tmp/
 
 # Node / TypeScript conductor build artifacts
-node_modules/
+node_modules
 .vite/
 src/conductor/dist
 src/conductor/dist-versions/
