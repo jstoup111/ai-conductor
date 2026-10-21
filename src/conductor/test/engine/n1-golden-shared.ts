@@ -179,7 +179,7 @@ const EPOCH_MS_KEYS = [
  */
 export function normalizeTimestamp(value: unknown, root: string): unknown {
   if (typeof value === 'string') {
-    if (/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    if (/^\d{4}-\d{2}-\d{2}T/.exec(value) !== null) {
       return '<TIMESTAMP>';
     }
     return value.replaceAll(root, '<ROOT>');

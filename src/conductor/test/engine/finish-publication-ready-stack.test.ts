@@ -73,7 +73,7 @@ function fixture(input: {
       };
     }
     const reference = args[2] ?? '';
-    const number = /^\d+$/.test(reference)
+    const number = reference !== '' && [...reference].every((char) => char >= '0' && char <= '9')
       ? Number(reference)
       : Number(reference.split('/').at(-1));
     return {
