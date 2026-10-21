@@ -1335,7 +1335,7 @@ export async function sweepMergeableLabels({
           // no attempt is claimed or ci-fix dispatcher is invoked.
           if (eligibility.reason === PUBLISHED_STACK_CI_FIX_REASON) {
             const reason = 'published stacked feature requires manual resolution (#2945)';
-            await emitEvent(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));
+            emitEvent(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));
             await escalate(entry.prUrl, 'published-stack', reason, {
               runGh: runnerForEntry(gh, entry, operations),
               cwd: entry.repoCwd,
