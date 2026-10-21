@@ -23,7 +23,7 @@ import {
 } from '../../src/engine/steps.js';
 import { phaseForStep } from '../../src/engine/resolved-config.js';
 import { isGatingStep } from '../../src/engine/gates.js';
-import { PRESEEDED_DONE } from '../../src/daemon-cli.js';
+import { PRESEEDED_DONE } from '../../src/engine/daemon-state.js';
 
 describe('engine/steps', () => {
   // --- ALL_STEPS exact order ---

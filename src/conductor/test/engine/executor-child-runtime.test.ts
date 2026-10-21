@@ -1,6 +1,6 @@
 // Covers: task:rem-as-built-rem-vg-1
 // Covers: task:rem-as-built-R1
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -67,6 +67,38 @@ function lifecycle(
 }
 
 describe('executor child runtime lifecycle composition', () => {
+  it('seeds the order tier and track into conduct-state before the conductor runs', async () => {
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    root = testRoot;
+    const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
+    await mkdir(join(worktree.path, '.pipeline'), { recursive: true });
+    await writeFile(join(worktree.path, '.pipeline', 'session-created'), '1');
+    let seenAtRun: Record<string, unknown> | undefined;
+    const deps = lifecycle(worktree, { done: false, halted: true, reason: 'stop' }, {
+      runConductor: vi.fn(async () => {
+        seenAtRun = JSON.parse(await readFile(join(worktree.path, '.pipeline', 'conduct-state.json'), 'utf8'));
+      }),
+    });
+
+    await makeExecutorChildFeatureRunner({
+      order: { ...order, tier: 'S', track: 'technical' },
+      worktree,
+      events: new ConductorEventEmitter(),
+      providerExecution,
+    }, deps)();
+
+    expect(deps.runConductor).toHaveBeenCalledTimes(1);
+    expect(seenAtRun).toMatchObject({
+      track: 'technical',
+      complexity_tier: 'S',
+      prd: 'skipped',
+      worktree: 'done',
+      memory: 'done',
+      feature_desc: order.slug,
+    });
+    await expect(readFile(join(worktree.path, '.pipeline', 'session-created'), 'utf8')).rejects.toThrow();
+  });
+
   it('returns setup-triage parking as a deferred autoPark effect and tears down the kept worktree', async () => {
     const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
     root = testRoot;

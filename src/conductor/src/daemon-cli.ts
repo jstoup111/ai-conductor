@@ -136,7 +136,7 @@ import {
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
+import type { ConductorEvent } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import {
   createDaemonTeardown,
@@ -209,13 +209,9 @@ import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
 } from './engine/conductor-deps.js';
-import {
-  deriveDaemonBaseState,
-  persistDaemonBaseState,
-} from './engine/daemon-state.js';
+import { seedDaemonDispatchState } from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
-import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
 import { runSetupFailureTriage, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
@@ -732,15 +728,6 @@ async function runOwnedHaltClassMigration(
   await deps.ensureWorktreeBase(worktreeBase);
   await deps.migrateHaltClasses(projectRoot, worktreeBase, deps.log);
   return worktreeBase;
-}
-
-// These are the only mechanical daemon bootstrap steps. DECIDE satisfaction
-// belongs to Conductor's artifact-backed entry policy, never this preseed.
-export const PRESEEDED_DONE: StepName[] = ['worktree', 'memory'];
-
-/** Mark only the mechanical daemon bootstrap steps as durable. */
-export function preseedStepStatuses(): Record<string, StepStatus> {
-  return Object.fromEntries(PRESEEDED_DONE.map((name) => [name, 'done']));
 }
 
 /**
@@ -1915,37 +1902,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       providerExecution.configuredProviders[0],
     );
 
-    // Sweep stale session markers before constructing the runner. A KEPT
-    // worktree (reused on a later daemon cycle after a prior halt/error —
-    // createWorktree is idempotent) still carries the previous run's
-    // `session-created` marker. Without this sweep the new
-    // runner inherits `sessionStarted = true` (lazy-init reads the marker) and
-    // its FIRST step would `--resume` a brand-new session id that was never
-    // created → "No conversation found" → "session unavailable (expired or in
-    // use)" → the feature errors out. The durable `conduct-session-id` is the
-    // feature run identity and survives restart/re-dispatch. The conductor
-    // also resets per step before every step, but sweeping here guarantees a
-    // clean provider start.
-    await preparePipelineForDaemonDispatch(pipelineDir);
-
-    // Pre-seed only mechanical bootstrap state. The engine checks DECIDE
-    // artifacts before it can advance into BUILD. On re-dispatch of a halted
-    // feature, preserve any recorded progress so resume picks up from its real
-    // next step (see `resume: true`).
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
-    const existingResult = await readState(stateFilePath);
-    const observedState = existingResult.ok ? existingResult.value : {};
-    // Seed the complexity tier only when the engineer supplied one. An
-    // unresolved tier remains unresolved here; Conductor alone resolves it
-    // conservatively to L when it evaluates step eligibility.
-    const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
-
     const stateStore = resolveConductorStateStore(
       stateFilePath,
       undefined,
       createStepStatusWriteRefusalDiagnostics(featureEvents),
     );
-    await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);
+    const baseState = await seedDaemonDispatchState(pipelineDir, item, stateStore);
 
     const stepRunner = new DefaultStepRunner(
       selectedRuntime.provider,

@@ -28,6 +28,9 @@ import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type Pr
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
+import { seedDaemonDispatchState } from './daemon-state.js';
+import type { ConductStateStore } from './conduct-state-store.js';
+import type { ConductState } from '../types/index.js';
 import type { FeatureExecutionOutcome } from './feature-executor.js';
 import type { ExecutorChildRunInput } from './executor-child.js';
 import { ConductorEventEmitter } from '../ui/events.js';
@@ -39,6 +42,8 @@ export interface ExecutorChildFeatureRunnerInput {
   /** The child's feature-local provider routing state for the runner scope. */
   providerExecution: ProviderExecutionContext;
   log?: (message: string) => void;
+  /** Store for the daemon base-state seed; defaults to the filesystem store. */
+  stateStore?: ConductStateStore<ConductState>;
 }
 
 /**
@@ -83,6 +88,13 @@ export function makeExecutorChildFeatureRunner(
       ...(input.log ? { log: input.log } : {}),
       stop: () => {},
     }),
+    // The child Conductor reads its tier, track, and preseeded steps from
+    // conduct-state.json; seed them from the order exactly as the
+    // in-process daemon does, or a technical spec resumes as `product`.
+    runConductor: async (worktree, item, ...rest) => {
+      await seedDaemonDispatchState(join(worktree.path, '.pipeline'), item, input.stateStore);
+      return lifecycle.runConductor(worktree, item, ...rest);
+    },
     deferTerminalEffects: true,
   });
   return () => run({
@@ -222,7 +234,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   let shutdown: Promise<void> | undefined;
   const beginShutdown = () => shutdown ??= closeForShutdown();
   signal.addEventListener('abort', () => { void beginShutdown(); }, { once: true });
-  const runner = makeExecutorChildFeatureRunner({ order, worktree, events, providerExecution, log: input.log }, {
+  const runner = makeExecutorChildFeatureRunner({ order, worktree, events, providerExecution, log: input.log, stateStore }, {
     createWorktree: async () => worktree,
     prepareWorktree: async (featureWorktree, featureLog, featureEvents) => prepareWorktree(
       featureWorktree.path,
