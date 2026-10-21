@@ -1729,3 +1729,11 @@ Each task's `**Dependencies:**` line is authoritative.
 **Done when:**
 - [test] S10.6 is satisfied by this task.
 - The repair for task rem-prd-audit-rem-s10-6-diverged-positions-halt is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asbuilt-malformed-stack-member-indeterminate: stack-publication.ts observeVerifiedStack (:485-487): return { kind: 'indeterminate' } when rawMembers[index] is present but malformed (null, scalar, or array), and keep pushing the expected member into mismatched only for a genuine membership change: index beyond rawMembers length or a different PR number. Tests in stack-publication-observe: a same-length stacks response with null, a scalar, or an array entry yields indeterminate and onDiverged is not called; a response missing a member or with a substituted PR number still yields diverged naming only that member's position.
+**Gate:** as-built
+**Rationale:** I confirmed this regression directly. At stack-publication.ts:485-487, observeVerifiedStack pushes the expected member into `mismatched` whenever rawMembers[index] is null, a scalar or an array. A malformed but same-length response therefore becomes confirmed divergence and reaches the terminal onDiverged halt at :550-552; before commit c58f8d86d2 it returned indeterminate. ADR decision 3 already requires indeterminate evidence to be retried and not halted, so the fix is BUILD work with no architectural decision. The repair must keep genuine membership changes as divergence: an index past the end of the response, a removed member, or a different PR number. Only an entry present at that index but not an object should return indeterminate. The S10.6 behaviour of reporting only the diverged members must survive.
+**Governing clause:** adr-2026-10-17-stacked-feature-publication-as-native-stack decision 3
+**Done when:**
+- adr-2026-10-17-stacked-feature-publication-as-native-stack decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-asbuilt-malformed-stack-member-indeterminate is committed and its targeted tests pass.
