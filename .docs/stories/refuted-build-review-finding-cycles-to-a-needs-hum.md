@@ -84,7 +84,7 @@ same refuted claim is neither re-judged nor halted as a regression.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a case resolved by refutation with effect `none`, when a later lap re-raises the exact same source id, then that source is removed from the live source set, the judge is not dispatched for it, and the lap routes PASS when no other source is live
+- Given a case resolved by refutation with effect `none` holds a source's authoritative link, when a later lap re-raises the exact same source id, then that source is removed from the live source set, the judge is not dispatched for it, and the lap routes PASS when no other source is live
 - Given a case resolved by refutation whose residual deferral is applied, when a later lap re-raises the same source id, then the source is settled the same way
 
 #### Negative Paths
