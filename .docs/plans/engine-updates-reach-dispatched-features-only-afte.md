@@ -937,3 +937,140 @@ Task 31 <- Task 14
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-R1: executor-child-runtime.ts + index.ts: pass selfHost (from WorkOrder/supervisor self-host flag), log: featureLog forwarder, stateStore and readOnlyReviewCapabilities into the child Conductor exactly as daemon-cli.ts in-process composition does; test that a self-host child dispatch opens a window via the live-boundary proxy
+**Gate:** prd-audit
+**Rationale:** Verified (99%): executor-child-runtime.ts Conductor construction omits selfHost, so isSelfBuild() is false in child mode and the live-boundary window is never requested. Approved architecture (ADR D4, Task 14) already requires the brokered live-boundary path; this is conforming implementation drift.
+**Criterion:** S5.1
+**Parent task:** 14
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R5: daemon/executor tests: add Task 28 test — a self-host child-mode feature whose provider windows straddle a mid-feature dist flip verifies with no live-boundary drift
+**Gate:** prd-audit
+**Rationale:** Task 28's straddle test is missing and the criterion is only vacuously met because the child never enters the self-build path. After R1 enables it, add the planned test.
+**Criterion:** S5.4
+**Parent task:** 28
+**Done when:**
+- [test] S5.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R2: child-feature-executor.ts: consume the forked child's piped stdout/stderr line-by-line into the slug-tagged daemon.log sink (or route child console.log through teeExecutorConsole); test a child feature log line and a console.log line both reach daemon.log tagged with the slug and a large output cannot block the child
+**Gate:** prd-audit
+**Rationale:** Verified: child Conductor has no log wiring, and child-feature-executor.ts forks with silent:true without reading stdout/stderr (dropped output, possible pipe-full block). Task 13 admits both repairs.
+**Criterion:** S7.3
+**Parent task:** 13
+**Done when:**
+- [test] S7.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R8: daemon.ts + daemon-maintenance.ts: consult isSuppressed before the cap drain, end the drain (endDrain + reopen maintenance) on every restartStaleSupervisor path that does not fire a restart, honor recorded protocol mismatch independent of current staleness, and run stale-age/mismatch observation at pool width 1; tests for each path
+**Gate:** prd-audit
+**Rationale:** Verified in daemon.ts: observeBusyDrainRequest begins a stale-engine drain on capExceeded without the suppression check, and restartStaleSupervisor's early-return-false paths (suppressed target, no longer stale) never call maintenance.endDrain(), leaving claims paused. Task 27 admits the repair.
+**Criterion:** S11.3
+**Parent task:** 27
+**Done when:**
+- [test] S11.3 is satisfied by this task.
+- The repair for task rem-prd-audit-R8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R3: executor-child-runtime.ts/index.ts: run the child feature through the shared daemon-runner.ts whole-feature lifecycle (prepareWorktree, setup triage incl. autoPark, REKICK/stack preflight, teardown) and return cleanupHaltPresentation and engineerSignal in terminalEffects for supervisor collection
+**Gate:** prd-audit
+**Rationale:** Task 30's parity test is absent and the child composition diverges (no selfHost/log/stateStore/readOnlyReviewCapabilities; skips prepareWorktree and REKICK/stack preflight). Restoring composition and lifecycle parity and adding the planned test is approved scope.
+**Criterion:** S16.1
+**Parent task:** 30
+**Done when:**
+- [test] S16.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R4: Add Task 30 parity tests: identical step sequence, ledger event types (excluding executor_started), terminal status/effects for child vs in-process; rate-limited episode variant; gate-halt variant with identical halt marker and collected outcome
+**Gate:** prd-audit
+**Rationale:** Task 30's parity test is absent and the child composition diverges (no selfHost/log/stateStore/readOnlyReviewCapabilities; skips prepareWorktree and REKICK/stack preflight). Restoring composition and lifecycle parity and adding the planned test is approved scope.
+**Criterion:** S16.1
+**Parent task:** 30
+**Done when:**
+- [test] S16.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R4 is committed and its targeted tests pass.
+
+### Task rem-as-built-R6: executor-proxies.ts + executor-broker.ts: retain the latest snapshot in proxies and replay to late subscribers; subscribe the broker to authoritative rate-limit/availability services and broadcast after each mutation (clear broadcast after rate-limit-episode reset); tests for pre-subscribe snapshot and supervisor-side change propagation
+**Gate:** as-built
+**Rationale:** ADR D4 requires faithful replicas; proxies drop snapshots before subscribers exist, supervisor-side changes are not propagated, and clear broadcasts before the authoritative reset. Clear implementation drift.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4 is satisfied by this task.
+- The repair for task rem-as-built-R6 is committed and its targeted tests pass.
+
+### Task rem-as-built-R7: child-feature-executor.ts: route the record-publication failure through the existing bounded SIGTERM→SIGKILL termination path with exit confirmation; test an uncooperative child after accepted hello is killed within budget
+**Gate:** as-built
+**Rationale:** ADR D5 bounded termination; record-publication failure still uses SIGTERM-only and may await exit indefinitely. Reuse the existing bounded path.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 5
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R7 is committed and its targeted tests pass.
+
+### Task rem-as-built-R9: daemon.ts/daemon-cli.ts: when engine source refresh is throttled or skipped, run backlog discovery without the fetch/fast-forward (refresh:false or a throttle-aware fastForwardRoot) so origin mutation honors engine_refresh_min_interval_seconds; test no fetch inside the interval while discovery still runs
+**Gate:** as-built
+**Rationale:** ADR D8 cadence: verified daemon.ts calls discoverBacklog({refresh:true}) even when refreshEngineSource was throttled, so fetch/fast-forward bypasses the interval. Task 28 admits the fix.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 8
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 8 is satisfied by this task.
+- The repair for task rem-as-built-R9 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-1: executor-child-runtime.ts/index.ts: replace the direct Conductor construction with a child composition of daemon-runner.ts makeRunFeature. Supply child-side deps for prepareWorktree, runSetupTriage, teardownWorktree and runConductor. The FeatureExecutionOutcome must carry the runner's own terminalEffects (autoPark, cleanupHaltPresentation, engineerSignal, markProcessed, enrollWatch, sweep) as declarative data, so root-owned effects still apply only at supervisor collection. Delete the handcrafted effect objects at executor-child-runtime.ts:170-188. Add targeted tests in executor-child-runtime.test.ts covering setup-triage park → autoPark, halt → cleanupHaltPresentation and engineerSignal, and teardown invocation.
+**Gate:** as-built
+**Rationale:** Verified (99%): ADR D1 says the child runs the whole per-feature path, including preparation, setup triage, runConductorInWorktree and teardown. executor-child-runtime.ts:95-188 builds a Conductor directly and handcrafts terminalEffects ({markProcessed, enrollWatch, sweep} / {sweep}). It bypasses makeRunFeature in daemon-runner.ts (prepareWorktree :470, runSetupTriage/autoPark :488-516, teardown :511/648/663/692, cleanupHaltPresentation/engineerSignal :563-600). The approved architecture is unambiguous, so this is conforming implementation work. Earlier laps patched individual effects instead of reusing the shared runner, so the repair must compose makeRunFeature itself and stop re-deriving its outputs.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 1
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-2: daemon parity test (e.g. test/engine/executor-parity.test.ts): run one fixture feature through createChildProcessFeatureExecutor and createInProcessFeatureExecutor. Assert an identical ordered step sequence, identical ledger event types excluding executor_started, identical terminal status, and identical terminalEffects. Add the rate-limited-episode variant: wait on the daemon-wide episode in both modes, and record a halt during the episode as episode-caused and recovered by the episode-halt sweep.
+**Gate:** prd-audit
+**Rationale:** Verified (99%): same root cause as the lifecycle as-built finding (the child bypasses daemon-runner's whole-feature lifecycle), and no child-versus-in-process parity test exists. The code repair is rem-vg-1. This disposition adds the missing parity coverage that task 30 and rem-prd-audit-R4 already admit, so the criterion is proven rather than asserted.
+**Criterion:** S16.1
+**Parent task:** rem-prd-audit-R3
+**Done when:**
+- [test] S16.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-3: Add the gate-halt parity variant to the parity test. A gate halt in child and in-process modes must produce identical HALT marker content, an identical ledger event sequence (fields equal except timestamps, run ids and executor_started), and an identical collected outcome including terminalEffects.
+**Gate:** prd-audit
+**Rationale:** Verified (99%): on a halt, the child returns only {sweep:true}. The in-process path also produces cleanupHaltPresentation, engineerSignal and (for triage) autoPark, and runs teardown. rem-vg-1 fixes the behavior. Task 30's third done-when (the gate-halt variant) has no test, so this adds it.
+**Criterion:** S16.3
+**Parent task:** 30
+**Done when:**
+- [test] S16.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg-4: executor-child.ts / shipped-record-cli.ts / finish path: in child mode, pass the child's pinned engineVersionId (derived via versionIdFromEngineDir from the child's own module dir, never inherited from supervisor env) to the shipped-record writer. For example, the child exports it to the finish step's conduct invocation, or the finish step launches the CLI from the pinned dist-versions/<id>. Add an executor-child.test.ts test asserting that a child-mode finish writes engine_version equal to the pinned engineVersionId, not the supervisor or floating-dist build.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): shipped-record-cli.ts stamps engine_version from resolveEngineVersion of its own module dir. Invoked through the conduct CLI from a child, that resolves through the floating dist instead of the child's pinned dist-versions/<id>. Task 31 Steps 1-4 directly admit the fix: make the finish path resolve from the executing engine dir in child mode, and add the missing child-mode test.
+**Criterion:** S13.3
+**Parent task:** 31
+**Done when:**
+- [test] S13.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg-5: daemon.ts: honor a recorded protocol mismatch independently of current staleness at both the drained boundary (:1565) and the idle boundary (:1916). Record pending mismatches before reading recordedMismatch. Ensure a fallback child that completes before busy observation still has its mismatch recorded and starts the claim-stop drain/restart. Add daemon.test.ts cases: mismatch with current staleness false still restarts at drained and idle boundaries, and a fast-completing fallback child does not permit another claim.
+**Gate:** as-built
+**Rationale:** Verified (95%): ADR D7 and task 27's done-when require that a recorded protocol mismatch start the drain/restart regardless of stale age. daemon.ts:1565-1568 reads recordedMismatch before the observation that records it, and abandons the drain when staleness is false. The idle path at :1916-1921 requires observeSupervisorStaleness() before restarting. A fallback child that settles before busy observation (:1998-2003) skips mismatch observation entirely. This is clear conforming scheduling work inside task 27.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-R1: src/conductor/src/engine/executor-child-runtime.ts: supply beginFeatureRun in makeExecutorChildFeatureRunner and the production lifecycle deps so the child-owned forwarded events bus is the feature-run scope at daemon-runner.ts:419. Keep feature_dispatch_started/ended supervisor-owned. Add a RED test asserting that shipment, setup/triage, shipment-refusal and termination events reach the forwarded bus and that no dispatch-start/end is emitted from the child.
+**Gate:** as-built
+**Rationale:** Verified (95%): makeExecutorChildFeatureRunner in executor-child-runtime.ts takes input.events but the makeRunFeature deps it builds supply no beginFeatureRun. The production lifecycle deps (~:193) and index.ts omit it too (grep finds no beginFeatureRun there), so daemon-runner.ts:419 runs with no feature event scope. That drops shipment, setup/triage, refusal and termination events. ADR D4 stays authoritative and the repair is clear wiring, so no architecture decision is needed. Bind the child-owned forwarded bus as the runner's feature scope. Dispatch-start/end stay supervisor-owned and are not re-emitted from the child (Task 19). Admitted by Task 12 (forward executor events to the proxy feature bus), Task 14 (child entrypoint composition) and Task 30 (child-mode parity).
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: src/conductor/src/engine/daemon.ts: route every collection path (immediate completedWorker, the maxIdlePolls===0 direct collect, and the post-busy-poll collect) through one helper that observes any pending protocol-mismatch drain request before collectOne can reopen a slot. Add a RED scheduler test: with another executor alive, a fallback child completes during the busy wait and no new feature is claimed before the drain starts.
+**Gate:** as-built
+**Rationale:** Verified (95%): in daemon.ts, observeBusyDrainRequest runs only before the immediate completedWorker collection (~:2033). The maxIdlePolls===0 direct collectOne (~:2043) and the post-busy-poll collectOne (~:2076) skip it. A fallback child that completes during the wait can free a slot, and claiming refills it before the protocol mismatch is recorded. ADR D7 is clear: the mismatch must be honored before claiming reopens. This is conforming implementation drift admitted by Task 27 (age-cap and protocol-mismatch drain restarts) and Task 29 (a pending restart stops new maintenance/claims).
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 7 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.

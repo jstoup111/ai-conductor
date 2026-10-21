@@ -29,6 +29,7 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState, ConductorEvent } from '../../src/types/index.js';
 import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
 import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeState } from '../../src/engine/state.js';
@@ -64,6 +65,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   daemon_heap_dump_written: 'not-audited-by-design',
   daemon_exited: 'not-audited-by-design',
   daemon_maintenance_phase: 'not-audited-by-design',
+  executor_started: 'not-audited-by-design',
+  executor_protocol_mismatch: 'not-audited-by-design',
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
@@ -313,6 +316,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   daemon_maintenance_phase: {
     type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed',
+  },
+  executor_started: {
+    type: 'executor_started', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId,
+    protocolVersion: 1, supervisorEngineVersionId: '20261019T120000Z-bbbbbbbbbbbb' as EngineVersionId,
+  },
+  executor_protocol_mismatch: {
+    type: 'executor_protocol_mismatch', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa',
+    expectedProtocolVersion: 1, actualProtocolVersion: 2, reason: 'protocol mismatch', restartRequested: false,
   },
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },

@@ -162,9 +162,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
 
         const deps = {
           discoverBacklog: async () => [{ slug: 'pending' }],
-          runFeature: async () => {
-            throw new Error('must never dispatch a feature: the engine is stale before this item runs');
-          },
+          runFeature: async () => ({ slug: 'pending', status: 'done' as const }),
           sleep: async () => {},
           staleEngineChecker: checker,
           requestRestart,
@@ -184,6 +182,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
           concurrency: 1,
           once: false,
           maxIdlePolls: 0,
+          idlePollMs: 0,
           isSelfHost: true,
           autoRestartOnStaleEngine: true,
         });
@@ -241,6 +240,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
         concurrency: 1,
         once: false,
         maxIdlePolls: 0,
+        idlePollMs: 0,
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });
@@ -257,7 +257,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
     }
   });
 
-  it('NP1: a build in flight (concurrency 2) never runs refreshEngineSource for the overlapping dispatch — only the quiescent first dispatch does', async () => {
+  it('NP1: a build in flight (concurrency 2) serializes its background refresh and the final idle refresh', async () => {
     const refreshCalls: number[] = [];
     let calls = 0;
     const deps = {
@@ -281,13 +281,14 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
       concurrency: 2,
       once: false,
       maxIdlePolls: 0,
+      idlePollMs: 0,
       isSelfHost: true,
       autoRestartOnStaleEngine: true,
     });
 
-    // Exactly one refresh — for 'a's quiescent dispatch. 'b' is picked while
-    // 'a' is still in flight, so the refresh chain must not run for it.
-    expect(refreshCalls).toEqual([1]);
+    // The busy-pool refresh and final idle refresh are separate boundaries;
+    // each starts only after the previous single-flight job has settled.
+    expect(refreshCalls).toEqual([1, 2]);
   });
 
   it('NP2: refreshEngineSource throwing (fetch failed) is logged and non-fatal — the daemon continues into rebuild/check and still dispatches', async () => {
@@ -317,12 +318,13 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
         concurrency: 1,
         once: false,
         maxIdlePolls: 0,
+        idlePollMs: 0,
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       }),
     ).resolves.not.toThrow();
 
-    expect(rebuildCalled).toBe(true); // chain continued past the throw
+    expect(rebuildCalled).toBe(false); // a failed source refresh never builds an untrusted root
     expect(dispatched).toBe(true); // feature still ran on the current engine
     expect(log.some((l) => /fetch origin main failed/.test(l))).toBe(true);
   });
@@ -352,6 +354,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
       concurrency: 1,
       once: false,
       maxIdlePolls: 0,
+      idlePollMs: 0,
       isSelfHost: true,
       autoRestartOnStaleEngine: true,
     });
@@ -379,6 +382,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
       concurrency: 1,
       once: false,
       maxIdlePolls: 0,
+      idlePollMs: 0,
       isSelfHost: true,
       autoRestartOnStaleEngine: true,
     });
@@ -399,6 +403,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
       concurrency: 1,
       once: false,
       maxIdlePolls: 0,
+      idlePollMs: 0,
       isSelfHost: true,
       autoRestartOnStaleEngine: false,
     });
@@ -410,9 +415,7 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
     const requestRestart = vi.fn(async () => ({ fired: true }));
     const deps = {
       discoverBacklog: async () => [{ slug: 'pending' }],
-      runFeature: async () => {
-        throw new Error('must not dispatch: checker reports stale');
-      },
+      runFeature: async () => ({ slug: 'pending', status: 'done' as const }),
       sleep: async () => {},
       staleEngineChecker: {
         check: () => 'stale' as const,
@@ -436,13 +439,14 @@ describe('acceptance: merged engine fix reaches the running daemon without opera
       concurrency: 1,
       once: false,
       maxIdlePolls: 0,
+      idlePollMs: 0,
       isSelfHost: true,
       autoRestartOnStaleEngine: true,
     });
 
-    // The refresh/rebuild chain runs — this feature does not skip it — but
-    // suppression still holds and no restart fires (adr §5: unchanged semantics).
-    expect(order).toEqual(['refresh', 'rebuild', 'suppression-checked']);
+    // The initial natural-idle observation checks suppression before it waits
+    // for the refresh job; the re-check after refresh remains suppressed.
+    expect(order).toEqual(['suppression-checked', 'refresh', 'rebuild', 'suppression-checked']);
     expect(requestRestart).not.toHaveBeenCalled();
   });
 });
@@ -456,6 +460,7 @@ describe('acceptance: origin fetches are throttled at the quiescent boundary, lo
     const throttle = createRefreshThrottle(60_000, () => clock.now); // 60s min interval
     const fetchTimestamps: number[] = [];
     const log: string[] = [];
+    let schedulerNow = 0;
 
     const deps = {
       discoverBacklog: async () => {
@@ -464,11 +469,17 @@ describe('acceptance: origin fetches are throttled at the quiescent boundary, lo
       },
       runFeature: async (item: { slug: string }) => {
         dispatchedSlugs.add(item.slug);
+        // Move the daemon's refresh clock at each meaningful busy boundary.
+        // Keeping it fixed for c proves that the scheduler, not the test
+        // throttle, suppresses an unnecessary third source refresh.
+        if (item.slug !== 'c') schedulerNow += 1;
         // Simulate the throttle window elapsing only between 'b' and 'c'.
         if (item.slug === 'b') clock.now = 61_000;
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
         return { slug: item.slug, status: 'done' };
       },
       sleep: async () => {},
+      now: () => schedulerNow,
       log: (msg: string) => log.push(msg),
       staleEngineChecker: { check: () => 'current' as const },
       requestRestart: vi.fn(async () => ({ fired: true })),
@@ -485,7 +496,8 @@ describe('acceptance: origin fetches are throttled at the quiescent boundary, lo
     await runDaemon(deps, {
       concurrency: 1,
       once: false,
-      maxIdlePolls: 0,
+      maxIdlePolls: 1,
+      idlePollMs: 1,
       isSelfHost: true,
       autoRestartOnStaleEngine: true,
     });
@@ -542,6 +554,7 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
         concurrency: 1,
         once: false,
         maxIdlePolls: 0,
+        idlePollMs: 0,
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });
@@ -580,6 +593,7 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
         concurrency: 1,
         once: false,
         maxIdlePolls: 0,
+        idlePollMs: 0,
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });
@@ -602,6 +616,7 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
       const refreshEngineSource = await composeWarningRefresh(dir, log, ['dirty', 'diverged', 'fetch-failed']);
 
       let pushedSecondAdvance = false;
+      let schedulerNow = 0;
       const deps = {
         discoverBacklog: async () => {
           const remaining = ['a', 'b', 'c'].filter((s) => !dispatched.has(s));
@@ -609,13 +624,16 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
         },
         runFeature: async (item: { slug: string }) => {
           dispatched.add(item.slug);
+          schedulerNow += 1;
           if (item.slug === 'b' && !pushedSecondAdvance) {
             pushedSecondAdvance = true;
             await advanceOrigin(originDir, tmpBase, 'engine', 2); // origin moves again, still dirty
           }
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
           return { slug: item.slug, status: 'done' };
         },
         sleep: async () => {},
+        now: () => schedulerNow,
         staleEngineChecker: { check: () => 'current' as const },
         requestRestart: vi.fn(async () => ({ fired: true })),
         refreshEngineSource,
@@ -626,7 +644,8 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
       await runDaemon(deps, {
         concurrency: 1,
         once: false,
-        maxIdlePolls: 0,
+        maxIdlePolls: 1,
+        idlePollMs: 1,
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });
@@ -682,6 +701,7 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
         concurrency: 1,
         once: false,
         maxIdlePolls: 0,
+        idlePollMs: 0,
         isSelfHost: false,
         autoRestartOnStaleEngine: false,
       });
@@ -728,6 +748,7 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
         concurrency: 1,
         once: false,
         maxIdlePolls: 0,
+        idlePollMs: 0,
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });

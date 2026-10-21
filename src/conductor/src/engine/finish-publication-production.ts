@@ -118,6 +118,8 @@ export interface ProductionFinishPublicationCoordinator {
 export interface ProductionFinishPublicationDeps {
   projectRoot: string;
   stateFilePath: string;
+  /** Child executor's loaded engine identity, when FINISH runs in child mode. */
+  engineVersionId?: string;
   /** Resolved PR base branch from the owning production composition root. */
   baseBranch: string;
   /** Loaded `.github/pull_request_template.md` bytes, when the project has one. */
@@ -1789,7 +1791,10 @@ export function createProductionFinishPublicationCoordinator(
           },
           createShippedRecord: async () => {
             if (!state.feature_desc || !state.pr_url) throw new Error('missing shipment identity');
-            const status = await writeShippedRecord({ kind: 'write', slug: state.feature_desc, pr: state.pr_url }, deps.projectRoot);
+            const status = await writeShippedRecord({
+              kind: 'write', slug: state.feature_desc, pr: state.pr_url,
+              ...(deps.engineVersionId === undefined ? {} : { engineVersion: deps.engineVersionId }),
+            }, deps.projectRoot);
             if (status !== 0) throw new Error('required shipped-record accepted-risk evidence could not be published');
             await copyRecordedReviewFindingsToShippedRecord(state.feature_desc);
           },

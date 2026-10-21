@@ -541,7 +541,34 @@ type ConductorEventBody =
     }
   /** Duration and result of a daemon maintenance occurrence on the canonical event spine. */
   | DaemonMaintenancePhaseEvent
-  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
+  | {
+      type: 'feature_dispatch_started';
+      slug: string;
+      kind: DispatchKind;
+      tier?: ComplexityTier;
+      /** Immutable executor build selected at claim time (absent in legacy ledgers). */
+      engineVersionId?: string;
+      /** Why this dispatch used the supervisor build rather than `dist`. */
+      pinFallbackReason?: string;
+    }
+  | {
+      type: 'executor_started';
+      slug: string;
+      engineVersionId: string;
+      protocolVersion: number;
+      supervisorEngineVersionId: string;
+    }
+  | {
+      /** A child was rejected before receiving a work order. */
+      type: 'executor_protocol_mismatch';
+      slug: string;
+      engineVersionId: string;
+      expectedProtocolVersion: number;
+      actualProtocolVersion?: number;
+      reason: string;
+      /** D7's drain fallback was requested through the armed supervisor seam. */
+      restartRequested: boolean;
+    }
   | {
       type: 'feature_dispatch_ended';
       slug: string;

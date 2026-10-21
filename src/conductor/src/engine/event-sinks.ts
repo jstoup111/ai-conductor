@@ -28,6 +28,8 @@ export const EVENT_SINKS = {
   daemon_exited: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_maintenance_phase: { render: false, persist: true, audit: false, otel: false },
   feature_dispatch_started: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  executor_started: { render: true, persist: true, audit: false, otel: false, otelTrace: false },
+  executor_protocol_mismatch: { render: true, persist: true, audit: false, otel: false, otelTrace: false },
   feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   feature_shipped: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   // Foreground monitor transitions are durable telemetry. The monitor has no

@@ -166,7 +166,9 @@ describe('currentTarget', () => {
 
   it('returns undefined for a dangling dist symlink rather than throwing', async () => {
     const { currentTarget } = await loadEngineStore();
-    const missingTarget = join(tmpDir, 'dist-versions', '20260704T120000Z-missing');
+    // A syntactically valid basename must still be unknown when its target is
+    // gone; status must not mark live rows falsely older from this link.
+    const missingTarget = join(tmpDir, 'dist-versions', '20260704T120000Z-aaaaaaaaaaaa');
     await symlink(missingTarget, join(tmpDir, 'dist'));
 
     await expect(currentTarget(tmpDir)).resolves.toBeUndefined();

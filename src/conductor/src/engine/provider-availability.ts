@@ -10,6 +10,10 @@ export interface ProviderAvailability {
 
   /** Returns whether a provider may be invoked at the injected current time. */
   isAvailable(provider: string): boolean;
+  /** Current authoritative suppression windows, for child-process replicas. */
+  snapshot?(): Record<string, number>;
+  /** Emits after an authoritative mutation so isolated executors stay in sync. */
+  subscribe?(listener: () => void): () => void;
 }
 
 interface SuppressionWindow {
@@ -53,6 +57,8 @@ export function createProviderAvailability({
   now,
 }: CreateProviderAvailabilityOptions): ProviderAvailability {
   const suppressedUntil = new Map<string, SuppressionWindow>();
+  const subscribers = new Set<() => void>();
+  const notify = () => { for (const listener of subscribers) listener(); };
 
   return {
     suppress(provider: string, untilMs: number): void {
@@ -62,6 +68,7 @@ export function createProviderAvailability({
       if (boundedUntil <= openedAtMs) return;
       if (existingUntil === undefined || boundedUntil > existingUntil.untilMs) {
         suppressedUntil.set(provider, { untilMs: boundedUntil, openedAtMs });
+        notify();
       }
     },
 
@@ -76,6 +83,7 @@ export function createProviderAvailability({
       // arbitrarily long refusal. Treat a pre-open observation as elapsed.
       if (currentMs < window.openedAtMs) {
         suppressedUntil.delete(provider);
+        notify();
         return true;
       }
       if (currentMs < Math.min(window.untilMs, window.openedAtMs + MAX_PROVIDER_SUPPRESSION_MS)) {
@@ -85,7 +93,22 @@ export function createProviderAvailability({
       // Expiry is self-contained: once observed, the old window cannot affect
       // a later exhaustion cycle and no operator-triggered clearing is needed.
       suppressedUntil.delete(provider);
+      notify();
       return true;
+    },
+    snapshot(): Record<string, number> {
+      const currentMs = now();
+      const result: Record<string, number> = {};
+      for (const [provider, window] of suppressedUntil) {
+        if (currentMs >= window.openedAtMs && currentMs < Math.min(window.untilMs, window.openedAtMs + MAX_PROVIDER_SUPPRESSION_MS)) {
+          result[provider] = window.untilMs;
+        }
+      }
+      return result;
+    },
+    subscribe(listener: () => void): () => void {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
     },
   };
 }

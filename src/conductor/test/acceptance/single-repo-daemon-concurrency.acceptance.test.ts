@@ -143,9 +143,11 @@ describe('single-repo daemon concurrency', () => {
     betaFinished.resolve(done('beta'));
     const result = await daemon;
 
-    expect(started).toEqual(['alpha', 'beta']);
-    expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['alpha', 'beta']);
+    // Ordinary staleness now adopts the natural-idle handoff: it does not
+    // drain a busy pinned-executor pool, so gamma can claim its free slot.
+    expect(started).toEqual(['alpha', 'beta', 'gamma']);
+    expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['alpha', 'beta', 'gamma']);
     expect(requestRestart).toHaveBeenCalledTimes(1);
-    expect(logs).toContainEqual(expect.stringMatching(/^\[daemon\].*drain.*stale/i));
+    expect(logs).toContainEqual(expect.stringMatching(/^\[daemon\].*stale supervisor at idle/i));
   });
 });

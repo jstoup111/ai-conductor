@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { engineEntryPathForRepo, readEngineSourceSha } from '../../src/daemon-cli.js';
+import { conductorRootForModuleDir, engineEntryPathForRepo, readEngineSourceSha } from '../../src/daemon-cli.js';
 import { captureEngineIdentity } from '../../src/engine/engine-identity.js';
 
 describe('engineEntryPathForRepo (stale-engine checker wiring)', () => {
@@ -33,6 +33,17 @@ describe('engineEntryPathForRepo (stale-engine checker wiring)', () => {
     // the checker would be permanently disabled.
     const preFix = await captureEngineIdentity(join(root, 'dist', 'index.js'));
     expect(preFix).toBeNull();
+  });
+});
+
+describe('conductorRootForModuleDir (per-dispatch pin wiring)', () => {
+  it('walks from a published version directory to the package root, not dist-versions', () => {
+    expect(conductorRootForModuleDir('/install/conductor/dist-versions/20261019T120000Z-aaaaaaaaaaaa'))
+      .toBe('/install/conductor');
+  });
+
+  it('keeps the development dist parent as the package root', () => {
+    expect(conductorRootForModuleDir('/repo/src/conductor/dist')).toBe('/repo/src/conductor');
   });
 });
 

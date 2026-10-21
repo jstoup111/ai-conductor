@@ -118,7 +118,7 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
   await writeFile(join(repo, '.docs', 'plans', 'feature-a.md'), '# feature-a\n');
   await writeFile(
     join(repo, '.ai-conductor/config.yml'),
-    'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n',
+    'executor_isolation: in-process\notel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n',
   );
   await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
   await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });

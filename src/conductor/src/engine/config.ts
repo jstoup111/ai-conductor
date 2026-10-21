@@ -114,6 +114,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
     'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
     'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
+    'executor_isolation', 'supervisor_max_stale_hours',
     'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review',
     'prd_audit', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
     'retry_routing', 'coverage_binding', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
@@ -1343,6 +1344,32 @@ export function validateConfig(
     ) {
       return errVal('daemon_concurrency must be an integer in the accepted range [1, ∞)');
     }
+  }
+
+  // executor_isolation — process boundary for daemon feature execution. This
+  // is deliberately fail-closed: an unknown mode could silently select the
+  // wrong lifecycle and engine-version semantics.
+  if (obj.executor_isolation === undefined) {
+    if (materializeDefaults) obj.executor_isolation = 'child';
+  } else if (obj.executor_isolation !== 'child' && obj.executor_isolation !== 'in-process') {
+    return errVal('executor_isolation must be one of: child | in-process');
+  }
+
+  // supervisor_max_stale_hours — age cap before a stale supervisor stops
+  // claiming and drains. Bad operator input must not disable that recovery
+  // path, so retain the bounded default and make the fallback visible.
+  if (
+    obj.supervisor_max_stale_hours !== undefined &&
+    (typeof obj.supervisor_max_stale_hours !== 'number' ||
+      !Number.isFinite(obj.supervisor_max_stale_hours) ||
+      obj.supervisor_max_stale_hours <= 0)
+  ) {
+    warnings.push(
+      `supervisor_max_stale_hours has invalid value ${JSON.stringify(obj.supervisor_max_stale_hours)}, falling back to 24.`,
+    );
+    obj.supervisor_max_stale_hours = 24;
+  } else if (obj.supervisor_max_stale_hours === undefined && materializeDefaults) {
+    obj.supervisor_max_stale_hours = 24;
   }
 
   // daemon_heap_limit_mb — V8's old-space cap must leave enough room for a

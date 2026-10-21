@@ -48,7 +48,7 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 
 export type ShippedRecordDispatch =
-  | { kind: 'write'; slug: string; pr: string }
+  | { kind: 'write'; slug: string; pr: string; engineVersion?: string }
   | { kind: 'guide' };
 
 /**
@@ -143,7 +143,7 @@ export async function dispatchShippedRecord(
     // can attribute each ship to a build. Resolved from this module's own path
     // (a fresh `conduct shipped-record` process has no pidfile to read) and
     // never throws — see resolveEngineVersion.
-    const engineVersion = resolveEngineVersion(dirname(fileURLToPath(import.meta.url)));
+    const engineVersion = cmd.engineVersion ?? resolveEngineVersion(dirname(fileURLToPath(import.meta.url)));
     const fields = {
       slug: identity.slug,
       specHash: digest,

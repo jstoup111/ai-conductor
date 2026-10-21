@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:8, task:9, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -291,6 +291,8 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'daemon_memory_sample',
   'daemon_heap_dump_written',
   'daemon_exited',
+  'executor_started',
+  'executor_protocol_mismatch',
   'feature_dispatch_started',
   'feature_dispatch_ended',
   'feature_shipped',
@@ -1822,6 +1824,8 @@ describe('event sink subscriptions', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
       'build_active_stall',
+      'executor_started',
+      'executor_protocol_mismatch',
       'tracker_backend_unavailable',
       'halt_marker_write_failed',
       'halt_record_written',
