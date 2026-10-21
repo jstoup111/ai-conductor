@@ -220,6 +220,8 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   escalation's durable stopping point under portable-build-review-policy D9. Superseding an open
 >   owner with a stop is #3005's decision and is not made here.
 
+> **Amended 2026-10-20 by #3271:** The settled predicate of D5.1 also admits a source by exact id when its D5.5 authoritative link is `carried`. A binding to a carry-eligible case is classified `carry` before D5.6's explicit-rebind regression halt and before D5.7's decision-stop persistence, so neither applies to it. D5.4's unchanged-resolved-row rule gains three engine writers that may change a resolved row: `finalize` acceptance origins, the carry lane, and reuse-halt source linking (adr-2026-10-20-operator-acceptance-is-durable-case-state D2, D3). D5.2's exclusion of `failed` and `reserved` action cases from settlement no longer applies to retirement: such a case retires under the shared retirement predicate when every source is covered by operator acceptance or carry, or is no longer raised on a mechanically healthy lap (adr-2026-10-20-operator-acceptance-is-durable-case-state D4, D5).
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced

@@ -104,6 +104,8 @@ the completion predicate and failure-detail renderer read the store afterward an
 matching finding's blocking effect. New, unmatched, malformed, legacy, and infrastructure findings
 remain blocking.
 
+> **Amended 2026-10-20 by #3271:** Exact dispositions in this store remain the only source of accepted risk. Their effect now also extends to later re-raises that the judge binds to a case holding an acceptance origin derived from them, recorded in the remediation case store as `carried` (adr-2026-10-20-operator-acceptance-is-durable-case-state D2, D3, D9). Invalidating a disposition stops new carry admission from it.
+
 ### 3. Serialize the coordinator and CLI through one state transaction
 
 All reads and writes that join current findings with dispositions use one feature-local
@@ -158,6 +160,8 @@ Acceptance during an active kickback loop is visible to the next deterministic g
 so the feature can converge without parking or waiting for the cumulative cap. This decision does
 not make the command a general HALT clearer; existing halted-feature recovery remains authoritative.
 
+> **Amended 2026-10-20 by #3271:** A third pre-boot local operation, `build-review resolve-case`, resolves an open remediation case under the same TTY and machine-identity gate as `accept` (adr-2026-10-20-operator-acceptance-is-durable-case-state D7). `findings` additionally lists carried sources with their origin dispositions, and operator-resolved cases (adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
+
 ### 5. Reuse the external-process event ledger and one reader contract
 
 Generalize the existing external event writer for any allowlisted `ConductorEvent`, retaining
@@ -178,6 +182,8 @@ uses the same renderer/data contract. Each entry includes finding ID, rubric, su
 rationale, operator, and acceptance time. Missing or unreadable disposition state cannot fabricate
 accepted risk; a known accepted record that cannot be rendered blocks completion rather than silently
 disappearing.
+
+> **Amended 2026-10-20 by #3271:** The accepted-risk renderer also lists carried findings (id, rubric, carried-from origin id and lap) and operator-resolved cases (case id, source ids), with no operator, rationale, summary or time (#1614). An unreadable case store fabricates no carried row and is reported (adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
 
 ## Event-Spine Verdict
 

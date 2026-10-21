@@ -109,6 +109,8 @@ Mechanical validation checks exhaustive source coverage, bounded fields, recogni
 
 A current requirement/plan/architecture gap cannot be converted to a non-blocking deferred issue merely to settle the lap. Existing deferral remains available only for work outside the current approved outcome and is subject to its existing durable effect contract. Escalation does not append tasks, rewrite sealed artifacts, grant risk acceptance, or spend a BUILD charge. On explicit decision resolution, recovery re-evaluates against the new approved baseline rather than editing an old verdict into PASS.
 
+> **Amended 2026-10-20 by #3271:** An `escalate` proposal bound to a carry-eligible case is classified `carry` before the escalation split. It produces no decision stop, never yields `conflicting-case-id`, and does not deny sibling action effects. An escalation bound to any other case, or unbound, is unchanged (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
+
 ### D10 — One authority across attended and daemon execution
 
 Extract the review-outcome application path currently nested under the daemon-specific branch into a shared review-domain operation that both custom-policy execution modes call. It invokes the existing adjudication coordinator once, persists a result bound to the current lap, and returns a typed route. Daemon navigation and attended checkpoint presentation consume that result; neither independently recomputes raw findings into a kickback. The daemon must not adjudicate a second time when the shared operation has already settled the lap.

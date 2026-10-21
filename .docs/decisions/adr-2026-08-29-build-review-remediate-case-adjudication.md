@@ -103,6 +103,8 @@ cannot write, broaden, or infer accepted risk. An operator disposition that beco
 the post-join path is running is re-read at every route, halt, and PASS exit, preserving the current
 late-acceptance rule.
 
+> **Amended 2026-10-20 by #3271:** An existing operator acceptance may now be *extended* by the judge's `existingCaseId` binding. A finding bound in a later lap to a resolved, origin-marked or operator-resolved case settles as `carried` (adr-2026-10-20-operator-acceptance-is-durable-case-state D3). A provider still cannot write, create or infer accepted risk: only `finalize` writes acceptance origins, from exact operator dispositions (D2 there), and only the TTY-gated `resolve-case` command writes an operator resolution (D7 there).
+
 ### D3 — One existing remediate dispatch owns the semantic fan-in
 
 A mechanically complete raw FAIL with at least one operator-unresolved content finding causes one
@@ -147,6 +149,8 @@ dispatchable work, a deferral has no out-of-scope justification, or any field ex
 Invalid, missing, stale, or contradictory output fails closed and can never publish PASS or consume
 the semantic kickback budget.
 
+> **Amended 2026-10-20 by #3271:** The case-store source outcome vocabulary gains `carried`. It is written only by the reconciler carry lane, never by provider output, and the provider artifact vocabulary is unchanged (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D3).
+
 ### D5 — Durable case state is shared machinery with domain-owned effects
 
 A versioned, feature-scoped `.pipeline/remediation-cases.json` store records engine-stamped cases,
@@ -162,6 +166,8 @@ Cases are not matched mechanically by summaries. `remediate` may bind a current 
 existing case; the engine validates the reference and appends the current raw source trace. When the
 current lap no longer reports an open case, the engine marks it resolved using current-lap absence
 plus mechanically available action evidence. It never deletes history.
+
+> **Amended 2026-10-20 by #3271:** The case store moves to v3. It adds case `operatorAcceptance` origins, case `operatorResolution`, the `carried` outcome and an outbox of `ConductorEvent` values, and v2 is upgraded on write (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D6). The store now holds one operator-authored field, `operatorResolution`, written only by `build-review resolve-case`, so the autonomous/operator separation holds per field. Open-case retirement, by absence or by acceptance, is decided by one shared reconciler predicate (adr-2026-10-20-operator-acceptance-is-durable-case-state D5). On a coordinator reuse halt, the halting proposal's live sources are linked to the bound case (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
 ### D6 — Effects use a reserved, idempotent outbox
 
@@ -239,6 +245,8 @@ of an adjudicated case rather than reopening an unbounded route.
 >   refutation on the existing spine, registered with every sink, so the durable resolution is never
 >   a silent state change.
 
+> **Amended 2026-10-20 by #3271:** A binding to a carry-eligible case classifies as `carry` before any repeat, regression, deferral-reuse or decision-stop rule applies, including the 2026-10-19 (#3292) explicit-rebind regression halt. It settles with no halt, no effect and no charge (adr-2026-10-20-operator-acceptance-is-durable-case-state D3). An act case whose effect is `failed` or `reserved` may now retire when every source is covered or no longer raised on a mechanically healthy lap (adr-2026-10-20-operator-acceptance-is-durable-case-state D5).
+
 ### D8 — The effective verdict is derived only after required effects settle
 
 The effective result is:
@@ -261,6 +269,8 @@ and semantic-repeat halt are additive `ConductorEvent` occurrences, registered e
 sink. `.pipeline/remediation-cases.json` and the charged-effect set in the kickback ledger are durable
 control state under event-spine exception C. No second event file, timestamp protocol, or polling
 channel is added.
+
+> **Amended 2026-10-20 by #3271:** The occurrences this change adds (`build_review_acceptance_carried`, `remediation_case_operator_resolved`, and `remediation_case_reconciled` for the new retirements) are written to the case-store outbox in the same transaction as their state change. They are drained onto the existing bus with persister eventId dedup (adr-2026-10-20-operator-acceptance-is-durable-case-state D6). No second schema or reader is introduced.
 
 ### D10 — Rollout is gated and default-on after compatibility validation
 
