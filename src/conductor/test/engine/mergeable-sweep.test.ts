@@ -946,7 +946,7 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     }).toEqual({
       failure: true,
       falseSuccess: false,
-      survivors: [],
+      survivors: [entry()],
     });
   });
 
@@ -1212,8 +1212,8 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
         (call) => call.prUrl === PR_URL_2 && call.label === 'mergeable',
       ).length,
     }).toEqual({
-      teardownCalls: 1,
-      survivors: [PR_URL_2],
+      teardownCalls: 2,
+      survivors: [PR_URL, PR_URL_2],
       failureSurfaced: true,
       remainingEntryProcessCount: 2,
     });

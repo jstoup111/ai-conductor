@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:8, task:rem-as-built-R4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -13,6 +13,8 @@ import {
   withSandboxBuildEnv,
 } from '../../../src/engine/self-host/sandbox-build-env.js';
 import { verifyTokenLiveness } from '../../../src/engine/self-host/token-liveness.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 describe('minimal Claude self-host sandbox', () => {
   let root: string;
@@ -228,8 +230,7 @@ describe('minimal Claude self-host sandbox', () => {
       ...defaulted,
       repository: 'owner/repository',
       featureSlug: 'sandbox-build-env',
-      runId: 'run-12',
-      attempt: 1,
+      captureIdentity: { step: 'build', runId: 'run-12', attempt: 1 },
     });
     try {
       expect([sandbox.configDir, sandbox.childEnv().CLAUDE_CONFIG_DIR]).toEqual([
@@ -237,7 +238,7 @@ describe('minimal Claude self-host sandbox', () => {
         expect.stringMatching(new RegExp(`^${scratchRoot}`)),
       ]);
       const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
-      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'provider', 'repository', 'runId', 'startedAt', 'step']);
       expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'sandbox-build-env', runId: 'run-12', attempt: 1, ownerPid: process.pid });
       expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
 
@@ -276,8 +277,7 @@ describe('minimal Claude self-host sandbox', () => {
       ...defaulted,
       repository: 'owner/repository',
       featureSlug: 'sandbox-build-env-failure',
-      runId: 'run-15',
-      attempt: 2,
+      captureIdentity: { step: 'build', runId: 'run-15', attempt: 2 },
       fs: failingFs,
     })).rejects.toThrow('post-acquire Claude provisioning failure');
     expect(observedLease).toMatchObject({
@@ -301,6 +301,106 @@ describe('minimal Claude self-host sandbox', () => {
     })).rejects.toThrow('build crash');
     await expect(access(captured)).rejects.toThrow();
     expect(parentEnv.CLAUDE_CONFIG_DIR).toBe('/operator/.claude');
+  });
+
+  it('harvests Claude transcripts before removing its sandbox and emits one capture event', async () => {
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const sandbox = await provisionSandboxBuildEnv(options({
+      captureIdentity: { step: 'build', runId: 'r1', attempt: 1 }, events,
+    }));
+    const session = join(sandbox.configDir, 'projects', 'w', 's.jsonl');
+    const subagent = join(sandbox.configDir, 'projects', 'w', 's', 'subagents', 'a.jsonl');
+    await mkdir(join(session, '..'), { recursive: true });
+    await mkdir(join(subagent, '..'), { recursive: true });
+    await writeFile(session, '{"type":"assistant"}\n');
+    await writeFile(subagent, '{"type":"assistant"}\n');
+
+    try {
+      await sandbox.teardown();
+      await sandbox.teardown();
+      const capture = join(worktree, '.pipeline', 'transcripts', 'build', 'r1-a1-claude');
+      await expect(readFile(join(capture, 'projects', 'w', 's.jsonl'), 'utf8')).resolves.toContain('assistant');
+      await expect(readFile(join(capture, 'projects', 'w', 's', 'subagents', 'a.jsonl'), 'utf8')).resolves.toContain('assistant');
+      await expect(access(sandbox.configDir)).rejects.toThrow();
+      const records = (await readFile(join(worktree, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      expect(records.filter((record) => record.type === 'provider_transcripts_captured')).toEqual([
+        expect.objectContaining({
+          step: 'build', runId: 'r1', attempt: 1, provider: 'claude',
+          path: '.pipeline/transcripts/build/r1-a1-claude', files: 2,
+        }),
+      ]);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('redacts the token injected into the child after ambient credentials are restored', async () => {
+    const token = 'daemon-token-123456';
+    const previous = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const hadPrevious = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const sandbox = await provisionSandboxBuildEnv(options({ captureIdentity: { step: 'build', runId: 'r-token', attempt: 1 } }));
+    try {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+      expect(sandbox.childEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe(token);
+      if (hadPrevious) process.env.CLAUDE_CODE_OAUTH_TOKEN = previous;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+      await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
+      await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), JSON.stringify({ output: token }));
+      await sandbox.teardown();
+
+      const captured = await readFile(join(
+        worktree, '.pipeline', 'transcripts', 'build', 'r-token-a1-claude', 'projects', 'w', 's.jsonl',
+      ), 'utf8');
+      expect(captured).not.toContain(token);
+    } finally {
+      if (hadPrevious) process.env.CLAUDE_CODE_OAUTH_TOKEN = previous;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      await sandbox.teardown();
+    }
+  });
+
+  it('preserves a configured group-member owner on Claude capture and reports a failed harvest without blocking teardown', async () => {
+    const events = new ConductorEventEmitter();
+    const captured: unknown[] = [];
+    const failed: unknown[] = [];
+    events.on('provider_transcripts_captured', (event) => { captured.push(event); });
+    events.on('provider_transcripts_harvest_failed', (event) => { failed.push(event); });
+    const owner = { kind: 'configured-group-member', parentGroup: 'explore', member: 'rubric-a' } as const;
+    const sandbox = await provisionSandboxBuildEnv(options({
+      captureIdentity: { owner, runId: 'r1', attempt: 1, auxiliaryMember: 'rubric-a' }, events,
+    }));
+    await mkdir(join(sandbox.configDir, 'projects', 'w'), { recursive: true });
+    await writeFile(join(sandbox.configDir, 'projects', 'w', 's.jsonl'), '{"type":"assistant"}\n');
+
+    await sandbox.teardown();
+    expect(captured).toEqual([expect.objectContaining({
+      owner, path: '.pipeline/transcripts/rubric-a/r1-a1-rubric-a-claude', member: 'rubric-a',
+    })]);
+    expect(failed).toEqual([]);
+    await expect(readFile(join(worktree, '.pipeline', 'transcripts', 'rubric-a', 'r1-a1-rubric-a-claude', 'projects', 'w', 's.jsonl'), 'utf8')).resolves.toContain('assistant');
+  });
+
+  it('reports a harvest failure and still removes the Claude sandbox', async () => {
+    const events = new ConductorEventEmitter();
+    const failed: unknown[] = [];
+    events.on('provider_transcripts_harvest_failed', (event) => { failed.push(event); });
+    const sandbox = await provisionSandboxBuildEnv(options({
+      captureIdentity: { step: 'build', runId: 'r1', attempt: 1 }, events,
+    }));
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'transcripts'), 'not a directory');
+
+    await expect(sandbox.teardown()).resolves.toBeUndefined();
+    expect(failed).toEqual([expect.objectContaining({
+      step: 'build', runId: 'r1', attempt: 1, provider: 'claude',
+      path: '.pipeline/transcripts/build/r1-a1-claude',
+    })]);
+    await expect(access(sandbox.configDir)).rejects.toThrow();
   });
 
   it('redacts and cleans a partial engine-control failure', async () => {

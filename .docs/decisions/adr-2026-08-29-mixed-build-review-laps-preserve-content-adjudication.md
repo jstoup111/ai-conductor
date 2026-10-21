@@ -89,13 +89,6 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   `refute` row (adr-2026-08-29-build-review-remediate-case-adjudication D7.1–D7.3) is a finalized
 >   permitted autonomous outcome for D3.3: it converts nothing about infrastructure, consumes no
 >   semantic kickback, and joins the deferred/rejected/merged set of D3.2.
->
-> **Amended 2026-10-19 by #3271:** A re-raised attempted or regressed case that the judge binds to
-> an operator-accepted case is neither a repeat nor a regression. That finding is carried operator
-> acceptance (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.5): for D3.3 it
-> counts as operator-resolved, it publishes no work order, and it consumes no semantic kickback,
-> whatever disposition the judge proposed. The repeat and regression halts of D3 and D3.4 still
-> apply to every case that holds no operator-accepted source.
 
 ### D4 — Grader confidence and an operator floor suppress a finding before it fails the gate
 
@@ -211,9 +204,8 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   without `existingCaseId` for a source owned only by resolved cases, reconciliation admits it as
 >   a new case of any disposition. A new `act` case reserves a fresh action effect, which the
 >   existing kickback budget charges like any first action, so the cumulative cap is the bound. An
->   explicit `existingCaseId` rebind with disposition `act` of a resolved action case that holds no
->   operator-accepted source still halts as a regression under predecessor D7. A binding to a case
->   that holds one carries operator acceptance under predecessor D2.1–D2.6. The predecessor D7 and D3 rule that an equivalent attempted
+>   explicit `existingCaseId` rebind with disposition `act` of a resolved action case still
+>   halts as a regression under predecessor D7. The predecessor D7 and D3 rule that an equivalent attempted
 >   case consumes no second kickback and halts applies to a case the judge binds. An unbound
 >   proposal is the judge's statement that the case is not that one. Equivalence across a re-raise
 >   stays the judge's call, and nothing infers it from prose.

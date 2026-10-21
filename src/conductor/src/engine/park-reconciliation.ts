@@ -19,8 +19,9 @@ import { phaseMarkerPath } from './phase-marker.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { ConductorEvent, WorktreeReclaimRetainedReason } from '../types/events.js';
 import { runTrackerAmbientRead } from './tracker-client.js';
-import { makeGitRunner } from './rebase.js';
+import { makeGitRunner, type GitRunner as RebaseGitRunner } from './rebase.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
+import { activePublicationRecord, writePublicationRecord } from './stack-publication-record.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -1208,6 +1209,29 @@ export async function reconcileMergedPark(
     }
   }
   steps.push('worktree-removed');
+
+  // Park reclamation deliberately leaves every child branch and its two
+  // stack-specific refs in place. Retire the active receipt instead, so a
+  // later feature with this slug starts fresh without orphaning kept children.
+  const publicationGit: RebaseGitRunner = async (args, options = {}) => {
+    const result = await runGit(args, {
+      cwd: opts.projectRoot,
+      ...(options.input === undefined ? {} : { input: options.input }),
+      ...(options.credential === undefined ? {} : { credential: options.credential }),
+      ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+    });
+    return { stdout: result.stdout, stderr: '', exitCode: result.exitCode ?? 0 };
+  };
+  const publication = await activePublicationRecord(opts.projectRoot, opts.slug, { git: publicationGit });
+  if (publication && publication.record.members.length > 1) {
+    await writePublicationRecord(
+      opts.projectRoot,
+      opts.slug,
+      publication,
+      { ...publication.record, tornDown: true },
+      { git: publicationGit },
+    );
+  }
 
   // The gate above proved every branch for this slug is contained in
   // origin/main, so deleting them cannot drop a commit. The no-branch case is

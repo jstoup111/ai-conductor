@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:8, task:9, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,6 +36,26 @@ const ACTIVE_STALL_EVENT: ConductorEvent = {
   resolvedBefore: 2,
   resolvedAfter: 2,
 };
+
+it('declares one persistent sink row for each stack event', () => {
+  const stackEventTypes = [
+    'stack_member_published',
+    'stack_member_redrafted',
+    'stack_assembled',
+    'stack_member_lifecycle',
+    'stack_members_unreachable',
+    'stack_tip_diverged',
+  ] as const;
+
+  for (const type of stackEventTypes) {
+    expect(EVENT_SINKS).toHaveProperty(type, {
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  }
+});
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
@@ -271,6 +291,8 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'daemon_memory_sample',
   'daemon_heap_dump_written',
   'daemon_exited',
+  'executor_started',
+  'executor_protocol_mismatch',
   'feature_dispatch_started',
   'feature_dispatch_ended',
   'feature_shipped',
@@ -329,6 +351,12 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'self_host_dispatch_admission',
   'self_host_containment_verdict',
   'self_host_boundary_fingerprint',
+  'provider_transcripts_captured',
+  'provider_transcripts_evicted',
+  'provider_transcripts_harvest_failed',
+  'provider_transcripts_pruned',
+  'provider_transcripts_retained',
+  'provider_transcripts_retention_failed',
   'over_scope_decision',
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
   'remediation_case_refuted',
@@ -349,6 +377,12 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'child_started',
   'child_closed',
   'child_switched',
+  'stack_member_published',
+  'stack_member_redrafted',
+  'stack_assembled',
+  'stack_member_lifecycle',
+  'stack_members_unreachable',
+  'stack_tip_diverged',
   'rebase_skipped_for_stack',
   'restack_planned',
   'restack_applied',
@@ -1796,6 +1830,8 @@ describe('event sink subscriptions', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
       'build_active_stall',
+      'executor_started',
+      'executor_protocol_mismatch',
       'tracker_backend_unavailable',
       'halt_marker_write_failed',
       'halt_record_written',

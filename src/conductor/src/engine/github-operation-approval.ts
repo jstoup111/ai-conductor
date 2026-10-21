@@ -69,6 +69,7 @@ function boundTarget(target: GithubOperationTarget): GithubOperationTarget {
   switch (target.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       return Object.freeze({ repository: target.repository, kind: target.kind, number: target.number });
     case 'label-definition':
       return Object.freeze({ repository: target.repository, kind: target.kind, name: target.name });
@@ -84,6 +85,7 @@ function targetsMatch(left: GithubOperationTarget, right: GithubOperationTarget)
   switch (left.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       return right.kind === left.kind && right.number === left.number;
     case 'label-definition':
       return right.kind === 'label-definition' && right.name === left.name;

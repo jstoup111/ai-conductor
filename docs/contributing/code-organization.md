@@ -71,6 +71,7 @@ Flat `engine/` files cluster by filename prefix. Use the prefix to find the subs
 | Prefix | Representative files |
 | --- | --- |
 | `daemon-*`, `daemon.ts` | `daemon.ts`, `daemon-runner.ts`, `daemon-backlog.ts`, `daemon-lock.ts`, `daemon-log.ts`, `daemon-tmux.ts`, `daemon-command.ts`, `daemon-fleet.ts`, `daemon-auto-park.ts` |
+| `executor-*`, engine pinning | `child-feature-executor.ts`, `executor-protocol.ts`, `executor-child.ts`, `executor-child-runtime.ts`, `executor-broker.ts`, `executor-proxies.ts`, `executor-records.ts`, `engine-pin.ts`, `supervisor-staleness.ts` |
 | step/pipeline core | `steps.ts`, `step-runners.ts`, `conductor.ts`, `selector.ts`, `state.ts`, `artifacts.ts`, `skill-invocation.ts`, `skill-resolver.ts`, `complete-verifier.ts` |
 | `gate*` | `gates.ts`, `gate-verdicts.ts`, `gate-code-validity.ts`, `gate-invalidation.ts`, `gate-writeback.ts`, `gated-snapshot.ts` |
 | `build-review-*` | `build-review-prompt.ts`, `build-review-inputs.ts`, `build-review-disposition.ts` |

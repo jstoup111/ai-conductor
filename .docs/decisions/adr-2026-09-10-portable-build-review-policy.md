@@ -109,8 +109,6 @@ Mechanical validation checks exhaustive source coverage, bounded fields, recogni
 
 A current requirement/plan/architecture gap cannot be converted to a non-blocking deferred issue merely to settle the lap. Existing deferral remains available only for work outside the current approved outcome and is subject to its existing durable effect contract. Escalation does not append tasks, rewrite sealed artifacts, grant risk acceptance, or spend a BUILD charge. On explicit decision resolution, recovery re-evaluates against the new approved baseline rather than editing an old verdict into PASS.
 
-> **Amended 2026-10-19 by #3271:** An escalation the adjudicator binds to an operator-accepted case is carried operator acceptance (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.5), not a decision stop. It settles with no durable decision stop, no new open case and no external effect, and it does not by itself block the adjudication's admitted actions. Every escalation bound to a case with no operator-accepted source still produces a durable decision stop exactly as above.
-
 ### D10 — One authority across attended and daemon execution
 
 Extract the review-outcome application path currently nested under the daemon-specific branch into a shared review-domain operation that both custom-policy execution modes call. It invokes the existing adjudication coordinator once, persists a result bound to the current lap, and returns a typed route. Daemon navigation and attended checkpoint presentation consume that result; neither independently recomputes raw findings into a kickback. The daemon must not adjudicate a second time when the shared operation has already settled the lap.
@@ -124,8 +122,6 @@ Keep built-in-only compatibility paths intact where their existing behavior diff
 Keep the current case store, work-order store, exact operator disposition store, and kickback ledger as the only owners of their state. Extend their schemas additively/versionedly to carry custom identity, consistency, and escalation. Production defaults remain filesystem-backed, leased, atomically replaced, and fail closed on corruption. No new independent retry ledger or case store is introduced.
 
 Preserve one charge per new aggregate action effect, idempotent interrupted-effect recovery, attempted-case repeat stops, and current-lap source binding. Configuration removal, policy-content changes, provider fallback, and incidental tree movement never reset cumulative limits. An unapplied effect cannot become a settled PASS. A changed custom policy invalidates stale evidence and exact settled-source reuse; semantic prior-case reasoning still prevents repeated repair under drifting identifiers.
-
-> **Amended 2026-10-19 by #3271:** The attempted-case repeat stop preserved here does not apply to a recurrence the adjudicator binds to an operator-accepted case. That recurrence is carried operator acceptance (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.5): no repair route and no charge. The exact operator disposition store keeps sole ownership of accepted risk, and carry is derived at read time, never written to it.
 
 ### D12 — Extend the existing event schema and documentation
 

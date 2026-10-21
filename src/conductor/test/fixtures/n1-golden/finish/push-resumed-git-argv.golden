@@ -1,0 +1,37 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+[
+  [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    "HEAD^{commit}"
+  ],
+  [
+    "hash-object",
+    "-w",
+    "--stdin"
+  ],
+  [
+    "update-ref",
+    "refs/conductor/n1-push/push-intent/feat/daemon-n1-push",
+    "<SHA>",
+    ""
+  ],
+  [
+    "update-ref",
+    "refs/conductor/n1-push/pushed/feat/daemon-n1-push",
+    "<SHA>",
+    "<SHA>"
+  ],
+  [
+    "update-ref",
+    "-d",
+    "refs/conductor/n1-push/push-intent/feat/daemon-n1-push",
+    "<SHA>"
+  ],
+  [
+    "push",
+    "origin",
+    "HEAD:refs/heads/feat/daemon-n1-push"
+  ]
+]

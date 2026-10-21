@@ -13,6 +13,7 @@ import { selectNextGate } from '../../src/engine/selector.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const roots: string[] = [];
 
@@ -158,6 +159,7 @@ describe('child-routed conduct state', () => {
       projectRoot: root,
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
       daemon: false,
+      events: new ConductorEventEmitter(),
     } as never);
     const state: ConductState = { coverage_binding: 'done', build: 'done' };
 

@@ -294,9 +294,9 @@ const ROUTING_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
   'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'child_revalidated',
 ]);
 
-/** Only producer observations are replay-deduplicated; ordinary events still append. */
+/** Producer observations and at-least-once lifecycle events are replay-deduplicated; ordinary events still append. */
 function observationEventId(event: ConductorEvent): string | undefined {
-  return (OBSERVATION_EVENT_TYPES.has(event.type) || ROUTING_OCCURRENCE_TYPES.has(event.type))
+  return (OBSERVATION_EVENT_TYPES.has(event.type) || ROUTING_OCCURRENCE_TYPES.has(event.type) || event.type === 'stack_member_lifecycle')
     && 'eventId' in event
     && typeof event.eventId === 'string'
     ? event.eventId
@@ -342,6 +342,18 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
     if (this.slug) forwardedFeature.set(forwarded, this.slug);
     await this.globalEvents.emit(forwarded);
   }
+}
+
+/**
+ * A feature-scoped bus for an executor that writes its own feature ledger.
+ * The supervisor deliberately owns no persister for this bus: forwarding only
+ * reuses renderer, OTel, memory and root-bus subscribers.
+ */
+export function createForwardingFeatureEventEmitter(
+  globalEvents: ConductorEventEmitter,
+  slug: string,
+): ConductorEventEmitter {
+  return new ForwardingEventEmitter(globalEvents, slug);
 }
 
 function cloneForwardedEvent(event: ConductorEvent): ConductorEvent {
@@ -437,7 +449,7 @@ export function startFeatureEventPersistence(
   globalEvents: ConductorEventEmitter,
   slug?: string,
 ): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void> } {
-  const featureEvents = new ForwardingEventEmitter(globalEvents, slug ?? basename(worktreePath));
+  const featureEvents = createForwardingFeatureEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, FEATURE_EVENT_LOG_PATH),
     featureEvents,

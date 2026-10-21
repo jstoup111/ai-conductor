@@ -12,6 +12,7 @@ import {
 } from './route-record-store.js';
 import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
+import { publishedStackRefusal } from '../stack-publication.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string };
 
@@ -28,6 +29,12 @@ export async function admitRound(
   firstHost: ChildId,
   dependencies: AdmitRoundDependencies = {},
 ): Promise<AdmitRoundResult> {
+  // The conductor performs this check before allocating a route record. Keep
+  // the same fence at the durable admission boundary so a publication that
+  // lands between route planning and this transaction cannot open the round.
+  if (await publishedStackRefusal(worktree, slug, { git: dependencies.git })) {
+    return { kind: 'refused', detail: 'routing admission refused: published-stack' };
+  }
   const marker = await readRepairMarker(worktree, slug, dependencies);
   if (marker.kind !== 'absent') return { kind: 'refused', detail: marker.kind === 'marker' ? `routing round ${marker.marker.roundId} is already open; cannot admit ${record.roundId}` : 'routing marker is unreadable' };
   const stored = await readRouteRecord(worktree, slug, record.roundId, dependencies);

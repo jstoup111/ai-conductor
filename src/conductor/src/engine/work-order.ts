@@ -2,6 +2,11 @@ import { createHash } from 'node:crypto';
 import { posix, win32 } from 'node:path';
 import type { ComplexityTier, Track } from '../types/steps.js';
 import type { FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored } from '../types/state.js';
+import type { EnginePin, EnginePinFallbackReason } from './engine-pin.js';
+import { versionIdFromEngineDir, type EngineVersionId } from './engine-version-id.js';
+
+/** Increment when the serializable dispatcher-to-executor contract changes. */
+export const WORK_ORDER_SCHEMA_VERSION = 1;
 
 /** A document carried across the dispatcher-to-executor boundary. */
 export interface ManifestEntry {
@@ -16,10 +21,22 @@ export interface ManifestEntry {
  * not persisted as an artifact-resolution authority.
  */
 export interface WorkOrder {
+  /** Version of the serialized dispatcher-to-executor contract. */
+  schemaVersion: typeof WORK_ORDER_SCHEMA_VERSION;
   repository: string;
   slug: string;
   /** Immutable base commit captured when the dispatcher claims this work. */
   baseSha: string;
+  /** Immutable engine build selected for this individual dispatch. */
+  engineVersionId: EngineVersionId;
+  /** Identity of the supervisor that issued this order (diagnostic only). */
+  supervisorEngineVersionId?: EngineVersionId;
+  /** Why this order uses the supervisor build rather than the floating dist link. */
+  pinFallbackReason?: EnginePinFallbackReason;
+  /** Supervisor pool width, retained for child-mode legacy safety guards. */
+  effectiveConcurrency?: number;
+  /** Whether this order was issued by the harness self-host supervisor. */
+  selfHost?: boolean;
   manifest: ManifestEntry[];
   /** Executor inputs formerly recovered from dispatcher-local bookkeeping. */
   tier?: ComplexityTier;
@@ -59,6 +76,12 @@ export interface BuildWorkOrderInput {
   repository: string;
   slug: string;
   baseSha: string;
+  /** Immutable engine selected at claim time; its path stays dispatcher-local. */
+  enginePin: EnginePin;
+  /** Supervisor pool width retained for child-mode legacy safety guards. */
+  effectiveConcurrency?: number;
+  /** Preserve the supervisor's self-host mode across the process boundary. */
+  selfHost?: boolean;
   documentRefs: readonly string[];
   tier?: ComplexityTier;
   sourceRef?: string;
@@ -96,9 +119,14 @@ export async function buildWorkOrder(
   }));
 
   return {
+    schemaVersion: WORK_ORDER_SCHEMA_VERSION,
     repository: input.repository,
     slug: input.slug,
     baseSha: input.baseSha,
+    engineVersionId: input.enginePin.engineVersionId,
+    ...(input.enginePin.fallbackReason === undefined ? {} : { pinFallbackReason: input.enginePin.fallbackReason }),
+    ...(input.effectiveConcurrency === undefined ? {} : { effectiveConcurrency: input.effectiveConcurrency }),
+    ...(input.selfHost === undefined ? {} : { selfHost: input.selfHost }),
     manifest,
     ...(input.tier ? { tier: input.tier } : {}),
     ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),
@@ -116,6 +144,15 @@ export async function verifyWorkOrder(
   order: WorkOrder,
   git: WorkOrderGitRunner,
 ): Promise<void> {
+  if (order.schemaVersion !== WORK_ORDER_SCHEMA_VERSION) {
+    throw new Error(
+      `work-order schemaVersion ${order.schemaVersion} is incompatible with ${WORK_ORDER_SCHEMA_VERSION}`,
+    );
+  }
+  if (versionIdFromEngineDir(order.engineVersionId) !== order.engineVersionId) {
+    throw new Error(`work-order engineVersionId is invalid: ${order.engineVersionId}`);
+  }
+
   const baseResult = await git(['cat-file', '-e', order.baseSha]);
   if (baseResult.exitCode !== 0) {
     throw new WorkOrderBaseShaMissingError(order.baseSha);

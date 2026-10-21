@@ -1036,6 +1036,23 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     expect(handlerBody).toContain('teardown.requestStop()');
   });
 
+  it('fans SIGTERM out to child executors before beginning the daemon lock drain', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    const handlerMatch = src.match(
+      /const daemonSigtermHandler = async \(\) => \{([\s\S]*?)\n  \};/,
+    );
+    expect(handlerMatch).not.toBeNull();
+    const handlerBody = handlerMatch![1];
+
+    // stopAll resolves only after its scaled grace window and SIGKILL fallback,
+    // so awaiting it before requestStop keeps the lock-release path behind
+    // child teardown.
+    expect(handlerBody).toContain('await stopChildExecutors?.()');
+    expect(handlerBody.indexOf('await stopChildExecutors?.()')).toBeLessThan(
+      handlerBody.indexOf('teardown.requestStop()'),
+    );
+  });
+
   it('runDaemon is invoked with a shouldStop dep wired to the teardown controller', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 

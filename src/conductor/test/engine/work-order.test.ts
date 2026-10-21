@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,9 +7,20 @@ import { describe, expect, it } from 'vitest';
 import {
   buildWorkOrder,
   verifyWorkOrder,
+  WORK_ORDER_SCHEMA_VERSION,
   WorkOrderBaseShaMissingError,
   WorkOrderManifestMismatchError,
 } from '../../src/engine/work-order.js';
+import type { EnginePin } from '../../src/engine/engine-pin.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
+import type { WorkOrder } from '../../src/engine/work-order.js';
+
+const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
+const ENGINE_PIN: EnginePin = {
+  engineVersionId: ENGINE_VERSION_ID,
+  engineDir: `/engine/dist-versions/${ENGINE_VERSION_ID}`,
+  fallbackReason: undefined,
+};
 
 describe('engine/work-order', () => {
   it('round-trips a fully populated order with a ref-and-hash document manifest', async () => {
@@ -24,6 +35,7 @@ describe('engine/work-order', () => {
         repository: 'jstoup/ai-conductor',
         slug: 'parallel-dispatch',
         baseSha: 'a'.repeat(40),
+        enginePin: ENGINE_PIN,
         documentRefs: [...documents.keys()],
         tier: 'L',
         sourceRef: 'owner/repo#42',
@@ -54,6 +66,8 @@ describe('engine/work-order', () => {
         repository: 'jstoup/ai-conductor',
         slug: 'parallel-dispatch',
         baseSha: 'a'.repeat(40),
+        engineVersionId: ENGINE_VERSION_ID,
+        schemaVersion: WORK_ORDER_SCHEMA_VERSION,
         tier: 'L',
         sourceRef: 'owner/repo#42',
         track: 'technical',
@@ -71,8 +85,52 @@ describe('engine/work-order', () => {
         (content) => `sha256:${createHash('sha256').update(content).digest('hex')}`,
       ),
       gitCalls: [...documents.keys()].map((ref) => ['show', `${'a'.repeat(40)}:${ref}`]),
-      serializedKeys: ['band', 'baseSha', 'manifest', 'repository', 'resolutionMode', 'slug', 'sourceRef', 'tier', 'track'],
+      serializedKeys: ['band', 'baseSha', 'engineVersionId', 'manifest', 'repository', 'resolutionMode', 'schemaVersion', 'slug', 'sourceRef', 'tier', 'track'],
       containsAbsolutePath: false,
+    });
+  });
+
+  it('preserves the claim-time engine pin through JSON and rejects incompatible order identities', async () => {
+    const order = await buildWorkOrder(
+      {
+        repository: 'jstoup/ai-conductor',
+        slug: 'parallel-dispatch',
+        baseSha: 'a'.repeat(40),
+        enginePin: ENGINE_PIN,
+        documentRefs: [],
+      },
+      async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    );
+
+    expect(JSON.parse(JSON.stringify(order))).toEqual(order);
+
+    const gitMustNotRun = async () => {
+      throw new Error('work-order identity must be checked before Git');
+    };
+    await expect(verifyWorkOrder(
+      { ...order, schemaVersion: WORK_ORDER_SCHEMA_VERSION + 1 } as WorkOrder,
+      gitMustNotRun,
+    )).rejects.toThrow(/schemaVersion/);
+    await expect(verifyWorkOrder(
+      { ...order, engineVersionId: 'not-an-engine-version' as EngineVersionId },
+      gitMustNotRun,
+    )).rejects.toThrow(/engineVersionId/);
+  });
+
+  it('carries a pin fallback reason across the dispatcher-to-executor boundary', async () => {
+    const order = await buildWorkOrder({
+      repository: 'jstoup/ai-conductor',
+      slug: 'fallback-dispatch',
+      baseSha: 'a'.repeat(40),
+      enginePin: { ...ENGINE_PIN, fallbackReason: 'publish-incomplete' },
+      effectiveConcurrency: 2,
+      documentRefs: [],
+    }, async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+
+    expect(JSON.parse(JSON.stringify(order))).toMatchObject({
+      engineVersionId: ENGINE_VERSION_ID,
+      pinFallbackReason: 'publish-incomplete',
+      effectiveConcurrency: 2,
     });
   });
 
@@ -87,6 +145,7 @@ describe('engine/work-order', () => {
             repository: 'jstoup/ai-conductor',
             slug: 'parallel-dispatch',
             baseSha: 'a'.repeat(40),
+            enginePin: ENGINE_PIN,
             documentRefs: [ref],
           },
           async (args) => {
@@ -117,13 +176,15 @@ describe('engine/work-order', () => {
       repository: 'jstoup/ai-conductor',
       slug: 'parallel-dispatch',
       baseSha,
+      engineVersionId: ENGINE_VERSION_ID,
+      schemaVersion: WORK_ORDER_SCHEMA_VERSION,
       manifest: [
         {
           ref,
           contentHash: `sha256:${createHash('sha256').update(expectedContents).digest('hex')}`,
         },
       ],
-    };
+    } satisfies WorkOrder;
 
     try {
       let caught: unknown;
@@ -161,13 +222,15 @@ describe('engine/work-order', () => {
       repository: 'jstoup/ai-conductor',
       slug: 'parallel-dispatch',
       baseSha,
+      engineVersionId: ENGINE_VERSION_ID,
+      schemaVersion: WORK_ORDER_SCHEMA_VERSION,
       manifest: [
         {
           ref: '.docs/plans/not-needed.md',
           contentHash: `sha256:${createHash('sha256').update('# Irrelevant').digest('hex')}`,
         },
       ],
-    };
+    } satisfies WorkOrder;
 
     try {
       let caught: unknown;

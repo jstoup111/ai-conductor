@@ -19,6 +19,10 @@ import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { discardPushedTipIntent, preparePushedTip, recordPushedTip, resolvePushedTipSource, type PreparedPushedTip, type PushLeaseGitRunner } from './push-lease.js';
 import { daemonOwnedSlugOfRef } from './feature-branch-identity.js';
+import { guardPublishedStackWrite } from './stack-tip-guard.js';
+import type { PublicationMember } from './stack-publication-record.js';
+import { makeGitRunner } from './rebase.js';
+import { hasDurableChildState } from './child-cursor.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
@@ -55,6 +59,8 @@ export type RemoteGitExecutionResult =
     readonly kind: 'refused';
     readonly reason: GithubOperationRefusalReason;
     readonly target?: RemoteGitDestination;
+    /** Present for the published-stack refusal so FINISH can name positions. */
+    readonly members?: readonly PublicationMember[];
   }
   | { readonly kind: 'failed'; readonly error: string; readonly targets: readonly RemoteGitDestination[] };
 
@@ -141,6 +147,57 @@ function featurePushSources(args: readonly string[], destinations: readonly Remo
     if (separator <= 0) return [];
     return [{ slug, branch: destination.ref.slice('refs/heads/'.length), source: refspec!.slice(0, separator).replace(/^\+/, '') }];
   });
+}
+
+function withExpectedLease(args: readonly string[], destination: RemoteGitDestination, expected: string): string[] {
+  return [...args, `--force-with-lease=${destination.ref}:${expected}`];
+}
+
+async function guardPublishedStackPushes(
+  args: readonly string[],
+  remote: string,
+  destinations: readonly RemoteGitDestination[],
+  dependencies: RemoteGitOperationDependencies,
+): Promise<{ readonly kind: 'allow'; readonly args: readonly string[] } | { readonly kind: 'refuse'; readonly members: readonly PublicationMember[] }> {
+  const candidates = featurePushSources(args, destinations);
+  let guardedArgs = [...args];
+  const localGit: PushLeaseGitRunner = dependencies.pushLeaseGit ?? (async (localArgs, input) => {
+    const result = await makeGitRunner(dependencies.cwd)([...localArgs], input === undefined ? undefined : { input });
+    return { stdout: result.stdout, exitCode: result.exitCode };
+  });
+  const childStateGit = async (localArgs: string[], options?: { readonly input?: string }) => {
+    const result = await localGit(localArgs, options?.input);
+    return { stdout: result.stdout, stderr: '', exitCode: result.exitCode };
+  };
+  for (const candidate of candidates) {
+    const destination = destinations.find((value) => value.operation === 'remote-ref.push'
+      && value.ref === `refs/heads/${candidate.branch}`);
+    if (destination === undefined) continue;
+    // Local read-only ref probes run on every push (ADR 2026-10-17 D1 amendment):
+    // absent feature-local metadata never proves there is no published stack.
+    const durableChildState = await hasDurableChildState(dependencies.cwd, candidate.slug, { git: childStateGit });
+    // N=1 takes the historical unguarded push path. An unreadable topology is
+    // not evidence that a published stack may be written without its lease.
+    if (durableChildState === false) continue;
+    if (durableChildState === 'git-error') return { kind: 'refuse', members: [] };
+    const guard = await guardPublishedStackWrite({
+      cwd: dependencies.cwd,
+      remote,
+      slug: candidate.slug,
+      destination: destination.ref,
+      source: candidate.source,
+      durableChildState,
+      git: localGit,
+      lsRemote: (lsArgs) => dependencies.runRemoteGit([...lsArgs], {
+        cwd: dependencies.cwd,
+        credential: 'write',
+        endpoint: destination.endpoint,
+      }),
+    });
+    if (guard.kind === 'refuse') return { kind: 'refuse', members: guard.members };
+    if (guard.kind === 'allow') guardedArgs = withExpectedLease(guardedArgs, destination, guard.expected);
+  }
+  return { kind: 'allow', args: guardedArgs };
 }
 
 async function preparePushRecordings(
@@ -271,14 +328,27 @@ export async function executeRemoteGit(
     }
   }
 
-  const preparation = await preparePushRecordings(args, resolution.targets, dependencies);
+  const guarded = await guardPublishedStackPushes(args, resolution.remote, resolution.targets, dependencies);
+  if (guarded.kind === 'refuse') {
+    // This low-level choke point has no authority to decide a feature's
+    // terminal state. Return the typed refusal; FINISH records the halt while
+    // halt-record and post-finish maintenance merely skip their write.
+    return {
+      kind: 'refused',
+      reason: 'stack-tip-mismatch',
+      target: resolution.targets[0],
+      members: guarded.members,
+    };
+  }
+
+  const preparation = await preparePushRecordings(guarded.args, resolution.targets, dependencies);
   if (preparation.kind === 'refused') {
     await discardPushRecordings(preparation.recordings, dependencies);
     return { kind: 'failed', error: preparation.error, targets: resolution.targets };
   }
   const recordings = preparation.recordings;
   try {
-    await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'write', endpoint: resolution.targets[0].endpoint });
+    await dependencies.runRemoteGit([...guarded.args], { cwd: dependencies.cwd, credential: 'write', endpoint: resolution.targets[0].endpoint });
     await completePushRecordings(recordings, dependencies);
     return { kind: 'executed', targets: resolution.targets };
   } catch (error) {
@@ -298,7 +368,7 @@ export async function executeRemoteGit(
         throw error;
       }
       try {
-        await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd, credential: 'operator', endpoint: resolution.targets[0].endpoint });
+        await dependencies.runRemoteGit([...guarded.args], { cwd: dependencies.cwd, credential: 'operator', endpoint: resolution.targets[0].endpoint });
         await completePushRecordings(recordings, dependencies);
         return { kind: 'executed', targets: resolution.targets };
       } catch (fallbackError) {

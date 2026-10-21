@@ -1,3 +1,4 @@
+// Covers: task:18
 import { describe, expect, it } from 'vitest';
 
 import { classifyShipmentAssociation, recordedShipmentFindings } from '../../src/engine/shipment-association.js';
@@ -31,6 +32,35 @@ describe('classifyShipmentAssociation', () => {
     expect(classifyShipmentAssociation({
       planStems: ['durable-shipped-records'],
       pr: {
+        metadataPlanStems: ['durable-shipped-records'],
+        changedPaths: ['src/conductor/src/engine/shipment-evidence.ts'],
+      },
+    })).toEqual({
+      kind: 'implementation',
+      slug: 'durable-shipped-records',
+    });
+  });
+
+  it('does not treat a stack child head as an implementation PR, before declaration matching', () => {
+    expect(classifyShipmentAssociation({
+      planStems: ['demo'],
+      pr: {
+        headRef: 'feat/c3/demo',
+        metadataPlanStems: ['demo'],
+        changedPaths: ['src/conductor/src/engine/demo.ts'],
+      },
+    })).toEqual({
+      kind: 'not-applicable',
+      classification: 'stack-child',
+      diagnostic: 'shipment association is stack-child',
+    });
+  });
+
+  it('keeps a non-child feature/x head classified by its declaration and changed paths', () => {
+    expect(classifyShipmentAssociation({
+      planStems: ['durable-shipped-records'],
+      pr: {
+        headRef: 'feature/x',
         metadataPlanStems: ['durable-shipped-records'],
         changedPaths: ['src/conductor/src/engine/shipment-evidence.ts'],
       },

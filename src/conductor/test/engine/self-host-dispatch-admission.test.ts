@@ -43,7 +43,7 @@ describe('self-host dispatch admission', () => {
           const prepared = await providerExecution.prepareCandidateSelfHost!(
             { step: 'build', providerKey: 'claude', model: 'opus', effort: 'high' },
             { provider: {} } as never,
-            { runId: 'admission-test', attempt: 1 },
+            { step: 'build', runId: 'admission-test', attempt: 1 },
           );
           try {
             expect(lease.spawnPermit()).toEqual({ permitted: true });
@@ -69,8 +69,8 @@ describe('self-host dispatch admission', () => {
     // Exercise the dispatch entry directly; no unrelated SDLC steps or external providers run.
     const settlePendingRepair = vi.fn(async () => false);
     const dispatch = (conductor as unknown as {
-      runSelfBuildDispatch(step: 'build', state: ConductState, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', { feature_desc: 'admission-test' } as ConductState, undefined, undefined, undefined, settlePendingRepair);
+      runSelfBuildDispatch(step: 'build', state: ConductState, attempt: number, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', { feature_desc: 'admission-test' } as ConductState, 1, undefined, undefined, undefined, settlePendingRepair);
     void dispatch.catch(() => undefined); // Observe failure even while the queue is held.
     try {
       await vi.advanceTimersByTimeAsync(11 * 60_000);
@@ -113,8 +113,8 @@ describe('self-host dispatch admission', () => {
     });
     const settlePendingRepair = vi.fn(async () => false);
     const dispatch = (conductor as unknown as {
-      runSelfBuildDispatch(step: 'build', state: ConductState, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', { feature_desc: 'auth-refusal' } as ConductState, undefined, undefined, undefined, settlePendingRepair);
+      runSelfBuildDispatch(step: 'build', state: ConductState, attempt: number, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>): Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', { feature_desc: 'auth-refusal' } as ConductState, 1, undefined, undefined, undefined, settlePendingRepair);
 
     await expect(dispatch).resolves.toMatchObject({ success: false, output: 'build auth unavailable' });
     expect(settlePendingRepair).not.toHaveBeenCalled();
@@ -132,10 +132,11 @@ describe('self-host dispatch admission', () => {
     const attempt = new AbortController();
 
     await (conductor as unknown as {
-      runSelfBuildDispatch(step: 'build', state: ConductState, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>, abortSignal?: AbortSignal): Promise<StepRunResult>;
+      runSelfBuildDispatch(step: 'build', state: ConductState, attempt: number, hint?: string, verdict?: string, context?: unknown, settle?: () => Promise<boolean>, abortSignal?: AbortSignal): Promise<StepRunResult>;
     }).runSelfBuildDispatch(
       'build',
       { feature_desc: 'abort-signal' } as ConductState,
+      1,
       undefined,
       undefined,
       undefined,

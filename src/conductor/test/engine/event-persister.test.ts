@@ -1,4 +1,4 @@
-// Covers: task:4, task:3, task:1
+// Covers: task:4, task:3, task:1, task:2
 // Covers: task:7
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
@@ -214,6 +214,22 @@ describe('EventPersister', () => {
 
     const restarted = new EventPersister(eventsPath, new ConductorEventEmitter());
     await expect(restarted.persistDurably(event)).resolves.toBe('duplicate');
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('deduplicates replayed stack member lifecycle events by eventId', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'stack_member_lifecycle',
+      child: ROUTING_CHILD,
+      pr: 101,
+      state: 'merged',
+      eventId: 'stack-member-101-merged',
+    } as ConductorEvent;
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
+
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 

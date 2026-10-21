@@ -1,0 +1,9 @@
+<!-- Recorded from 14a615c678ab0df4bb467fa0313bcb24434ef68f -->
+{"type":"finish_publication_transition","phase":"started","transition":"author_pr_prose"}
+{"type":"finish_publication_transition","phase":"completed","transition":"author_pr_prose"}
+{"type":"finish_publication_transition","phase":"started","transition":"write_shipped_record"}
+{"type":"finish_publication_transition","phase":"completed","transition":"write_shipped_record"}
+{"type":"finish_publication_transition","phase":"started","transition":"ready_pr"}
+{"type":"finish_publication_transition","phase":"completed","transition":"ready_pr"}
+{"type":"finish_publication_transition","phase":"started","transition":"judge_pr_prose"}
+{"type":"finish_publication_transition","phase":"completed","transition":"judge_pr_prose"}

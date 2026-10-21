@@ -48,6 +48,10 @@ import {
   type ProviderSetupExhaustion,
 } from './provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
+import {
+  transcriptCaptureSource,
+  type TranscriptCaptureSource,
+} from './self-host/transcript-harvest.js';
 import type { SelfHostProviderId } from './self-host/provider-home.js';
 import {
   CODEX_DISPLAY_NAME,
@@ -258,7 +262,7 @@ export function createCandidateSafetyBoundary(options: {
 export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
-  identity?: { readonly runId: string | undefined; readonly attempt: number; readonly member?: string },
+  identity?: TranscriptCaptureSource,
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
@@ -270,6 +274,8 @@ export interface ExecuteProviderCandidatesInput {
   config?: HarnessConfig;
   tier?: ComplexityTier;
   attempt?: number;
+  /** Self-host transcript capture identity, independent of escalation. */
+  captureAttempt?: number;
   /** Run identity held by the enclosing step runner for self-host scratch homes. */
   runId?: string;
   /** Feature-owned worktree identity for schema-only Codex scratch. */
@@ -355,6 +361,11 @@ export interface ProviderExecutionContext {
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
+  /** Settle a failed auxiliary capture before any later auxiliary dispatch can prune it. */
+  onAuxiliaryAttemptFailed?: (
+    identity: AuxiliaryAttemptFailureIdentity,
+    executionContext?: ExecutionContext,
+  ) => void | Promise<void>;
   onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   warn?: ExecuteProviderCandidatesInput['warn'];
   /** Feature-owned persisted sink for provider subprocess diagnostics. */
@@ -362,6 +373,18 @@ export interface ProviderExecutionContext {
   /** Immutable identity established by the daemon before provider dispatch. */
   managedSessionContext?: ManagedSessionContext;
   prepareManagedSessionObservation?: ExecuteProviderCandidatesInput['prepareManagedSessionObservation'];
+}
+
+/**
+ * A failed auxiliary dispatch identifies its capture without claiming which
+ * lifecycle owner created it.  The conductor owns that resolution because it
+ * alone has the issuing execution context.
+ */
+export interface AuxiliaryAttemptFailureIdentity {
+  readonly step: StepName;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly auxiliaryMember: string;
 }
 
 /**
@@ -850,6 +873,7 @@ export async function executeProviderCandidates({
   config,
   tier,
   attempt = 1,
+  captureAttempt,
   runId,
   nativeSchemaScratch,
   executionContext,
@@ -898,6 +922,18 @@ export async function executeProviderCandidates({
     effort: EffortLevel | undefined;
   } | undefined;
   let lastUnavailableResult: InvokeResult | undefined;
+  // Auxiliary rubric captures and their terminal settlement share this
+  // closed identity. A rubric can only inhabit `member`, never `step`.
+  const selfHostCaptureIdentity = runId === undefined
+    ? undefined
+    : transcriptCaptureSource({
+      runId,
+      attempt: captureAttempt ?? attempt,
+      owner: auxiliaryMember === undefined
+        ? { kind: 'registered-step', step }
+        : { kind: 'configured-group-member', parentGroup: step, member: auxiliaryMember },
+      ...(auxiliaryMember === undefined ? {} : { auxiliaryMember }),
+    });
 
   // A fallback may become the actual candidate only after another provider has
   // failed.  Capture every candidate-local policy baseline before that can
@@ -913,7 +949,7 @@ export async function executeProviderCandidates({
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
       let prepared: SelfHostInvocation | undefined;
       try {
-        prepared = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
+        prepared = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
         await prepareCandidateBaseline({ candidate, prepared });
       } catch (error) {
         // Normal setup-unavailable candidates will be represented by the real
@@ -1088,7 +1124,7 @@ export async function executeProviderCandidates({
           ? undefined
           : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
-          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index, member: auxiliaryMember });
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
           // write no observation record, so it is provisioned no destination
@@ -1464,6 +1500,10 @@ export interface ExecuteAuxiliaryProviderCandidatesInput<MemberId extends string
     'modelOverride' | 'effortOverride' | 'modelFallbackLadder' | 'auxiliaryMember'> {
   memberId: MemberId;
   policy: ResolvedBuildReviewRubricPolicy;
+  /** Allocates a capture-only dispatch sequence; it must not affect escalation. */
+  nextCaptureAttempt?: () => number;
+  /** Lifecycle-owned settlement for an auxiliary capture that failed this dispatch. */
+  onAuxiliaryAttemptFailed?: ProviderExecutionContext['onAuxiliaryAttemptFailed'];
 }
 
 export async function executeAuxiliaryProviderCandidates<MemberId extends string>(
@@ -1474,6 +1514,7 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
     : [input.policy.llm_provider];
   let last: ProviderExecutionResult | undefined;
   for (let attempt = 1; attempt <= input.policy.max_retries; attempt += 1) {
+    const captureAttempt = input.nextCaptureAttempt?.() ?? attempt;
     const result = await executeProviderCandidates({
       ...input,
       configuredProviders,
@@ -1484,7 +1525,21 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       effortOverride: input.policy.effort,
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
+      captureAttempt,
     });
+    if (!result.success && input.runId !== undefined) {
+      const failureIdentity: AuxiliaryAttemptFailureIdentity = {
+        step: input.step,
+        runId: input.runId,
+        attempt: captureAttempt,
+        auxiliaryMember: input.memberId,
+      };
+      if (input.executionContext === undefined) {
+        await input.onAuxiliaryAttemptFailed?.(failureIdentity);
+      } else {
+        await input.onAuxiliaryAttemptFailed?.(failureIdentity, input.executionContext);
+      }
+    }
     // A setup-only exhaustion is terminal for this logical dispatch: retrying
     // repeats the same verified capability checks without ever invoking a
     // provider.

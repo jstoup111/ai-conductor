@@ -13,7 +13,7 @@ stop instead of failing `conflicting-case-id`. This spec also delivers the core 
 Excluded: `distinctFrom` declarations and recurrence-keeps-limits semantics (#3124 becomes an
 optional tightening; the kickback cap is the bound); explicit `existingCaseId` rebinds to resolved
 cases, which keep the D7 regression halt; supersession of an OPEN owner by a decision or
-consistency stop (#3005's D9.x items); operator-acceptance carry-over (#3271, which lands first and owns it);
+consistency stop (#3005's D9.x items); operator-acceptance carry-over (#3271, sequenced after this spec, owns it);
 hand-off provenance fields and any store schema change; prd_widening cases.
 
 Internal engine invariant and adjudication-routing fix with no user-facing product capability;

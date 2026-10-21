@@ -501,6 +501,16 @@ step event (`step_completed`, `step_failed`, `step_interrupted`, or `step_refuse
 execution id (by step name for ledgers without execution context); a `step_retry` keeps the original
 start time. Rows for a daemon that is not running omit these lines.
 
+A running daemon also prints its engine versions when it has a pidfile, executor records, or
+dispatch events:
+
+| Line | Source |
+| --- | --- |
+| `EXECUTOR ENGINE CURRENT: <id>` | The installed engine's `dist` target; `unknown` when unreadable. |
+| `SUPERVISOR ENGINE: <id>` | The supervisor's pidfile engine dir. Suffixed `(older than current)` when stale. |
+| `EXECUTOR [<slug>]: <id>` | A running child executor's `.daemon/executors/<slug>.json` pin, suffixed `(older than current)` when stale. An unreadable record prints `version unknown — record unreadable`. |
+| `DISPATCH [<slug>]: engine <id>` | Each `feature_dispatch_started` in `.daemon/events.jsonl`; dispatches from before per-dispatch pinning print `engine unknown`. |
+
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.
 
@@ -648,6 +658,11 @@ never races a live build.
 Otherwise it prints `Reclaiming retained worktree: <path>`, removes the worktree, then prints
 `Removed retained worktree '<slug>': <path>` and exits 0. A removal failure prints `Could not
 reclaim-worktree '<slug>': <error message>` and exits 1, leaving the worktree in place.
+
+For a [published stack](configuration.md#stacked-publication), after removing the worktree it
+deletes the child branches under the same proof as the mergeable sweep, when the shipped record is
+on `origin/main` and every member is reachable. Otherwise it keeps the children and marks
+`refs/conductor/<slug>/publication` torn down. Either way it exits 0.
 
 Like `park`/`unpark`/`reconcile-parked`, it resolves the main repo root via `git rev-parse
 --git-common-dir` before doing any other work, so it works from inside any worktree.
@@ -1054,6 +1069,31 @@ so a success line on stderr would make every completed ship read as a failure.
 Every other failure exits **0** with one warning and no record written, so the exit code cannot be
 used to detect success. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
+
+## `ai-conductor transcripts`
+
+```bash
+ai-conductor transcripts <slug> [--show <capture>]
+```
+
+A read-only command that inspects the self-host provider transcripts retained for a feature. See
+[self-hosting: provider transcripts](../guides/self-hosting.md#provider-transcripts). It resolves
+`<main repo root>/.worktrees/<slug>`, then folds `.pipeline/events.jsonl`. It lists only captures
+whose latest state is retained and whose directory still exists, newest first.
+
+| Form | Output (stdout) |
+| --- | --- |
+| `transcripts <slug>` | One line per capture: `step=<step> attempt=<n> member=<member\|-> provider=<id> interrupted=<bool> path=<path>`, or `no retained transcripts for <slug>`. |
+| `transcripts <slug> --show <capture>` | The final assistant message from the capture's most recently modified top-level session file (Claude subagent sessions are excluded), sanitized again. `<capture>` is a full capture path or its trailing path segment(s). |
+
+Exit codes: 0 on success, including an empty list. 1 when:
+
+- the arguments are malformed (prints the usage guide);
+- the slug contains `/` or `\` or is `.`/`..`, or no worktree exists for it (`no feature worktree for <slug>`);
+- the capture is ambiguous (`ambiguous capture «<capture>»: <paths>`);
+- the capture is missing or has no assistant message (`no assistant message in <capture>`).
+
+All errors go to stderr.
 
 ## `ai-conductor kpi`
 

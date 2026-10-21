@@ -4,6 +4,7 @@ import {
   HALT_MARKER,
   HALT_CLASS_MARKER,
   PLAN_GAP_HALT_CLASS,
+  STACK_TIP_DIVERGED_HALT_CLASS,
   type HaltDisposition,
 } from './halt-marker.js';
 import {
@@ -39,6 +40,7 @@ import { applyRebaseTransition } from './rebase-transition.js';
 import { runRestack } from './restack/restack-executor.js';
 import { routedRoundOpen } from './routing/round-admission.js';
 import { emitRestackRefused } from './restack/restack-events.js';
+import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
@@ -70,6 +72,7 @@ export interface HaltRetentionDecision {
 export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
   'needs-human',
   PLAN_GAP_HALT_CLASS,
+  STACK_TIP_DIVERGED_HALT_CLASS,
   OVER_SCOPE_HALT_CLASS,
   KICKBACK_CAP_HALT_CLASS,
 ]);
@@ -869,6 +872,11 @@ export async function resumeRebaseFirst(opts: {
     return 'halted';
   }
   if (durableChildState) {
+    if (await publishedStackRefusal(opts.worktreePath, stackSlug, { git })) {
+      await opts.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: published stack left at its current base`);
+      return 'rebased';
+    }
     const [target, previous, oldBase] = await Promise.all([
       git(['rev-parse', '--verify', opts.localBase]),
       git(['rev-parse', '--verify', 'HEAD']),

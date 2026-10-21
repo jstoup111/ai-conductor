@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, chmod, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+// Covers: task:6
 // ─────────────────────────────────────────────────────────────────────────────
 // Unit tests for `gcVersions` in src/engine/engine-store.ts (Task 7, Phase 1 —
 // FR-15: "GC deletes old versions only when NOT current AND NOT
@@ -81,7 +82,50 @@ async function registerRepoWithPidfile(
   return repoPath;
 }
 
+async function writeExecutorReference(repoPath: string, slug: string, engineVersionId: string): Promise<void> {
+  const executorDir = join(repoPath, '.daemon', 'executors');
+  await mkdir(executorDir, { recursive: true });
+  await writeFile(join(executorDir, `${slug}.json`), JSON.stringify({
+    pid: process.pid,
+    engineDir: join(storeRoot, engineVersionId),
+    engineVersionId,
+    startedAt: NOW.toISOString(),
+  }), 'utf8');
+}
+
 describe('gcVersions', () => {
+  it('retains a version pinned only by a live executor and deletes it after the record is removed', async () => {
+    const { gcVersions, listVersions } = await loadEngineStore();
+    const pinned = '20260101T000000Z-aaaaaaaaaaaa';
+    const current = '20260701T000000Z-bbbbbbbbbbbb';
+    await makeVersion(pinned, 200 * ONE_DAY_MS);
+    await makeVersion(current, ONE_DAY_MS);
+    const repoPath = await registerRepoWithPidfile('repo-executor', undefined);
+    await writeExecutorReference(repoPath, 'feature-a', pinned);
+
+    const opts = { conductorRoot, currentVersionId: current as any, minAgeMsecs: ONE_DAY_MS, keepLastK: 0, registryPath, now: NOW, warn: () => {} };
+    expect((await gcVersions(opts)).deleted).not.toContain(pinned);
+    expect(await listVersions(storeRoot)).toContain(pinned);
+
+    await rm(join(repoPath, '.daemon', 'executors', 'feature-a.json'));
+    expect((await gcVersions(opts)).deleted).toContain(pinned);
+    expect(await listVersions(storeRoot)).not.toContain(pinned);
+  });
+
+  it('aborts without deletion when an executor reference is unreadable', async () => {
+    const { gcVersions, listVersions } = await loadEngineStore();
+    const old = '20260101T000000Z-aaaaaaaaaaaa';
+    const current = '20260701T000000Z-bbbbbbbbbbbb';
+    await makeVersion(old, 200 * ONE_DAY_MS);
+    await makeVersion(current, ONE_DAY_MS);
+    const repoPath = await registerRepoWithPidfile('repo-unreadable-executor', undefined);
+    await mkdir(join(repoPath, '.daemon', 'executors'), { recursive: true });
+    await writeFile(join(repoPath, '.daemon', 'executors', 'feature-a.json'), '{not json', 'utf8');
+
+    const result = await gcVersions({ conductorRoot, currentVersionId: current as any, minAgeMsecs: ONE_DAY_MS, keepLastK: 0, registryPath, now: NOW, warn: () => {} });
+    expect(result.deleted).toEqual([]);
+    expect(await listVersions(storeRoot)).toContain(old);
+  });
   it('happy path: ancient, non-current, unreferenced, outside keep-K version is deleted', async () => {
     const { gcVersions, listVersions } = await loadEngineStore();
 

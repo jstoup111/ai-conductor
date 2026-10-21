@@ -166,6 +166,7 @@ import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
+import { detectTranscriptsCommand, dispatchTranscripts } from './engine/transcripts-cli.js';
 import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
@@ -837,6 +838,58 @@ export async function dispatchCliEntry(input: {
 // --- Main ---
 
 async function dispatchCliCommand(): Promise<void> {
+  // Private child entrypoint. It intentionally is not registered in the
+  // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
+  // argv can never satisfy the daemon supervisor process matcher.
+  if (process.argv[2] === 'executor-child') {
+    const [
+      { runExecutorChild, withExecutorBrokerProxies },
+      { runExecutorChildFeature },
+      { createWorkOrderGitRunner },
+      { makeFeatureRunnerDeps },
+      { leafBranchFor },
+      { defaultSelfHostDetector },
+    ] = await Promise.all([
+      import('./engine/executor-child.js'),
+      import('./engine/executor-child-runtime.js'),
+      import('./daemon-cli.js'),
+      import('./engine/daemon-deps.js'),
+      import('./engine/feature-branch-identity.js'),
+      import('./engine/self-host/detector.js'),
+    ]);
+    const projectRoot = process.cwd();
+    await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
+      // Reuse the daemon seam, which verifies the WorkOrder before its first
+      // worktree side effect and performs the pinned-base create under the
+      // brokered lifecycle lock.
+      createWorktree: async (order, worktreeLifecycle) => {
+        const runnerDeps = makeFeatureRunnerDeps({
+          projectRoot,
+          worktreeBase: join(projectRoot, '.worktrees'),
+          baseBranch: 'main',
+          runConductorInWorktree: async () => {},
+          workOrderGit: createWorkOrderGitRunner(projectRoot),
+          worktreeLifecycle: worktreeLifecycle as never,
+        });
+        return runnerDeps.createWorktree(order.slug, order);
+      },
+      run: async (input) => {
+        const branch = leafBranchFor(input.order.slug);
+        return runExecutorChildFeature({
+          ...input,
+          worktree: { path: join(projectRoot, '.worktrees', input.order.slug), branch },
+          projectRoot,
+          supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
+        });
+      },
+      // The WorkOrder is the supervisor's authority for self-host mode.  The
+      // detector is only a compatibility fallback for pre-field orders.
+      liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
+      log: (line) => { process.send?.({ kind: 'log', level: 'info', message: line }); },
+      exit: (code) => { process.exitCode = code; },
+    }));
+    return;
+  }
   // Per-command help is answered by `main()` before the daemon-session guard,
   // so it never reaches this dispatcher.
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
@@ -1041,6 +1094,14 @@ async function dispatchCliCommand(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Transcript inspection is deliberately read-only: it reconstructs the
+  // retained capture set from the event ledger and never creates pipeline state.
+  const transcriptsCmd = detectTranscriptsCommand(process.argv);
+  if (transcriptsCmd) {
+    const code = await dispatchTranscripts(transcriptsCmd, process.cwd());
     process.exit(code);
   }
 

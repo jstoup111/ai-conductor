@@ -70,6 +70,7 @@ export interface PullRequestEvidenceMetadata {
   url: string;
   body: string;
   changedPaths: string[];
+  headRef: string;
   headRefOid: string;
 }
 
@@ -141,12 +142,17 @@ export async function dispatchShipmentEvidence(
     const association = classifyShipmentAssociation({
       planStems,
       pr: {
+        headRef: metadata.headRef,
         metadataPlanStems: cmd.kind === 'check'
           ? extractShipmentPlanDeclarations(metadata.body)
           : extractPlanStems(metadata.body),
         changedPaths: metadata.changedPaths,
       },
     });
+    if (cmd.kind === 'reconcile' && !metadata.headRef) {
+      report('shipped-record: unclassified (head ref unavailable)');
+      return 0;
+    }
     if (association.kind === 'not-applicable') {
       report(`shipped-record: not applicable (${association.classification})`);
       return 0;
@@ -328,10 +334,15 @@ export function makeRecordRepairRequester(
       const association = classifyShipmentAssociation({
         planStems,
         pr: {
+          headRef: metadata.headRef,
           metadataPlanStems: extractPlanStems(metadata.body),
           changedPaths: metadata.changedPaths,
         },
       });
+      if (!metadata.headRef) {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} is unclassified (head ref unavailable); no repair requested`);
+        return;
+      }
       if (association.kind !== 'implementation') {
         log(`[shipped-record-repair] ${slug}: ${prUrl} is ${association.classification}; no repair requested`);
         return;
@@ -683,7 +694,7 @@ async function readPullRequestEvidenceMetadata(
   try {
     stdout = await runTrackerRead(
       runGh, cwd, 'pull-request.read', repositoryForPullRequest(pr), { kind: 'repository' },
-      ['pr', 'view', pr, '--json', 'url,body,files,headRefOid'],
+      ['pr', 'view', pr, '--json', 'url,body,files,headRefOid,headRefName'],
     );
   } catch (error) {
     // Preserve the caller's established error wording while the read itself
@@ -696,6 +707,7 @@ async function readPullRequestEvidenceMetadata(
     body?: unknown;
     files?: unknown;
     headRefOid?: unknown;
+    headRefName?: unknown;
   };
   return {
     url: typeof value.url === 'string' ? value.url : '',
@@ -706,6 +718,7 @@ async function readPullRequestEvidenceMetadata(
         return typeof path === 'string' ? [path] : [];
       })
       : [],
+    headRef: typeof value.headRefName === 'string' ? value.headRefName.trim() : '',
     headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : '',
   };
 }
@@ -731,13 +744,17 @@ async function readPullRequestEventMetadata(
       html_url?: unknown;
       body?: unknown;
       base?: { sha?: unknown };
-      head?: { sha?: unknown };
+      head?: { ref?: unknown; sha?: unknown };
     };
   };
   const pullRequest = event.pull_request;
   const url = typeof pullRequest?.html_url === 'string' ? pullRequest.html_url : '';
   const baseSha = typeof pullRequest?.base?.sha === 'string' ? pullRequest.base.sha : '';
+  const headRef = typeof pullRequest?.head?.ref === 'string' ? pullRequest.head.ref : '';
   const headRefOid = typeof pullRequest?.head?.sha === 'string' ? pullRequest.head.sha : '';
+  if (!headRef) {
+    throw new Error(`pull-request event lacks head ref: ${eventPath}`);
+  }
   if (!url || !baseSha || !headRefOid) {
     throw new Error(`pull-request event lacks URL or commit identity: ${eventPath}`);
   }
@@ -748,6 +765,7 @@ async function readPullRequestEventMetadata(
     url,
     body: typeof pullRequest?.body === 'string' ? pullRequest.body : '',
     changedPaths,
+    headRef,
     headRefOid,
   };
 }

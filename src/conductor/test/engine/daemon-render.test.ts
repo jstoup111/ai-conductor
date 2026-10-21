@@ -42,6 +42,20 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders executor protocol mismatches with the restart disposition', () => {
+    expect(lines({
+      type: 'executor_protocol_mismatch',
+      slug: 'feature-a',
+      engineVersionId: '20261019T120000Z-abcdef123456',
+      expectedProtocolVersion: 2,
+      actualProtocolVersion: 1,
+      reason: 'executor protocol mismatch: expected 2, received 1',
+      restartRequested: true,
+    })).toEqual([
+      '· executor feature-a protocol mismatch: executor protocol mismatch: expected 2, received 1 (restart requested)',
+    ]);
+  });
+
   it('renders build tree witnesses without changing legacy or non-build lines', () => {
     expect(lines({ type: 'step_completed', step: 'build', status: 'done', treeBefore: 'abc123456', treeAfter: 'abc123456' }))
       .toEqual(['·   build ✓ done (tree abc1234 unchanged)']);
@@ -615,6 +629,18 @@ describe('renderDaemonEvent coloring', () => {
 describe('renderDaemonEvent distinctness and completeness guards', () => {
   beforeEach(() => {
     chalk.level = 0;
+  });
+
+  it('renders an executor start with its pinned and supervisor engine versions', () => {
+    expect(lines({
+      type: 'executor_started',
+      slug: 'pinned-feature',
+      engineVersionId: 'engine-v2',
+      protocolVersion: 1,
+      supervisorEngineVersionId: 'engine-v1',
+    })).toEqual([
+      '· executor pinned-feature started on engine-v2 (protocol 1; supervisor engine-v1)',
+    ]);
   });
 
   it('keeps kickback and navigation_back (BACK) lines textually distinct', () => {

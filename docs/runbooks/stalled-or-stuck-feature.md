@@ -101,6 +101,7 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — except a matching, one-use `kickback-budget` authorization for a budget-cap halt. |
 | `kickback-cap` | A bounded `prd_audit` or as-built-review remediation allowance is exhausted. | No — except a matching, one-use `kickback-budget` authorization. |
 | `plan-gap` | A BUILD task reported a Done-when check the approved plan cannot satisfy, or `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
+| `stack-tip-diverged` | A [published stack](../reference/configuration.md#stacked-publication) member's remote tip no longer matches its recorded tip; the detail begins `published stack tip diverged` and names the positions. | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | No — skipped on every sweep until an operator resolves it. |
 | `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
@@ -186,7 +187,9 @@ move for `build_progress.active_stall_minutes`. `warn` only reports it. `end_att
 attempt; that spends one ordinary retry, and a pinned retry from attempt 2 onward becomes
 [`no_task_progress`](#no_task_progress).
 
-**Recovery:** inspect the attempt's transcript for a loop or an unreachable task. To end such
+**Recovery:** inspect the attempt's transcript for a loop or an unreachable task. For a self-host
+build, list the retained captures with `ai-conductor transcripts <slug>`. Read one with
+`--show <capture>` (see [`ai-conductor transcripts`](../reference/cli.md#ai-conductor-transcripts)). To end such
 attempts automatically, set `build_progress.active_stall_action: end_attempt`; to tolerate long
 non-committing work, raise `active_stall_minutes`. See
 [`build_progress`](../reference/configuration.md#build_progress).

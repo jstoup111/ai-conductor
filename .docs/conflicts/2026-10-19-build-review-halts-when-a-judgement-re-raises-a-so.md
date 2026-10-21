@@ -52,7 +52,7 @@ operator-approved in-place corrections.
 **Stories involved:** post-join adjudicator Story 7 vs new Story 4
 **Type:** contradiction. **Severity:** degrading.
 - **Existing:** "Given an action case not resolved by refutation was marked resolved and the judgement binds a reappearing finding to that case by `existingCaseId`, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback."
-- **New:** "Given R holds no operator-accepted source and the judgement names R as `existingCaseId` on an escalation whose sources differ from R's, when the stop is persisted, then a new open stop with a fresh case id is written and R is byte-identical."
+- **New:** "Given the judgement names R as `existingCaseId` on an escalation whose sources differ from R's, when the stop is persisted, then a new open stop with a fresh case id is written and R is byte-identical."
 - **Resolution (option 1):** limit the regression halt to a rebind with disposition `act`. This
   matches the current coordinator, which skips non-`act` proposals before the regression check.
   Applied to the existing story, to governing D5.6, and to the predecessor's D7 note.

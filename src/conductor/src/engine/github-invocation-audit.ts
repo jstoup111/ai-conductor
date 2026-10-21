@@ -64,7 +64,9 @@ const GH_COMMAND_FAMILIES = new Set(['pr', 'issue', 'api', 'repo', 'label', 'aut
 /** A `gh` invocation inside a shell string, at the start or after a shell operator. */
 const SHELL_GH = /(?:^|[\s;&|(`{$])gh\s/;
 
-type MutationOperation = Exclude<GithubOperationName, 'issue.read' | 'pull-request.read' | 'repository.read'>;
+type MutationOperation = {
+  [Operation in GithubOperationName]: (typeof GITHUB_OPERATION_REGISTRY)[Operation]['access'] extends 'read' ? never : Operation;
+}[GithubOperationName];
 interface OperationCallerProof { readonly adapter: 'createGuardedGithubOperationRunner' | 'executeRemoteGit'; readonly owner: string; }
 
 /**
@@ -83,6 +85,7 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'pull-request.comment.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.comment.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.edit': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'pull-request.retarget': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.ready': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.draft': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.label.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
@@ -96,6 +99,9 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'issue.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'commit.status.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'stack.read': { adapter: 'createGuardedGithubOperationRunner', owner: 'stack-publication.ts' },
+  'stack.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'stack.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'repository.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
@@ -414,14 +420,21 @@ function remoteGitRunnerInvocation(node: ts.CallExpression): boolean {
 /** The remote adapter's transport call must forward precisely its guarded argv. */
 function guardedRemoteGitRunnerCall(file: string, node: ts.CallExpression): boolean {
   const args = node.arguments[0];
-  return normalizedFile(file) === 'engine/remote-git-operations.ts'
-    && enclosingFunctionName(node) === 'executeRemoteGit'
-    && remoteGitRunnerInvocation(node)
-    && ts.isArrayLiteralExpression(args)
-    && args.elements.length === 1
-    && ts.isSpreadElement(args.elements[0])
-    && ts.isIdentifier(args.elements[0].expression)
-    && args.elements[0].expression.text === 'args';
+  if (normalizedFile(file) !== 'engine/remote-git-operations.ts'
+    || !remoteGitRunnerInvocation(node)
+    || !ts.isArrayLiteralExpression(args)
+    || args.elements.length !== 1
+    || !ts.isSpreadElement(args.elements[0])) return false;
+  const source = args.elements[0].expression;
+  if (enclosingFunctionName(node) === 'guardPublishedStackPushes') {
+    return ts.isIdentifier(source) && source.text === 'lsArgs';
+  }
+  return enclosingFunctionName(node) === 'executeRemoteGit'
+    && ((ts.isIdentifier(source) && source.text === 'args')
+      || (ts.isPropertyAccessExpression(source)
+        && ts.isIdentifier(source.expression)
+        && source.expression.text === 'guarded'
+        && source.name.text === 'args'));
 }
 
 /**

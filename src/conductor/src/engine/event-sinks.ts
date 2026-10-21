@@ -28,6 +28,8 @@ export const EVENT_SINKS = {
   daemon_exited: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
   daemon_maintenance_phase: { render: false, persist: true, audit: false, otel: false },
   feature_dispatch_started: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  executor_started: { render: true, persist: true, audit: false, otel: false, otelTrace: false },
+  executor_protocol_mismatch: { render: true, persist: true, audit: false, otel: false, otelTrace: false },
   feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   feature_shipped: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   // Foreground monitor transitions are durable telemetry. The monitor has no
@@ -147,6 +149,14 @@ export const EVENT_SINKS = {
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_retained: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_failed: { render: true, persist: true, audit: false, otel: false },
+  // Transcript lifecycle occurrences stay on the shared spine. Later tasks own
+  // harvesting, retention, and reader projections; this task only persists them.
+  provider_transcripts_captured: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_harvest_failed: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_retained: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_pruned: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_evicted: { render: false, persist: true, audit: false, otel: false },
+  provider_transcripts_retention_failed: { render: false, persist: true, audit: false, otel: false },
   feature_usage_total: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   feature_cost_snapshot: { render: false, persist: false, audit: false, otel: true, otelTrace: false },
   provider_fallback: { render: true, persist: true, audit: false, otel: false },
@@ -167,6 +177,14 @@ export const EVENT_SINKS = {
   finish_publication_transition: { render: true, persist: true, audit: false, otel: false },
   finish_publication_blocked: { render: true, persist: true, audit: false, otel: false },
   finish_publication_disposition: { render: true, persist: true, audit: false, otel: false },
+  // Stack publication is durable feature telemetry. The canonical event ledger
+  // is its sole reader path; later tasks own any renderer or audit projection.
+  stack_member_published: { render: false, persist: true, audit: false, otel: false },
+  stack_member_redrafted: { render: false, persist: true, audit: false, otel: false },
+  stack_assembled: { render: false, persist: true, audit: false, otel: false },
+  stack_member_lifecycle: { render: false, persist: true, audit: false, otel: false },
+  stack_members_unreachable: { render: false, persist: true, audit: false, otel: false },
+  stack_tip_diverged: { render: false, persist: true, audit: false, otel: false },
   feature_complete: { render: false, persist: true, audit: false, otel: true },
   dashboard_refresh: { render: false, persist: true, audit: false, otel: false },
   protected_artifact_rebaseline: { render: true, persist: true, audit: false, otel: false },

@@ -11,7 +11,7 @@ interface GithubClient {
         number: number;
         html_url: string;
         body?: string | null;
-        head: { sha: string };
+        head: { sha: string; ref?: string };
       }>>;
       listFiles(input: {
         owner: string;
@@ -104,7 +104,13 @@ export function createShipmentReconcileGithubAdapter(input: {
   return {
     async getPullRequestMetadata({ pullNumber }: { pullNumber: number }) {
       const { data } = await client.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-      return { number: data.number, url: data.html_url, body: data.body ?? '', headSha: data.head.sha };
+      return {
+        number: data.number,
+        url: data.html_url,
+        body: data.body ?? '',
+        headSha: data.head.sha,
+        headRef: data.head.ref ?? '',
+      };
     },
 
     async listImplementationPullRequestFiles({ pullNumber }: { pullNumber: number }) {
@@ -181,7 +187,7 @@ export function createShipmentReconcileGhRunner(input: {
     if (command === 'pr' && action === 'view' && jsonFlag === '--json' && args.length === 5) {
       const pullNumber = target ? pullNumbersByUrl.get(target) : undefined;
       if (pullNumber === undefined) throw new Error(`shipment reconcile gh runner: unknown pull request URL: ${target}`);
-      if (target === input.implementationPullRequest.url && fields === 'url,body,files,headRefOid') {
+      if (target === input.implementationPullRequest.url && fields === 'url,body,files,headRefOid,headRefName') {
         const [metadata, files] = await Promise.all([
           input.adapter.getPullRequestMetadata({ pullNumber }),
           input.adapter.listImplementationPullRequestFiles({ pullNumber }),
@@ -192,6 +198,7 @@ export function createShipmentReconcileGhRunner(input: {
           body: metadata.body,
           files: files.map(({ path }) => ({ path })),
           headRefOid: metadata.headSha,
+          headRefName: metadata.headRef,
         });
       }
       if (fields === 'url,headRefOid') {

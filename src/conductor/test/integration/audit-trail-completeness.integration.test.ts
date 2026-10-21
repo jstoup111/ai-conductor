@@ -29,6 +29,7 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState, ConductorEvent } from '../../src/types/index.js';
 import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
 import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeState } from '../../src/engine/state.js';
@@ -64,6 +65,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   daemon_heap_dump_written: 'not-audited-by-design',
   daemon_exited: 'not-audited-by-design',
   daemon_maintenance_phase: 'not-audited-by-design',
+  executor_started: 'not-audited-by-design',
+  executor_protocol_mismatch: 'not-audited-by-design',
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
@@ -275,6 +278,19 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   remediation_rerouted: 'not-audited-by-design',
   routed_repair_phase: 'not-audited-by-design',
   child_revalidated: 'not-audited-by-design',
+  // Stack-publication occurrences persist on the spine but are not audited (event-sinks audit: false).
+  stack_member_published: 'not-audited-by-design',
+  stack_member_redrafted: 'not-audited-by-design',
+  stack_assembled: 'not-audited-by-design',
+  stack_member_lifecycle: 'not-audited-by-design',
+  stack_members_unreachable: 'not-audited-by-design',
+  stack_tip_diverged: 'not-audited-by-design',
+  provider_transcripts_captured: 'not-audited-by-design',
+  provider_transcripts_harvest_failed: 'not-audited-by-design',
+  provider_transcripts_retained: 'not-audited-by-design',
+  provider_transcripts_pruned: 'not-audited-by-design',
+  provider_transcripts_evicted: 'not-audited-by-design',
+  provider_transcripts_retention_failed: 'not-audited-by-design',
 };
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
@@ -306,6 +322,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   daemon_maintenance_phase: {
     type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed',
+  },
+  executor_started: {
+    type: 'executor_started', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId,
+    protocolVersion: 1, supervisorEngineVersionId: '20261019T120000Z-bbbbbbbbbbbb' as EngineVersionId,
+  },
+  executor_protocol_mismatch: {
+    type: 'executor_protocol_mismatch', slug: 'feature', engineVersionId: '20261019T120000Z-aaaaaaaaaaaa',
+    expectedProtocolVersion: 1, actualProtocolVersion: 2, reason: 'protocol mismatch', restartRequested: false,
   },
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
@@ -1004,6 +1028,27 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'child_revalidated', eventId: 'route-4', occurredAt: '2030-01-01T00:00:00.000Z',
     child: parseChildId(1)!, generation: 1, closureSha: parseCommitSha('a'.repeat(40))!, outcome: 'passed',
   },
+  provider_transcripts_captured: {
+    type: 'provider_transcripts_captured', step: 'build', runId: 'transcript-run', attempt: 1,
+    provider: 'codex', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+    files: 1, bytes: 1, interrupted: false, skipped: 0, omittedLines: 0,
+  },
+  provider_transcripts_harvest_failed: {
+    type: 'provider_transcripts_harvest_failed', step: 'build', runId: 'transcript-run', attempt: 1,
+    provider: 'codex', path: '.pipeline/transcripts/build/transcript-run-a1-codex', error: 'read failed',
+  },
+  provider_transcripts_retained: {
+    type: 'provider_transcripts_retained', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+  },
+  provider_transcripts_pruned: {
+    type: 'provider_transcripts_pruned', path: '.pipeline/transcripts/build/transcript-run-a1-codex',
+  },
+  provider_transcripts_evicted: {
+    type: 'provider_transcripts_evicted', path: '.pipeline/transcripts/build/transcript-run-a1-codex', reason: 'count',
+  },
+  provider_transcripts_retention_failed: {
+    type: 'provider_transcripts_retention_failed', path: '.pipeline/transcripts/build/transcript-run-a1-codex', action: 'prune', error: 'unlink failed',
+  },
   acceptance_red: {
     type: 'acceptance_red',
     state: 'required',
@@ -1017,6 +1062,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   step_inapplicable_refused: {
     type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late', priorStatus: 'failed',
   },
+  stack_member_published: { type: 'stack_member_published', child: parseChildId(1)!, pr: 101 },
+  stack_member_redrafted: { type: 'stack_member_redrafted', child: parseChildId(1)!, pr: 101 },
+  stack_assembled: { type: 'stack_assembled', prs: [101, 500] },
+  stack_member_lifecycle: {
+    type: 'stack_member_lifecycle', child: parseChildId(1)!, pr: 101, state: 'merged', eventId: 'stack-lifecycle-1',
+  },
+  stack_members_unreachable: { type: 'stack_members_unreachable', child: parseChildId(1)!, pr: 101 },
+  stack_tip_diverged: { type: 'stack_tip_diverged', prs: [101] },
 };
 
 async function loadWriter(): Promise<Record<string, any>> {

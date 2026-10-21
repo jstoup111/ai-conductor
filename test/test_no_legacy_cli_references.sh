@@ -61,9 +61,9 @@ while IFS= read -r hit; do
       ;;
     # The managed-session instruction audit recognizes both the canonical and
     # compatibility command prefixes; it does not invoke either command.
-    'src/conductor/src/engine/session-command-audit.ts:const COMMAND = /(?<![.\w/-])(?:ai-conductor|conduct-ts)\s+([a-z][a-z0-9-]*)\b/g;')
+    'src/conductor/src/engine/session-command-audit.ts:const COMMAND = /(?<![.\w/-])(?:ai-conductor|conduct-ts)(?!:)\s+([a-z][a-z0-9-]*)\b/g;')
       ;;
-    'src/conductor/src/engine/session-command-audit.ts:const COMMAND_PREFIX = /(?<![.\w/-])(?:ai-conductor|conduct-ts)\b/;')
+    'src/conductor/src/engine/session-command-audit.ts:const COMMAND_PREFIX = /(?<![.\w/-])(?:ai-conductor|conduct-ts)(?!:)\b/;')
       ;;
     # Claude read-only review denies every observed launcher, compatibility
     # alias included; it names the alias only to refuse it.
