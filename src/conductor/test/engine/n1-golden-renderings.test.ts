@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-n1-golden-probe-list, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection
+// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-n1-golden-probe-list, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-4-n1-golden-leaf-push, task:rem-prd-audit-rem-s1-6-resume-golden-pushed-receipt
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

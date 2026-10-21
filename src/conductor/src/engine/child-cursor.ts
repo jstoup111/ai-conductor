@@ -146,24 +146,30 @@ export async function hasDurableChildState(
   // The feature-owned conductor namespace is durable across worktree
   // recreation.  Do not restrict this probe to closure receipts: a published
   // positions/publication receipt is itself enough to keep the stack guard on.
-  // Only stack-owned refs count. Every ordinary N=1 push records
-  // `pushed/<branch>` (and transiently `push-intent/<branch>`), and routing
-  // owns `routes`, `rejected`, `revalidate`, `repairing` and `red`; none of
-  // those prove a stack exists.
+  // Push receipts are durable stack state only for child branches.  The leaf
+  // receipt is ordinary N=1 publication evidence and must retain the flat
+  // FINISH path.
   const conductorRefs = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/`]);
   if (!conductorRefs || conductorRefs.exitCode !== 0) return 'git-error';
   const prefix = `refs/conductor/${slug}/`;
   return conductorRefs.stdout.split('\n').some((line) => {
     const ref = line.trim();
-    return ref.startsWith(prefix) && isStackOwnedConductorRef(ref.slice(prefix.length));
+    return ref.startsWith(prefix) && isStackOwnedConductorRef(ref.slice(prefix.length), slug);
   });
 }
 
 /** Stack-owned names under `refs/conductor/<slug>/`: exact refs and ref directories. */
 const STACK_OWNED_CONDUCTOR_REFS = ['positions', 'publication', 'leaf-moved', 'cascades'] as const;
 const STACK_OWNED_CONDUCTOR_REF_DIRS = ['closed/', 'restack/'] as const;
+const STACK_PUSH_RECEIPT_DIRS = ['pushed/', 'push-intent/'] as const;
 
-function isStackOwnedConductorRef(name: string): boolean {
+function isStackOwnedConductorRef(name: string, slug: string): boolean {
+  const receiptBranch = STACK_PUSH_RECEIPT_DIRS
+    .find((dir) => name.startsWith(dir));
+  if (receiptBranch !== undefined) {
+    const identity = parseFeatureBranch(name.slice(receiptBranch.length));
+    return identity.kind === 'child' && identity.slug === slug;
+  }
   return (STACK_OWNED_CONDUCTOR_REFS as readonly string[]).includes(name) ||
     STACK_OWNED_CONDUCTOR_REF_DIRS.some((dir) => name.startsWith(dir));
 }

@@ -222,6 +222,7 @@ describe('Conductor FINISH publication routing', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  // Covers: task:rem-as-built-rem-d11-halt-positions-preserved
   it('preserves only server-rebased #c3 and #500 positions through the observer and final conductor halt', async () => {
     const events = new ConductorEventEmitter();
     const divergences: number[][] = [];

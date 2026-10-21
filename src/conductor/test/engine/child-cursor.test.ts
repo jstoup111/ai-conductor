@@ -1,4 +1,4 @@
-// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection
+// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -90,7 +90,8 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
   });
 
-  it('keeps an ordinary N=1 feature flat when only push and routing refs exist', async () => {
+  // Covers: task:rem-prd-audit-rem-s1-2-not-applicable-after-leaf-push
+  it('keeps an ordinary N=1 feature flat after its leaf pushed-tip receipt is recorded', async () => {
     const tip = (await git(['rev-parse', 'HEAD'])).trim();
     // Every N=1 daemon push records a pushed-tip receipt; routing owns its own refs.
     await git(['update-ref', 'refs/conductor/demo/pushed/feat/daemon-demo', tip]);
@@ -109,6 +110,8 @@ describe('resolveActiveChild', () => {
     'refs/conductor/demo/positions',
     'refs/conductor/demo/publication',
     'refs/conductor/demo/closed/c1',
+    'refs/conductor/demo/pushed/feat/c1/demo',
+    'refs/conductor/demo/push-intent/feat/c1/demo',
   ])('keeps the stack guard on for a recreated worktree holding only %s', async (ref) => {
     const tip = (await git(['rev-parse', 'HEAD'])).trim();
     await git(['update-ref', 'refs/conductor/demo/pushed/feat/daemon-demo', tip]);

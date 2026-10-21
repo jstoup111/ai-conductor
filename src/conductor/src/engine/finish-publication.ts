@@ -14,6 +14,8 @@ export class StackPublicationHaltError extends Error {
   constructor(
     readonly reason: Extract<HumanRequiredReason, 'stack_tip_diverged' | 'stack_publication_precondition_failed'>,
     message: string,
+    /** Durable member identities survive coordinator and conductor routing. */
+    readonly members: readonly { readonly pr?: number; readonly position?: number }[] = [],
   ) {
     super(message);
     this.name = 'StackPublicationHaltError';

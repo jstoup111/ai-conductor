@@ -402,7 +402,7 @@ async function haltAndThrowStackTipDiverged(input: {
   events?: { emit(event: ConductorEvent): Promise<void> };
 }, members: readonly { readonly pr: number; readonly position?: number }[], detail: string): Promise<never> {
   await haltStackTipDiverged(input.root, members, input.events, detail);
-  throw new StackPublicationHaltError('stack_tip_diverged', detail);
+  throw new StackPublicationHaltError('stack_tip_diverged', detail, members);
 }
 
 /**
@@ -470,13 +470,17 @@ async function verifyStackBeforeReadyFlip(input: {
   if (!matchesMembers) {
     const mismatched = mismatchedNativeMembers(expected, members);
     await haltStackTipDiverged(input.root, mismatched, input.events, `published stack tip diverged before position ${input.position}`);
-    throw new StackPublicationHaltError('stack_tip_diverged', `native stack membership diverged at positions: ${mismatched.map((member) => member.position).join(', ')}`);
+    throw new StackPublicationHaltError(
+      'stack_tip_diverged',
+      `native stack membership diverged at positions: ${mismatched.map((member) => member.position).join(', ')}`,
+      mismatched,
+    );
   }
   for (const [index, member] of expected.entries()) {
     const expectedTip = await input.git(['rev-parse', '--verify', '--quiet', pushedTipRef(input.slug, member.branch)]);
     if (expectedTip.exitCode !== 0 || expectedTip.stdout.trim() !== members[index]!.head) {
       await haltStackTipDiverged(input.root, [member], input.events, `published stack tip diverged at position ${member.position}`);
-      throw new StackPublicationHaltError('stack_tip_diverged', `native stack head diverged at position ${member.position}`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `native stack head diverged at position ${member.position}`, [member]);
     }
   }
 }
@@ -526,7 +530,7 @@ export async function readyStackChildren(input: {
     const state = (current as { state?: unknown }).state;
     if (state !== 'OPEN' || typeof draft !== 'boolean' || typeof body !== 'string') {
       await haltStackTipDiverged(input.root, [member], input.events, `published stack tip diverged at position ${member.position}`);
-      throw new StackPublicationHaltError('stack_tip_diverged', `child position ${member.position} is no longer an open draft`);
+      throw new StackPublicationHaltError('stack_tip_diverged', `child position ${member.position} is no longer an open draft`, [member]);
     }
     if (!draft) continue;
     const postcondition = checkChildBodyPostconditions(body, input.template, member.branch);
@@ -691,8 +695,11 @@ export async function assembleStack(input: {
     if (guard.kind === 'refuse') {
       await haltStackTipDiverged(input.root, guard.members, input.events,
         `published stack tip diverged at positions: ${guard.members.map((member) => member.position).join(', ')}`);
-      throw new StackPublicationHaltError('stack_tip_diverged',
-        `published stack tip diverged at positions: ${guard.members.map((member) => member.position).join(', ')}`);
+      throw new StackPublicationHaltError(
+        'stack_tip_diverged',
+        `published stack tip diverged at positions: ${guard.members.map((member) => member.position).join(', ')}`,
+        guard.members,
+      );
     }
 
     await executeValidatedStackOperation({
@@ -963,7 +970,11 @@ async function establishChildPrs(input: {
     const mismatched = prior.record.members.filter((member, index) => member.position !== expectedPositions[index]);
     const affected = mismatched.length > 0 ? mismatched : prior.record.members;
     await haltStackTipDiverged(input.root, affected, input.events, 'published stack tip diverged at sealed position');
-    throw new StackPublicationHaltError('stack_tip_diverged', `publication record has divergent sealed positions: ${affected.map((member) => member.position).join(', ')}`);
+    throw new StackPublicationHaltError(
+      'stack_tip_diverged',
+      `publication record has divergent sealed positions: ${affected.map((member) => member.position).join(', ')}`,
+      affected,
+    );
   }
   const leafView = await list(leafBranchFor(input.slug));
   const retained = leafView.find((candidate) => candidate.number === leaf.number);
@@ -1015,7 +1026,11 @@ async function establishChildPrs(input: {
         ?? listedMembers.get(child.position)?.number;
       await haltStackTipDiverged(input.root, [{ position: child.position, ...(knownPr === undefined ? {} : { pr: knownPr }) }], input.events,
         `published stack tip diverged at position ${child.position}`);
-      throw new StackPublicationHaltError('stack_tip_diverged', `child closure diverged at position ${child.position}`);
+      throw new StackPublicationHaltError(
+        'stack_tip_diverged',
+        `child closure diverged at position ${child.position}`,
+        [{ position: child.position, ...(knownPr === undefined ? {} : { pr: knownPr }) }],
+      );
     }
     if (pushed.kind === 'read-failed') throw new Error(`child closure read failed at ${child.position}`);
     let member = await choose(await list(child.branch), child.branch, base, child.position);
