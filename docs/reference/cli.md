@@ -649,6 +649,11 @@ Otherwise it prints `Reclaiming retained worktree: <path>`, removes the worktree
 `Removed retained worktree '<slug>': <path>` and exits 0. A removal failure prints `Could not
 reclaim-worktree '<slug>': <error message>` and exits 1, leaving the worktree in place.
 
+For a [published stack](configuration.md#stacked-publication), after removing the worktree it
+deletes the child branches under the same proof as the mergeable sweep, when the shipped record is
+on `origin/main` and every member is reachable. Otherwise it keeps the children and marks
+`refs/conductor/<slug>/publication` torn down. Either way it exits 0.
+
 Like `park`/`unpark`/`reconcile-parked`, it resolves the main repo root via `git rev-parse
 --git-common-dir` before doing any other work, so it works from inside any worktree.
 

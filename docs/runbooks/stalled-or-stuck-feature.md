@@ -101,6 +101,7 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — except a matching, one-use `kickback-budget` authorization for a budget-cap halt. |
 | `kickback-cap` | A bounded `prd_audit` or as-built-review remediation allowance is exhausted. | No — except a matching, one-use `kickback-budget` authorization. |
 | `plan-gap` | A BUILD task reported a Done-when check the approved plan cannot satisfy, or `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
+| `stack-tip-diverged` | A [published stack](../reference/configuration.md#stacked-publication) member's remote tip no longer matches its recorded tip; the detail begins `published stack tip diverged` and names the positions. | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | No — skipped on every sweep until an operator resolves it. |
 | `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |

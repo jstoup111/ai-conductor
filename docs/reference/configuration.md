@@ -1477,8 +1477,8 @@ removal attempts; other `needs-remediation` causes remain sticky.
 Opts a project into stacked delivery of a sliced plan. Plan-slice grammar validation (the
 `plan-slices` land gate) runs regardless of this block; the checks below run only when `enabled` is
 `true`. An admitted plan builds
-[child by child](#child-by-child-build). Child publication remains reserved for the stacked
-child-plans chain (#2945). Routing whole-feature fixes to the owning child is dark-launched behind
+[child by child](#child-by-child-build), and FINISH publishes it as a
+[GitHub native stack](#stacked-publication). Routing whole-feature fixes to the owning child is dark-launched behind
 `route_whole_feature_fixes`. Round admission and the routed repair pass on the host are implemented;
 child revalidation and the exit restack land with #3212.
 
@@ -1585,7 +1585,7 @@ child, in declared order:
   or the previous child's closure tip, and checks it out. A dirty tree refuses the switch. The leaf
   is the feature branch `feat/daemon-<slug>`. Before the leaf region, the engine moves it to the last
   intermediate child's closure tip; if the leaf has commits of its own it halts `needs-human`. Child
-  branches are never pushed. See [branch naming](artifacts.md#worktree-and-branch-names).
+  branches are pushed only at FINISH, by [stacked publication](#stacked-publication). See [branch naming](artifacts.md#worktree-and-branch-names).
 - **Closure.** A closed child's tip is recorded at `refs/conductor/<slug>/closed/c<k>`; only an
   explicit operator recovery removes it. To change a closed child, commit to its branch; the next
   [restack](#restack) carries the change into every existing child above it. A closed child's branch
@@ -1615,6 +1615,45 @@ child, in declared order:
 
 Per-child state is described in [per-child state](artifacts.md#per-child-state); operator commands
 select a child with [`--child`](cli.md#per-child-selection---child).
+
+### Stacked publication
+
+FINISH publishes a feature with two or more sealed positions as a GitHub native stack: one PR per
+position, bottom to top, with the leaf PR on top. A feature without children publishes one PR,
+unchanged.
+
+- **Transitions.** FINISH publication adds `establish_child_prs` after `establish_pr` and
+  `assemble_stack` after `write_shipped_record`; `ready_pr` waits for a valid stack. The progress
+  allowance is twice the number of transitions the feature can select.
+- **Children.** `establish_child_prs` re-drafts a ready leaf, plain-pushes each child's closure tip
+  to `feat/c<k>/<slug>` (no force), and opens one draft PR per child, based on the previous
+  position's branch (the first child on the default branch). A child PR body is engine-rendered: the
+  slice title, its stories and tasks, a diffstat, the `## Stack` section, and the template-default
+  regions (`Release-Disposition: no-note`). It carries no plan path and no closing keyword.
+- **Leaf.** The leaf alone carries the feature's authored prose, `Plan:`, `Closes`, release
+  metadata, migration block, and shipped record. `assemble_stack` retargets the leaf onto the top
+  child's branch, creates or extends the native stack, verifies member order and head SHAs, and
+  re-renders the leaf's `## Stack` section.
+- **Ready.** `ready_pr` flips members ready top-down, re-reading the stack before each flip. A child
+  whose body fails its postconditions stays a draft.
+- **Checks.** Every member runs the required checks. A child PR is classified `stack-child` by its
+  head ref, so the shipment check, reconcile, and audit never treat it as the feature's
+  implementation PR. Merge the stack bottom up; only the leaf merging ships the feature.
+- **Freeze.** Once members are recorded, every engine push to a member passes a tip guard: only a
+  fast-forward is allowed, and only while every member's remote tip matches its record. A mismatch
+  at FINISH halts with class `stack-tip-diverged` and a detail beginning
+  `published stack tip diverged`; halt-record and post-finish pushes are skipped, and agent
+  `github-operation` writes are refused `stack-tip-mismatch`. Restacks refuse `published-stack`: a
+  base refresh leaves the stack on its current base, local-work restacks halt `needs-human`, and
+  routed-repair admission halts with `routing admission refused: published-stack`. CI fix skips the
+  feature (`skipped(published-stack)`).
+- **Teardown.** After the shipped record is on `origin/main`, the mergeable sweep removes the
+  worktree, then deletes each child's local branch by name, only when its PR is merged, its merge
+  commit is on `origin/main`, and the local tip equals the merged head. Any kept member retains the
+  watch entry; see [retained worktrees](../guides/running-the-daemon.md#retained-worktrees).
+
+Publication state is recorded at `refs/conductor/<slug>/publication`; see
+[branch naming](artifacts.md#worktree-and-branch-names).
 
 ### Restack
 
