@@ -58,7 +58,9 @@ was only a heartbeat" without reading prose summaries.
 
 As the harness, I want each operator-recorded external event to be written as a real
 `ConductorEvent` to the pipeline-owned sibling ledger by the recording command's own process, so that
-the record exists even when no conductor is driving the feature.
+the record exists even when no conductor is driving the feature. The one exception is
+`build-review resolve-case`, whose event is written to the remediation case-store outbox and drained
+by the next engine pass (adr-2026-10-20-operator-acceptance-is-durable-case-state D6, D7).
 
 ### Acceptance Criteria
 

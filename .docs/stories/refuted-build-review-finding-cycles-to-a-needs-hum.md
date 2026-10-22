@@ -46,7 +46,7 @@ cannot be used to wave findings through.
 - Given a `refute` row with no existing-case binding, when the judgement is validated, then it is rejected with a reason naming the missing binding and nothing is persisted
 - Given a `refute` row bound to an open `act` case that BUILD never attempted, when the judgement is reconciled, then it is rejected as an illegal disposition transition and the case remains open with disposition `act`
 - Given a `refute` row bound to an attempted case whose action effect is still reserved or failed, when the judgement is reconciled, then it is rejected as an illegal disposition transition
-- Given a `refute` row bound to a case with disposition `defer` or `reject`, when the judgement is reconciled, then it is rejected as an illegal disposition transition
+- Given a `refute` row bound to a case with disposition `defer` or `reject` that is not carry-eligible (adr-2026-10-20-operator-acceptance-is-durable-case-state D3), when the judgement is reconciled, then it is rejected as an illegal disposition transition
 - Given a `refute` row whose evidence reference names a path that does not exist at the current tree, when the judgement is validated, then the whole judgement is rejected fail-closed and no waiver path accepts it
 - Given a `refute` row whose evidence reference names an existing path but an excerpt that does not occur in that file after whitespace normalization, when the judgement is validated, then the whole judgement is rejected fail-closed
 - Given a `refute` row whose evidence reference carries a line number, hunk offset, or commit SHA field, when the judgement is parsed, then it is rejected as malformed
