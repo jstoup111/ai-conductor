@@ -33,6 +33,7 @@ import {
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   applyBuildReviewOutcome,
@@ -13466,6 +13467,8 @@ export class Conductor {
                     {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      child: this.activeRegionChild,
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     },
                   );
                   // Old raw aggregate fixtures (and pre-adjudication callers)
@@ -13517,10 +13520,21 @@ export class Conductor {
                       {
                         emit: async (event) => { await this.events.emit(event); },
                         minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                        child: this.activeRegionChild,
+                        adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                       },
                     );
                     if (!latest.ok) throw new Error(latest.reason);
                     return new Set(latest.effective.acceptedFindingIds);
+                  };
+                  // Carry authority is the feature's current disposition
+                  // ledger, not merely the current lap's accepted ids.  The
+                  // origin necessarily belongs to an earlier finding id.
+                  const resolveEffectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> => {
+                    const listed = await new BuildReviewDispositionStore(this.projectRoot).list(effective.feature);
+                    if (!listed.ok) throw new Error(listed.message);
+                    return new Set(listed.records.map((record) =>
+                      `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
                   // A deferred issue is creation, not an existing-resource
@@ -13570,6 +13584,7 @@ export class Conductor {
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     suppressions,
                     resolveOperatorResolvedFindingIds,
+                    resolveEffectiveAcceptedSourceIds,
                     mechanical,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
@@ -13612,6 +13627,7 @@ export class Conductor {
                       } }),
                     }),
                     emit: async (event) => { await this.events.emit(event); },
+                    emitOrThrow: async (event) => this.events.emitOrThrow(event),
                     },
                   });
                   if (outcome.kind === 'decision-stop' || (outcome.kind === 'infrastructure' && outcome.status === 'halt')) {
@@ -13723,6 +13739,8 @@ export class Conductor {
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      child: this.activeRegionChild,
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {

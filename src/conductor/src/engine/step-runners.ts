@@ -3669,6 +3669,8 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(config),
+      child,
+      adjudicationEnabled: config.adjudication.enabled,
     });
     const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
       ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }
@@ -4409,6 +4411,8 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(input.config),
+      child: input.child,
+      adjudicationEnabled: input.config.adjudication.enabled,
     });
     const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
       ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }

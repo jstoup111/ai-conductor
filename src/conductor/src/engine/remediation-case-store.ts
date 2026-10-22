@@ -966,7 +966,7 @@ export class RemediationCaseStore {
     readonly rationale: string;
     readonly resolvedAt: string;
   }): Promise<RemediationCaseStoreMutationResult<RemediationCaseOperatorResolutionResult>> {
-    return this.mutate(async (state) => {
+    return this.mutate<RemediationCaseOperatorResolutionResult>(async (state) => {
       const record = state.cases.find((candidate) => candidate.id === input.caseId);
       if (!record) return { value: { kind: 'unknown-case' } };
       if (record.resolution !== 'open') return { value: { kind: 'already-resolved' } };

@@ -343,6 +343,44 @@ function failOnlyDecisionStopMutation(reason: 'lock-timeout' | 'malformed-state'
 describe('coordinateBuildReviewAdjudication', () => {
   const customAggregate = customMixedAggregate();
   const customSource = projectBuildReviewAggregateSources(customAggregate)!.find((source) => source.rubric === 'security')!;
+  it('routes an explicitly bound accepted action re-raise through the carry lane', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const origin = 'testQuality:accepted-on-lap-1';
+    await seedCases(store, {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'accepted-case', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The original finding was accepted.', resolution: 'resolved',
+        sources: [{ sourceId: origin, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId: origin, lapId: 'lap-old' }] },
+        effect: { id: 'accepted-effect', kind: 'action', status: 'applied', workOrderId: 'accepted-order' },
+      }],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'carry' }],
+      cases: [{
+        caseRef: 'carry', existingCaseId: 'accepted-case', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The later finding is explicitly bound to the accepted case.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Must not be published' }] },
+      }],
+    };
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement),
+      resolveEffectiveAcceptedSourceIds: async () => new Set([origin]),
+      chargeEffect: charge,
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, route: 'pass' }));
+    expect(charge).not.toHaveBeenCalled();
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      id: 'accepted-case', resolution: 'resolved',
+      sources: expect.arrayContaining([{ sourceId, outcome: 'carried', recordedAt: expect.any(String) }]),
+    })] } });
+  });
   it.each([
     ['built-in finding on an open case', aggregate, rawSource, 'open'],
     ['built-in finding on a resolved case', aggregate, rawSource, 'resolved'],

@@ -85,6 +85,27 @@ export function isCarryEligibleRemediationCase(
     && origins.every((origin) => effectiveAcceptedSourceIds.has(origin.sourceId) && origin.lapId !== currentLapId);
 }
 
+/**
+ * The sole retirement decision for open build-review action cases.  Acceptance
+ * is authoritative even when an earlier effect failed; absence is evidence
+ * only on a mechanically healthy lap.  Callers own their writes, never a
+ * second interpretation of these conditions.
+ */
+export function retiresOpenBuildReviewCase(
+  record: RemediationCaseRecord,
+  input: {
+    readonly liveSourceIds: ReadonlySet<string>;
+    readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+    readonly mechanicallyHealthy: boolean;
+  },
+): boolean {
+  if (record.resolution !== 'open') return false;
+  const accepted = record.sources.length > 0 && record.sources.every((source) => input.effectiveAcceptedSourceIds.has(source.sourceId));
+  const absentFailed = input.mechanicallyHealthy && record.disposition === 'act' && record.effect.kind === 'action' && record.effect.status === 'failed'
+    && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId));
+  return accepted || absentFailed;
+}
+
 export function classifyRemediationCaseReuse(
   record: RemediationCaseRecord,
   attemptedCaseIds: ReadonlySet<string>,
