@@ -603,7 +603,16 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (allOperatorResolved(resolved)) {
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
-  const settledSourceIds = finalizedSourceIds(prior.state.cases);
+  // A decision stop has no settled semantic answer: its source must remain
+  // eligible for a later judgement to converge on that owner, or to surface a
+  // different-owner conflict. `finalizedBuildReviewSourceIds` deliberately
+  // serves broader terminal dispositions, so narrow it at this coordinator
+  // boundary for the stop re-evaluation lane.
+  const decisionStopSourceIds = new Set(prior.state.cases
+    .filter(isBuildReviewDecisionStop)
+    .flatMap((record) => record.sources.map((source) => source.sourceId)));
+  const settledSourceIds = new Set([...finalizedSourceIds(prior.state.cases)]
+    .filter((sourceId) => !decisionStopSourceIds.has(sourceId)));
   currentSources = sources.filter((source) =>
     !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
     !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
@@ -726,7 +735,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // same evidence the exit paths settle on. Leaving it open let stale history
     // feed a later adjudication as an unresolved prior. A mechanically incomplete
     // lap proves nothing by absence, so it still leaves that history open.
-    resolveAbsentOpenNonActionCases: input.mechanical === 'healthy',
+    // An escalation is the explicit re-evaluation lane for an existing owner
+    // stop. Do not ask reconciliation to settle that stop by absence before
+    // its durable replay/persistence path sees the proposed escalation.
+    resolveAbsentOpenNonActionCases: input.mechanical === 'healthy' && escalationCases.length === 0,
   });
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific
