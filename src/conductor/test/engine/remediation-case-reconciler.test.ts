@@ -568,6 +568,7 @@ describe('remediation case reconciler', () => {
     expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'resolved' }] } });
   });
 
+  // Covers: task:16, task:rem-as-built-R16a
   it.each(['reserved', 'failed'] as const)('retires an attempted absent action case with a %s effect on a healthy lap', async (status) => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);

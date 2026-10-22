@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker, resolveAbsentFailedBuildReviewCases } from '../../src/engine/remediation-case-effects.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -85,6 +85,36 @@ describe('remediation case effects', () => {
     ['resolved case carries no obligation', { id: 'e', kind: 'deferral', status: 'failed', diagnostic: 'x' }, { resolution: 'resolved' }, false],
   ] as const)('settlement obligation: %s', (_label, effect, overrides, expected) => {
     expect(isBuildReviewSettlementObligationCase(record(effect as RemediationCaseRecord['effect'], overrides as Partial<RemediationCaseRecord>))).toBe(expected);
+  });
+
+  // Covers: task:16, task:rem-as-built-R16a, task:rem-as-built-R16b
+  it.each(['reserved', 'failed'] as const)('retires an accepted %s action with the shared transformation', async (status) => {
+    const acceptedSourceId = 'testQuality:accepted-action';
+    const original = {
+      ...openAppliedActionRecord(),
+      effect: status === 'reserved'
+        ? { id: 'effect-accepted', kind: 'action' as const, status }
+        : { id: 'effect-accepted', kind: 'action' as const, status, diagnostic: 'earlier failure' },
+      sources: [{ sourceId: acceptedSourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T00:00:00.000Z' }],
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: 'lap-old' }] },
+    };
+    const store = await storeWith({ version: 'v3', feature, cases: [original], prdWideningCases: [], suppressions: [], outbox: [] });
+
+    await expect(resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: new Set(), lapId: 'lap-current',
+    })).resolves.toEqual({ ok: true, settled: [{ caseId: 'case-1', effectId: 'effect-accepted' }] });
+
+    const settled = await store.read();
+    expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      sources: original.sources,
+      resolution: 'resolved',
+      effect: status === 'reserved'
+        ? {
+            id: 'effect-accepted', kind: 'action', status: 'failed',
+            diagnostic: 'retired: every source operator-accepted or no longer raised',
+          }
+        : { id: 'effect-accepted', kind: 'action', status: 'failed', diagnostic: 'earlier failure' },
+    })] } });
   });
 
   // Covers: task:6

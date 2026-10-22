@@ -9,7 +9,7 @@
 // real effects, with fakes only at the provider and `gh` boundaries.
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,6 +18,8 @@ import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine
 import type { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
+import { parseChildId, pipelinePathFor } from '../../src/engine/child-context.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
@@ -271,7 +273,6 @@ async function fixture(options: FixtureOptions = {}) {
   await mkdir(join(projectRoot, '.docs', 'plans'), { recursive: true });
   await writeFile(join(projectRoot, '.docs', 'plans', 'feature.md'), '# Plan\n\n### Task 32: shared outcome\n**Files:** src/portable.ts\n', 'utf8');
   await writeFile(join(projectRoot, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }, { id: '32', status: 'in_progress' }] }), 'utf8');
-
   await options.seedPipeline?.(projectRoot);
 
   const statePath = join(projectRoot, '.pipeline', 'state.json');
@@ -404,7 +405,6 @@ async function fixture(options: FixtureOptions = {}) {
     }),
     gh,
   } as never);
-
   for (const relative of ['.pipeline/remediation-cases.json', '.pipeline/build-review-work-order.json']) {
     await stat(join(projectRoot, relative)).then((metadata) => artifactMtimes.set(relative, metadata.mtimeMs)).catch(() => {});
   }
@@ -1148,6 +1148,91 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
         status: 'failed', diagnostic: status === 'reserved' ? 'retired: every source operator-accepted or no longer raised' : 'previous effect failure',
       }) })]);
     }
+  });
+
+  // Covers: task:16, task:17, task:rem-as-built-R16a, task:rem-as-built-R17a
+  it.each(['reserved', 'failed'] as const)('settles an accepted missing-order %s action before testing obligations', async (status) => {
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: 'case-accepted', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The accepted finding has no remaining work order.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: status === 'reserved'
+                ? { id: 'effect-accepted', kind: 'action', status }
+                : { id: 'effect-accepted', kind: 'action', status, diagnostic: 'previous effect failure' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+        const accepted = await new BuildReviewDispositionStore(root).append({
+          feature,
+          finding: canonicalizeBuildReviewFindingIdentity({
+            rubric: 'testQuality', contractVersion: 'v3', concernKind: FINDING.concernKind, anchor: FINDING.anchor,
+          })!,
+          sourceLapId: LAP_ID, summary: 'Accepted current finding.', rationale: 'Operator accepts this risk.', operator: 'operator',
+        });
+        if (!accepted.ok) throw new Error(accepted.message);
+      },
+    });
+
+    expect(await run.haltMarker()).toBe('');
+    expect((await run.state()).build_review).toBe('done');
+    await expect(run.readJson('.pipeline/remediation-cases.json')).resolves.toMatchObject({ cases: [expect.objectContaining({
+      resolution: 'resolved', effect: expect.objectContaining({
+        status: 'failed', diagnostic: status === 'reserved'
+          ? 'retired: every source operator-accepted or no longer raised'
+          : 'previous effect failure',
+      }),
+    })] });
+  });
+
+  // Covers: task:17, task:rem-as-built-R17b
+  it('includes child scope in the missing-work-order action resolution command', async () => {
+    const child = parseChildId(2)!;
+    const root = await mkdtemp(join(tmpdir(), 'conductor-build-review-child-settlement-'));
+    roots.push(root);
+    const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+    const verdictPath = pipelinePathFor(root, 'build-review.json', child);
+    await mkdir(dirname(verdictPath), { recursive: true });
+    await writeFile(verdictPath, JSON.stringify(passAggregate()), 'utf8');
+    const store = new RemediationCaseStore(root, feature, { child });
+    const seeded = await store.mutate(async (state) => ({
+      value: undefined,
+      nextState: {
+        ...state,
+        cases: [{
+          id: 'case-child', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The child action has no published work order.', resolution: 'open',
+          sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+          effect: { id: 'effect-child', kind: 'action', status: 'applied', workOrderId: 'order-child' },
+        }],
+      },
+    }));
+    if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events: new ConductorEventEmitter(),
+      config: { build_review: { adjudication: { enabled: true } } },
+    } as never);
+    (conductor as unknown as { activeRegionChild: typeof child; activeRegionIsLeaf: boolean }).activeRegionChild = child;
+    (conductor as unknown as { activeRegionChild: typeof child; activeRegionIsLeaf: boolean }).activeRegionIsLeaf = true;
+
+    await expect((conductor as unknown as {
+      settleRemediationCasesOnCleanBuildReview: () => Promise<{ kind: string; reason?: string }>;
+    }).settleRemediationCasesOnCleanBuildReview()).resolves.toEqual(expect.objectContaining({
+      kind: 'invalid',
+      reason: expect.stringContaining('resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --child 2 --case case-child'),
+    }));
   });
 
   it.each(['reserved', 'failed'] as const)('halts a clean PASS when an open %s deferral effect has no order', async (status) => {
