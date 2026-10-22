@@ -82,6 +82,69 @@ discipline produced false blocks.
 > adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback), its criterion check carries the `[test]` tag, so the repair closes under D6. No new appender
 > or plan-growth source is added, and as-built REMEDIABLE tasks are unchanged.
 
+
+> **Amended 2026-10-21 by #3200:** D6's text-only check accepted any test that existed at HEAD, matched
+> the title as a substring, and shared a file-level `Covers:` marker. On one feature, only 34 of 185
+> `[test]` citations asserted the check they closed, and the gap surfaced only through `prd_audit` laps
+> (plan 33 → 98 tasks, 13 production bugs hidden). D1-D9 stand. D6's text checks still run first and
+> still refuse; what a passing reference proves is now split by provenance, as follows. Untagged checks
+> and plans without tags close exactly as before. `Task:` trailers stay telemetry
+> (adr-2026-07-21-demote-task-stamping-to-telemetry) and are never read for provenance.
+>
+> D10. **Task start records its start commit.** `conduct task start` writes the current HEAD as an
+> additive `startHead` field on the task's engine-owned task-status row (adr-2026-07-05 H1/H4). A task
+> closed without a start, or started before this field existed, has no `startHead`.
+>
+> D11. **A test the task itself wrote closes mechanically.** After D6's checks pass, a `[test]` check is
+> stamped `verified` only when `startHead` is an ancestor of HEAD and the cited title, whitespace-
+> normalized, appears in the whitespace-normalized added lines of `git diff <startHead> HEAD -- <path>`.
+> This is git and text only, with no language, framework, or AST parsing. A test that another task
+> added inside the same window also counts as new. No judgement, no delay, no added cost.
+>
+> D12. **Every other citation closes pending judgement.** When D11 does not hold (no `startHead`, an
+> unreachable `startHead` after a rebase, or a title that is not on an added line because the test
+> predates the task or only its body changed), the check is recorded with source
+> `pending-judgement` and the task completes. The `task done` CLI still runs no model and emits nothing.
+>
+> D13. **The conductor judges pending citations at the BUILD boundary.** When a BUILD session ends and
+> any `pending-judgement` record exists, the conductor dispatches one judgement over all of them before
+> the BUILD completion predicate is evaluated. The judgement is read-only and uses the provider's native
+> output schema. Its input for each citation is the check text, the task text, the cited path and title,
+> and the bounded content of the cited file at HEAD. It returns, per citation,
+> `{ verdict: 'asserts' | 'does-not-assert', reason }`, and the engine stamps the envelope. A provider
+> failure or schema-invalid output is a failed dispatch, retried once. A failed dispatch is never a
+> refusal and never counts toward D14's bound.
+>
+> D14. **A refusal reopens the task, bounded.** `asserts` stamps source `judged` with the reason.
+> `does-not-assert` reopens the task through a repair obligation
+> (adr-2026-09-06-reopened-task-resolution decision 13), and the BUILD retry hint names the task, the
+> check, the citation, and the judge's reason. That routes the task back to BUILD inside the same BUILD
+> step rather than laps later. The engine persists a refusal count for each check, keyed by task id,
+> check index, and check-text digest. A second refusal of the same check, a refusal when no BUILD
+> attempt remains, or a refused check that BUILD completes without re-closing is demoted instead: the
+> check is recorded `unverified`, with the judge's reason as its reason, and follows D8 unchanged. A
+> refusal never halts the feature.
+>
+> D15. **A judgement that cannot run never blocks.** When no candidate provider declares native output
+> schema support, or the dispatch fails twice, every pending record is demoted to `unverified` with the
+> reason `citation judgement unavailable: <cause>` and follows D8. BUILD proceeds.
+>
+> D16. **The operator can overturn a refusal.** `ai-conductor done-when accept --feature <slug> --task
+> <id> --check <n> --reason <text>` accepts a check whose latest judgement is `does-not-assert`, whether
+> it is reopened or demoted. It records source `operator-accepted` with the reason, resolves that
+> check's citation repair obligation, and emits a `ConductorEvent`. It refuses a check with no recorded
+> refusal. `done-when` is not a session-sanctioned subcommand, so the daemon-session guard refuses it
+> inside every dispatched session; only an operator can run it.
+>
+> D17. **The close-record source set grows, and stays closed.** `source` is exactly one of `verified`,
+> `reported`, `verify-only`, `unverified`, `pending-judgement`, `judged`, or `operator-accepted`, and
+> every consumer matches it exhaustively. `prd_audit`'s input still carries only `unverified` records
+> (D8), which now include demoted refusals.
+>
+> D18. **Citation judgement is observable on the existing spine.** Each judgement pass emits one
+> `ConductorEvent` listing each citation's task, check, and verdict (or demotion cause). Each
+> `done-when accept` emits one naming the task, check, and reason. Both have `EVENT_SINKS` rows.
+
 ## Consequences
 
 ### Positive

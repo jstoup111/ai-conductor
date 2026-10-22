@@ -80,6 +80,19 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 >
 > N=1 obligations omit `branch` and are unchanged.
 
+
+> **Amended 2026-10-21 by #3200:** a refused Done-when test citation becomes an admitted repair source,
+> narrowly, for the reopen that `adr-2026-08-22-done-when-evidence-at-task-close` D14 defines. Decisions
+> 1-12 are unchanged.
+>
+> 13. When the BUILD-boundary citation judgement refuses a check, the engine admits an obligation with
+> source authority `done-when-citation`, a finding id digested from the task id, check index, check
+> text, and cited reference, and the cited task id. Admission uses the same idempotent admission, replay,
+> and restage path as the other existing-task sources. It charges no lap and no gate allowance; the
+> per-check refusal bound of D14 bounds it instead. Under decision 4, pre-reopen trailers and the old
+> close record do not resolve the task. For decision 8, its governing review is the next BUILD-boundary
+> citation judgement of the re-closed check. A D14 demotion or a D16 operator acceptance resolves it.
+
 ## Architectural Alignment
 
 This is a durable state-transition decision, so an ADR is warranted even at Medium tier. No existing ADR covers a current repair obligation spanning resolver, reconstruction, task close, and restart. The July 23 trailer-union ADR continues to own the shared resolution/authority split; its bounded freshness exception and the July 13 no-op guard qualification are amended beside their original clauses in this same DECIDE change.
