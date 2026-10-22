@@ -33,7 +33,7 @@ import {
   isUnreadableKickbackLedger,
   readKickbackLedger,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, withPendingGrowth } from './kickback-budget-view.js';
 import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
@@ -758,9 +758,22 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
         .map(([gate, count]) => `${gate}: ${count}`)
         .join(', ');
       const added = `added ${growth.added}${byGate ? ` (${byGate})` : ''}`;
+      // The shared view is the sole pending-growth projection: status only
+      // decides its compact presentation. An unresolved plan has no reliable
+      // cap, so intentionally withhold its projection rather than inventing
+      // one from an otherwise-raised ledger cap.
+      const view = withPendingGrowth(
+        { ...growth, cap: authoredSource === 'unresolved' ? null : cap, capSource, authoredSource },
+        ledger.pendingRepair,
+      );
+      const pending = view.pendingGrowth;
+      const pendingSummary = pending === undefined
+        ? ''
+        : `; pending ${pending.total} (${Object.entries(pending.byGate).map(([gate, amount]) => `${gate} ${amount}`).join(', ')})` +
+          (pending.minimumRaise === undefined ? '' : `, minimum raise ${pending.minimumRaise}`);
       const summary = authoredSource === 'unresolved'
-        ? `plan unresolved; ${added}${capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : ''}`
-        : `authored ${growth.authored}; ${added}; remaining ${growth.remaining}/${cap}`;
+        ? `plan unresolved; ${added}${pendingSummary || (capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : '')}`
+        : `authored ${growth.authored}; ${added}; remaining ${view.remaining}/${cap}${pendingSummary}`;
       out(`  PLAN GROWTH [${feature.slug}${childStatus}]: ${summary}`);
     } catch (error) {
       out(
