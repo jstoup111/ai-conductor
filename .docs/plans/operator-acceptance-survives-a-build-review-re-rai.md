@@ -886,3 +886,20 @@ Task 9, Task 19 ─▶ Task 23, Task 24 (slice 2)
 **Done when:**
 - adr-2026-10-20-operator-acceptance-is-durable-case-state decision 7 is satisfied by this task.
 - The repair for task rem-as-built-rem-as-built-R17e is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R17f: Scope absence-retirement health to the current lap: add one shared helper (e.g. in build-review-effective.ts or remediation-case-reconciler.ts) that returns healthy only when the current lap has no built-in or custom infrastructure-failure rubric and no scope-incomplete rubric, covered or not. Drop the feature-wide hasRecordedReducedCoverage term from conductor.ts build_review adjudication (~:13540) and the reducedCoverage.records.length === 0 term from clean-PASS settlement (~:5381-5387), and use the helper at both sites. Add conductor build_review step tests: (a) a lap after an earlier lap recorded a reduced-coverage decision, with every rubric judged and no infrastructure or scope fault, retires an open failed action case whose source is not raised, writes exactly one remediation_case_reconciled event, and clean PASS publishes; (b) a lap whose infrastructure failure is covered by a reduced-coverage decision still does not retire it (existing R17d tests keep passing).
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:13540-13543 makes absence-retirement health false whenever effective.hasRecordedReducedCoverage is set, which build-review-aggregate.ts:561 sets for any non-retired reduced-coverage record of the feature, regardless of lap; clean-PASS settlement (conductor.ts:5381-5387) likewise requires reducedCoverage.records.length === 0 feature-wide. The over-broad term came from R17d's own wording. Task 17 doneWhen #3 only forbids retirement on a lap WITH an infrastructure failure or reduced coverage, so the conforming fix is lap-scoped health: a reduced-coverage decision matters only when it covers a fault on the current lap, and any such fault already appears in the lap's infrastructure/scope-incomplete lists. Approved architecture (ADR D5) is unchanged; this is implementation drift inside Task 17, so BUILD.
+**Criterion:** S9.3
+**Parent task:** 17
+**Done when:**
+- [test] S9.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R17f is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R17g: Make the shared lap-health helper from rem-prd-audit-R17f count custom-rubric infrastructure failures (aggregate.currentCustomRubrics with customResults[rubric].result.kind === 'infrastructure-failure', or an equivalent field exposed by the custom composition in build-review-effective.ts) so conductor.ts build_review adjudication and clean-PASS settlement compute identical health. Add a conductor build_review step test: healthy built-ins plus one failed custom rubric and no reduced-coverage decision leaves an open failed action case and an open reserved action case whose sources are not raised unretired, with no remediation_case_reconciled event; and a parity test that both call sites return the same health for built-in failure, custom failure, scope-incomplete and fully healthy fixtures.
+**Gate:** as-built
+**Rationale:** Verified (99%): conductor.ts:13540 reads effective.infrastructureFailureRubrics, which build-review-aggregate.ts:517 fills from built-in RUBRICS only, and the custom composition at build-review-effective.ts:137 passes it through unchanged, so a failed custom rubric leaves the lap 'healthy' and lets coordinator sites retire absent reserved/failed actions. Clean-PASS settlement (conductor.ts:5382-5384) already checks custom failures, proving the intended rule. ADR D5 is authoritative and unambiguous; this is conforming implementation work within Task 17, so BUILD. It shares the helper introduced by rem-prd-audit-R17f.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R17g is committed and its targeted tests pass.
