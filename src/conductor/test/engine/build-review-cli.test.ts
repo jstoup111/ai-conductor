@@ -1,14 +1,15 @@
-// Covers: task:2, task:27
+// Covers: task:2, task:19, task:27
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { joinBuildReviewRubricOutcomes, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
-import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
+import { remediationCaseStorePath, RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
+import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from '../../src/engine/build-review-cli.js';
 import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => ({
@@ -1167,5 +1168,159 @@ describe('build-review findings with current custom rubrics', () => {
       exhaustedMechanicalFaults: [{ rubric: 'portablePolicy', cause: 'policy-load-failed', diagnostic: 'policy could not be loaded' }],
     });
     await expect(jsonFindings(findingsDeps(aggregate, { readMechanicalFaults: async () => 2 }))).resolves.not.toHaveProperty('exhaustedMechanicalFaults');
+  });
+});
+
+describe('build-review resolve-case', () => {
+  const feature = { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' };
+
+  async function openCaseStore(root: string, child?: 1) {
+    const caseStore = new RemediationCaseStore(root, feature, { child });
+    await caseStore.mutate(async (state) => ({
+      value: undefined,
+      nextState: {
+        ...state,
+        cases: [{
+          id: 'case-open', domain: 'build_review', disposition: 'act', priority: 'high',
+          rationale: 'Missing behavioral coverage.', confidence: 'high', resolution: 'open',
+          sources: [{ sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: '2026-10-22T12:00:00.000Z' }],
+          effect: { id: 'effect-open', kind: 'action', status: 'reserved' },
+        }],
+      },
+    }));
+    return caseStore;
+  }
+
+  function command(child?: string) {
+    return {
+      kind: 'resolve-case' as const, feature: 'review-rubrics', caseId: 'case-open', rationale: 'Accepted for this release.',
+      ...(child === undefined ? {} : { child }),
+    };
+  }
+
+  function deps(caseStore: RemediationCaseStore, overrides: Record<string, unknown> = {}) {
+    return {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator',
+      resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      createCaseStore: () => caseStore, print: vi.fn(), now: () => new Date('2026-10-22T13:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('resolves an open remediation case for a verified interactive operator', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-'));
+    const caseStore = await openCaseStore(root);
+    const print = vi.fn();
+    const eventPath = join(root, '.pipeline', 'events.jsonl');
+    await writeFile(eventPath, '{"type":"existing"}\n');
+
+    try {
+      const result = await dispatchBuildReviewResolveCase(command(), deps(caseStore, { print }));
+      const stored = await caseStore.read();
+
+      expect({ result, stored, events: await readFile(eventPath, 'utf8'), output: print.mock.calls }).toMatchObject({
+        result: 0,
+        stored: {
+          ok: true,
+          state: {
+            cases: [{
+              id: 'case-open', resolution: 'resolved',
+              operatorResolution: {
+                operator: 'local-operator', rationale: 'Accepted for this release.', resolvedAt: '2026-10-22T13:00:00.000Z',
+              },
+              sources: [{ sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: '2026-10-22T12:00:00.000Z' }],
+              effect: { id: 'effect-open', kind: 'action', status: 'failed', diagnostic: 'Resolved by operator.' },
+            }],
+            outbox: [{
+              occurredAt: '2026-10-22T13:00:00.000Z',
+              event: { type: 'remediation_case_operator_resolved', feature: 'review-rubrics', caseId: 'case-open', sourceIds: ['testQuality:finding-1'] },
+            }],
+          },
+        },
+        events: '{"type":"existing"}\n',
+        output: [['build-review resolve-case: resolved case-open.']],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('writes only the requested child case store', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-child-'));
+    const flat = await openCaseStore(root);
+    const child = await openCaseStore(root, 1);
+    const flatBefore = await readFile(remediationCaseStorePath(root), 'utf8');
+
+    try {
+      await expect(dispatchBuildReviewResolveCase(command('1'), deps(child, {
+        createCaseStore: (_worktree: string, _feature: unknown, selectedChild?: number) => {
+          expect(selectedChild).toBe(1);
+          return child;
+        },
+      }))).resolves.toBe(0);
+
+      expect({
+        flat: await readFile(remediationCaseStorePath(root), 'utf8'),
+        child: await child.read(),
+      }).toMatchObject({
+        flat: flatBefore,
+        child: { ok: true, state: { cases: [{ resolution: 'resolved' }] } },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses invalid operator requests without changing the case store', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-refusal-'));
+    const caseStore = await openCaseStore(root);
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
+    const print = vi.fn();
+
+    try {
+      const results = await Promise.all([
+        dispatchBuildReviewResolveCase(command(), deps(caseStore, { isInteractive: false, print })),
+        dispatchBuildReviewResolveCase(command(), deps(caseStore, { resolveOperator: () => undefined, print })),
+        dispatchBuildReviewResolveCase({ ...command(), rationale: '   ' }, deps(caseStore, { print })),
+        dispatchBuildReviewResolveCase({ ...command(), caseId: 'unknown-case' }, deps(caseStore, { print })),
+        dispatchBuildReviewResolveCase(command(), deps(new RemediationCaseStore(root, { ...feature, feature: 'other-feature' }), { print })),
+      ]);
+
+      expect({ results, after: await readFile(remediationCaseStorePath(root), 'utf8'), messages: print.mock.calls.flat() }).toMatchObject({
+        results: [1, 1, 1, 1, 1], after: before,
+        messages: expect.arrayContaining([
+          expect.stringContaining('interactive terminal'), expect.stringContaining('non-empty rationale'),
+          expect.stringContaining('unknown case'), expect.stringContaining('feature mismatch'),
+        ]),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an already resolved case and a lease timeout without changing the store', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-locked-'));
+    const caseStore = await openCaseStore(root);
+    const print = vi.fn();
+
+    try {
+      await expect(dispatchBuildReviewResolveCase(command(), deps(caseStore, { print }))).resolves.toBe(0);
+      const resolved = await readFile(remediationCaseStorePath(root), 'utf8');
+      const lock: ConductStateLease = {
+        acquire: async () => ({ ok: false, kind: 'timeout', message: 'case store remains held' }),
+      };
+      const lockedStore = new RemediationCaseStore(root, feature, { lock });
+      const outcomes = await Promise.all([
+        dispatchBuildReviewResolveCase(command(), deps(caseStore, { print })),
+        dispatchBuildReviewResolveCase({ ...command(), caseId: 'other-case' }, deps(lockedStore, { print })),
+      ]);
+
+      expect({ outcomes, after: await readFile(remediationCaseStorePath(root), 'utf8'), messages: print.mock.calls.flat() }).toMatchObject({
+        outcomes: [1, 1], after: resolved,
+        messages: expect.arrayContaining([expect.stringContaining('already resolved'), expect.stringContaining('lock-timeout')]),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

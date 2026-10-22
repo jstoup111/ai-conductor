@@ -301,6 +301,11 @@ export type RemediationCaseStoreMutationResult<Value> =
   | { readonly ok: false; readonly reason: Exclude<RemediationCaseStoreFailureReason, 'rejected-transition'> }
   | { readonly ok: false; readonly reason: 'rejected-transition'; readonly violation?: RemediationCaseTransitionViolation };
 
+export type RemediationCaseOperatorResolutionResult =
+  | { readonly kind: 'resolved'; readonly record: RemediationCaseRecord }
+  | { readonly kind: 'unknown-case' }
+  | { readonly kind: 'already-resolved' };
+
 const defaultFilesystem: RemediationCaseStoreFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
@@ -948,6 +953,66 @@ export class RemediationCaseStore {
     } finally {
       await acquired.release();
     }
+  }
+
+  /**
+   * The sole operator-owned case-state transition.  Its outbox occurrence is
+   * committed with the resolution and intentionally left for a later engine
+   * pass to drain through the event spine.
+   */
+  async resolveByOperator(input: {
+    readonly caseId: string;
+    readonly operator: string;
+    readonly rationale: string;
+    readonly resolvedAt: string;
+  }): Promise<RemediationCaseStoreMutationResult<RemediationCaseOperatorResolutionResult>> {
+    return this.mutate(async (state) => {
+      const record = state.cases.find((candidate) => candidate.id === input.caseId);
+      if (!record) return { value: { kind: 'unknown-case' } };
+      if (record.resolution !== 'open') return { value: { kind: 'already-resolved' } };
+
+      const resolved: RemediationCaseRecord = {
+        ...record,
+        resolution: 'resolved',
+        operatorResolution: {
+          operator: input.operator,
+          rationale: input.rationale,
+          resolvedAt: input.resolvedAt,
+        },
+        effect: record.effect.kind !== 'none' && record.effect.status === 'reserved'
+          ? { ...record.effect, status: 'failed', diagnostic: 'Resolved by operator.' }
+          : record.effect,
+      };
+      const eventId = randomUUID();
+      const upgraded: RemediationCaseStoreV3State = state.version === STORE_VERSION
+        ? state
+        : {
+          version: STORE_VERSION,
+          feature: state.feature,
+          cases: state.cases,
+          prdWideningCases: state.version === LEGACY_STORE_VERSION ? state.prdWideningCases : [],
+          suppressions: state.suppressions ?? [],
+          outbox: [],
+        };
+      return {
+        value: { kind: 'resolved', record: resolved },
+        nextState: {
+          ...upgraded,
+          cases: upgraded.cases.map((candidate) => candidate.id === input.caseId ? resolved : candidate),
+          outbox: [...upgraded.outbox, {
+            eventId,
+            occurredAt: input.resolvedAt,
+            event: {
+              type: 'remediation_case_operator_resolved',
+              eventId,
+              feature: this.feature.feature,
+              caseId: input.caseId,
+              sourceIds: record.sources.map((source) => source.sourceId),
+            },
+          }],
+        },
+      };
+    });
   }
 }
 

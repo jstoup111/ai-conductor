@@ -17,6 +17,7 @@ import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js'
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 import { isRegisteredRubric } from './build-review-registry.js';
+import { parseChildId, type ChildId } from './child-context.js';
 
 export interface BuildReviewFindingsCommand {
   readonly kind: 'findings';
@@ -53,6 +54,14 @@ export interface BuildReviewRecordReducedCoverageCommand {
   readonly rationale: string;
 }
 
+export interface BuildReviewResolveCaseCommand {
+  readonly kind: 'resolve-case';
+  readonly feature: string;
+  readonly caseId: string;
+  readonly rationale: string;
+  readonly child?: string;
+}
+
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
   listReducedCoverage?(feature: unknown): Promise<BuildReviewReducedCoverageListResult>;
@@ -62,6 +71,15 @@ type DispositionStore = {
 
 type RemediationCaseStoreReader = {
   read(): Promise<RemediationCaseStoreReadResult>;
+};
+
+type RemediationCaseStoreResolver = {
+  resolveByOperator(input: {
+    readonly caseId: string;
+    readonly operator: string;
+    readonly rationale: string;
+    readonly resolvedAt: string;
+  }): ReturnType<RemediationCaseStore['resolveByOperator']>;
 };
 
 type ReducedCoverageDispositionStore = {
@@ -83,6 +101,13 @@ export interface BuildReviewRecordReducedCoverageDeps extends Omit<BuildReviewFi
   readonly createStore?: (worktree: string) => ReducedCoverageDispositionStore;
   readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
   readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_reduced_coverage_accepted' | 'build_review_disposition_refused' }>) => void;
+}
+
+export interface BuildReviewResolveCaseDeps extends Pick<BuildReviewFindingsDeps, 'cwd' | 'resolveMainRoot' | 'realpath' | 'print'> {
+  readonly isInteractive?: boolean;
+  readonly resolveOperator?: () => string | undefined;
+  readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => RemediationCaseStoreResolver;
+  readonly now?: () => Date;
 }
 
 function isBuildReviewRubricId(value: string): value is BuildReviewRubricId {
@@ -466,6 +491,58 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   } catch (error) {
     return refuse('disposition-store-unavailable', `build-review accept: refused for '${command.feature}'; the disposition store could not be reached: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/** Resolve one open remediation case from an interactive operator terminal. */
+export async function dispatchBuildReviewResolveCase(
+  command: BuildReviewResolveCaseCommand,
+  deps: BuildReviewResolveCaseDeps = {},
+): Promise<number> {
+  const print = deps.print ?? console.log;
+  const operator = (deps.resolveOperator ?? (() => userInfo().username))();
+  if (!(deps.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true)) || !operator?.trim()) {
+    print('build-review resolve-case: requires an interactive terminal and a verified local operator identity.');
+    return 1;
+  }
+  if (!command.rationale.trim()) {
+    print('build-review resolve-case: requires a non-empty rationale.');
+    return 1;
+  }
+  const child = command.child === undefined ? undefined : parseChildId(command.child);
+  if (command.child !== undefined && child === undefined) {
+    print(`build-review resolve-case: invalid child id '${command.child}'.`);
+    return 1;
+  }
+  const resolved = await resolveCliFeature(command, deps).catch(() => undefined);
+  if (!resolved) {
+    print(`build-review resolve-case: refused for '${command.feature}'; the feature worktree could not be resolved (feature mismatch).`);
+    return 1;
+  }
+  const { worktree, feature } = resolved;
+  const caseStore = (deps.createCaseStore ?? ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity, selectedChild?: ChildId) =>
+    new RemediationCaseStore(projectRoot, caseFeature, { child: selectedChild })))(worktree, feature, child);
+  const resolvedAt = (deps.now ?? (() => new Date()))().toISOString();
+  const result = await caseStore.resolveByOperator({
+    caseId: command.caseId,
+    operator: operator.trim(),
+    rationale: command.rationale.trim(),
+    resolvedAt,
+  });
+  if (!result.ok) {
+    const reason = result.reason === 'foreign-feature' ? 'feature mismatch' : result.reason;
+    print(`build-review resolve-case: refused for '${command.feature}'; ${reason}.`);
+    return 1;
+  }
+  if (result.value.kind === 'unknown-case') {
+    print(`build-review resolve-case: refused; unknown case '${command.caseId}'.`);
+    return 1;
+  }
+  if (result.value.kind === 'already-resolved') {
+    print(`build-review resolve-case: refused; case '${command.caseId}' is already resolved.`);
+    return 1;
+  }
+  print(`build-review resolve-case: resolved ${command.caseId}.`);
+  return 0;
 }
 
 /**
