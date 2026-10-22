@@ -3657,6 +3657,7 @@ export class DefaultStepRunner implements StepRunner {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
+      ...(inputs.securitySourceSnapshot === undefined ? {} : { securitySnapshotDigest: inputs.securitySourceSnapshot.digest }),
       results: validResults,
       declaredReplicationSuppressions,
       ...(customResults === undefined ? {} : {
