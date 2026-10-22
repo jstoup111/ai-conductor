@@ -93,6 +93,25 @@ describe('build-review test declarations', () => {
     });
   });
 
+  it('ignores member names that merely match declaration keywords but still reports wrapped declarations', () => {
+    const helperCode = analyzeTestDeclarations(source('test/regex.test.ts', `
+      function ghMock(reference) {
+        const number = /^\\d+$/.test(reference);
+        return number || pattern.test('x') || runner.describe.call(null, fixture.it);
+      }
+      it('parses references', () => { expect(ghMock('1')).toBe(true); });
+    `));
+    expect(helperCode).toMatchObject({ kind: 'supported', diagnostics: [] });
+
+    const wrapped = analyzeTestDeclarations(source('test/wrapped.test.ts', `
+      withRetries(test.concurrent)('wrapped declaration', () => {});
+    `));
+    expect(wrapped).toMatchObject({
+      kind: 'uncertain',
+      diagnostics: [expect.objectContaining({ reason: 'unsupported-declaration-wrapper' })],
+    });
+  });
+
   it('keeps duplicate changed occurrences uncertain when syntax cannot establish a correspondence', () => {
     const base = source('test/duplicates.test.ts', `
       it('same title', () => { expect('first').toBe('first'); });

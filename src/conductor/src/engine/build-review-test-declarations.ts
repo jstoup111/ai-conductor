@@ -181,7 +181,10 @@ function expressionMentionsDeclaration(node: ts.Node, scope: Scope): boolean {
   let mentioned = false;
   const inspect = (child: ts.Node): void => {
     if (ts.isIdentifier(child) && scope.resolve(child.text)) mentioned = true;
-    if (!mentioned) ts.forEachChild(child, inspect);
+    if (mentioned) return;
+    // A member name such as `pattern.test` names a property, not a binding in scope.
+    if (ts.isPropertyAccessExpression(child)) inspect(child.expression);
+    else ts.forEachChild(child, inspect);
   };
   inspect(node);
   return mentioned;
