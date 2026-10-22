@@ -561,12 +561,14 @@ describe('remediation case reconciler', () => {
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
       attemptedCaseIds: ['case-1'],
+      mechanicallyHealthy: true,
+      allowAppliedByAbsence: true,
     });
 
     expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'resolved' }] } });
   });
 
-  it.each(['reserved', 'failed'] as const)('keeps an attempted absent action case with a %s effect open', async (status) => {
+  it.each(['reserved', 'failed'] as const)('retires an attempted absent action case with a %s effect on a healthy lap', async (status) => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
     await reconcileRemediationCases(store, {
@@ -587,16 +589,21 @@ describe('remediation case reconciler', () => {
       },
     }));
 
-    // Same shared effect-status test as the non-action branch: attempt
-    // membership alone never resolves unfinished durable evidence.
     const result = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
       attemptedCaseIds: ['case-1'],
+      mechanicallyHealthy: true,
     });
 
-    expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'open' }] }, resolvedAbsentCaseIds: [] });
+    expect(result).toMatchObject({ ok: true, state: { cases: [{
+      id: 'case-1', resolution: 'resolved', effect: {
+        status: 'failed', diagnostic: status === 'reserved'
+          ? 'retired: every source operator-accepted or no longer raised'
+          : 'charge failed',
+      },
+    }] }, resolvedAbsentCaseIds: ['case-1'] });
   });
 
   it('keeps an absent open action case open without recorded BUILD attempt evidence', async () => {

@@ -70,7 +70,7 @@ import {
   type RefusalReworkAllowanceBlocker,
   type RefusalRoundOutcome,
 } from './prd-widening-refusal-rework.js';
-import { reconcileRemediationCases, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 import {
   buildRemediationProjection,
   type RemediationProjectionLimits,
@@ -5383,22 +5383,6 @@ export class Conductor {
     };
     await drainOutbox();
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
-    const missingAttemptEvidence = classifyBuildReviewDurableRead(attemptEvidence) === 'absent';
-    if (missingAttemptEvidence) {
-      const state = await store.read();
-      if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
-      // Shared effect-status obligation: an applied action awaiting its work
-      // order, or ANY reserved/failed effect (action or deferral), is durable
-      // unfinished evidence — settling around it would turn it into a
-      // terminal PASS.
-      const obligationCase = state.state.cases.find(isBuildReviewSettlementObligationCase);
-      if (obligationCase && obligationCase.effect.kind !== 'none') {
-        return {
-          kind: 'invalid',
-          reason: `work order attempt missing-work-order with open ${obligationCase.effect.kind} case ${obligationCase.id} (${obligationCase.effect.status})`,
-        };
-      }
-    }
     if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
       return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     }
@@ -5414,7 +5398,8 @@ export class Conductor {
     // test keeps any reserved or failed effect open.
     const retirement = await store.mutate(async (state) => {
       const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
-        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: true, settleReservedByAbsence: true,
+        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: true,
+        allowAppliedByAbsence: attemptEvidence.ok,
       }));
       if (retired.length === 0) return { value: undefined };
       const events = retired.map((record) => {
@@ -5430,13 +5415,7 @@ export class Conductor {
         value: undefined,
         nextState: {
           ...upgraded,
-          cases: upgraded.cases.map((record) => ids.has(record.id) ? {
-            ...record,
-            resolution: 'resolved' as const,
-            effect: record.effect.kind !== 'none' && record.effect.status === 'reserved'
-              ? { ...record.effect, status: 'failed' as const, diagnostic: 'retired: every source operator-accepted or no longer raised' }
-              : record.effect,
-          } : record),
+          cases: upgraded.cases.map((record) => ids.has(record.id) ? retireOpenBuildReviewCase(record) : record),
           outbox: [...upgraded.outbox, ...events.slice(1)],
         },
       };
@@ -5449,6 +5428,8 @@ export class Conductor {
       generateId: randomUUID,
       attemptedCaseIds: attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [],
       lapId: aggregate.lapId,
+      effectiveAcceptedSourceIds: acceptedSourceIds,
+      mechanicallyHealthy: true,
       resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {
@@ -5467,9 +5448,12 @@ export class Conductor {
     const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
     // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
+      const actionResolution = survivingObligation.effect.kind === 'action'
+        ? `; resolve with ai-conductor build-review resolve-case --feature ${feature.feature}${this.activeRegionChild === undefined ? '' : ` --child ${this.activeRegionChild}`} --case ${survivingObligation.id} --rationale "<why>"`
+        : '';
       return {
         kind: 'invalid',
-        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status}); resolve with ai-conductor build-review resolve-case --feature ${feature.feature}${this.activeRegionChild === undefined ? '' : ` --child ${this.activeRegionChild}`} --case ${survivingObligation.id} --rationale "<why>"`,
+        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${actionResolution}`,
       };
     }
     // /ai-conductor:session-command-context

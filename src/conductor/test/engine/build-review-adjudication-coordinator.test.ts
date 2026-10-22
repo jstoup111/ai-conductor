@@ -381,6 +381,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       sources: expect.arrayContaining([{ sourceId, outcome: 'carried', recordedAt: expect.any(String) }]),
     })] } });
   });
+
   it.each([
     ['built-in finding on an open case', aggregate, rawSource, 'open'],
     ['built-in finding on a resolved case', aggregate, rawSource, 'resolved'],
@@ -1428,12 +1429,14 @@ describe('coordinateBuildReviewAdjudication', () => {
       resolveOperatorResolvedFindingIds: async () => unresolved.shift() ?? new Set([findingId]),
     });
 
-    // The stranded effect is neither applied nor retired by this acceptance —
-    // its source is not one the operator accepted — so the lap surfaces it for
-    // a human instead of reporting a healthy route past it.
-    expect(result).toMatchObject({ ok: true, route: 'halt', detail: 'remediation effect is not finalized' });
+    // A mechanically healthy lap proves the old source absent, so the shared
+    // retirement predicate settles the reserved action instead of retaining a
+    // stale blocker.
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
     await expect(store.read()).resolves.toMatchObject({
-      ok: true, state: { cases: [{ id: 'case-stranded', resolution: 'open' }] },
+      ok: true, state: { cases: [{ id: 'case-stranded', resolution: 'resolved', effect: {
+        status: 'failed', diagnostic: 'retired: every source operator-accepted or no longer raised',
+      } }] },
     });
   });
 
@@ -1527,7 +1530,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       state: {
         cases: [{
           resolution: 'resolved',
-          effect: { status: 'failed', diagnostic: 'retired by operator acceptance' },
+          effect: { status: 'failed', diagnostic: 'retired: every source operator-accepted or no longer raised' },
         }],
       },
     });
@@ -1539,7 +1542,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-durable', resolution: 'resolved' }),
       expect.objectContaining({
         type: 'remediation_effect_failed', caseId: 'case-durable', effectId: 'effect-durable', effectKind: 'action',
-        reason: 'retired by operator acceptance',
+        reason: 'retired: every source operator-accepted or no longer raised',
       }),
       expect.objectContaining({ type: 'remediation_adjudication_completed' }),
     ]);
@@ -1592,7 +1595,7 @@ describe('coordinateBuildReviewAdjudication', () => {
         expect.objectContaining({
           resolution: 'resolved',
           sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(acceptedSource) })],
-          effect: expect.objectContaining({ kind: 'deferral', status: 'failed', diagnostic: 'retired by operator acceptance' }),
+          effect: expect.objectContaining({ kind: 'deferral', status: 'reserved' }),
         }),
         expect.objectContaining({
           resolution: 'open',
@@ -1637,17 +1640,13 @@ describe('coordinateBuildReviewAdjudication', () => {
         expect.objectContaining({
           resolution: 'resolved',
           sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })],
-          effect: expect.objectContaining({ kind: 'deferral', status: 'failed', diagnostic: 'retired by operator acceptance' }),
+          effect: expect.objectContaining({ kind: 'deferral', status: 'reserved' }),
         }),
       ]) },
     });
     // The suppressed reservation is retired at the exit as a durable
     // reserved->failed transition, and that transition emits.
-    const retired = settled.ok ? settled.state.cases.find((record) => record.effect.kind === 'deferral' && record.effect.status === 'failed') : undefined;
-    expect(events).toContainEqual(expect.objectContaining({
-      type: 'remediation_effect_failed', caseId: retired?.id, effectKind: 'deferral',
-      reason: 'retired by operator acceptance',
-    }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', effectKind: 'deferral' }));
   });
 
   it('emits a failed deferral effect through the same coordinator event port', async () => {
@@ -2613,7 +2612,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted.id)).toEqual([
       expect.objectContaining({
         type: 'remediation_effect_failed', caseId: accepted.id, effectId: accepted.effect.id, effectKind: 'action',
-        reason: 'retired by operator acceptance',
+        reason: 'retired: every source operator-accepted or no longer raised',
       }),
     ]);
     const completionIndex = events.findIndex((event) => event.type === 'remediation_adjudication_completed');
@@ -3324,8 +3323,15 @@ describe('coordinateBuildReviewAdjudication', () => {
 
       const after = await store.read();
       if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
-      expect(after.state.cases.find((record) => record.id === 'case-stranded')?.effect).toMatchObject({ status: expect.not.stringMatching(/^failed$/) });
-      expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', caseId: 'case-stranded' }));
+      if (mechanical === 'retry') {
+        expect(after.state.cases.find((record) => record.id === 'case-stranded')?.effect).toMatchObject({ status: 'reserved' });
+        expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-stranded' }));
+      } else {
+        expect(after.state.cases.find((record) => record.id === 'case-stranded')?.effect).toMatchObject({
+          status: 'failed', diagnostic: 'retired: every source operator-accepted or no longer raised',
+        });
+        expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_case_reconciled', caseId: 'case-stranded' }));
+      }
     });
   });
 

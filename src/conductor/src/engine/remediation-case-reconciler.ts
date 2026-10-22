@@ -1,6 +1,5 @@
 import type { RemediationCaseRow } from './remediation-case-artifact.js';
 import { randomUUID } from 'node:crypto';
-import { hasReservedOrFailedRemediationEffect } from './remediation-case-effects.js';
 import {
   type RemediationCaseEffect,
   type RemediationCaseOutboxEntry,
@@ -22,8 +21,16 @@ export interface ReconcileRemediationCasesInput {
   readonly generateId: () => string;
   /** Durable BUILD-work-order evidence, supplied by the later work-order seam. */
   readonly attemptedCaseIds?: readonly string[];
-  /** A clean PASS with no order settles absent non-action case history too. */
+  /** Exact operator authority available to this reconciliation. */
+  readonly effectiveAcceptedSourceIds?: ReadonlySet<string>;
+  /** Whether this lap proves absence rather than merely omitting a source. */
+  readonly mechanicallyHealthy?: boolean;
+  /** Full current-lap source projection for exit-time settlement. */
+  readonly liveSourceIds?: ReadonlySet<string>;
+  /** Preserve the established absence settlement for completed non-action history. */
   readonly resolveAbsentOpenNonActionCases?: boolean;
+  /** An attempted applied effect may settle on a normal adjudication lap, never a missing-order PASS. */
+  readonly allowAppliedByAbsence?: boolean;
   /** The occurrence lap for any absence retirement performed in this mutation. */
   readonly lapId?: string;
   /** Case identities known by the caller to belong to another feature/domain. */
@@ -101,8 +108,7 @@ export function retiresOpenBuildReviewCase(
     readonly liveSourceIds: ReadonlySet<string>;
     readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
     readonly mechanicallyHealthy: boolean;
-    /** Clean-PASS settlement has no surviving work order; ordinary laps do. */
-    readonly settleReservedByAbsence?: boolean;
+    readonly allowAppliedByAbsence?: boolean;
   },
 ): boolean {
   if (record.resolution !== 'open') return false;
@@ -110,10 +116,28 @@ export function retiresOpenBuildReviewCase(
   const covered = record.sources.length > 0 && record.sources.every((source) =>
     input.effectiveAcceptedSourceIds.has(source.sourceId) || originSourceIds.has(source.sourceId) || source.outcome === 'carried');
   if (covered) return true;
-  const absent = input.mechanicallyHealthy && record.disposition === 'act' && record.effect.kind === 'action' &&
-    (record.effect.status === 'failed' || (record.effect.status === 'reserved' && input.settleReservedByAbsence === true)) &&
+  if (record.disposition !== 'act' || record.effect.kind !== 'action') return false;
+  const absent = input.mechanicallyHealthy &&
+    (record.effect.status === 'failed' || record.effect.status === 'reserved' ||
+      (record.effect.status === 'applied' && input.allowAppliedByAbsence === true)) &&
     record.sources.every((source) => !input.liveSourceIds.has(source.sourceId));
   return absent;
+}
+
+/** Apply the one durable representation of a build-review retirement. */
+export function retireOpenBuildReviewCase(record: RemediationCaseRecord): RemediationCaseRecord {
+  if (record.effect.kind === 'action' && record.effect.status === 'reserved') {
+    return {
+      ...record,
+      resolution: 'resolved',
+      effect: {
+        ...record.effect,
+        status: 'failed',
+        diagnostic: 'retired: every source operator-accepted or no longer raised',
+      },
+    };
+  }
+  return { ...record, resolution: 'resolved' };
 }
 
 export function classifyRemediationCaseReuse(
@@ -376,36 +400,18 @@ function reconcileState(
     }
   }
 
-  // An empty graph is restart/no-current-source settlement, not evidence that
-  // an owner changed the approved baseline. Unlike ordinary non-action
-  // history, a durable decision stop cannot be retired by that absence: doing
-  // so would let the caller turn an unresolved current-outcome gap into PASS.
-  // A later non-empty admitted graph remains the explicit re-evaluation lane.
-  if (
-    input.resolveAbsentOpenNonActionCases
-    && input.graph.sourceOutcomes.length === 0
-    && state.cases.some((record) => record.resolution === 'open' && record.disposition === 'escalate')
-  ) {
-    return { ok: false, reason: 'decision-stop-pending' };
-  }
-
   let changed = additions.length > 0 || replacements.size > 0;
   // Resolved here, but named by no `caseRef` — reported separately so the
   // caller can emit one lifecycle occurrence per persisted transition.
   const resolvedAbsentCaseIds: string[] = [];
   const cases = state.cases.map((record) => {
     const replacement = replacements.get(record.id) ?? record;
-    if (
-      replacement.resolution === 'open'
-      && replacement.disposition === 'act'
-      && replacement.effect.kind === 'action'
-      && !referencedExisting.has(replacement.id)
-      && attemptedIds.has(replacement.id)
-      // Same shared effect-status test as the non-action branch below: an
-      // attempted case whose effect is still reserved or durably failed is
-      // unfinished evidence, and attempt membership alone must not resolve it.
-      && !hasReservedOrFailedRemediationEffect(replacement)
-    ) {
+    if (!referencedExisting.has(replacement.id) && attemptedIds.has(replacement.id) && retiresOpenBuildReviewCase(replacement, {
+      liveSourceIds: input.liveSourceIds ?? new Set(input.graph.sourceOutcomes.map((source) => source.sourceId)),
+      effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds ?? new Set(),
+      mechanicallyHealthy: input.mechanicallyHealthy === true,
+      allowAppliedByAbsence: input.allowAppliedByAbsence,
+    })) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);
       if (input.lapId) {
@@ -415,17 +421,14 @@ function reconcileState(
           caseId: replacement.id, resolution: 'resolved',
         } });
       }
-      return { ...replacement, resolution: 'resolved' as const };
+      return retireOpenBuildReviewCase(replacement);
     }
     if (
       replacement.resolution === 'open'
       && replacement.disposition !== 'act'
       && !referencedExisting.has(replacement.id)
       && input.resolveAbsentOpenNonActionCases
-      // Shared effect-status test (remediation-case-effects.ts): a reserved or
-      // failed effect is durable unfinished evidence, never benign absence, so
-      // it must not resolve into a terminal PASS.
-      && !hasReservedOrFailedRemediationEffect(replacement)
+      && (replacement.effect.kind === 'none' || replacement.effect.status === 'applied')
     ) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);

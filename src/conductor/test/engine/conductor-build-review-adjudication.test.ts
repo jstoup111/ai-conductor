@@ -1114,7 +1114,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     }));
   });
 
-  it.each(['reserved', 'applied', 'failed'] as const)('halts a clean PASS when an open %s action effect has no order', async (status) => {
+  it.each(['reserved', 'applied', 'failed'] as const)('settles eligible clean-PASS action state and halts only the applied missing-order obligation (%s)', async (status) => {
     const first = await fixture();
     const cases = await first.readJson('.pipeline/remediation-cases.json') as {
       cases: Array<{ id: string; effect: { id: string; kind: string; status: string; workOrderId?: string; diagnostic?: string } }>;
@@ -1137,8 +1137,17 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       seedPipeline: async (root) => writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(seeded), 'utf8'),
     });
 
-    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: work order attempt missing-work-order with open action case ${caseId} (${status})`);
-    expect((await run.state()).build_review).not.toBe('done');
+    if (status === 'applied') {
+      expect(await run.haltMarker()).toContain(`clean PASS cannot settle open action case ${caseId} (${status}); resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --case ${caseId}`);
+      expect((await run.state()).build_review).not.toBe('done');
+    } else {
+      expect(await run.haltMarker()).toBe('');
+      expect((await run.state()).build_review).toBe('done');
+      const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string; effect: { status: string; diagnostic?: string } }> };
+      expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({
+        status: 'failed', diagnostic: status === 'reserved' ? 'retired: every source operator-accepted or no longer raised' : 'previous effect failure',
+      }) })]);
+    }
   });
 
   it.each(['reserved', 'failed'] as const)('halts a clean PASS when an open %s deferral effect has no order', async (status) => {
@@ -1166,7 +1175,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     // A reserved/failed deferral is durable unfinished evidence: it must never
     // resolve by benign absence into a terminal PASS.
-    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: work order attempt missing-work-order with open deferral case ${caseId} (${status})`);
+    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: clean PASS cannot settle open deferral case ${caseId} (${status})`);
     expect((await run.state()).build_review).not.toBe('done');
     const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string }> };
     expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'open' })]);

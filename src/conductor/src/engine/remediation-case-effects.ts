@@ -24,7 +24,7 @@ import {
   RemediationCaseStore,
   appendRemediationCaseOutbox,
 } from './remediation-case-store.js';
-import { retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 
 export type RemediationEffectResult =
   | { readonly ok: true; readonly status: 'applied' | 'already-applied'; readonly effectId: string }
@@ -268,6 +268,7 @@ export async function resolveAbsentFailedBuildReviewCases(input: {
         liveSourceIds: input.liveSourceIds,
         effectiveAcceptedSourceIds: new Set(),
         mechanicallyHealthy: true,
+        allowAppliedByAbsence: false,
       })
         ? [{ caseId: record.id, effectId: record.effect.id }]
         : []);
@@ -285,7 +286,7 @@ export async function resolveAbsentFailedBuildReviewCases(input: {
       value: settled,
       nextState: {
         ...upgraded,
-        cases: upgraded.cases.map((record) => retired.has(record.id) ? { ...record, resolution: 'resolved' } : record),
+        cases: upgraded.cases.map((record) => retired.has(record.id) ? retireOpenBuildReviewCase(record) : record),
         outbox: [...upgraded.outbox, ...events.slice(1)],
       },
     };

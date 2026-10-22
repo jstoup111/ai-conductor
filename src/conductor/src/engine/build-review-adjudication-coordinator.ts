@@ -19,7 +19,7 @@ import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from '.
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, resolveAbsentFailedBuildReviewCases, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
-import { classifyRemediationCaseReuse, reconcileRemediationCases, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
 import { appendRemediationCaseOutbox, drainRemediationCaseOutbox, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
@@ -42,7 +42,7 @@ type OperatorRetirementTransition = {
   readonly retiredEffect?: {
     readonly effectId: string;
     readonly effectKind: 'action' | 'deferral';
-    readonly reason: 'retired by operator acceptance';
+    readonly reason: 'retired: every source operator-accepted or no longer raised';
   };
 };
 
@@ -339,10 +339,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         generateId: input.generateId ?? randomUUID,
         attemptedCaseIds: exitAttemptEvidence.ok ? exitAttemptEvidence.attemptedCaseIds : [],
         lapId: input.aggregate.lapId,
-        // Same semantics as clean-PASS settlement: absent non-action history
-        // resolves benignly, while the reconciler's shared effect-status test
-        // keeps any reserved or failed effect open as a blocker.
+        effectiveAcceptedSourceIds: new Set(),
+        mechanicallyHealthy: input.mechanical === 'healthy',
+        liveSourceIds: new Set(sources.map(buildReviewAdjudicationSourceId)),
         resolveAbsentOpenNonActionCases: true,
+        allowAppliedByAbsence: true,
       });
       if (!absentSettled.ok) {
         return absentSettled.reason === 'store-failure'
@@ -409,28 +410,18 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
           effectiveAcceptedSourceIds: acceptedSourceIds,
           mechanicallyHealthy: input.mechanical === 'healthy',
         })) return withOrigins;
-        // An accepted source never completed this reserved effect. Preserve the
-        // durable row as a retired failure rather than falsely recording work as
-        // applied; the reducer ignores resolved rows through the shared open-case
-        // vocabulary.
-        let retiredEffect: OperatorRetirementTransition['retiredEffect'];
-        const effect = withOrigins.effect.kind !== 'none' && withOrigins.effect.status === 'reserved'
-          ? (() => {
-            retiredEffect = {
-              effectId: withOrigins.effect.id,
-              effectKind: withOrigins.effect.kind,
-              reason: 'retired by operator acceptance',
-            };
-            return { id: withOrigins.effect.id, kind: withOrigins.effect.kind, status: 'failed' as const, diagnostic: retiredEffect.reason };
-          })()
-          : withOrigins.effect;
+        const retired = retireOpenBuildReviewCase(withOrigins);
+        const retiredEffect = retired.effect.kind !== 'none' && retired.effect.status === 'failed'
+          && withOrigins.effect.kind !== 'none' && withOrigins.effect.status === 'reserved'
+          ? { effectId: retired.effect.id, effectKind: retired.effect.kind, reason: 'retired: every source operator-accepted or no longer raised' as const }
+          : undefined;
         retirementTransitions.push({ caseId: withOrigins.id, ...(retiredEffect ? { retiredEffect } : {}) });
         const eventId = randomUUID();
         retirementOutbox.push({ eventId, occurredAt: new Date().toISOString(), event: {
           type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.aggregate.lapId,
           caseId: withOrigins.id, resolution: 'resolved',
         } });
-        return { ...withOrigins, resolution: 'resolved' as const, effect };
+        return retired;
       });
       const nextState = (): import('./remediation-case-store.js').RemediationCaseStoreState => {
         if (retirementOutbox.length === 0) return { ...state, cases };
@@ -723,7 +714,32 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       ? [proposed.case.caseRef]
       : [];
   }));
-  const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({ judgement, validation: graph }));
+  const carriedSourceIds = new Set(liveProposals
+    .filter((proposed) => carriedCaseRefs.has(proposed.case.caseRef))
+    .flatMap((proposed) => proposed.sources.map((source) => source.sourceId)));
+  const actionEffectJudgement = judgement.mode === 'case-v2'
+    ? {
+      ...judgement,
+      sourceOutcomes: judgement.sourceOutcomes.filter((source) => !carriedSourceIds.has(source.sourceId)),
+      cases: judgement.cases.filter((caseRow) => !carriedCaseRefs.has(caseRow.caseRef)),
+      consistency: judgement.consistency.verdict === 'blocked' && judgement.consistency.sourceIds.every((sourceId) => carriedSourceIds.has(sourceId))
+        ? { ...judgement.consistency, verdict: 'consistent' as const, sourceIds: [], caseRefs: [] }
+        : judgement.consistency,
+    }
+    : {
+      ...judgement,
+      sourceOutcomes: judgement.sourceOutcomes.filter((source) => !carriedSourceIds.has(source.sourceId)),
+      cases: judgement.cases.filter((caseRow) => !carriedCaseRefs.has(caseRow.caseRef)),
+    };
+  const actionEffectGraph = {
+    ...graph.graph,
+    sourceOutcomes: graph.graph.sourceOutcomes.filter((source) => !carriedSourceIds.has(source.sourceId)),
+    cases: graph.graph.cases.filter((proposed) => !carriedCaseRefs.has(proposed.case.caseRef)),
+  };
+  const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({
+    judgement: actionEffectJudgement,
+    validation: { ...graph, graph: actionEffectGraph },
+  }));
   const admitted = liveProposals.filter((proposed) =>
     carriedCaseRefs.has(proposed.case.caseRef) || proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef),
   );
@@ -749,7 +765,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       },
       recordedAt: new Date().toISOString(),
       generateId: input.generateId ?? randomUUID,
-      attemptedCaseIds,
+      attemptedCaseIds: [],
     });
     if (linked.ok) return undefined;
     return linked.reason === 'store-failure'
@@ -814,7 +830,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // An escalation is the explicit re-evaluation lane for an existing owner
     // stop. Do not ask reconciliation to settle that stop by absence before
     // its durable replay/persistence path sees the proposed escalation.
+    effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
+    mechanicallyHealthy: input.mechanical === 'healthy' && escalationCases.length === 0,
     resolveAbsentOpenNonActionCases: input.mechanical === 'healthy' && escalationCases.length === 0,
+    allowAppliedByAbsence: true,
   });
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific
@@ -895,7 +914,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     }
   }
   for (const proposed of admitted) {
-    if (proposed.case.disposition !== 'refute') continue;
+    if (proposed.case.disposition !== 'refute' || carriedCaseRefs.has(proposed.case.caseRef)) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     const record = caseId ? reconciledCasesById.get(caseId) : undefined;
     if (!caseId || !record) return fail('refuted case identity was not reconciled');
