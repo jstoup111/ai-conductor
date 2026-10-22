@@ -1001,7 +1001,7 @@ describe('task-progress', () => {
       });
     });
 
-    it('closes a mixed task with verified tagged evidence and reported untagged evidence', async () => {
+    it('closes a mixed task with pending tagged evidence and reported untagged evidence', async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
@@ -1032,7 +1032,7 @@ describe('task-progress', () => {
           {
             check: '[test] tagged observable outcome',
             evidence: 'test:test/mixed-close.test.ts::closes the tagged outcome',
-            source: 'verified',
+            source: 'pending-judgement',
           },
           {
             check: 'untagged configuration outcome',
@@ -1171,7 +1171,7 @@ describe('task-progress', () => {
       ]);
     });
 
-    it('requires tagged verify-only checks to be verified or explicitly unverified while prove-closing untagged checks', async () => {
+    it('requires tagged verify-only checks to be cited or explicitly unverified while prove-closing untagged checks', async () => {
       await prepareTaskClose(`### Task 1: verify existing behavior with a test
 
 **Verify-only:** yes
@@ -1209,7 +1209,7 @@ describe('task-progress', () => {
           {
             check: '[test] tagged behavior remains covered',
             evidence: 'test:test/verify-only.test.ts::keeps tagged behavior covered',
-            source: 'verified',
+            source: 'pending-judgement',
           },
           {
             check: 'untagged behavior remains closed',

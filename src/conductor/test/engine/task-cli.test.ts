@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:26, task:15
+// Covers: task:1, task:2, task:3, task:6, task:26, task:15
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -1146,6 +1146,7 @@ describe('runTaskDone', () => {
       testText: string;
       check?: string;
       storyText?: string;
+      testAddedAfterStart?: boolean;
     }): Promise<void> {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: dir });
@@ -1179,10 +1180,17 @@ describe('runTaskDone', () => {
       await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '3', status: 'pending' }],
       }));
-      await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+      if (!options.testAddedAfterStart) {
+        await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+      }
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'seed committed test'], { cwd: dir });
       await expect(runTaskStart(dir, '3')).resolves.toBe(0);
+      if (options.testAddedAfterStart) {
+        await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+        await execa('git', ['add', 'test/close.test.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'add focused test after task start'], { cwd: dir });
+      }
     }
 
     async function close(evidence: string, cwd = dir): Promise<number> {
@@ -1191,7 +1199,7 @@ describe('runTaskDone', () => {
       ])!, cwd);
     }
 
-    it('closes a tagged check from a committed task-marked test and records verified', async () => {
+    it('holds a pre-existing tagged test for judgement', async () => {
       await prepareTaggedTask({
         testText: '// Covers: task:3\nit(\'closes the tagged task\', () => {});\n',
       });
@@ -1200,8 +1208,97 @@ describe('runTaskDone', () => {
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
       expect(status.tasks[0]).toMatchObject({
         status: 'completed',
+        doneWhen: [{ source: 'pending-judgement' }],
+      });
+    });
+
+    // Covers: task:6
+    it('records verified when the cited title was added after the task start', async () => {
+      await prepareTaggedTask({
+        testAddedAfterStart: true,
+        testText: '// Covers: task:3\nit(\'adds the focused test after start\', () => {});\n',
+      });
+
+      expect(await close('test:test/close.test.ts::adds the focused test after start')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed',
         doneWhen: [{ source: 'verified' }],
       });
+      await expect(fsPromises.access(join(dir, '.pipeline', 'events.jsonl'))).rejects.toThrow();
+      await expect(fsPromises.access(join(dir, '.pipeline', 'pipeline-events.jsonl'))).rejects.toThrow();
+    });
+
+    // Covers: task:6
+    it('records verified for a task-4 test added after task 3 started through a shared story criterion', async () => {
+      await prepareTaggedTask({
+        testAddedAfterStart: true,
+        testText: '// Covers: S2.1\nit(\'task 4 added shared criterion coverage\', () => {});\n',
+      });
+
+      expect(await close('test:test/close.test.ts::task 4 added shared criterion coverage')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen).toEqual([expect.objectContaining({ source: 'verified' })]);
+    });
+
+    // Covers: task:6
+    it('holds a citation for judgement when the task has no start boundary', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'pre-existing without a start boundary\', () => {});\n',
+      });
+      const statusPath = join(dir, '.pipeline', 'task-status.json');
+      const state = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      delete state.tasks[0].startHead;
+      await fsPromises.writeFile(statusPath, JSON.stringify(state));
+
+      expect(await close('test:test/close.test.ts::pre-existing without a start boundary')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed', doneWhen: [{ source: 'pending-judgement' }],
+      });
+    });
+
+    // Covers: task:6
+    it('holds a citation for judgement when its recorded start commit is no longer an ancestor', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'pre-existing after a rebase\', () => {});\n',
+      });
+      await execa('git', ['checkout', '--orphan', 'rebased-away'], { cwd: dir });
+      await fsPromises.writeFile(join(dir, 'stale.txt'), 'stale\n');
+      await execa('git', ['add', 'stale.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'stale start boundary'], { cwd: dir });
+      const rebasedAwayHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+      await execa('git', ['checkout', 'main'], { cwd: dir });
+      const statusPath = join(dir, '.pipeline', 'task-status.json');
+      const state = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      state.tasks[0].startHead = rebasedAwayHead;
+      await fsPromises.writeFile(statusPath, JSON.stringify(state));
+
+      expect(await close('test:test/close.test.ts::pre-existing after a rebase')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed', doneWhen: [{ source: 'pending-judgement' }],
+      });
+    });
+
+    // Covers: task:6
+    it('records reported alongside pending-judgement for a mixed close', async () => {
+      await prepareTaggedTask({
+        check: 'the ordinary outcome is reported\n- [test] the pre-existing test is held for review',
+        testText: '// Covers: task:3\nit(\'the pre-existing test is held for review\', () => {});\n',
+      });
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '3',
+        '--done-when', '1=ordinary proof',
+        '--done-when', '2=test:test/close.test.ts::the pre-existing test is held for review',
+      ]);
+
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen).toEqual([
+        expect.objectContaining({ source: 'reported' }),
+        expect.objectContaining({ source: 'pending-judgement' }),
+      ]);
     });
 
     // Covers: task:5
@@ -1223,7 +1320,7 @@ describe('runTaskDone', () => {
       expect(status.tasks[0]).toMatchObject({
         status: 'completed',
         doneWhen: [
-          { source: 'verified' },
+          { source: 'pending-judgement' },
           {
             source: 'unverified',
             reason: 'the integration environment is unavailable',
@@ -1270,7 +1367,7 @@ describe('runTaskDone', () => {
       expect(stdErr.join('\n')).toContain('not a tagged Done when check');
     });
 
-    it('closes from a criterion marker and a test committed before the feature branch', async () => {
+    it('holds a criterion-marked test that predates the task start for judgement', async () => {
       await prepareTaggedTask({
         testText: '// Covers: S2.1\nit(\'proves the criterion\', () => {});\n',
       });
@@ -1280,7 +1377,7 @@ describe('runTaskDone', () => {
       expect(await close('test:test/close.test.ts::proves the criterion')).toBe(0);
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
       expect(status.tasks[0].doneWhen).toEqual(expect.arrayContaining([
-        expect.objectContaining({ source: 'verified' }),
+        expect.objectContaining({ source: 'pending-judgement' }),
       ]));
     });
 
@@ -1292,7 +1389,7 @@ describe('runTaskDone', () => {
 
       expect(await close('test:test/close.test.ts::proves from a subdirectory', join(dir, 'nested', 'work'))).toBe(0);
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
-      expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'verified' });
+      expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'pending-judgement' });
     });
 
     // Covers: task:5

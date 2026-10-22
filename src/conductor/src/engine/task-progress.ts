@@ -31,6 +31,7 @@ import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from '
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { readGitBlobs } from './git-blob-batch.js';
 import {
+  classifyCitationProvenance,
   parseDoneWhenTestReference,
   verifyDoneWhenTestReference,
 } from './done-when-test-reference.js';
@@ -636,6 +637,33 @@ export async function completeTaskDoneWhen(
     };
   }
 
+  // A citation is mechanically verified only when its named title was added
+  // in the task's recorded start window.  Any missing boundary or git error
+  // deliberately falls through to bounded judgement rather than refusing an
+  // otherwise valid close.
+  const taggedSources = new Map<number, 'verified' | 'pending-judgement'>();
+  for (const { index } of taggedChecks) {
+    if (unverifiedByIndex.has(index)) continue;
+    taggedSources.set(index, 'pending-judgement');
+    const startHead = typeof task.startHead === 'string' ? task.startHead : undefined;
+    const reference = parseDoneWhenTestReference(evidenceByIndex.get(index)!);
+    if (!startHead || !reference) continue;
+    try {
+      const ancestor = await execa('git', ['merge-base', '--is-ancestor', startHead, 'HEAD'], {
+        cwd: projectRoot, reject: false,
+      });
+      if (ancestor.exitCode !== 0) continue;
+      const diff = await execa('git', ['diff', startHead, 'HEAD', '--', reference.path], {
+        cwd: projectRoot, reject: false,
+      });
+      if (diff.exitCode === 0 && classifyCitationProvenance({
+        path: reference.path, title: reference.title, diffText: diff.stdout,
+      }) === 'task-added') taggedSources.set(index, 'verified');
+    } catch {
+      // pending-judgement is the safe, non-blocking fallback.
+    }
+  }
+
   const doneWhenRecords: DoneWhenEvidenceRecord[] = checks.map((check, index) => {
     const checkIndex = index + 1;
     const unverifiedReason = unverifiedByIndex.get(checkIndex);
@@ -653,7 +681,7 @@ export async function completeTaskDoneWhen(
         ? 'prove-closed'
         : evidenceByIndex.get(checkIndex)!,
       source: check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
-        ? 'verified'
+        ? taggedSources.get(checkIndex) ?? 'pending-judgement'
         : verifyOnly ? 'verify-only' : 'reported',
     };
   });
