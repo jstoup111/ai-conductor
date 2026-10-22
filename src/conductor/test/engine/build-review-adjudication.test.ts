@@ -300,20 +300,22 @@ describe('reduceBuildReviewAdjudication', () => {
     }))).toMatchObject({ route: 'build', reason: 'applied action effect awaits its BUILD attempt' });
   });
 
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17c
   it.each(['reserved', 'failed'] as const)('halts when a refutation deferral is %s', (status) => {
     expect(reduceBuildReviewAdjudication(reducerInput({ cases: [refute(status)] })))
       .toMatchObject({ route: 'halt', reason: 'remediation effect is not finalized' });
   });
 
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17c
   it.each([
-    { feature: 'operator-acceptance', child: undefined, scope: '' },
-    { feature: 'operator-acceptance', child: 2 as never, scope: ' --child 2' },
-  ])('names the failed action case and its scoped operator-resolution command', ({ feature, child, scope }) => {
+    { feature: 'operator-acceptance', child: undefined, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action' },
+    { feature: 'operator-acceptance', child: 2 as never, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action --child 2' },
+  ])('names the failed action case and its scoped operator-resolution command', ({ feature, child, command }) => {
     expect(reduceBuildReviewAdjudication(reducerInput({
       feature, child, cases: [action('failed')],
     }))).toMatchObject({
       route: 'halt',
-      reason: expect.stringContaining(`ai-conductor build-review resolve-case --feature ${feature}${scope} --case case-action`),
+      reason: expect.stringContaining(command),
     });
   });
 

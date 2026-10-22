@@ -90,7 +90,7 @@ export function reduceBuildReviewAdjudication(input: {
     return {
       route: 'halt',
       remainingMechanical: input.mechanical !== 'healthy',
-      reason: `open action case ${failedActionWithCurrentSource.id} has a failed effect while a current remediation source remains unaccepted; resolve with ai-conductor build-review resolve-case --feature ${input.feature}${input.child === undefined ? '' : ` --child ${input.child}`} --case ${failedActionWithCurrentSource.id} --rationale "<why>"`,
+      reason: `open action case ${failedActionWithCurrentSource.id} has a failed effect while a current remediation source remains unaccepted; resolve with ai-conductor build-review resolve-case --feature ${input.feature} --case ${failedActionWithCurrentSource.id}${input.child === undefined ? '' : ` --child ${input.child}`} --rationale "<why>"`,
     };
   }
   if (input.cases.some(hasUnfinishedEffect)) {
