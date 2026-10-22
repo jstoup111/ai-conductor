@@ -349,7 +349,7 @@ export type GithubOperationDecodeResult =
   | { readonly kind: 'refused'; readonly reason: GithubOperationRefusalReason };
 
 export type GithubOperationResult =
-  | { readonly kind: 'executed'; readonly operation: GithubOperationName; readonly target: GithubOperationTarget }
+  | { readonly kind: 'executed'; readonly operation: GithubOperationName; readonly target: GithubOperationTarget; readonly url?: string }
   | { readonly kind: 'refused'; readonly operation: GithubOperationName; readonly reason: GithubOperationRefusalReason }
   | { readonly kind: 'failed'; readonly operation: GithubOperationName; readonly error: string }
   | {
@@ -361,6 +361,8 @@ export type GithubOperationResult =
 
 export interface GithubOperationRunnerResponse {
   readonly created?: GithubOperationTarget;
+  /** Canonical URL returned by a create operation, when the transport supplies one. */
+  readonly url?: string;
   readonly metadataFailures?: readonly { readonly operation: GithubOperationName; readonly error: string }[];
 }
 
@@ -719,6 +721,7 @@ export async function executeGithubOperation(
       kind: 'executed',
       operation: request.operation,
       target: response.created ?? request.target,
+      ...(response.url ? { url: response.url } : {}),
     };
   } catch (error) {
     return {

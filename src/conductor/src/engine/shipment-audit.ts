@@ -70,6 +70,8 @@ interface AuditSource {
   plan?: { path: string; slug: string };
   relatedSourcePaths?: string[];
   reason?: string;
+  /** Historical bytes recovered when a plan was pruned at audit HEAD. */
+  planContent?: Buffer;
 }
 
 interface MergedPullRequest {
@@ -153,6 +155,7 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
   const sources: AuditSource[] = [];
   for (const path of planPaths) {
     let reason: string | undefined;
+    let planContent: Buffer | undefined;
     if (!currentPaths.has(path)) {
       const resolved = await readPlanOrPruned(
         async (commit, candidate) => committedFile(options, commit, candidate),
@@ -166,9 +169,10 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
         auditHead,
         path,
       );
-      if (typeof resolved === 'object' && 'kind' in resolved) reason = resolved.code;
+      if (Buffer.isBuffer(resolved)) planContent = resolved;
+      else reason = resolved.code;
     }
-    sources.push({ path, kind: 'plan', plan: plans.get(path), relatedSourcePaths: [], ...(reason ? { reason } : {}) });
+    sources.push({ path, kind: 'plan', plan: plans.get(path), relatedSourcePaths: [], ...(reason ? { reason } : {}), ...(planContent ? { planContent } : {}) });
   }
   const sourcesByPlanPath = new Map(sources.flatMap((source) => source.plan ? [[source.plan.path, source]] : []));
 
@@ -637,7 +641,7 @@ async function auditImplementationCandidate(
   if (verdict.kind === 'refusal' && verdict.code === 'shipped-record-missing') {
     let proposal: { path: string; content: string };
     try {
-      proposal = await expectedProposal(options, plan, implementationPr);
+      proposal = await expectedProposal(options, plan, implementationPr, source.planContent);
     } catch (error) {
       return {
         ...row(source, 'unresolved', `implementation head cannot prove record proposal: ${errorMessage(error)}`),
@@ -666,8 +670,9 @@ async function expectedProposal(
   options: ShipmentAuditOptions,
   plan: { path: string; slug: string },
   pullRequest: MergedPullRequest,
+  recoveredPlan?: Buffer,
 ): Promise<{ path: string; content: string }> {
-  const planBytes = await committedFile(options, pullRequest.headSha, plan.path);
+  const planBytes = recoveredPlan ?? await committedFile(options, pullRequest.headSha, plan.path);
   if (planBytes === null) throw new Error(`implementation head is missing ${plan.path}`);
   const planContent = planBytes.toString('utf8');
   const referencedStories = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];

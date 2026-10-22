@@ -15,7 +15,8 @@ export async function readPlanOrPruned(
   commit: string,
   planPath: string,
 ): Promise<Buffer | PrunedPlanRefusal> {
-  const plan = await readAt(commit, planPath);
+  let plan: Buffer | null;
+  try { plan = await readAt(commit, planPath); } catch (error) { return refused(planPath, errorMessage(error)); }
   if (plan !== null) return plan;
 
   let deletion;
@@ -28,7 +29,8 @@ export async function readPlanOrPruned(
 
   const deletingCommit = deletion.stdout.trim();
   if (!deletingCommit) return refused(planPath, 'no reachable deleting commit');
-  const parentPlan = await readAt(`${deletingCommit}^`, planPath);
+  let parentPlan: Buffer | null;
+  try { parentPlan = await readAt(`${deletingCommit}^`, planPath); } catch (error) { return refused(planPath, errorMessage(error)); }
   return parentPlan ?? refused(planPath, `deleting commit ${deletingCommit} has no parent plan`);
 }
 

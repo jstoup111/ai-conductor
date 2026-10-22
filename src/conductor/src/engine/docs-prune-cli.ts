@@ -3,6 +3,11 @@ import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } fr
 import { runTrackerAmbientRead } from './tracker-client.js';
 import { applyOpenPullRequestDeferral, docsPruneEvent, DocsPruneRefusal, publishDocsPrune, renderDocsPruneReport, resolveDocsPruneSelection, commitDocsPruneDeletion, type DocsPrunePublisher } from './docs-prune.js';
 import { listPullRequestsWithFiles } from './pull-request-files.js';
+import { createGuardedGithubOperationRunner } from './tracker-client.js';
+import { executeRemoteGit } from './remote-git-operations.js';
+import { requestExplicitGithubOperationApproval, hasExplicitGithubOperationApproval } from './github-operation-approval.js';
+import { createTerminalGithubOperationConfirmation } from './github-operation-terminal-confirmation.js';
+import type { GithubOperationRequest } from './github-operations.js';
 
 export type DocsPruneCommand = { kind: 'run' } | { kind: 'guide' };
 export const DOCS_PRUNE_USAGE = 'conduct docs-prune';
@@ -20,6 +25,47 @@ export interface DocsPruneCliDependencies {
   reportError?: (message: string) => void;
 }
 
+/** Compose the only production publication path: guarded Git, guarded gh, and exact terminal approval. */
+export function makeProductionDocsPrunePublisher(git: GitRunner, gh: GhRunner, cwd: string): NonNullable<DocsPruneCliDependencies['publish']> {
+  const confirmation = createTerminalGithubOperationConfirmation();
+  let approval: Awaited<ReturnType<typeof requestExplicitGithubOperationApproval>> | undefined;
+  let repository = '';
+  const approve = async (request: unknown): Promise<boolean> => {
+    const typed = request as GithubOperationRequest;
+    approval = await requestExplicitGithubOperationApproval(typed, confirmation);
+    return approval.kind === 'approved';
+  };
+  const operations = createGuardedGithubOperationRunner(gh, {
+    cwd,
+    creation: {
+      authorize: async (request) => {
+        if (approval?.kind === 'approved' && hasExplicitGithubOperationApproval(approval.capability, request)) return { url: undefined };
+        return { kind: 'refused' as const, reason: 'explicit-authorization-required' as const };
+      },
+    },
+    mutation: undefined,
+  });
+  return async (input) => {
+    repository = input.repository;
+    return publishDocsPrune({ ...input, operations, approve, push: async (branch, commit) => {
+      const request = approval;
+      if (!request || request.kind !== 'approved') return { kind: 'refused', detail: 'explicit approval required' };
+      const result = await executeRemoteGit(['push', 'origin', `${commit}:refs/heads/${branch}`], {
+        cwd, config: (args) => git(args, { cwd }), runRemoteGit: git,
+        explicitApproval: { capability: request.capability, request: { operation: 'remote-ref.push', access: 'remote-ref-write', target: { repository, kind: 'remote-ref', ref: `refs/heads/${branch}` }, context: { actor: input.operatorLogin } } },
+      });
+      return result.kind === 'executed' ? { kind: 'executed' as const } : { kind: 'refused' as const, detail: result.kind === 'failed' ? result.error : result.kind === 'refused' ? result.reason : 'not a remote write' };
+    } });
+  };
+}
+
+async function resolveDocsPruneRepository(gh: GhRunner, cwd: string): Promise<string> {
+  const raw = await gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
+  const repository = (JSON.parse(raw.stdout) as { nameWithOwner?: unknown }).nameWithOwner;
+  if (typeof repository !== 'string' || !repository) throw new DocsPruneRefusal('docs-prune publication refused: repository resolution failed');
+  return repository;
+}
+
 /** Operator-only cleanup orchestration.  All reads precede the temporary commit. */
 export async function dispatchDocsPrune(cmd: DocsPruneCommand, cwd: string, deps: DocsPruneCliDependencies = {}): Promise<number> {
   const report = deps.report ?? console.log;
@@ -33,13 +79,16 @@ export async function dispatchDocsPrune(cmd: DocsPruneCommand, cwd: string, deps
     // This guarded complete reader must finish before a worktree or commit exists.
     const prs = await listPullRequestsWithFiles({ runGh: gh, cwd, state: 'OPEN' });
     const operatorLogin = (await runTrackerAmbientRead(gh, cwd, 'ambient.identity.read', ['api', 'user', '--jq', '.login'])).trim();
+    const foreign = prs.find((pr) => pr.headRef.startsWith('docs-prune/') && pr.author !== operatorLogin);
+    if (foreign) throw new DocsPruneRefusal(`docs-prune publication refused: another operator owns ${foreign.url}`);
     const outcome = applyOpenPullRequestDeferral(selection, prs, operatorLogin);
     let pullRequestUrl: string | undefined;
     if (outcome.removable.length) {
       const startPoint = (await git(['rev-parse', 'origin/main'], { cwd })).stdout.trim();
       const commit = await commitDocsPruneDeletion({ repoDir: cwd, startPoint, removable: outcome.removable, git });
-      if (!deps.publish) throw new DocsPruneRefusal('docs-prune publication refused: guarded publisher is unavailable');
-      const published = await deps.publish({ repoDir: cwd, repository: '', operatorLogin, branch: `docs-prune/${new Date().toISOString().slice(0, 10)}`, commit, outcome, openPullRequests: prs });
+      const publish = deps.publish ?? makeProductionDocsPrunePublisher(git, gh, cwd);
+      const repository = await resolveDocsPruneRepository(gh, cwd);
+      const published = await publish({ repoDir: cwd, repository, operatorLogin, branch: `docs-prune/${new Date().toISOString().slice(0, 10)}`, commit, outcome, openPullRequests: prs });
       pullRequestUrl = published.pullRequestUrl;
     }
     await spine.events.emitOrThrow(docsPruneEvent(outcome, pullRequestUrl));

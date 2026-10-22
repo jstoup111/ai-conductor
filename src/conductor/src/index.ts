@@ -1100,7 +1100,8 @@ async function dispatchCliCommand(): Promise<void> {
 
   const docsPruneCmd = detectDocsPruneCommand(process.argv);
   if (docsPruneCmd) {
-    const code = await dispatchDocsPrune(docsPruneCmd, process.cwd());
+    const repoRoot = makeProductionGit()(['rev-parse', '--show-toplevel'], { cwd: process.cwd() });
+    const code = await dispatchDocsPrune(docsPruneCmd, (await repoRoot).stdout.trim());
     process.exit(code);
   }
 

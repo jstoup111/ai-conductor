@@ -171,6 +171,7 @@ export async function dispatchShipmentEvidence(
         runGh,
         runGit,
         evaluateEvidence: runners.evaluateEvidence ?? evaluateShipmentEvidence,
+        specCommit: candidateCommit,
       });
       report(`shipped-record: ${result.kind}`);
       return result.kind === 'unresolved' ? 1 : 0;

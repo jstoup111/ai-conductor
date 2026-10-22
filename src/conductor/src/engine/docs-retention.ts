@@ -30,6 +30,10 @@ export const DOCS_RETENTION_POLICY = {
     'observation',
     '*.md',
   ],
+  normalizedStemFamilies: [
+    'conflicts', 'coherence', 'coherence-waivers', 'track', 'complexity',
+    'halted', 'plan-review', 'applicability', 'retros',
+  ],
 } as const;
 
 const PLAN_STEM_IDENTITY = { strategy: 'plan-stem' } as const;
@@ -48,9 +52,9 @@ export function prunableFilesForStem(paths: readonly string[], stem: string): st
     );
     if (!isPrunableFamily) return false;
 
+    const family = DOCS_RETENTION_POLICY.prunableFamilies.find((candidate) => normalizedPath.startsWith(`.docs/${candidate}/`));
     if (artifactMatchesFeatureIdentity(normalizedPath, stem, PLAN_STEM_IDENTITY)) return true;
-    if (undated === stem) return false;
-
+    if (undated === stem || !family || !DOCS_RETENTION_POLICY.normalizedStemFamilies.includes(family as never)) return false;
     return artifactMatchesFeatureIdentity(normalizedPath, undated, PLAN_STEM_IDENTITY)
       || artifactMatchesFeatureIdentity(normalizedPath, stem, NORMALIZED_STEM_IDENTITY);
   });
