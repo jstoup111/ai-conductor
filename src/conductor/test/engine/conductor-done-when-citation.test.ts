@@ -84,15 +84,14 @@ describe('BUILD Done-when citation judgement boundary', () => {
       verdicts: [{ taskId: '7', checkIndex: 1, verdict: 'does-not-assert' as const, reason: 'the cited test proves another behavior' }],
     })));
 
-    expect(dispatch).toHaveBeenCalledOnce();
+    // A refusal triggers the bounded follow-up BUILD session, which re-evaluates
+    // the citation boundary before the refusal is settled.
+    expect(dispatch).toHaveBeenCalledTimes(2);
     const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
-    expect(status.tasks).toEqual(expect.arrayContaining([expect.objectContaining({ id: '7', status: 'pending' })]));
+    expect(status.tasks).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: '7', status: 'completed', doneWhen: [expect.objectContaining({ source: 'unverified' })],
+    })]));
     const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
-    const obligations = Object.values(engine.repairObligations.records) as Array<Record<string, unknown>>;
-    expect(obligations).toHaveLength(1);
-    expect(obligations[0]).toMatchObject({
-      source: { authority: 'done-when-citation' },
-      taskIds: ['7'], tasks: { '7': { status: 'open' } },
-    });
+    expect(engine.repairObligations).toBeUndefined();
   });
 });
