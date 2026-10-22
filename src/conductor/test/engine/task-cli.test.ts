@@ -517,6 +517,30 @@ describe('runTaskStart', () => {
   });
 
   describe('happy path — start row 7', () => {
+    it('records HEAD as startHead without changing other row fields, and preserves it on restart', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [
+        { id: '7', name: 'Task seven', status: 'pending', owner: 'build' },
+      ] }, null, 2));
+
+      await expect(runTaskStart(dir, '7', { resolveHead: async () => 'a'.repeat(40) })).resolves.toBe(0);
+      let task = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8')).tasks[0];
+      expect(task).toEqual({ id: '7', name: 'Task seven', status: 'in_progress', owner: 'build', startHead: 'a'.repeat(40) });
+
+      await expect(runTaskStart(dir, '7', { resolveHead: async () => 'b'.repeat(40) })).resolves.toBe(0);
+      task = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8')).tasks[0];
+      expect(task.startHead).toBe('a'.repeat(40));
+    });
+
+    it('still starts when resolving HEAD fails', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '7', status: 'pending' }] }));
+
+      await expect(runTaskStart(dir, '7', { resolveHead: async () => { throw new Error('git failed'); } })).resolves.toBe(0);
+      expect(JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8')).tasks[0])
+        .toEqual({ id: '7', status: 'in_progress' });
+    });
+
     it('flips row 7 to in_progress and leaves others unchanged', async () => {
       // Setup: seed task-status.json with 12 pending rows (1..12)
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
