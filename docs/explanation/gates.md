@@ -702,6 +702,14 @@ an action route takes precedence while an uncovered infrastructure failure remai
 BUILD attempt. Invalid, incomplete, stale, repeated, or unfinished case state halts rather than silently
 routing or passing.
 
+Only open cases own a source. A later judgement may re-raise a source that resolved history already
+links; the re-raise opens a new case, leaves the resolved case intact, and an action charges the
+`build_review` kickback cap like any other. Each source is read through one current link: an open case
+outranks resolved history, otherwise the latest link wins. A decision stop never settles its source, so
+a later judgement can re-evaluate it; an escalation with the same owner and source outcomes converges
+on the existing stop, and a different owner halts as a
+[rejected case transition](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-a-rejected-case-transition).
+
 The case store and work order survive a daemon restart. BUILD stamps the work order before it starts,
 so an already attempted case cannot receive another free route; a later clean review settles cases
 whose sources are absent. Inspect the durable state and lifecycle events in
