@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { formatBuildReviewResolveCaseCommand, reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { detectBuildReviewResolveCaseCommand } from '../../src/cli.js';
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
@@ -308,14 +309,25 @@ describe('reduceBuildReviewAdjudication', () => {
 
   // Covers: task:rem-prd-audit-rem-prd-audit-R17c
   it.each([
-    { feature: 'operator-acceptance', child: undefined, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action' },
-    { feature: 'operator-acceptance', child: 2 as never, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --child 2 --case case-action' },
+    { feature: 'operator-acceptance', child: undefined, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action --rationale "<why>"' },
+    { feature: 'operator-acceptance', child: 2 as never, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --child 2 --case case-action --rationale "<why>"' },
   ])('names the failed action case and its scoped operator-resolution command', ({ feature, child, command }) => {
     expect(reduceBuildReviewAdjudication(reducerInput({
       feature, child, cases: [action('failed')],
     }))).toMatchObject({
       route: 'halt',
       reason: expect.stringContaining(command),
+    });
+  });
+
+  it('renders a child-scoped recovery command the CLI recognizes', () => {
+    const command = formatBuildReviewResolveCaseCommand({ feature: 'operator-acceptance', child: 2, caseId: 'case-action' });
+    const parsed = detectBuildReviewResolveCaseCommand([
+      'node', 'ai-conductor', ...command.split(' ').slice(1).map((part) => part.replaceAll('"', '')),
+    ]);
+
+    expect(parsed).toEqual({
+      kind: 'resolve-case', feature: 'operator-acceptance', child: '2', caseId: 'case-action', rationale: '<why>',
     });
   });
 

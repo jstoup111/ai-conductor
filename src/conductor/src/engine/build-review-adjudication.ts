@@ -21,6 +21,15 @@ export interface BuildReviewAdjudicationTransition {
  */
 export type BuildReviewMechanicalState = 'healthy' | 'retry' | 'halt';
 
+/** Render the exact operator recovery command for an open action case. */
+export function formatBuildReviewResolveCaseCommand(input: {
+  readonly feature: string;
+  readonly child: number | undefined;
+  readonly caseId: string;
+}): string {
+  return `ai-conductor build-review resolve-case --feature ${input.feature}${input.child === undefined ? '' : ` --child ${input.child}`} --case ${input.caseId} --rationale "<why>"`;
+}
+
 /**
  * The application boundary receives no actionable cases until the whole v2
  * judgement is mechanically valid and free of its declared decision stops.
@@ -91,7 +100,7 @@ export function reduceBuildReviewAdjudication(input: {
     return {
       route: 'halt',
       remainingMechanical: input.mechanical !== 'healthy',
-      reason: `open action case ${failedActionWithCurrentSource.id} has a failed effect while a current remediation source remains unaccepted; resolve with ai-conductor build-review resolve-case --feature ${input.feature}${input.child === undefined ? '' : ` --child ${input.child}`} --case ${failedActionWithCurrentSource.id} --rationale "<why>"`,
+      reason: `open action case ${failedActionWithCurrentSource.id} has a failed effect while a current remediation source remains unaccepted; resolve with ${formatBuildReviewResolveCaseCommand({ feature: input.feature, child: input.child, caseId: failedActionWithCurrentSource.id })}`,
     };
   }
   // /ai-conductor:session-command-context

@@ -71,6 +71,7 @@ import {
   type RefusalRoundOutcome,
 } from './prd-widening-refusal-rework.js';
 import { reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
 import {
   buildRemediationProjection,
   type RemediationProjectionLimits,
@@ -5388,6 +5389,15 @@ export class Conductor {
     }
     const dispositions = await new BuildReviewDispositionStore(this.projectRoot).list(feature);
     if (!dispositions.ok) return { kind: 'invalid', reason: `build-review disposition state ${dispositions.message}` };
+    const reducedCoverage = await new BuildReviewDispositionStore(this.projectRoot).listReducedCoverage(feature);
+    if (!reducedCoverage.ok) return { kind: 'invalid', reason: `build-review reduced-coverage state ${reducedCoverage.message}` };
+    const absenceRetirementMechanicallyHealthy =
+      !Object.values(aggregate.results).some((result) => result.kind === 'infrastructure-failure') &&
+      !(aggregate.currentCustomRubrics ?? []).some((rubric) =>
+        aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
+      ) &&
+      aggregate.scopeIncomplete.length === 0 &&
+      reducedCoverage.records.length === 0;
     const acceptedSourceIds = new Set(dispositions.records
       .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
         record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
@@ -5398,7 +5408,7 @@ export class Conductor {
     // test keeps any reserved or failed effect open.
     const retirement = await store.mutate(async (state) => {
       const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
-        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: true,
+        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
         allowAppliedByAbsence: attemptEvidence.ok,
         resolveAbsentOpenNonActionCases: true,
         referenced: false,
@@ -5431,7 +5441,7 @@ export class Conductor {
       attemptedCaseIds: attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [],
       lapId: aggregate.lapId,
       effectiveAcceptedSourceIds: acceptedSourceIds,
-      mechanicallyHealthy: true,
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
       resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {
@@ -5451,7 +5461,7 @@ export class Conductor {
     // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
       const actionResolution = survivingObligation.effect.kind === 'action'
-        ? `; resolve with ai-conductor build-review resolve-case --feature ${feature.feature}${this.activeRegionChild === undefined ? '' : ` --child ${this.activeRegionChild}`} --case ${survivingObligation.id} --rationale "<why>"`
+        ? `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`
         : '';
       return {
         kind: 'invalid',
@@ -13537,6 +13547,13 @@ export class Conductor {
                   const mechanical = uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0
                     ? 'healthy'
                     : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
+                  // Covered faults can release retry routing, but they never
+                  // prove that a case source was absent. Keep that evidence
+                  // boundary distinct from the retry/halt mechanical lane.
+                  const absenceRetirementMechanicallyHealthy =
+                    effective.effective.infrastructureFailureRubrics.length === 0 &&
+                    (effective.effective.scopeIncompleteRubrics?.length ?? 0) === 0 &&
+                    effective.effective.hasRecordedReducedCoverage !== true;
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,
@@ -13613,6 +13630,7 @@ export class Conductor {
                     resolveOperatorResolvedFindingIds,
                     resolveEffectiveAcceptedSourceIds,
                     mechanical,
+                    absenceRetirementMechanicallyHealthy,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
                       resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),

@@ -101,7 +101,7 @@ describe('remediation case effects', () => {
     const store = await storeWith({ version: 'v3', feature, cases: [original], prdWideningCases: [], suppressions: [], outbox: [] });
 
     await expect(resolveAbsentFailedBuildReviewCases({
-      store, liveSourceIds: new Set(), lapId: 'lap-current',
+      store, liveSourceIds: new Set(), lapId: 'lap-current', mechanicallyHealthy: true,
     })).resolves.toEqual({ ok: true, settled: [{ caseId: 'case-1', effectId: 'effect-accepted' }] });
 
     const settled = await store.read();
@@ -181,7 +181,7 @@ describe('remediation case effects', () => {
     });
 
     await expect(resolveAbsentFailedBuildReviewCases({
-      store, liveSourceIds: new Set([sourceId]), lapId: 'lap-current',
+      store, liveSourceIds: new Set([sourceId]), lapId: 'lap-current', mechanicallyHealthy: true,
     })).resolves.toEqual({ ok: true, settled: [] });
 
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: {

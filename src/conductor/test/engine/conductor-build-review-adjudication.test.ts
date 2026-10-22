@@ -339,6 +339,9 @@ async function fixture(options: FixtureOptions = {}) {
         uncoveredInfrastructureFailureRubrics: [...uncovered],
         uncoveredScopeIncompleteRubrics: [...uncoveredScopeIncomplete],
         ...(scopeIncomplete ? { scopeIncompleteRubrics: ['testQuality'] } : {}),
+        ...(options.infrastructure === 'covered' || options.scopeIncomplete === 'covered'
+          ? { hasRecordedReducedCoverage: true }
+          : {}),
       },
     };
   }) as never;
@@ -997,6 +1000,41 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(covered.remediateDispatches()).toBe(0);
   });
 
+  // Covers: S9.5, task:rem-prd-audit-rem-prd-audit-R17d
+  it.each(['failed', 'reserved'] as const)(
+    'does not retire an absent %s action case on a reduced-coverage lap',
+    async (status) => {
+      const caseId = `case-covered-${status}`;
+      const run = await fixture({
+        infrastructure: 'covered',
+        seedPipeline: async (root) => {
+          await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+            version: 'v3', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+            cases: [{
+              id: caseId, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The prior action was not completed.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: status === 'failed'
+                ? { id: `effect-covered-${status}`, kind: 'action', status, diagnostic: 'prior effect failed' }
+                : { id: `effect-covered-${status}`, kind: 'action', status },
+            }],
+            prdWideningCases: [], suppressions: [], outbox: [],
+          }), 'utf8');
+        },
+      });
+
+      const cases = await run.readJson('.pipeline/remediation-cases.json') as {
+        cases: Array<{ id: string; resolution: string; effect: { status: string } }>;
+      };
+      expect(cases.cases.find((record) => record.id === caseId)).toMatchObject({
+        resolution: 'open', effect: { status },
+      });
+      expect(run.lifecycle.filter((event) =>
+        event.type === 'remediation_case_reconciled' && event.caseId === caseId,
+      )).toEqual([]);
+    },
+  );
+
   // Covers: task:5
   it('keeps an uncovered infrastructure branch in the mechanical lane without a semantic kickback', async () => {
     const uncovered = await fixture({ infrastructure: 'uncovered' });
@@ -1152,7 +1190,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     });
 
     if (status === 'applied') {
-      expect(await run.haltMarker()).toContain(`clean PASS cannot settle open action case ${caseId} (${status}); resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --case ${caseId}`);
+      expect(await run.haltMarker()).toContain(`clean PASS cannot settle open action case ${caseId} (${status}); resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --case ${caseId} --rationale "<why>"`);
       expect((await run.state()).build_review).not.toBe('done');
     } else {
       expect(await run.haltMarker()).toBe('');
@@ -1450,7 +1488,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       settleRemediationCasesOnCleanBuildReview: () => Promise<{ kind: string; reason?: string }>;
     }).settleRemediationCasesOnCleanBuildReview()).resolves.toEqual(expect.objectContaining({
       kind: 'invalid',
-      reason: expect.stringContaining('resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --child 2 --case case-child'),
+      reason: expect.stringContaining('resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --child 2 --case case-child --rationale "<why>"'),
     }));
   });
 

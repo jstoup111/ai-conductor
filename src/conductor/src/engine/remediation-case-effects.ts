@@ -265,13 +265,14 @@ export async function resolveAbsentFailedBuildReviewCases(input: {
   /** This lap's reported, unsuppressed rubric-namespaced source ids. */
   readonly liveSourceIds: ReadonlySet<string>;
   readonly lapId: string;
+  readonly mechanicallyHealthy: boolean;
 }): Promise<SettleStrandedActionReservationsResult> {
   const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
     const settled = state.cases.flatMap((record) =>
       record.effect.kind === 'action' && retiresOpenBuildReviewCase(record, {
         liveSourceIds: input.liveSourceIds,
         effectiveAcceptedSourceIds: new Set(),
-        mechanicallyHealthy: true,
+        mechanicallyHealthy: input.mechanicallyHealthy,
         allowAppliedByAbsence: false,
       })
         ? [{ caseId: record.id, effectId: record.effect.id }]

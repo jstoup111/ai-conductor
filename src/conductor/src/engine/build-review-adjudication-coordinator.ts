@@ -141,6 +141,8 @@ export interface BuildReviewAdjudicationCoordinatorInput {
    */
   readonly resolveEffectiveAcceptedSourceIds?: () => Promise<ReadonlySet<string>>;
   readonly mechanical: BuildReviewMechanicalState;
+  /** A covered review fault is not evidence that absent sources disappeared. */
+  readonly absenceRetirementMechanicallyHealthy?: boolean;
   readonly judge: (context: unknown) => Promise<RemediationCaseJudgement>;
   readonly chargeInput: BumpKickbackGateInput;
   /** Injectable only at the charge boundary; production retains the ledger adapter. */
@@ -168,6 +170,10 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
 }
 
 export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudicationCoordinatorInput): Promise<BuildReviewAdjudicationCoordinatorResult> {
+  // Legacy direct coordinator callers did not carry the distinct signal. The
+  // conductor always supplies it; retain the historical value for those tests
+  // and integrations until they adopt the new boundary input.
+  const absenceRetirementMechanicallyHealthy = input.absenceRetirementMechanicallyHealthy ?? input.mechanical === 'healthy';
   const store = new RemediationCaseStore(input.projectRoot, input.feature, {
     ...(input.child === undefined ? {} : { child: input.child }),
   });
@@ -256,7 +262,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const strandedSettlement = await settleStrandedBuildReviewActionReservations({
       store,
       liveSourceIds: strandedLiveSourceIds,
-      mechanicallyHealthy: input.mechanical === 'healthy',
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
       effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
       lapId: input.aggregate.lapId,
       readPublishedCaseIds: async (actionEffectIds) => {
@@ -273,7 +279,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         caseId, effectId, effectKind: 'action', reason: STRANDED_ACTION_RESERVATION_DIAGNOSTIC,
       });
     }
-    const absentFailed = await resolveAbsentFailedBuildReviewCases({ store, liveSourceIds: strandedLiveSourceIds, lapId: input.aggregate.lapId });
+    const absentFailed = await resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: strandedLiveSourceIds, lapId: input.aggregate.lapId,
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+    });
     if (!absentFailed.ok) return failStore('case store', absentFailed);
     await drainOutbox();
     const strandedDeferrals = await settleStrandedBuildReviewDeferralReservations({ store, liveSourceIds: strandedLiveSourceIds, lapId: input.aggregate.lapId });
@@ -342,7 +351,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         attemptedCaseIds: exitAttemptEvidence.ok ? exitAttemptEvidence.attemptedCaseIds : [],
         lapId: input.aggregate.lapId,
         effectiveAcceptedSourceIds: new Set(),
-        mechanicallyHealthy: input.mechanical === 'healthy',
+        mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
         liveSourceIds: new Set(sources.map(buildReviewAdjudicationSourceId)),
         resolveAbsentOpenNonActionCases: true,
         allowAppliedByAbsence: true,
@@ -410,7 +419,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         if (!retiresOpenBuildReviewCase(withOrigins, {
           liveSourceIds: new Set(sources.map(buildReviewAdjudicationSourceId)),
           effectiveAcceptedSourceIds: acceptedSourceIds,
-          mechanicallyHealthy: input.mechanical === 'healthy',
+          mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
         })) return withOrigins;
         const retired = retireOpenBuildReviewCase(withOrigins);
         const retiredEffect = retired.effect.kind !== 'none' && retired.effect.status === 'failed'
@@ -863,8 +872,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // stop. Do not ask reconciliation to settle that stop by absence before
     // its durable replay/persistence path sees the proposed escalation.
     effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
-    mechanicallyHealthy: input.mechanical === 'healthy' && escalationCases.length === 0,
-    resolveAbsentOpenNonActionCases: input.mechanical === 'healthy' && escalationCases.length === 0,
+    mechanicallyHealthy: absenceRetirementMechanicallyHealthy && escalationCases.length === 0,
+    resolveAbsentOpenNonActionCases: absenceRetirementMechanicallyHealthy && escalationCases.length === 0,
     allowAppliedByAbsence: true,
   });
   if (!reconciled.ok) {
