@@ -59,12 +59,32 @@ export type ReconcileRemediationCasesResult =
   };
 
 /** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
-export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression';
+export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression' | 'carry';
+
+export interface RemediationCaseCarryInput {
+  readonly currentLapId: string;
+  readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+}
+
+/** A durable operator decision carries only after its origin remains effective in a later lap. */
+export function isCarryEligibleRemediationCase(
+  record: RemediationCaseRecord,
+  { currentLapId, effectiveAcceptedSourceIds }: RemediationCaseCarryInput,
+): boolean {
+  if (record.operatorResolution) return true;
+  const origins = record.operatorAcceptance?.origins;
+  return record.resolution === 'resolved'
+    && origins !== undefined
+    && origins.length > 0
+    && origins.every((origin) => effectiveAcceptedSourceIds.has(origin.sourceId) && origin.lapId !== currentLapId);
+}
 
 export function classifyRemediationCaseReuse(
   record: RemediationCaseRecord,
   attemptedCaseIds: ReadonlySet<string>,
+  carryInput?: RemediationCaseCarryInput,
 ): RemediationCaseReuseDisposition {
+  if (carryInput && isCarryEligibleRemediationCase(record, carryInput)) return 'carry';
   if (record.disposition !== 'act') return 'reuse';
   if (record.resolution === 'resolved') return 'halt-regression';
   return attemptedCaseIds.has(record.id) ? 'halt-repeat' : 'resume';
