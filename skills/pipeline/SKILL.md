@@ -134,6 +134,11 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   test for a tagged check is never `--plan-gap`. For an untagged check that cannot be
                   satisfied within the approved plan, use `conduct task done <id> --plan-gap <n> --reason <text>`
                   instead and report the resulting HALT — do not clear the task or append off-plan work.
+                  A `[test]` citation whose title cannot be provenance-verified as added since the
+                  task began closes as `pending-judgement`; the conductor judges it when the BUILD session ends.
+                  A refused citation returns as a retry hint naming the check and the judge's reason. Repair it by
+                  writing or citing a test that asserts the check, or close that check with
+                  `--unverified <n>=<reason>` when it cannot be verified.
                   For a legacy task with no `Done when:` block, close with `conduct task done <id>`.
                   Then read `.pipeline/task-status.json` and confirm the row reads `completed`.
                   A stampless close records declared Done when evidence or refuses naming the
@@ -223,6 +228,12 @@ If no scoped set can be identified, record that limitation rather than claiming 
 passed. If the scoped tests pass, required task evidence exists, and commits exist for the
 task, mark it completed; aggregate proof remains pending at `test_suite`. Do not trust JSON
 state alone: it can become stale after connection interruptions or subagent context loss.
+
+**Citation-refusal remediation (step 4):** A `[test]` citation that closes
+`pending-judgement` is judged at BUILD session end. When its citation is refused, use the retry
+hint's named check and reason to write or cite a test that asserts the check. If that cannot be
+verified, close the check with `--unverified <n>=<reason>`; do not claim the refused citation is
+verified.
 
 **Superseded-symbol check (step 5 — replacement tasks):** Before marking a task `completed`
 whose plan says it **replaces or supersedes** an existing symbol/behavior ("replace X",
