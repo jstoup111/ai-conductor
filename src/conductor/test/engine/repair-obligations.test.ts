@@ -65,6 +65,8 @@ function sectionForStanding(): RepairObligationSection {
     },
     currentByPlan: { 'current-plan': { '2': 'current' } },
     admissionsByPlan: {},
+    citationRefusals: {},
+    citationRefusalAdmissions: {},
   };
 }
 

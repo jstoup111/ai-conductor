@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import type { CitationJudgementDispatchResult } from '../../src/engine/step-runner-types.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -45,13 +46,18 @@ describe('BUILD Done-when citation judgement boundary', () => {
 
   afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-  async function run(status: unknown, judgement = vi.fn(async () => ({
+  async function run(
+    status: unknown,
+    judgement: NonNullable<StepRunner['dispatchDoneWhenCitationJudgement']> = vi.fn(async (): Promise<CitationJudgementDispatchResult> => ({
     kind: 'valid' as const,
     verdicts: [
       { taskId: '7', checkIndex: 1, verdict: 'asserts' as const, reason: 'first assertion' },
       { taskId: '9', checkIndex: 1, verdict: 'asserts' as const, reason: 'second assertion' },
     ],
-  })), events = new ConductorEventEmitter(), maxRetries = 1) {
+    })),
+    events = new ConductorEventEmitter(),
+    maxRetries = 1,
+  ) {
     if (status !== undefined) await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(status));
     let dispatches = 0;
     const runner: StepRunner = {

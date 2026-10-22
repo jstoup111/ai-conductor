@@ -277,6 +277,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_active_stall: 'not-audited-by-design',
   build_done_when_unverified: 'not-audited-by-design',
   decide_artifacts_pruned: 'not-audited-by-design',
+  done_when_citation_judged: 'not-audited-by-design',
+  done_when_citation_accepted: 'not-audited-by-design',
   remediation_routed: 'not-audited-by-design',
   remediation_rerouted: 'not-audited-by-design',
   routed_repair_phase: 'not-audited-by-design',
@@ -1019,6 +1021,16 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   decide_artifacts_pruned: {
     type: 'decide_artifacts_pruned', removed: [], deferred: [], skipped: [], excluded: [],
+  },
+  done_when_citation_judged: {
+    type: 'done_when_citation_judged',
+    citations: [],
+  },
+  done_when_citation_accepted: {
+    type: 'done_when_citation_accepted',
+    taskId: '1',
+    check: 1,
+    reason: 'operator accepted the citation',
   },
   remediation_routed: {
     type: 'remediation_routed', eventId: 'route-1', occurredAt: '2030-01-01T00:00:00.000Z',

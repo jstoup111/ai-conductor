@@ -664,7 +664,7 @@ describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
     const parsed = JSON.parse(raw);
 
     const byId = Object.fromEntries(
-      (parsed.tasks as Array<{ id: string; commit?: string }>).map((t) => [t.id, t]),
+      (parsed.tasks as Array<{ id: string; commit?: string; startHead?: string }>).map((t) => [t.id, t]),
     );
 
     expect(byId.T1.commit).toBe(NEW_FULL_A);

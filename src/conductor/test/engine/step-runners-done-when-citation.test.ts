@@ -49,7 +49,7 @@ async function subject(results: readonly InvokeResult[], native = true) {
 
 describe('DefaultStepRunner.dispatchDoneWhenCitationJudgement', () => {
   it('dispatches one read-only, non-interactive native-schema judgement and returns validated verdicts', async () => {
-    const { runner, invoke } = await subject([{ success: true, output: 'done', finalStructuredResult: valid }]);
+    const { runner, invoke } = await subject([{ success: true, output: 'done', exitCode: 0, finalStructuredResult: valid }]);
 
     await expect(runner.dispatchDoneWhenCitationJudgement(input)).resolves.toEqual({ kind: 'valid', verdicts: valid.verdicts });
 
@@ -62,8 +62,8 @@ describe('DefaultStepRunner.dispatchDoneWhenCitationJudgement', () => {
 
   it('retries one schema-invalid result and returns the valid retry without a refusal', async () => {
     const { runner, invoke } = await subject([
-      { success: true, output: 'bad', finalStructuredResult: { verdicts: [] } },
-      { success: true, output: 'done', finalStructuredResult: valid },
+      { success: true, output: 'bad', exitCode: 0, finalStructuredResult: { verdicts: [] } },
+      { success: true, output: 'done', exitCode: 0, finalStructuredResult: valid },
     ]);
 
     await expect(runner.dispatchDoneWhenCitationJudgement(input)).resolves.toEqual({ kind: 'valid', verdicts: valid.verdicts });
@@ -71,7 +71,7 @@ describe('DefaultStepRunner.dispatchDoneWhenCitationJudgement', () => {
   });
 
   it('returns unavailable without dispatching when no configured candidate supports native output schemas', async () => {
-    const { runner, invoke } = await subject([{ success: true, output: 'unreachable', finalStructuredResult: valid }], false);
+    const { runner, invoke } = await subject([{ success: true, output: 'unreachable', exitCode: 0, finalStructuredResult: valid }], false);
 
     await expect(runner.dispatchDoneWhenCitationJudgement(input)).resolves.toMatchObject({
       kind: 'unavailable', cause: expect.stringContaining('native output schema'),
@@ -81,8 +81,8 @@ describe('DefaultStepRunner.dispatchDoneWhenCitationJudgement', () => {
 
   it('returns unavailable after two failed dispatches', async () => {
     const { runner, invoke } = await subject([
-      { success: false, output: 'first provider failure' },
-      { success: false, output: 'second provider failure' },
+      { success: false, output: 'first provider failure', exitCode: 1 },
+      { success: false, output: 'second provider failure', exitCode: 1 },
     ]);
 
     await expect(runner.dispatchDoneWhenCitationJudgement(input)).resolves.toMatchObject({
