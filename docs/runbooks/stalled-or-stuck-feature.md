@@ -1612,7 +1612,8 @@ The matching `remediation_adjudication_failed` event carries `rejectedTransition
 invariant: `source-linked-by-multiple-cases`, `duplicate-case-id`, `duplicate-effect-id`, or
 `invalid-next-state`. The store refused the transition and wrote nothing, so
 `.pipeline/remediation-cases.json` is still the last valid history. Most often the judgement linked a
-source that an existing case — usually a resolved one — already owns to a new case. A halt that
+source that another open case already owns to a new case. Only open cases own a source: re-raising a
+source that only resolved cases link opens a new case and does not trip this invariant. A halt that
 instead reads `case store malformed-state` or `suppression store malformed-state`, without the
 `persisted case history is valid` line, means the persisted file itself is corrupt. This section does
 not cover that case.

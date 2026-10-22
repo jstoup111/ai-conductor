@@ -603,7 +603,16 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (allOperatorResolved(resolved)) {
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
-  const settledSourceIds = finalizedSourceIds(prior.state.cases);
+  // A decision stop has no settled semantic answer: its source must remain
+  // eligible for a later judgement to converge on that owner, or to surface a
+  // different-owner conflict. `finalizedBuildReviewSourceIds` deliberately
+  // serves broader terminal dispositions, so narrow it at this coordinator
+  // boundary for the stop re-evaluation lane.
+  const decisionStopSourceIds = new Set(prior.state.cases
+    .filter(isBuildReviewDecisionStop)
+    .flatMap((record) => record.sources.map((source) => source.sourceId)));
+  const settledSourceIds = new Set([...finalizedSourceIds(prior.state.cases)]
+    .filter((sourceId) => !decisionStopSourceIds.has(sourceId)));
   currentSources = sources.filter((source) =>
     !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
     !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
@@ -665,25 +674,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
   }
   const liveSourceIds = liveSourceIdsFor(resolved);
-  // A resolved case whose action effect failed was never built (for example
-  // it was charged past the kickback budget, then resolved once its finding
-  // vanished). A later lap that re-raises it and binds it there is not a
-  // regression of delivered work: admit the proposal as a new case so the
-  // repair is actually attempted, leaving the old case's history intact.
-  const priorById = new Map(prior.state.cases.map((record) => [record.id, record]));
-  const neverBuilt = (caseId: string | undefined): boolean => {
-    const record = caseId === undefined ? undefined : priorById.get(caseId);
-    return record !== undefined && record.resolution === 'resolved' && record.disposition === 'act'
-      && record.effect.kind === 'action' && record.effect.status === 'failed';
-  };
   const admitted = graph.graph.cases.filter((proposed) =>
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)) &&
     (proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef)),
-  ).map((proposed) => {
-    if (proposed.case.disposition !== 'act' || !neverBuilt(proposed.case.existingCaseId)) return proposed;
-    const { existingCaseId: _neverBuilt, ...unbound } = proposed.case;
-    return { ...proposed, case: unbound as typeof proposed.case };
-  });
+  );
   // Escalations have no effect id and use Task 31's dedicated durable owner
   // stop writer. The general reconciler owns ordinary case/effect transitions;
   // routing a stop through it would manufacture a deferral-shaped effect.
@@ -741,7 +735,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     // same evidence the exit paths settle on. Leaving it open let stale history
     // feed a later adjudication as an unresolved prior. A mechanically incomplete
     // lap proves nothing by absence, so it still leaves that history open.
-    resolveAbsentOpenNonActionCases: input.mechanical === 'healthy',
+    // An escalation is the explicit re-evaluation lane for an existing owner
+    // stop. Do not ask reconciliation to settle that stop by absence before
+    // its durable replay/persistence path sees the proposed escalation.
+    resolveAbsentOpenNonActionCases: input.mechanical === 'healthy' && escalationCases.length === 0,
   });
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific

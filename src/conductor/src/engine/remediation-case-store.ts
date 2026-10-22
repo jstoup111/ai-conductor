@@ -105,23 +105,51 @@ export interface RemediationCasePrdWideningRecord {
 /** The tagged case-record vocabulary for the version-two shared envelope. */
 export type RemediationCaseDomainRecord = RemediationCaseRecord | RemediationCasePrdWideningRecord;
 
+/** One source link and the case whose disposition and effect govern it. */
+export interface CurrentBuildReviewSourceLink {
+  readonly record: RemediationCaseRecord;
+  readonly link: RemediationCaseSourceLink;
+}
+
+/**
+ * Select the single current link for every rubric-namespaced source. Open
+ * cases take precedence over resolved history; otherwise the latest recorded
+ * link wins, with later store order resolving an equal timestamp.
+ */
+export function currentBuildReviewSourceLinks(
+  cases: readonly RemediationCaseRecord[],
+): ReadonlyMap<string, CurrentBuildReviewSourceLink> {
+  const current = new Map<string, CurrentBuildReviewSourceLink>();
+  for (const record of cases) {
+    for (const link of record.sources) {
+      const prior = current.get(link.sourceId);
+      if (!prior ||
+        (prior.record.resolution === 'resolved' &&
+          (record.resolution === 'open' || Date.parse(link.recordedAt) >= Date.parse(prior.link.recordedAt)))) {
+        current.set(link.sourceId, { record, link });
+      }
+    }
+  }
+  return current;
+}
+
 /**
  * Rubric-namespaced source ids (`<rubric>:<findingId>`) that a finalized case
- * durably settles. A finalized non-action case settles every source it binds;
- * a resolved, applied action case settles only its `merged` sources, so a
- * sibling source that merely `acted` stays live and is re-adjudicated on
- * recurrence. The adjudication coordinator and the effective build_review
- * verdict both read settlement through this one predicate, so a lap the
- * coordinator settles is never re-selected by the completion check.
+ * durably settles. Each source is read through its authoritative link: a
+ * finalized non-action case settles it; a resolved, applied action case
+ * settles only a `merged` link. The adjudication coordinator and the effective
+ * build_review verdict both read settlement through this predicate, so a lap
+ * the coordinator settles is never re-selected by the completion check.
  */
 export function finalizedBuildReviewSourceIds(cases: readonly RemediationCaseRecord[]): ReadonlySet<string> {
-  return new Set(cases.flatMap((record) =>
+  return new Set([...currentBuildReviewSourceLinks(cases)].flatMap(([sourceId, { record, link }]) =>
     record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
-      ? record.sources.map((source) => source.sourceId)
+      ? [sourceId]
       : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
-      ? record.sources.map((source) => source.sourceId)
-      : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
-        ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
+      ? [sourceId]
+      : record.resolution === 'resolved' && record.effect.kind !== 'none' &&
+          record.effect.status === 'applied' && link.outcome === 'merged'
+        ? [sourceId]
         : [],
   ));
 }
@@ -503,7 +531,7 @@ function parseBuildReviewCases(value: unknown):
   // any caller can consume or mutate the state.
   const caseIds = new Set<string>();
   const effectOwners = new Map<string, string>();
-  const sourceOwners = new Map<string, string>();
+  const openSourceOwners = new Map<string, string>();
   const cases: RemediationCaseRecord[] = [];
   for (const caseValue of value) {
     const parsed = parseRemediationCaseDomainRecord(caseValue);
@@ -529,15 +557,16 @@ function parseBuildReviewCases(value: unknown):
       }
       effectOwners.set(record.effect.id, record.id);
     }
+    const sourceIdsInCase = new Set<string>();
     for (const source of record.sources) {
-      // Global, not per-case: a source id repeated across two canonical cases
-      // is ambiguous durable history in exactly the way a repeat within one
-      // case is, and both readers index sources back to a single case.
-      const owner = sourceOwners.get(source.sourceId);
-      if (owner !== undefined) {
-        return owner === record.id
-          ? { ok: false, reason: 'malformed-state' }
-          : {
+      if (sourceIdsInCase.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
+      sourceIdsInCase.add(source.sourceId);
+      if (record.resolution === 'open') {
+        // Only live build-review cases own a source. Resolved history remains
+        // durable evidence, but a new open case may legitimately re-raise it.
+        const owner = openSourceOwners.get(source.sourceId);
+        if (owner !== undefined) {
+          return {
             ok: false,
             reason: 'malformed-state',
             violation: {
@@ -546,8 +575,9 @@ function parseBuildReviewCases(value: unknown):
               sourceIds: [source.sourceId],
             },
           };
+        }
+        openSourceOwners.set(source.sourceId, record.id);
       }
-      sourceOwners.set(source.sourceId, record.id);
     }
     cases.push(record);
   }

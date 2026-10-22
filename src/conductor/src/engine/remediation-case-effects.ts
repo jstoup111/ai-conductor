@@ -49,7 +49,8 @@ type DeferralCase = RemediationCaseRecord & {
 
 export type PersistBuildReviewDecisionStopResult =
   | { readonly ok: true; readonly status: 'persisted' | 'already-persisted' | 'already-resolved'; readonly caseId: string }
-  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` };
+  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}`; readonly violation?: never }
+  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly violation: RemediationCaseTransitionViolation };
 
 /** The shared lifecycle vocabulary for reducers and effect execution. */
 export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
@@ -65,16 +66,24 @@ export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolea
 }
 
 function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
-  return left.id === right.id && left.domain === right.domain && left.disposition === 'escalate' &&
-    right.disposition === 'escalate' && left.priority === right.priority && left.rationale === right.rationale &&
-    left.confidence === right.confidence && left.resolution === right.resolution &&
+  return left.id === right.id && left.disposition === 'escalate' && right.disposition === 'escalate' &&
     left.effect.kind === 'none' && right.effect.kind === 'none' &&
     left.escalation?.owner === right.escalation?.owner &&
-    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && left.sources.length === right.sources.length &&
-    left.sources.every((source, index) => {
-      const other = right.sources[index];
-      return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome && source.recordedAt === other.recordedAt;
-    });
+    sameSourceOutcomes(left, right);
+}
+
+function sameSourceOutcomes(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  return left.sources.length === right.sources.length && left.sources.every((source) =>
+    right.sources.some((other) => source.sourceId === other.sourceId && source.outcome === other.outcome),
+  );
+}
+
+function sameDecisionStopOwnerOrConsistency(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  // D5.7 defines an unbound stop's convergence key as its owner and source
+  // set. This deliberately treats two ownerless consistency stops as having
+  // the same owner, while never letting matching consistency prose bridge an
+  // owner mismatch.
+  return left.escalation?.owner === right.escalation?.owner;
 }
 
 function sameSourceIds(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
@@ -113,12 +122,22 @@ export async function persistBuildReviewDecisionStop(input: {
           : { ok: false as const, reason: 'conflicting-case-id' as const },
       };
     }
+    const converged = state.cases.find((record) =>
+      isBuildReviewDecisionStop(record) && record.disposition === 'escalate' &&
+      sameDecisionStopOwnerOrConsistency(record, input.record) && sameSourceOutcomes(record, input.record),
+    );
+    if (converged) {
+      return { value: { ok: true as const, status: 'already-persisted' as const, caseId: converged.id } };
+    }
     return {
       value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id },
       nextState: { ...state, cases: [...state.cases, input.record] },
     };
   });
-  return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
+  if (mutation.ok) return mutation.value;
+  return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
+    ? { ok: false, reason: mutation.reason, violation: mutation.violation }
+    : { ok: false, reason: `case store ${mutation.reason}` };
 }
 
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {

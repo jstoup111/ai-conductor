@@ -639,7 +639,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const build = vi.fn(async () => ({ success: true }));
       await new Conductor({
-        stateFilePath: statePath, projectRoot: dir, stepRunner: { run: async (step) => step === 'build' ? build() : { success: true } },
+        stateFilePath: statePath, projectRoot: dir, stepRunner: { run: async (step: string) => step === 'build' ? build() : { success: true } },
         events: new ConductorEventEmitter(), mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false,
         config: {
           defaults: { model: 'test-model', effort: 'medium', max_retries: 1, escalate: false },

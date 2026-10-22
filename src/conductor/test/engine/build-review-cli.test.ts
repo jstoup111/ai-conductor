@@ -1,4 +1,4 @@
-// Covers: task:27
+// Covers: task:2, task:27
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -152,6 +152,33 @@ describe('build-review findings CLI', () => {
       }],
       acceptedDispositions: [expect.objectContaining({ disposition: expect.objectContaining({ rationale: 'operator risk' }) })],
     });
+  });
+
+  it('passes the coordinator-equivalent unsettled set for resolved R and open N on S to the CLI verdict', async () => {
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const sourceId = `testQuality:${identity.id}`;
+    const resolved = {
+      ...refutedCaseStore.cases[0],
+      sources: [{ sourceId, outcome: 'refuted' as const, recordedAt: '2026-10-19T12:00:00.000Z' }],
+    };
+    const open = {
+      ...resolved,
+      id: 'case-open', disposition: 'act' as const, resolution: 'open' as const,
+      sources: [{ sourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T12:00:00.000Z' }],
+      effect: { id: 'case-open-effect', kind: 'action' as const, status: 'reserved' as const },
+    };
+    caseRead.mockResolvedValue({ ok: true, state: { ...refutedCaseStore, cases: [resolved, open] } });
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readMechanicalFaults: async () => 0,
+      print,
+    })).resolves.toBe(0);
+
+    expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
   });
 
   // Covers: task:12
