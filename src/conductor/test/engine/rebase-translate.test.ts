@@ -677,6 +677,21 @@ describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
     expect(byId.T4.commit).toBeUndefined();
   });
 
+  it('translates task 4 startHead only when A is present in the rebase map, without residue', async () => {
+    const taskFour = '4444444444444444444444444444444444444444';
+    const translated = '5555555555555555555555555555555555555555';
+    await writeFile(statusPath, JSON.stringify({ tasks: [{ id: '4', status: 'pending', startHead: taskFour }] }));
+
+    await applyMapToStores(projectRoot, { [taskFour]: translated });
+    expect(JSON.parse(await readFile(statusPath, 'utf8')).tasks[0].startHead).toBe(translated);
+
+    await writeFile(statusPath, JSON.stringify({ tasks: [{ id: '4', status: 'pending', startHead: taskFour }] }));
+    await applyMapToStores(projectRoot, {});
+    expect(JSON.parse(await readFile(statusPath, 'utf8')).tasks[0].startHead).toBe(taskFour);
+    await expect(readFile(join(pipelineDir, 'rebase-residue.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(statusPath, statusBefore);
+  });
+
   it('before/after diff shows every mapped sha updated and no unmapped sha changed', async () => {
     await applyMapToStores(projectRoot, REWRITE_MAP);
 

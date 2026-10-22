@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -32,21 +33,26 @@ describe('BUILD Done-when citation judgement boundary', () => {
       { taskId: '7', checkIndex: 1, verdict: 'asserts' as const, reason: 'first assertion' },
       { taskId: '9', checkIndex: 1, verdict: 'asserts' as const, reason: 'second assertion' },
     ],
-  }))) {
+  })), events = new ConductorEventEmitter(), maxRetries = 1) {
     await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(status));
+    let dispatches = 0;
     const runner: StepRunner = {
       run: async () => {
-        const completed = structuredClone(status) as { tasks?: Array<{ status?: string }> };
-        for (const task of completed.tasks ?? []) task.status = 'completed';
-        await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(completed));
+        // A retry continues from the prior BUILD session's durable status; it
+        // must not resurrect citations that the previous boundary settled.
+        if (dispatches++ === 0) {
+          const completed = structuredClone(status) as { tasks?: Array<{ status?: string }> };
+          for (const task of completed.tasks ?? []) task.status = 'completed';
+          await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(completed));
+        }
         return { success: true };
       },
       dispatchDoneWhenCitationJudgement: judgement,
     };
     await new Conductor({
       projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
-      stepRunner: runner, events: new ConductorEventEmitter(), mode: 'auto', resume: true,
-      fromStep: 'build', verifyArtifacts: true, maxRetries: 1,
+      stepRunner: runner, events, mode: 'auto', resume: true,
+      fromStep: 'build', verifyArtifacts: true, maxRetries,
     } as never).run();
     return judgement;
   }
@@ -77,13 +83,78 @@ describe('BUILD Done-when citation judgement boundary', () => {
   });
 
   it('demotes an unavailable citation judgement without admitting a repair obligation', async () => {
+    const events = new ConductorEventEmitter();
+    const observed: unknown[] = [];
+    events.on('build_done_when_unverified', (event) => { observed.push(event); });
     const dispatch = await run({ tasks: [{ id: '7', status: 'pending', doneWhen: [
       { check: '[test] pending', evidence: 'test:test/one.test.ts::pending', source: 'pending-judgement' },
-    ] }] }, vi.fn(async () => ({ kind: 'unavailable' as const, cause: 'native schema unsupported' })));
-    // The direct demotion produces the normal one unverified-check review lap.
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    ] }] }, vi.fn(async () => ({ kind: 'unavailable' as const, cause: 'native schema unsupported' })), events);
+    // The direct demotion produces the normal one unverified-check review lap
+    // without dispatching a second citation judgement.
+    expect(dispatch).toHaveBeenCalledOnce();
     const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
     expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'unverified', reason: 'citation judgement unavailable: native schema unsupported' });
+    expect(observed).toHaveLength(1);
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(engine.repairObligations).toBeUndefined();
+  });
+
+  it('persists one judgement event for verdicts', async () => {
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await run({ tasks: [
+        { id: '7', status: 'pending', doneWhen: [{ check: '[test] first', evidence: 'test:test/one.test.ts::first', source: 'pending-judgement' }] },
+        { id: '9', status: 'pending', doneWhen: [{ check: '[test] second', evidence: 'test:test/two.test.ts::second', source: 'pending-judgement' }] },
+      ] }, vi.fn(async () => ({ kind: 'valid' as const, verdicts: [
+        { taskId: '7', checkIndex: 1, verdict: 'asserts' as const, reason: 'asserts' },
+        { taskId: '9', checkIndex: 1, verdict: 'does-not-assert' as const, reason: 'refused' },
+      ] })), events);
+      const judged = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+        .map((line) => JSON.parse(line)).filter((event) => event.type === 'done_when_citation_judged');
+      expect(judged).toHaveLength(1);
+      expect(judged[0].citations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskId: '7', check: 1, verdict: 'asserts' }),
+        expect.objectContaining({ taskId: '9', check: 1, verdict: 'does-not-assert' }),
+      ]));
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('persists an unavailable cause in one judgement event for an unavailable demotion', async () => {
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await run({ tasks: [{ id: '7', status: 'pending', doneWhen: [
+        { check: '[test] pending', evidence: 'test:test/one.test.ts::pending', source: 'pending-judgement' },
+      ] }] }, vi.fn(async () => ({ kind: 'unavailable' as const, cause: 'native schema unsupported' })), events);
+      const judged = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+        .map((line) => JSON.parse(line)).filter((event) => event.type === 'done_when_citation_judged');
+      expect(judged).toEqual([expect.objectContaining({ citations: [
+        expect.objectContaining({ taskId: '7', check: 1, unavailable: 'native schema unsupported' }),
+      ] })]);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('emits no judgement event when BUILD ends with no pending citation', async () => {
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await run({ tasks: [{ id: '7', status: 'pending', doneWhen: [
+        { check: '[test] proven', evidence: 'test:test/one.test.ts::proven', source: 'verified' },
+      ] }] }, undefined, events);
+      const judged = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+        .map((line) => JSON.parse(line)).filter((event) => event.type === 'done_when_citation_judged');
+      expect(judged).toEqual([]);
+    } finally {
+      persister.stop();
+    }
   });
 
   it('reopens a refused citation through one durable done-when-citation obligation', async () => {
@@ -94,9 +165,9 @@ describe('BUILD Done-when citation judgement boundary', () => {
       verdicts: [{ taskId: '7', checkIndex: 1, verdict: 'does-not-assert' as const, reason: 'the cited test proves another behavior' }],
     })));
 
-    // A refusal triggers the bounded follow-up BUILD session, which re-evaluates
-    // the citation boundary before the refusal is settled.
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    // The bounded follow-up BUILD session settles the refused citation without
+    // sending a duplicate citation judgement.
+    expect(dispatch).toHaveBeenCalledOnce();
     const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
     expect(status.tasks).toEqual(expect.arrayContaining([expect.objectContaining({
       id: '7', status: 'completed', doneWhen: [expect.objectContaining({ source: 'unverified' })],

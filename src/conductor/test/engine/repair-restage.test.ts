@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { admitAndRestageRepair } from '../../src/engine/repair-restage.js';
+import { admitAndRestageRepair, restageExistingRemediationTaskStatuses } from '../../src/engine/repair-restage.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 describe('admitAndRestageRepair', () => {
@@ -69,6 +69,19 @@ describe('admitAndRestageRepair', () => {
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
       gates: { coverage_binding: { laps: 1 } },
     });
+  });
+
+  it('reopens task 4 without replacing its recorded startHead', async () => {
+    await writeFile(planPath, '# Plan\n\n### Task 4: Citation repair\n');
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+      tasks: [{ id: '4', status: 'completed', startHead: 'A' }],
+    }));
+
+    await expect(restageExistingRemediationTaskStatuses(dir, planPath, new Set(['4'])))
+      .resolves.toEqual({ kind: 'restaged' });
+
+    const status = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+    expect(status.tasks).toEqual([expect.objectContaining({ id: '4', status: 'pending', startHead: 'A' })]);
   });
 
   it.each(['prd_audit', 'architecture_review_as_built'])(
