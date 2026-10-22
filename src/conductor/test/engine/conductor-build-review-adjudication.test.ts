@@ -362,7 +362,8 @@ async function fixture(options: FixtureOptions = {}) {
   events.on('loop_halt', (event) => { loopHalts.push(event); });
   for (const type of [
     'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
-    'remediation_effect_applied', 'remediation_case_reconciled',
+    'remediation_effect_applied', 'remediation_case_reconciled', 'remediation_case_operator_resolved',
+    'build_review_acceptance_carried',
   ] as const) {
     events.on(type, (event) => {
       lifecycle.push(event);
@@ -1203,6 +1204,122 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.lifecycle.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-accepted')).toEqual([
       expect.objectContaining({ eventId: expect.any(String), resolution: 'resolved' }),
     ]);
+  });
+
+  // Covers: task:20
+  it('carries a same-id re-raise of an operator-resolved action case before any new effect', async () => {
+    const charge = vi.fn(async () => ({
+      status: 'charged' as const, exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 },
+    }));
+    const run = await fixture({
+      chargeEffect: charge as never,
+      judgement: {
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'acted', caseRef: 'operator-resolved-O' }],
+        cases: [{
+          caseRef: 'operator-resolved-O', existingCaseId: 'case-O', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The same finding was re-raised after operator resolution.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'This carry must not create a work order.' }] },
+        }],
+      },
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The original repair failed and needs an operator decision.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: 'effect-O', kind: 'action', status: 'failed', diagnostic: 'original attempt failed' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+        const resolved = await store.resolveByOperator({
+          caseId: 'case-O', operator: 'operator', rationale: 'The operator accepts this known risk.', resolvedAt: '2026-10-21T00:00:00.000Z',
+        });
+        if (!resolved.ok || resolved.value.kind !== 'resolved') throw new Error('operator resolution seed failed');
+      },
+    });
+
+    expect(await run.haltMarker()).toBe('');
+    expect(run.dispatched).not.toContain('build');
+    expect(charge).not.toHaveBeenCalled();
+    await expect(readFile(join(run.projectRoot, '.pipeline/build-review-work-order.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await run.readJson('.pipeline/remediation-cases.json')).toMatchObject({
+      cases: [expect.objectContaining({
+        id: 'case-O', resolution: 'resolved', operatorResolution: expect.any(Object),
+        sources: [expect.objectContaining({ sourceId: SOURCE_ID, outcome: 'carried' })],
+      })],
+    });
+    const caseEvents = run.lifecycle.filter((event) =>
+      event.type === 'remediation_case_operator_resolved' || event.type === 'build_review_acceptance_carried');
+    expect(caseEvents.map((event) => event.type)).toEqual([
+      'remediation_case_operator_resolved',
+      'build_review_acceptance_carried',
+    ]);
+    expect(caseEvents.filter((event) => event.type === 'remediation_case_operator_resolved')).toHaveLength(1);
+    expect(caseEvents.filter((event) => event.type === 'build_review_acceptance_carried')).toHaveLength(1);
+  });
+
+  // Covers: task:20
+  it('also carries a new source bound to an operator-resolved action case', async () => {
+    const charge = vi.fn(async () => ({
+      status: 'charged' as const, exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 },
+    }));
+    const run = await fixture({
+      reRaised: true,
+      chargeEffect: charge as never,
+      judgement: {
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [
+          { sourceId: SOURCE_ID, outcome: 'acted', caseRef: 'operator-resolved-O' },
+          { sourceId: RE_RAISED_SOURCE_ID, outcome: 'acted', caseRef: 'operator-resolved-O' },
+        ],
+        cases: [{
+          caseRef: 'operator-resolved-O', existingCaseId: 'case-O', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The new source is the same accepted risk.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'This carry must not create a work order.' }] },
+        }],
+      },
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The original repair failed and needs an operator decision.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: 'effect-O', kind: 'action', status: 'failed', diagnostic: 'original attempt failed' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+        const resolved = await store.resolveByOperator({
+          caseId: 'case-O', operator: 'operator', rationale: 'The operator accepts this known risk.', resolvedAt: '2026-10-21T00:00:00.000Z',
+        });
+        if (!resolved.ok || resolved.value.kind !== 'resolved') throw new Error('operator resolution seed failed');
+      },
+    });
+
+    expect(await run.haltMarker()).toBe('');
+    expect(run.dispatched).not.toContain('build');
+    expect(charge).not.toHaveBeenCalled();
+    expect(await run.readJson('.pipeline/remediation-cases.json')).toMatchObject({
+      cases: [expect.objectContaining({
+        id: 'case-O',
+        sources: expect.arrayContaining([
+          expect.objectContaining({ sourceId: SOURCE_ID, outcome: 'carried' }),
+          expect.objectContaining({ sourceId: RE_RAISED_SOURCE_ID, outcome: 'carried' }),
+        ]),
+      })],
+    });
   });
 
   // Covers: task:rem-prd-audit-R16c

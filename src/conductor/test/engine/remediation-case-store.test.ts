@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:9
+// Covers: task:1, task:2, task:9, task:20
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -279,6 +279,21 @@ describe('remediation case store', () => {
       carried('built-in-case', 'testQuality:built-in-finding'),
       carried('custom-case', 'portablePolicy:custom-finding'),
     ])).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
+  });
+
+  it('settles the current acted link of an operator-resolved action despite its failed effect', () => {
+    const operatorResolved: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      resolution: 'resolved',
+      effect: { id: 'effect-operator-resolved', kind: 'action', status: 'failed', diagnostic: 'original attempt failed' },
+      operatorResolution: {
+        operator: 'operator@example.test',
+        rationale: 'The operator accepts this remaining risk.',
+        resolvedAt: '2026-10-21T12:00:00.000Z',
+      },
+    };
+
+    expect(finalizedBuildReviewSourceIds([operatorResolved])).toEqual(new Set(['testQuality:finding-1']));
   });
 
   it('preserves the former any-link settlement result when no source is shared', () => {

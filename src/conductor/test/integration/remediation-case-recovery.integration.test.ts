@@ -413,7 +413,7 @@ describe('remediation case recovery', () => {
     expect(retry).toMatchObject({ kind: 'ready' });
     expect(retry.context).not.toContain('orphaned-case-id');
     expect(reduceBuildReviewAdjudication({
-      currentSourceIds: [buildReviewAdjudicationSourceId(distinctSource)], cases: persisted.state.cases, mechanical: 'healthy',
+      currentSourceIds: [buildReviewAdjudicationSourceId(distinctSource)], feature: 'remediation-case-recovery', child: undefined, cases: persisted.state.cases, mechanical: 'healthy',
     })).toMatchObject({ route: 'build', remainingMechanical: false });
   });
 

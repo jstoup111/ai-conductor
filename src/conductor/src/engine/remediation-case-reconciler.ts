@@ -335,7 +335,30 @@ function reconcileState(
     for (const source of sources) {
       const historical = existing.sources.find((link) => link.sourceId === source.sourceId);
       if (historical) {
-        if (admitsCarry) continue;
+        if (admitsCarry) {
+          // A built-in finding commonly re-raises under its original source
+          // id. Its old acted link is the authoritative current link, so carry
+          // must upgrade it (and record the occurrence) rather than treating
+          // it as a replay of an already-carried source.
+          if (historical.outcome === 'carried') continue;
+          const eventId = takeId(input.generateId, usedIds);
+          if (eventId === 'id-generation-failed' || eventId === 'id-collision') return { ok: false, reason: eventId };
+          const origins = existing.operatorAcceptance?.origins ?? [];
+          outbox.push({
+            eventId,
+            occurredAt: input.recordedAt,
+            event: {
+              type: 'build_review_acceptance_carried', eventId, feature: state.feature.feature,
+              lapId: input.carry!.lapId, sourceId: source.sourceId, caseId: existing.id,
+              originSourceIds: origins.map((origin) => origin.sourceId),
+              originLapIds: origins.map((origin) => origin.lapId),
+            },
+          });
+          appendedSources = appendedSources.map((link) => link.sourceId === source.sourceId
+            ? { ...link, outcome: 'carried', recordedAt: input.recordedAt }
+            : link);
+          continue;
+        }
         // An applied action may be conclusively refuted on a later attempted
         // lap. Preserve the source identity while changing its durable
         // outcome; adding a second link would violate the store's unique
@@ -368,7 +391,7 @@ function reconcileState(
       appendedSources.push({ sourceId: source.sourceId, outcome: admitsCarry ? 'carried' : source.outcome, recordedAt: input.recordedAt });
     }
     if (admitsCarry) {
-      if (appendedSources.length !== existing.sources.length) {
+      if (appendedSources.some((source, index) => source !== existing.sources[index])) {
         replacements.set(existingCaseId, { ...existing, sources: appendedSources });
       }
     } else if (admitsRefutation) {

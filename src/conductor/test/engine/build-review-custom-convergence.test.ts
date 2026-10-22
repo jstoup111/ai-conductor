@@ -211,7 +211,7 @@ describe('custom build-review convergence', () => {
     if (!reconciled.ok) return;
 
     const transition = reduceBuildReviewAdjudication({
-      currentSourceIds: [sourceId], cases: reconciled.state.cases, mechanical: 'retry',
+      currentSourceIds: [sourceId], feature: 'custom-convergence', child: undefined, cases: reconciled.state.cases, mechanical: 'retry',
     });
 
     expect({ record: reconciled.state.cases[0], transition }).toMatchObject({

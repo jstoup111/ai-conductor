@@ -22,7 +22,7 @@ import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
-import { appendRemediationCaseOutbox, drainRemediationCaseOutbox, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
+import { appendRemediationCaseOutbox, currentBuildReviewSourceLinks, drainRemediationCaseOutbox, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
@@ -477,7 +477,13 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       // the read the route is taken from, so it can never predate the
       // authority the round just settled under.
       const exitSourceIds = [...liveSourceIdsFor(exitResolved)];
-      const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settledCases, mechanical: input.mechanical });
+      const transition = reduceBuildReviewAdjudication({
+        currentSourceIds: exitSourceIds,
+        feature: input.feature.feature,
+        child: input.child,
+        cases: settledCases,
+        mechanical: input.mechanical,
+      });
       const currentSourceSet = new Set(exitSourceIds);
       const durable = {
         repairCaseIds: transition.route === 'build'
@@ -641,8 +647,17 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const decisionStopSourceIds = new Set(prior.state.cases
     .filter(isBuildReviewDecisionStop)
     .flatMap((record) => record.sources.map((source) => source.sourceId)));
+  // An operator resolution settles the effective verdict immediately, but its
+  // next raised source still has to pass through the sole carry writer so the
+  // durable link and occurrence explain why the finding was accepted. Other
+  // finalized links remain outside the judge's source set as before.
+  const authoritativeLinks = currentBuildReviewSourceLinks(prior.state.cases);
   const settledSourceIds = new Set([...finalizedSourceIds(prior.state.cases)]
-    .filter((sourceId) => !decisionStopSourceIds.has(sourceId)));
+    .filter((sourceId) => {
+      const current = authoritativeLinks.get(sourceId);
+      return !decisionStopSourceIds.has(sourceId) &&
+        (current?.record.operatorResolution === undefined || current.link.outcome === 'carried');
+    }));
   currentSources = sources.filter((source) =>
     !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
     !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&

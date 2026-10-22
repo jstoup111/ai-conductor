@@ -159,7 +159,9 @@ export function currentBuildReviewSourceLinks(
  */
 export function finalizedBuildReviewSourceIds(cases: readonly RemediationCaseRecord[]): ReadonlySet<string> {
   return new Set([...currentBuildReviewSourceLinks(cases)].flatMap(([sourceId, { record, link }]) =>
-    link.outcome === 'carried'
+    record.operatorResolution !== undefined
+      ? [sourceId]
+      : link.outcome === 'carried'
       ? [sourceId]
       : record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
       ? [sourceId]
