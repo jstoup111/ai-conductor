@@ -950,6 +950,41 @@ export class RemediationCaseStore {
 }
 
 /**
+ * Delivers the case-store's durable occurrence handoff through the canonical
+ * event spine. Persisting precedes the independent removal mutation, so a
+ * crash in between replays the same eventId and is deduplicated by the spine.
+ */
+export async function drainRemediationCaseOutbox(
+  store: RemediationCaseStore,
+  emitOrThrow: (event: ConductorEvent) => Promise<unknown>,
+): Promise<void> {
+  while (true) {
+    const loaded = await store.read();
+    if (!loaded.ok || loaded.state.version !== STORE_VERSION) return;
+    const entry = loaded.state.outbox[0];
+    if (!entry) return;
+
+    const event = { ...entry.event, eventId: entry.eventId, occurredAt: entry.occurredAt } as unknown as ConductorEvent;
+    try {
+      await emitOrThrow(event);
+    } catch {
+      return;
+    }
+
+    const removed = await store.mutate(async (state) => {
+      if (state.version !== STORE_VERSION || state.outbox[0]?.eventId !== entry.eventId) {
+        return { value: false };
+      }
+      return {
+        value: true,
+        nextState: { ...state, outbox: state.outbox.slice(1) },
+      };
+    });
+    if (!removed.ok) return;
+  }
+}
+
+/**
  * The feature identity recorded in the durable case store, without needing to
  * know it first.
  *
