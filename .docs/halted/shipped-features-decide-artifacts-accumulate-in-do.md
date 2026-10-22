@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-22T17:00:32.741Z
 Slug: shipped-features-decide-artifacts-accumulate-in-do
 Class: needs-human
 Halting step: unknown
