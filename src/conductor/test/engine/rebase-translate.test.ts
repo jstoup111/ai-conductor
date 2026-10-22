@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';

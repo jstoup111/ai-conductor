@@ -97,7 +97,15 @@ describe('BUILD completion nudge for unverified Done-when checks', () => {
     expect(result.reason).not.toContain('unverified Done-when');
   });
 
-  it('does not classify an all-resolved nudge attempt as no_task_progress', () => {
+  it('exempts citation-refusal retries at attempt one and later while retaining ordinary no-progress stalls', () => {
+    expect(isNoTaskProgressBuildStall({
+      attempt: 1,
+      resolvedTasksBefore: 1,
+      resolvedTasksAfter: 1,
+      headMovedThisAttempt: false,
+      completionReason: 'Done-when citation refused: Task 7 must repair its refused test citation(s): check 1',
+    })).toBe(false);
+
     expect(isNoTaskProgressBuildStall({
       attempt: 2,
       resolvedTasksBefore: 1,
