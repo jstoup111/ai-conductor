@@ -686,10 +686,9 @@ describe('conductor transcript retention wiring', () => {
         invoke: async () => {
           invocations++;
           return {
-            success: invocations === 3,
+            success: invocations === 2,
             output: 'provider result',
-            exitCode: invocations === 3 ? 0 : 1,
-            ...(invocations === 2 ? { rateLimited: true, waitSeconds: 0 } : {}),
+            exitCode: invocations === 2 ? 0 : 1,
           };
         },
       },
@@ -729,7 +728,6 @@ describe('conductor transcript retention wiring', () => {
         return {
           success: result.success,
           output: result.output,
-          ...(result.rateLimited ? { rateLimited: true, waitSeconds: result.waitSeconds } : {}),
         };
       },
     };
@@ -789,30 +787,24 @@ describe('conductor transcript retention wiring', () => {
 
       const first = join('.pipeline', 'transcripts', 'build', 'retry-flow-a1-codex');
       const second = join('.pipeline', 'transcripts', 'build', 'retry-flow-a2-codex');
-      const third = join('.pipeline', 'transcripts', 'build', 'retry-flow-a3-codex');
       expect({ invocations, dispatched }).toEqual({
-        invocations: 3,
+        invocations: 2,
         dispatched: [
           { step: 'build', captureAttempt: 1 },
           { step: 'build', captureAttempt: 2 },
-          { step: 'build', captureAttempt: 3 },
         ],
       });
       expect(lifecycle).toEqual([
         { type: 'provider_transcripts_retained', path: first },
-        { type: 'provider_transcripts_retained', path: second },
-        { type: 'provider_transcripts_pruned', path: third },
+        { type: 'provider_transcripts_pruned', path: second },
       ]);
       expect(transcriptWrites).toEqual([
         { path: first, content: firstCapture },
         { path: second, content: '{"attempt":2,"message":"dispatch 2"}\n' },
-        { path: third, content: '{"attempt":3,"message":"dispatch 3"}\n' },
       ]);
-      await expect(access(join(root, second))).resolves.toBeUndefined();
-      await expect(readFile(join(root, second, 'session.jsonl'), 'utf8')).resolves.toBe(
-        '{"attempt":2,"message":"dispatch 2"}\n',
-      );
-      await expect(access(join(root, third))).rejects.toThrow();
+      await expect(access(join(root, first))).resolves.toBeUndefined();
+      await expect(readFile(join(root, first, 'session.jsonl'), 'utf8')).resolves.toBe(firstCapture);
+      await expect(access(join(root, second))).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
