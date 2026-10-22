@@ -56,7 +56,7 @@ it('keeps a local edit or stops with the pruned path conflict; it never silently
   }
 
   const tier1 = await runTier1(git, repo);
-  if (tier1.remaining.includes(path)) {
+  if (outcome.kind === 'conflict_halt' && tier1.remaining.includes(path)) {
     expect(outcome.conflicts, 'tier-1 stopped and the original rebase stop reported the pruned path').toContain(path);
   } else {
     await expect(readFile(join(repo, path), 'utf8'), 'tier-1 resolved the conflict and retained the feature edit').resolves.toContain('feature edit that must survive');

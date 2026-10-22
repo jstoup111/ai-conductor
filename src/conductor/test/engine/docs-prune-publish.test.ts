@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { DocsPruneRefusal, publishDocsPrune } from '../../src/engine/docs-prune.js';
-import { dispatchDocsPrune, makeProductionDocsPrunePublisher } from '../../src/engine/docs-prune-cli.js';
+import { dispatchDocsPrune, makeProductionDocsPrunePublisher, type DocsPruneCliDependencies } from '../../src/engine/docs-prune-cli.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 const outcome = { removable: ['.docs/plans/alpha.md'], deferred: [], skipped: [], excluded: [] };
@@ -84,9 +84,9 @@ it('refreshes an owned prune PR from current main with every newly removable pat
     if (args[0] === 'api') return { stdout: 'me\n' };
     throw new Error(`unexpected gh command: ${args.join(' ')}`);
   });
-  const pushes = vi.fn(async () => ({ kind: 'executed' as const }));
+  const pushes = vi.fn(async (_branch: string, _commit: string, _expectedHead?: string) => ({ kind: 'executed' as const }));
   const requests: unknown[] = [];
-  const publish = async (input: Parameters<typeof publishDocsPrune>[0]) => publishDocsPrune({
+  const publish: NonNullable<DocsPruneCliDependencies['publish']> = async (input) => publishDocsPrune({
     ...input,
     push: pushes,
     operations: { run: async (request) => { requests.push(request); return {}; } },

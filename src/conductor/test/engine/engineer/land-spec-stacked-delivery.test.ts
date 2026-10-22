@@ -153,6 +153,11 @@ function options() {
 beforeEach(async () => {
   repoPath = await mkdtemp(join(tmpdir(), 'land-spec-stacked-delivery-'));
   await git(['init', '-b', 'main', '-q']);
+  // This fixture removes the repository immediately after each case. Prevent
+  // Git from detaching maintenance that can recreate .git/objects during
+  // teardown, bypassing Vitest's run-scoped tmpdir cleanup.
+  await git(['config', 'maintenance.auto', 'false']);
+  await git(['config', 'gc.auto', '0']);
   await git(['config', 'user.email', 'test@example.test']);
   await git(['config', 'user.name', 'Test']);
   await writeFile(join(repoPath, 'README.md'), '# repo\n');
