@@ -456,7 +456,7 @@ async function resolveRepairRepository(
   return typeof nameWithOwner === 'string' && nameWithOwner ? nameWithOwner : undefined;
 }
 
-async function expectedReconciledRecord(
+export async function expectedReconciledRecord(
   readSpec: (path: string) => Promise<Buffer | null>,
   slug: string,
   shipped: string,
@@ -468,8 +468,12 @@ async function expectedReconciledRecord(
       async (commit, path) => readCommittedFile(history.runGit, history.cwd, commit, path)
         .then((content) => content === null ? null : Buffer.from(content, 'utf8')),
       async (args) => {
-        const result = await history.runGit(args, { cwd: history.cwd });
-        return { stdout: result.stdout, stderr: '', exitCode: result.exitCode ?? 0 };
+        try {
+          const result = await history.runGit(args, { cwd: history.cwd });
+          return { stdout: result.stdout, stderr: '', exitCode: result.exitCode ?? 0 };
+        } catch (error) {
+          return { stdout: '', stderr: error instanceof Error ? error.message : String(error), exitCode: 1 };
+        }
       },
       history.commit,
       planPath,

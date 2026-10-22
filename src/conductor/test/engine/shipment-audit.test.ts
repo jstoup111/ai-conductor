@@ -1,24 +1,109 @@
 // Covers: task:13, task:19, task:rem-as-built-R16, task:rem-as-built-rem-v3-audit-child-exclusion
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 
 import { runShipmentAudit } from '../../src/engine/shipment-audit.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
+
+const execFile = promisify(execFileCb);
+
+async function commitAll(cwd: string, message: string): Promise<string> {
+  await execFile('git', ['add', '-A'], { cwd });
+  await execFile('git', ['commit', '-m', message], { cwd });
+  return (await execFile('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim();
+}
+
+async function realGit(args: string[], { cwd }: { cwd: string }) {
+  try {
+    const { stdout } = await execFile('git', args, { cwd });
+    return { stdout, exitCode: 0 };
+  } catch (error) {
+    const result = error as { stdout?: string; code?: number };
+    return { stdout: result.stdout ?? '', exitCode: result.code ?? 1 };
+  }
+}
+
+function mergedPlanPr(slug: string, headSha: string) {
+  return vi.fn(async (args: string[]) => {
+    if (args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'acme/conductor' }) };
+    return { stdout: JSON.stringify({ data: { repository: { pullRequests: { nodes: [{
+      number: 500,
+      url: 'https://github.com/acme/conductor/pull/500',
+      body: `Plan: .docs/plans/${slug}.md`,
+      mergedAt: '2026-10-19T00:00:00Z',
+      headRefOid: headSha,
+      headRefName: `feat/${slug}`,
+      files: { nodes: [{ path: 'src/conductor/src/engine/demo.ts' }], pageInfo: { hasNextPage: false, endCursor: null } },
+    }], pageInfo: { hasNextPage: false, endCursor: null } } } } }) };
+  });
+}
 
 describe('shipment audit', () => {
-  it('classifies pruned plans through their deleting commit', async () => {
-    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
-    await expect(readPlanOrPruned(async (commit) => commit.endsWith('^') ? Buffer.from('plan') : null,
-      async () => ({ stdout: 'deadbeef\n', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
-      .resolves.toEqual(Buffer.from('plan'));
+  it('keeps a shipped plan aligned after its docs-prune deletion', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-audit-pruned-plan-'));
+    const slug = 'alpha';
+    try {
+      await initTestRepo(cwd);
+      await mkdir(join(cwd, '.docs/plans'), { recursive: true });
+      await writeFile(join(cwd, `.docs/plans/${slug}.md`), '# Alpha\n');
+      const implementationHead = await commitAll(cwd, 'feat: add plan');
+      await mkdir(join(cwd, '.docs/shipped'), { recursive: true });
+      await writeFile(join(cwd, `.docs/shipped/${slug}.md`), 'record\n');
+      await commitAll(cwd, 'docs: add shipped record');
+      const beforeGit = vi.fn(realGit);
+      const before = await runShipmentAudit({
+        cwd, runGit: beforeGit, runGh: mergedPlanPr(slug, implementationHead),
+        evaluateEvidence: async () => ({ kind: 'valid', slug, pr: 'https://github.com/acme/conductor/pull/500', recordPath: `.docs/shipped/${slug}.md`, hash: 'hash', commit: implementationHead }),
+      });
+
+      await execFile('git', ['rm', `.docs/plans/${slug}.md`], { cwd });
+      await execFile('git', ['commit', '-m', 'docs: prune alpha plan'], { cwd });
+      const after = await runShipmentAudit({
+        cwd, runGit: realGit, runGh: mergedPlanPr(slug, implementationHead),
+        evaluateEvidence: async () => ({ kind: 'valid', slug, pr: 'https://github.com/acme/conductor/pull/500', recordPath: `.docs/shipped/${slug}.md`, hash: 'hash', commit: implementationHead }),
+      });
+
+      expect([before.rows[0]?.classification, after.rows[0]?.classification]).toEqual(['aligned', 'aligned']);
+      expect(beforeGit.mock.calls.some(([args]) => args.includes('--diff-filter=D'))).toBe(false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
-  it('classifies an unreachable plan as shipment-plan-pruned', async () => {
-    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
-    await expect(readPlanOrPruned(async () => null,
-      async () => ({ stdout: '', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
-      .resolves.toMatchObject({ code: 'shipment-plan-pruned' });
+  it('marks unreachable or unreadable pruned plans unresolved without leaving other rows unclassified', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-audit-unresolved-pruned-plan-'));
+    try {
+      await initTestRepo(cwd);
+      await mkdir(join(cwd, '.docs/plans'), { recursive: true });
+      await writeFile(join(cwd, '.docs/plans/reachable.md'), '# reachable\n');
+      await commitAll(cwd, 'feat: reachable plan');
+      await execFile('git', ['checkout', '-b', 'unmerged'], { cwd });
+      await writeFile(join(cwd, '.docs/plans/unmerged.md'), '# unmerged\n');
+      await commitAll(cwd, 'feat: unmerged plan');
+      await execFile('git', ['checkout', 'main'], { cwd });
+      const runGit = vi.fn(realGit);
+      const report = await runShipmentAudit({ cwd, runGit, runGh: vi.fn(async (args: string[]) => args[0] === 'repo'
+        ? { stdout: JSON.stringify({ nameWithOwner: 'acme/conductor' }) }
+        : { stdout: JSON.stringify({ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }) }) });
+      expect(report.rows.find((row) => row.sourcePath.endsWith('unmerged.md'))).toMatchObject({ classification: 'unresolved', reason: 'shipment-plan-pruned' });
+      expect(report.rows.every((row) => row.classification !== undefined)).toBe(true);
+
+      const failedHistory = vi.fn(async (args: string[], opts: { cwd: string }) => {
+        if (args[0] === 'log' && args.includes('--diff-filter=D')) throw new Error('history failed');
+        return realGit(args, opts);
+      });
+      const failed = await runShipmentAudit({ cwd, runGit: failedHistory, runGh: vi.fn(async (args: string[]) => args[0] === 'repo'
+        ? { stdout: JSON.stringify({ nameWithOwner: 'acme/conductor' }) }
+        : { stdout: JSON.stringify({ data: { repository: { pullRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } }) }) });
+      expect(failed.rows.find((row) => row.sourcePath.endsWith('unmerged.md'))).toMatchObject({ classification: 'unresolved', reason: 'shipment-plan-pruned' });
+      expect(failed.rows.every((row) => row.classification !== undefined)).toBe(true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
   it('selects a merged PR head ref and leaves a missing one unclassified', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'shipment-audit-head-ref-'));

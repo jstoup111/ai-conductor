@@ -1,42 +1,95 @@
 // Covers: task:2, task:4, task:12, task:18, task:19
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { load } from 'js-yaml';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   dispatchShipmentEvidence,
+  expectedReconciledRecord,
 } from '../../src/engine/shipment-evidence-cli.js';
 import type {
   ShipmentEvidenceDependencies,
   ShipmentEvidenceInput,
 } from '../../src/engine/shipment-evidence.js';
 import { evaluateShipmentEvidence } from '../../src/engine/shipment-evidence.js';
+import { renderShippedRecord } from '../../src/engine/shipped-record.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
+
+const execFile = promisify(execFileCb);
+
+async function realGit(args: string[], { cwd }: { cwd: string }) {
+  try {
+    const { stdout } = await execFile('git', args, { cwd });
+    return { stdout, exitCode: 0 };
+  } catch (error) {
+    const result = error as { stdout?: string; code?: number };
+    return { stdout: result.stdout ?? '', exitCode: result.code ?? 1 };
+  }
+}
 
 describe('shipment-evidence CLI', () => {
-  it('repairs records for pruned plans', async () => {
-    // The historical-plan resolver is the record-only repair seam; this
-    // lightweight contract keeps its dedicated coverage visible here.
-    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
-    await expect(readPlanOrPruned(async (commit) => commit.endsWith('^') ? Buffer.from('plan') : null,
-      async () => ({ stdout: 'deadbeef\n', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
-      .resolves.toEqual(Buffer.from('plan'));
+  it('renders a record-only repair from the same bytes as the record before its plan was pruned', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-evidence-pruned-repair-'));
+    const slug = 'alpha';
+    const pr = 'https://github.com/acme/conductor/pull/500';
+    try {
+      await initTestRepo(cwd);
+      await mkdir(join(cwd, '.docs/plans'), { recursive: true });
+      await writeFile(join(cwd, `.docs/plans/${slug}.md`), '# Alpha\n');
+      await execFile('git', ['add', '.'], { cwd });
+      await execFile('git', ['commit', '-m', 'feat: add plan'], { cwd });
+      const before = await expectedReconciledRecord(
+        async (path) => path === `.docs/plans/${slug}.md` ? Buffer.from('# Alpha\n') : null,
+        slug,
+        '2026-10-19',
+      );
+      const renderedBefore = renderShippedRecord({ slug, specHash: before.specHash, pr, shipped: before.shipped });
+      await mkdir(join(cwd, '.docs/shipped'), { recursive: true });
+      await writeFile(join(cwd, `.docs/shipped/${slug}.md`), renderedBefore);
+      await execFile('git', ['add', '.'], { cwd });
+      await execFile('git', ['commit', '-m', 'docs: add shipped record'], { cwd });
+      const beforePrune = (await execFile('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim();
+      await execFile('git', ['rm', `.docs/plans/${slug}.md`], { cwd });
+      await execFile('git', ['commit', '-m', 'docs: prune plan'], { cwd });
+      const repair = await expectedReconciledRecord(
+        async () => null,
+        slug,
+        '2026-10-19',
+        { runGit: realGit, cwd, commit: 'HEAD' },
+      );
+      expect(renderShippedRecord({ slug, specHash: repair.specHash, pr, shipped: repair.shipped }))
+        .toBe((await execFile('git', ['show', `${beforePrune}:.docs/shipped/${slug}.md`], { cwd })).stdout);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
-  it('rejects an unavailable plan as shipment-plan-pruned', async () => {
-    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
-    await expect(readPlanOrPruned(async () => null,
-      async () => ({ stdout: '', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
-      .resolves.toMatchObject({ code: 'shipment-plan-pruned', path: '.docs/plans/alpha.md' });
-  });
-
-  it('rejects a failed pruned plan lookup', async () => {
-    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
-    await expect(readPlanOrPruned(async () => null,
-      async () => ({ stdout: '', stderr: 'history failed', exitCode: 1 }), 'HEAD', '.docs/plans/alpha.md'))
-      .resolves.toMatchObject({ code: 'shipment-plan-pruned', detail: 'history failed' });
+  it.each(['never-reachable', 'failed-history'])('fails record-only repair for a %s plan with actionable provenance', async (mode) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-evidence-pruned-refusal-'));
+    const slug = 'alpha';
+    try {
+      await initTestRepo(cwd);
+      await writeFile(join(cwd, 'README.md'), '# fixture\n');
+      await execFile('git', ['add', '.'], { cwd });
+      await execFile('git', ['commit', '-m', 'test: base'], { cwd });
+      const runGit = mode === 'failed-history'
+        ? async (args: string[], options: { cwd: string }) => {
+          if (args[0] === 'log' && args.includes('--diff-filter=D')) throw new Error('failed history read');
+          return realGit(args, options);
+        }
+        : realGit;
+      await expect(expectedReconciledRecord(async () => null, slug, '2026-10-19', { runGit, cwd, commit: 'HEAD' }))
+        .rejects.toThrow(mode === 'failed-history'
+          ? `shipment-plan-pruned: .docs/plans/${slug}.md: failed history read`
+          : `shipment-plan-pruned: .docs/plans/${slug}.md`);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
   it('does not bind a quoted plan path in an implementation PR body', async () => {
     const reports: string[] = [];
