@@ -233,6 +233,57 @@ describe('EventPersister', () => {
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 
+  it.each([
+    {
+      type: 'build_review_acceptance_carried',
+      eventId: 'acceptance-carried-1',
+      feature: 'feature-a',
+      lapId: 'lap-2',
+      sourceId: 'finding-2',
+      caseId: 'case-1',
+      originSourceIds: ['finding-1'],
+      originLapIds: ['lap-1'],
+    },
+    {
+      type: 'remediation_case_operator_resolved',
+      eventId: 'operator-resolved-1',
+      feature: 'feature-a',
+      caseId: 'case-1',
+      sourceIds: ['finding-1', 'finding-2'],
+    },
+    {
+      type: 'remediation_case_reconciled',
+      eventId: 'retired-1',
+      domain: 'build_review',
+      lapId: 'lap-2',
+      caseId: 'case-1',
+      resolution: 'resolved',
+    },
+  ] satisfies ConductorEvent[])('deduplicates replayed $type occurrences by eventId', async (event) => {
+    const persister = new EventPersister(eventsPath, emitter);
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('continues to persist reconciliation occurrences without an eventId', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'remediation_case_reconciled',
+      domain: 'build_review',
+      lapId: 'lap-2',
+      caseId: 'case-1',
+      resolution: 'resolved',
+    } satisfies ConductorEvent;
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
   it('uses a routing event occurrence time rather than its later persistence time', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-13T00:00:00.000Z'));

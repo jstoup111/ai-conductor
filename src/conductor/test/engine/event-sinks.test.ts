@@ -226,6 +226,8 @@ const REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES = [
   'remediation_adjudication_started',
   'remediation_adjudication_completed',
   'remediation_adjudication_failed',
+  'build_review_acceptance_carried',
+  'remediation_case_operator_resolved',
   'remediation_case_reconciled',
   'remediation_effect_reserved',
   'remediation_effect_applied',
