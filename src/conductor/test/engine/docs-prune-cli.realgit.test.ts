@@ -50,3 +50,27 @@ it('fails before committing or publishing when another operator owns an open doc
   expect(git.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
   await expect(readFile(join(cwd, '.pipeline', 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 });
+
+it.each(['tracker failure', 'repeated cursor', 'missing cursor'] as const)('fails closed before commit, push, PR creation, or a removal event on %s', async (failure) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'docs-prune-cli-'));
+  roots.push(cwd);
+  const errors: string[] = [];
+  const git = vi.fn(async (args: string[]) => ({ stdout: args[0] === 'ls-tree' ? '.docs/shipped/alpha.md\n.docs/plans/alpha.md\n' : '' }));
+  const gh = vi.fn(async (args: string[]) => {
+    if (args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'acme/conductor' }) };
+    if (!args.includes('graphql')) throw new Error(`unexpected gh command: ${args.join(' ')}`);
+    if (failure === 'tracker failure') throw new Error('tracker unavailable');
+    const files = { nodes: [], pageInfo: failure === 'repeated cursor' ? { hasNextPage: true, endCursor: 'again' } : { hasNextPage: true, endCursor: null } };
+    const isFilePage = args.some((arg) => arg.startsWith('number='));
+    const payload = isFilePage
+      ? { data: { repository: { pullRequest: { files } } } }
+      : { data: { repository: { pullRequests: { nodes: [{ number: 1, url: 'https://example.test/pr/1', body: '', headRefOid: 'a'.repeat(40), headRefName: 'feature/a', author: { login: 'other' }, files }], pageInfo: { hasNextPage: false, endCursor: null } } } } };
+    return { stdout: JSON.stringify(payload) };
+  });
+  const publish = vi.fn();
+  await expect(dispatchDocsPrune({ kind: 'run' }, cwd, { git: git as never, gh: gh as never, publish: publish as never, reportError: (message) => errors.push(message) })).resolves.toBe(1);
+  expect(errors.join('\n')).toMatch(failure === 'tracker failure' ? /GraphQL read failed|tracker unavailable/i : /incomplete/i);
+  expect(git.mock.calls.some(([args]) => args[0] === 'worktree')).toBe(false);
+  expect(publish).not.toHaveBeenCalled();
+  await expect(readFile(join(cwd, '.pipeline', 'events.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+});

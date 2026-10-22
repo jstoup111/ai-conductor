@@ -409,6 +409,7 @@ describe('CLI', () => {
       const help = renderCanonicalFullHelp();
       const commandOptions: Record<(typeof OPERATOR_FACING_COMMANDS)[number], string[]> = {
         'shipped-record': ['--slug', '--pr'],
+        'docs-prune': [],
         kpi: [],
         memory: ['setup'],
         brain: ['start', 'stop', 'status'],

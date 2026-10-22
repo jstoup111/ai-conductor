@@ -45,7 +45,7 @@ it('keeps a local edit or stops with the pruned path conflict; it never silently
 
   const outcome = await performRebase(git, repo, 'main');
   expect(['changed', 'noop', 'conflict_halt'], 'production rebase returns a success or conflict-stop shape').toContain(outcome.kind);
-  if (outcome.kind === 'changed' || outcome.kind === 'noop') {
+  if (outcome.kind !== 'conflict_halt') {
     await expect(readFile(join(repo, path), 'utf8'), 'rebase succeeded and retained the feature edit').resolves.toContain('feature edit that must survive');
     return;
   }
