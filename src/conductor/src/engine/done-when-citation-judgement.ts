@@ -263,6 +263,12 @@ export async function admitCitationRefusals(
   status?: unknown,
 ): Promise<CitationRefusalAdmission[]> {
   const byTask = new Map<string, RefusedCitation[]>();
+  let planChecks: ReadonlyMap<string, readonly string[]>;
+  try {
+    planChecks = parsePlanTaskDoneWhen(await readFile(planPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`could not read current plan task checks: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const citations = new Map(pending.map((citation) => [`${citation.taskId}\u0000${citation.checkIndex}`, citation]));
   for (const verdict of verdicts) {
     if (verdict.verdict !== 'does-not-assert') continue;
@@ -285,6 +291,9 @@ export async function admitCitationRefusals(
         const close = record(rawClose);
         if (!close || close.source !== 'judged' || close.verdict !== 'does-not-assert' ||
           typeof close.check !== 'string' || typeof close.evidence !== 'string' || typeof close.reason !== 'string') continue;
+        // A removed check was settled as dropped.  Its persisted refusal is
+        // historical evidence, never a new replay authority.
+        if (!(planChecks.get(task.id) ?? []).includes(close.check)) continue;
         const reference = parseDoneWhenTestReference(close.evidence);
         if (!reference) continue;
         const citation = { taskId: task.id, checkIndex: offset + 1, check: close.check, path: reference.path, title: reference.title, reason: close.reason };
@@ -318,6 +327,9 @@ export async function admitCitationRefusals(
       baseline: { head: head ?? '', tree: tree ?? '', resolvedTaskIds: [], resolvedCount },
     });
     if (!admitted.ok) throw new Error(`could not admit Done-when citation refusal: ${admitted.message}`);
+    // Settled obligations remain durable for auditability, but must not
+    // consume another refusal count or reopen their task on a later session.
+    if (admitted.obligation.tasks[taskId]?.status === 'resolved') continue;
     // The store receipt makes this safe even if admission succeeded before a
     // crash prevented the counter write.
     const counts = await repairs.recordCitationRefusals(`done-when-citation:${findingId}`, checks.map(({ checkIndex, check }) =>

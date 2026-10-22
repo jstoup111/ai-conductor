@@ -1,6 +1,10 @@
-// Covers: task:7
+// Covers: task:7, task:rem-prd-audit-rem-prd-audit-17
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  admitCitationRefusals,
   buildCitationJudgementInput,
   collectPendingCitations,
   DONE_WHEN_CITATION_JUDGEMENT_SCHEMA,
@@ -60,5 +64,24 @@ describe('done-when citation judgement contract', () => {
     expect((verdict.items.properties.verdict as { enum: readonly string[] }).enum).toEqual(['asserts', 'does-not-assert']);
     expect(verdict.items.required).toContain('reason');
     expect(verdict.items.properties.reason).toMatchObject({ type: 'string', pattern: '\\S' });
+  });
+
+  it('does not replay a persisted refusal after its check leaves the plan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'done-when-stale-citation-'));
+    try {
+      const planPath = join(root, '.docs', 'plans', 'citation.md');
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'));
+      await writeFile(planPath, '### Task 24: Current\n\n**Done when:**\n- [test] replacement\n');
+
+      await expect(admitCitationRefusals(root, planPath, [], [], { tasks: [{
+        id: '24', status: 'completed', doneWhen: [{
+          check: '[test] removed', evidence: 'test:test/citation.test.ts::removed',
+          source: 'judged', verdict: 'does-not-assert', reason: 'stale refusal',
+        }],
+      }] })).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

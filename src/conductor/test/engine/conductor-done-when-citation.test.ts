@@ -95,6 +95,19 @@ describe('BUILD Done-when citation judgement boundary', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it('leaves a dropped stale refusal closed without admitting or restaging task 24 at a later session end', async () => {
+    await writeFile(join(root, '.docs', 'plans', 'citation.md'), '### Task 24: Current\nTask twenty-four text\n\n**Done when:**\n- [test] replacement\n');
+    const dispatch = await run({ tasks: [{ id: '24', status: 'completed', doneWhen: [
+      { check: '[test] removed', evidence: 'test:test/citation.test.ts::removed', source: 'judged', verdict: 'does-not-assert', reason: 'stale refusal' },
+    ] }] });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
+    expect(status.tasks).toEqual([expect.objectContaining({ id: '24', status: 'completed' })]);
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(engine.repairObligations).toBeUndefined();
+  });
+
   it('demotes an unavailable citation judgement without admitting a repair obligation', async () => {
     const events = new ConductorEventEmitter();
     const observed: unknown[] = [];
