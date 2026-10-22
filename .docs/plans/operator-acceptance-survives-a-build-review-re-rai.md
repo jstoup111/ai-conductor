@@ -817,3 +817,37 @@ Task 9, Task 19 ─▶ Task 23, Task 24 (slice 2)
 **Done when:**
 - adr-2026-10-20-operator-acceptance-is-durable-case-state decision 7 is satisfied by this task.
 - The repair for task rem-as-built-R17b is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R10c: In build-review-adjudication-coordinator.ts, compute one effective consistency once, after carry classification: the blocked sourceIds/caseRefs minus carriedSourceIds/carriedCaseRefs. Use that single value both for authorizeBuildReviewRemediationActionEffects and for blockedConsistency/the consistency-stop. If no live non-carried source remains, the lap is consistent: no stop, siblings authorized. Otherwise it is blocked: the stop persists over the non-carried sources only, and no action effect is authorized, reserved, published or charged. Add coordinator tests for three shapes. (a) Blocked consistency over only carried F2 settles F2 carried, persists no open decision stop and writes no HALT. (b) Blocked consistency over carried F2 plus live non-carried G persists a stop naming G only and leaves sibling act case A unreserved and uncharged. (c) A consistent verdict with carried F2 beside A still reserves A.
+**Gate:** prd-audit
+**Rationale:** Verified 99% by reading build-review-adjudication-coordinator.ts. actionEffectJudgement (~:724) downgrades a blocked consistency to consistent when every implicated source is carried. blockedConsistency (~:775) still reads the unfiltered judgement.consistency and filters only by liveSourceIds. A blocked consistency over only carried F2 therefore persists a consistency-stop and halts. Task 10 requires a carried binding to persist no open decision stop. This is implementation drift inside Task 10, and the same defect as as-built finding :3.
+**Criterion:** S2.1
+**Parent task:** 10
+**Done when:**
+- [test] S2.1 is satisfied by this task.
+- The repair for task rem-prd-audit-R10c is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R16c: In remediation-case-reconciler.ts retiresOpenBuildReviewCase, check disposition==='act' && effect.kind==='action' before the coverage branch. Count an origin source only when it is in effectiveAcceptedSourceIds, so stored origins of withdrawn or invalidated dispositions never retire a case. Add predicate unit tests for four shapes. True: a failed action with an effective origin. True: a reserved action with every source accepted this lap. False: an open deferral (failed or reserved) whose sources are all accepted. False: an open decision stop whose sources are all accepted. Also false: a failed action whose only origin's disposition was withdrawn and whose source is still raised. Restore the coordinator test assertions that an accepted failed deferral stays failed and emits remediation_effect_failed. Add a conductor clean-PASS test showing an accepted-source failed deferral and an open decision stop still block (missing-order / decision-stop-pending).
+**Gate:** prd-audit
+**Rationale:** Verified 99% by reading remediation-case-reconciler.ts:105-140. The 'covered' branch returns true before the act/action check, so it retires open deferrals and decision stops. It also counts stored operatorAcceptance.origins without requiring them to be in effectiveAcceptedSourceIds, so a withdrawn or invalidated acceptance still retires a case. Task 16 doneWhen requires false for an open deferral with a failed effect and for an open decision stop. The regressed coordinator test assertions ('deferral status reserved', no remediation_effect_failed) contradict Task 16 and the earlier behavior. This is implementation drift inside Task 16. The fix restores the Task 16 coverage rather than relaxing it.
+**Criterion:** S9.6
+**Parent task:** 16
+**Done when:**
+- [test] S9.6 is satisfied by this task.
+- The repair for task rem-prd-audit-R16c is committed and its targeted tests pass.
+
+### Task rem-as-built-R16d: Route both remaining retirement decisions through retiresOpenBuildReviewCase. (1) In remediation-case-effects.ts settleStrandedActionReservations, select candidates with the predicate, using liveSourceIds, mechanicallyHealthy and accepted sources. Keep the published-order exclusion as a caller-side filter only. (2) Move the non-action absence rule in remediation-case-reconciler.ts (~:439) into the predicate as an explicit option-gated branch: resolveAbsentOpenNonActionCases, non-act, effect none or applied, not referenced. It must still never retire an open escalate decision stop. Delete the private conditions. Extend the parity tests so reconciler absence resolution, finalize, settleStrandedActionReservations and resolveAbsentFailedBuildReviewCases each reach the predicate's result for every Task 16 fixture.
+**Gate:** as-built
+**Rationale:** Verified 99%. Two sites still make their own retirement decision. remediation-case-effects.ts:212 (settleStrandedActionReservations) selects reserved actions absent from live sources by a private filter. remediation-case-reconciler.ts:439 retires open non-action cases by a private absence rule. ADR-2026-10-20 D5 and Task 16 ('One shared predicate retires accepted, absent and failed cases') require one predicate to own every retirement decision. Callers may keep only their writes and side conditions (published-order check, referencedExisting). This is conforming implementation work inside Task 16; no architectural decision is needed.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R16d is committed and its targeted tests pass.
+
+### Task rem-as-built-R16e: In remediation-case-reconciler.ts retireOpenBuildReviewCase, turn any reserved effect, action or deferral, into failed with the retirement diagnostic, keeping links and earlier effect state. Add a unit test that the transformation never returns a resolved record with a reserved effect for action and deferral inputs. Add finalize and clean-PASS settlement tests asserting that no retired case ends resolved with a reserved effect, and that each retirement appends exactly one remediation_case_reconciled outbox entry with an eventId.
+**Gate:** as-built
+**Rationale:** Verified 99% by reading remediation-case-reconciler.ts:128-140. retireOpenBuildReviewCase turns only reserved action effects into failed. Meanwhile the predicate's coverage branch admits deferrals, so finalize (coordinator ~:413) and clean-PASS settlement (conductor.ts ~:5405) can resolve a case and leave its effect reserved. D5 requires every retired reserved effect to become failed with the retirement diagnostic. R16c restricts the predicate to action cases, which closes the reachable path. The transformation must still be total over reserved effects so no retirement can strand one. This is conforming implementation inside Task 16.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R16e is committed and its targeted tests pass.
