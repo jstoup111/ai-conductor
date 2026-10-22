@@ -1,4 +1,4 @@
-// Covers: task:4, task:6, task:12, task:rem-prd-audit-11-r3
+// Covers: task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
 import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +41,25 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     count: 0, cumulative: 0, laps, treeHash: null,
     lastReason: 'blocking finding', priorVerdict: true, resolvedBefore: 0,
   });
+
+  const asBuiltFindings = [
+    {
+      gate: 'architecture_review_as_built' as const,
+      finding: 'as-built:a:1',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'Task 5',
+      summary: 'first as-built finding',
+      outcome: 'remediated' as const,
+    },
+    {
+      gate: 'architecture_review_as_built' as const,
+      finding: 'as-built:a:2',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'Task 5',
+      summary: 'second as-built finding',
+      outcome: 'remediated' as const,
+    },
+  ];
 
   async function runBuild(
     pendingRepair: PendingRepair | unknown,
@@ -375,7 +394,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      'Findings: S1.1, S1.2',
+      'Findings (prd_audit): S1.1, S1.2',
     );
   });
 
@@ -402,7 +421,9 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(allowance, 'i'));
     if (Object.hasOwn(charges, 'prd_audit')) {
-      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('Findings: S2.1');
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+        _name.includes('as-built') ? 'Also pending (prd_audit): S2.1' : 'Findings (prd_audit): S2.1',
+      );
     }
     await expect(readFile(statePath, 'utf8')).resolves.not.toMatch(/"build": "done"/);
     await expect(readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).resolves.toMatch(/"status":"pending"/);
@@ -440,7 +461,79 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
 
     expect(build).not.toHaveBeenCalled();
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/kickback|allowance/i);
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Pending remediation findings are unavailable because the repair record is malformed.');
+    expect(halt).not.toContain('Findings (');
+    expect(halt).not.toContain('Also pending (');
+  });
+
+  it('leads an as-built exhaustion with its findings and retains PRD findings as also pending', async () => {
+    const { build } = await runBuild({
+      receiptId: 'as-built-findings-first', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
+      prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry(1) },
+      growth: { authored: 4, added: 0, byGate: {} },
+      pendingAsBuiltRemediationFindings: asBuiltFindings,
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Findings (architecture_review_as_built): as-built:a:1, as-built:a:2');
+    expect(halt).toContain('Also pending (prd_audit): S5.1, S5.2, S5.3');
+    expect(halt).not.toContain('Findings: S5.1');
+    expect(halt).toContain('Blocking findings:\nas-built:a:1');
+    expect((await readKickbackLedger(dir)).gates.architecture_review_as_built?.capEvidence?.latestReason).toMatch(
+      /^Findings \(architecture_review_as_built\): as-built:a:1/,
+    );
+  });
+
+  it('leads a PRD exhaustion with its criteria and retains as-built findings as also pending', async () => {
+    const { build } = await runBuild({
+      receiptId: 'prd-findings-first', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
+      prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(1), architecture_review_as_built: entry() },
+      growth: { authored: 4, added: 0, byGate: {} },
+      pendingAsBuiltRemediationFindings: asBuiltFindings,
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Findings (prd_audit): S5.1, S5.2, S5.3\nAlso pending (architecture_review_as_built): as-built:a:1, as-built:a:2',
+    );
+  });
+
+  it('does not add an also-pending line to a PRD-only exhaustion', async () => {
+    const { build } = await runBuild({
+      receiptId: 'prd-only-findings', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } }, prdAuditCriteria: ['S1.1'],
+    }, {
+      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 4, added: 0, byGate: {} },
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Findings (prd_audit): S1.1');
+    expect(halt).not.toContain('Also pending (');
+  });
+
+  it('uses pending task ids when an as-built exhaustion has no as-built findings', async () => {
+    const { build } = await runBuild({
+      receiptId: 'as-built-task-fallback', taskIds: ['rem-1', 'rem-2'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } }, prdAuditCriteria: ['S5.1'],
+    }, {
+      version: 1, gates: { architecture_review_as_built: entry(1) }, growth: { authored: 4, added: 0, byGate: {} },
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Pending remediation tasks: rem-1, rem-2');
+    expect(halt).not.toContain('Findings (architecture_review_as_built): S5.1');
   });
 
   it('renders projected pending growth and its minimum raise when BUILD growth is exhausted', async () => {

@@ -10118,11 +10118,24 @@ export class Conductor {
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
             const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
             const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
-            const findings = prdAuditCriteria.length > 0
-              ? `Findings: ${prdAuditCriteria.join(', ')}`
+            const asBuiltFindingIds = pendingAsBuiltFindings.map((finding) => finding.finding);
+            const haltingFindings = gate === 'architecture_review_as_built'
+              ? asBuiltFindingIds
+              : prdAuditCriteria;
+            const otherGate = gate === 'architecture_review_as_built'
+              ? 'prd_audit'
+              : 'architecture_review_as_built';
+            const otherFindings = gate === 'architecture_review_as_built'
+              ? prdAuditCriteria
+              : asBuiltFindingIds;
+            const findings = haltingFindings.length > 0
+              ? `Findings (${gate}): ${haltingFindings.join(', ')}`
               : pendingTasks.length > 0
               ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
               : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const alsoPending = otherFindings.length > 0
+              ? `Also pending (${otherGate}): ${otherFindings.join(', ')}`
+              : '';
             const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
               ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
                   `${finding.finding} (${finding.class}; ${finding.reference === undefined
@@ -10172,7 +10185,7 @@ export class Conductor {
             }
             const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
-              `${detail}\n${findings}${asBuiltFindingDetail}\n` +
+              `${detail}\n${findings}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,
