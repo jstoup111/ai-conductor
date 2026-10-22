@@ -109,6 +109,7 @@ export type DaemonSessionSubcommand =
   | 'config'
   | 'test-suite'
   | 'build-review'
+  | 'done-when'
   | 'finish-record'
   | 'docs-prune'
   | 'unknown'
@@ -119,6 +120,7 @@ const KNOWN_BLOCKED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'config',
   'test-suite',
   'build-review',
+  'done-when',
   'finish-record',
   'docs-prune',
 ]);

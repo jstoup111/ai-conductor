@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+export { detectDoneWhenAcceptCommand } from './engine/done-when-accept-cli.js';
 import { CLAUDE_DISPLAY_NAME } from './execution/provider-catalog.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -902,6 +903,13 @@ export function createProgram(): Command {
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--rubric <rubric>', 'Mechanically failed rubric')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
+
+  // ai-conductor:session-command-context=operator-only
+  const doneWhen = program.command('done-when').description('Operator-only done-when citation decisions');
+  doneWhen.command('accept').description('Accept one refused citation after operator review')
+    .requiredOption('--feature <slug>', 'Feature worktree slug').requiredOption('--task <id>', 'Task identifier')
+    .requiredOption('--check <n>', 'Done-when check number').requiredOption('--reason <text>', 'Non-empty operator reason');
+  // /ai-conductor:session-command-context
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep

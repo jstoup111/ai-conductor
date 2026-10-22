@@ -58,6 +58,7 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'version',
   'update',
   'build-review',
+  'done-when',
   'build-tail',
   'decide-grant',
   'kickback-budget',
