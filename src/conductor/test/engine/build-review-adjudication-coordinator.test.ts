@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:1, task:3, task:4, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1635,11 +1635,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     ]);
   });
 
-  it('acts on a re-raised finding bound to a resolved case whose repair was never built', async () => {
-    // a-routed-fix-cannot-be-built-charged-and-reviewed-: case 630266b7 was
-    // charged past the budget (effect failed), resolved once its finding
-    // vanished, then re-raised after BUILD. Binding to it is not a regression
-    // of delivered work.
+  it('keeps the regression halt for an explicit rebind to a resolved failed action case', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
     await seedCases(store, {
@@ -1662,14 +1658,176 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event); },
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'build' });
-    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-never-built' });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_semantic_repeat_halt', caseId: 'case-never-built', effectId: 'effect-never-built', reason: 'regressed',
+    }));
     const after = await store.read();
     if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
     expect(after.state.cases.find((record) => record.id === 'case-never-built')).toMatchObject({
       resolution: 'resolved', effect: { status: 'failed' },
     });
-    expect(after.state.cases.some((record) => record.id !== 'case-never-built' && record.effect.kind === 'action' && record.effect.status === 'applied')).toBe(true);
+    expect(after.state.cases).toHaveLength(1);
+  });
+
+  it('admits an unbound re-raise over resolved history as a fresh action case', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const mergedSourceId = buildReviewAdjudicationSourceId(acceptedSource);
+    const otherSourceId = buildReviewAdjudicationSourceId(liveSource);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair exhausted its attempt.', resolution: 'resolved',
+        sources: [{ sourceId: mergedSourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'failed', diagnostic: 'build-review kickback budget exhausted (cumulative)' },
+      }],
+    });
+    const before = JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases[0];
+    const chargeEffect = vi.fn(chargeBuildReviewEffectInLedger);
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const reRaised: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: mergedSourceId, outcome: 'merged', caseRef: 'case-n' },
+        { sourceId: otherSourceId, outcome: 'acted', caseRef: 'case-n' },
+      ],
+      cases: [{
+        caseRef: 'case-n', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The re-raised finding needs a fresh repair.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the re-raised finding' }] },
+      }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => reRaised), aggregate: mixedAggregate, chargeEffect,
+      generateId: sequentialIds('case-n'), emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['case-n-1'] } });
+    expect(chargeEffect).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => event.type)).not.toContain('remediation_adjudication_failed');
+    const after = await store.read();
+    if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+    expect(after.state.cases).toHaveLength(2);
+    expect(after.state.cases.find((record) => record.id === 'case-n-1')).toMatchObject({
+      disposition: 'act', resolution: 'open',
+      sources: [{ sourceId: mergedSourceId, outcome: 'merged' }, { sourceId: otherSourceId, outcome: 'acted' }],
+      effect: { id: 'case-n-2', kind: 'action', status: 'applied' },
+    });
+    expect(JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases[0]).toEqual(before);
+  });
+
+  it.each([
+    ['defer', 'deferred'],
+    ['reject', 'rejected'],
+  ] as const)('admits an unbound %s over a resolved applied action case', async (disposition, outcome) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was applied.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'applied', workOrderId: 'order-r' },
+      }],
+    });
+    const before = JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases[0];
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome, caseRef: 'case-n' }],
+      cases: [disposition === 'defer'
+        ? {
+            caseRef: 'case-n', disposition, priority: 'low', confidence: 'high', rationale: 'The follow-up is outside this feature.',
+            effect: { kind: 'deferral', title: 'Track the re-raised finding', body: 'The finding remains live.', exclusionRationale: 'It is outside this feature.' },
+          }
+        : {
+            caseRef: 'case-n', disposition, priority: 'low', confidence: 'high', rationale: 'The finding is rejected.', effect: { kind: 'none' },
+          }],
+    };
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), generateId: sequentialIds(`${disposition}-n`),
+      ...(disposition === 'defer'
+        ? { repo: 'acme/conductor', tracker: { findIssueByEffectMarker: async () => undefined } as unknown as EffectMarkerTrackerClient,
+          fileIssue: async () => ({ issueUrl: 'https://example.test/issues/1' }) }
+        : {}),
+    });
+
+    expect(result.ok).toBe(true);
+    const after = await store.read();
+    if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+    expect(after.state.cases.find((record) => record.id === `${disposition}-n-1`)).toMatchObject({ disposition });
+    expect(JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases[0]).toEqual(before);
+  });
+
+  it('converges a repeated unbound re-raise without another case, effect, or charge', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair exhausted its attempt.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+        effect: { id: 'effect-r', kind: 'action', status: 'failed', diagnostic: 'budget exhausted' },
+      }],
+    });
+    const chargeEffect = vi.fn(chargeBuildReviewEffectInLedger);
+    const judgement = actionJudgement();
+    const first = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), chargeEffect, generateId: sequentialIds('repeat-n'),
+    });
+    const second = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), chargeEffect, generateId: sequentialIds('unexpected'),
+    });
+
+    expect(first).toMatchObject({ ok: true, route: 'build' });
+    expect(second).toMatchObject({ ok: true, route: 'build' });
+    expect(chargeEffect).toHaveBeenCalledTimes(1);
+    const after = await store.read();
+    if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
+    expect(after.state.cases).toHaveLength(2);
+    expect(after.state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : [])).toEqual(['effect-r', 'repeat-n-2']);
+  });
+
+  it('rejects an unbound action that overlaps an open owner', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const ownerSourceId = buildReviewAdjudicationSourceId(acceptedSource);
+    const siblingSourceId = buildReviewAdjudicationSourceId(liveSource);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-o', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The existing repair remains open.', resolution: 'open',
+        sources: [{ sourceId: ownerSourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+        effect: { id: 'effect-o', kind: 'action', status: 'applied', workOrderId: 'order-o' },
+      }],
+    });
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: ownerSourceId, outcome: 'acted', caseRef: 'case-n' },
+        { sourceId: siblingSourceId, outcome: 'acted', caseRef: 'case-n' },
+      ],
+      cases: [{
+        caseRef: 'case-n', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'A new repair is requested.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the overlapping finding' }] },
+      }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate, generateId: sequentialIds('case-n'),
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('case transition rejected: source-linked-by-multiple-cases') });
+    expect(result).toMatchObject({ detail: expect.stringContaining('case-o') });
+    expect(result).toMatchObject({ detail: expect.stringContaining('case-n-1') });
+    expect(result).toMatchObject({ detail: expect.stringContaining(ownerSourceId) });
+    await expect(readFile(remediationCaseStorePath(root), 'utf8')).resolves.toBe(before);
   });
 
   it('halts a regression before reserving a sibling action effect it could never apply', async () => {

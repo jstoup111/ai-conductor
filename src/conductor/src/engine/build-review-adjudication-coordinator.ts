@@ -665,25 +665,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
   }
   const liveSourceIds = liveSourceIdsFor(resolved);
-  // A resolved case whose action effect failed was never built (for example
-  // it was charged past the kickback budget, then resolved once its finding
-  // vanished). A later lap that re-raises it and binds it there is not a
-  // regression of delivered work: admit the proposal as a new case so the
-  // repair is actually attempted, leaving the old case's history intact.
-  const priorById = new Map(prior.state.cases.map((record) => [record.id, record]));
-  const neverBuilt = (caseId: string | undefined): boolean => {
-    const record = caseId === undefined ? undefined : priorById.get(caseId);
-    return record !== undefined && record.resolution === 'resolved' && record.disposition === 'act'
-      && record.effect.kind === 'action' && record.effect.status === 'failed';
-  };
   const admitted = graph.graph.cases.filter((proposed) =>
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)) &&
     (proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef)),
-  ).map((proposed) => {
-    if (proposed.case.disposition !== 'act' || !neverBuilt(proposed.case.existingCaseId)) return proposed;
-    const { existingCaseId: _neverBuilt, ...unbound } = proposed.case;
-    return { ...proposed, case: unbound as typeof proposed.case };
-  });
+  );
   // Escalations have no effect id and use Task 31's dedicated durable owner
   // stop writer. The general reconciler owns ordinary case/effect transitions;
   // routing a stop through it would manufacture a deferral-shaped effect.
