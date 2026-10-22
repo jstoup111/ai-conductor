@@ -49,10 +49,13 @@ export function makeProductionDocsPrunePublisher(git: GitRunner, gh: GhRunner, c
   });
   return async (input) => {
     repository = input.repository;
-    return publishDocsPrune({ ...input, operations, approve, push: async (branch, commit) => {
+    return publishDocsPrune({ ...input, operations, approve, push: async (branch, commit, expectedHead) => {
       const request = approval;
       if (!request || request.kind !== 'approved') return { kind: 'refused', detail: 'explicit approval required' };
-      const result = await executeRemoteGit(['push', 'origin', `${commit}:refs/heads/${branch}`], {
+      const destination = `refs/heads/${branch}`;
+      const push = ['push', 'origin', `${commit}:${destination}`];
+      if (expectedHead) push.push(`--force-with-lease=${destination}:${expectedHead}`);
+      const result = await executeRemoteGit(push, {
         cwd, config: (args) => git(args, { cwd }), runRemoteGit: git,
         explicitApproval: { capability: request.capability, request: { operation: 'remote-ref.push', access: 'remote-ref-write', target: { repository, kind: 'remote-ref', ref: `refs/heads/${branch}` }, context: { actor: input.operatorLogin } } },
       });
@@ -87,14 +90,18 @@ export async function dispatchDocsPrune(cmd: DocsPruneCommand, cwd: string, deps
     let pullRequestUrl: string | undefined;
     if (outcome.removable.length) {
       const ownedPr = prs.find((pr) => pr.headRef.startsWith('docs-prune/') && pr.author === operatorLogin);
-      if (ownedPr) await git(['fetch', 'origin', ownedPr.headRef], { cwd });
-      // Continuing an owned PR must be a fast-forward of its observed head;
-      // a new prune branch still begins at the fetched main tip.
-      const startPoint = (await git(['rev-parse', ownedPr ? 'FETCH_HEAD' : 'origin/main'], { cwd })).stdout.trim();
+      let expectedHead: string | undefined;
+      if (ownedPr) {
+        await git(['fetch', 'origin', ownedPr.headRef], { cwd });
+        expectedHead = (await git(['rev-parse', 'FETCH_HEAD'], { cwd })).stdout.trim();
+      }
+      // A refresh replaces the old prune commit with the complete selection from
+      // current main. FETCH_HEAD protects that replacement only at push time.
+      const startPoint = 'origin/main';
       const commit = await commitDocsPruneDeletion({ repoDir: cwd, startPoint, removable: outcome.removable, git });
       const publish = deps.publish ?? makeProductionDocsPrunePublisher(git, gh, cwd, deps.confirmation);
       const repository = await resolveDocsPruneRepository(gh, cwd);
-      const published = await publish({ repoDir: cwd, repository, operatorLogin, branch: `docs-prune/${new Date().toISOString().slice(0, 10)}`, commit, outcome, openPullRequests: prs });
+      const published = await publish({ repoDir: cwd, repository, operatorLogin, branch: `docs-prune/${new Date().toISOString().slice(0, 10)}`, commit, expectedHead, outcome, openPullRequests: prs });
       pullRequestUrl = published.pullRequestUrl;
     }
     await spine.events.emitOrThrow(docsPruneEvent(outcome, pullRequestUrl));

@@ -18,8 +18,8 @@ it('refreshes the operator owned prune PR instead of creating a second PR', asyn
   const push = vi.fn(async () => ({ kind: 'executed' as const }));
   operations.run.mockClear();
   const existing = { number: 2, url: 'https://example.test/pr/2', body: '', headSha: 'old', headRef: 'docs-prune/previous', author: 'me', changedPaths: [] };
-  await publishDocsPrune({ repoDir: '/repo', repository: 'o/r', operatorLogin: 'me', branch: 'docs-prune/2026-10-22', commit: 'next', outcome: { ...outcome, removable: ['.docs/plans/alpha.md', '.docs/plans/beta.md'] }, openPullRequests: [existing], push, operations, approve: async () => true });
-  expect(push).toHaveBeenCalledWith('docs-prune/previous', 'next');
+  await publishDocsPrune({ repoDir: '/repo', repository: 'o/r', operatorLogin: 'me', branch: 'docs-prune/2026-10-22', commit: 'next', expectedHead: 'fetched-head', outcome: { ...outcome, removable: ['.docs/plans/alpha.md', '.docs/plans/beta.md'] }, openPullRequests: [existing], push, operations, approve: async () => true });
+  expect(push).toHaveBeenCalledWith('docs-prune/previous', 'next', 'fetched-head');
   expect(operations.run).toHaveBeenCalledWith(expect.objectContaining({ operation: 'pull-request.edit', target: { kind: 'pull-request', number: 2, repository: 'o/r' } }));
   expect(operations.run).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pull-request.create' }));
 });

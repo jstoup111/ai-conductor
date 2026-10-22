@@ -17,10 +17,12 @@ export interface DocsPrunePublisher {
   operatorLogin: string;
   branch: string;
   commit: string;
+  /** Fetched remote tip used to lease replacement of an owned prune branch. */
+  expectedHead?: string;
   outcome: Pick<DocsPruneSelection, 'removable' | 'deferred' | 'skipped' | 'excluded'>;
   openPullRequests: PullRequestWithFiles[];
   /** The push is deliberately injected: callers must use the guarded remote-git boundary. */
-  push(branch: string, commit: string): Promise<{ kind: 'executed' | 'refused' | 'failed'; detail?: string }>;
+  push(branch: string, commit: string, expectedHead?: string): Promise<{ kind: 'executed' | 'refused' | 'failed'; detail?: string }>;
   operations: GithubOperationRunner;
   /** Every remote write needs an exact interactive approval. */
   approve?: (request: Parameters<typeof executeGithubOperation>[0]) => Promise<boolean>;
@@ -32,10 +34,15 @@ export async function publishDocsPrune(input: DocsPrunePublisher): Promise<{ pul
   if (foreign) throw new DocsPruneRefusal(`docs-prune publication refused: another operator owns ${foreign.url}`);
   const existing = input.openPullRequests.find((pr) => pr.headRef.startsWith('docs-prune/') && pr.author === input.operatorLogin);
   const branch = existing?.headRef || input.branch;
+  if (existing && !input.expectedHead) {
+    throw new DocsPruneRefusal('docs-prune publication refused: owned PR refresh requires fetched head');
+  }
   if (!input.approve || !await input.approve({ operation: 'remote-ref.push', repository: input.repository, resource: { kind: 'remote-ref', ref: `refs/heads/${branch}` }, context: { actor: input.operatorLogin } })) {
     throw new DocsPruneRefusal('docs-prune publication refused: remote-ref.push requires explicit approval');
   }
-  const pushed = await input.push(branch, input.commit);
+  const pushed = existing
+    ? await input.push(branch, input.commit, input.expectedHead)
+    : await input.push(branch, input.commit);
   if (pushed.kind !== 'executed') throw new DocsPruneRefusal(`docs-prune publication refused: push ${pushed.detail ?? pushed.kind}`);
   const body = renderDocsPruneReport(input.outcome);
   if (existing) {
