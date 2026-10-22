@@ -17,3 +17,16 @@ describe('docs prune selection', () => {
     expect(deferred.deferred[0]?.paths).toEqual(selected.removable);
   });
 });
+
+it('keeps an exact dated artifact while excluding an ambiguous undated match', async () => {
+  const collisionPaths = [
+    '.docs/shipped/2026-10-01-alpha.md', '.docs/plans/2026-10-01-alpha.md',
+    '.docs/plans/2026-10-20-alpha.md', '.docs/coherence/2026-10-01-alpha.md',
+    '.docs/conflicts/alpha.md',
+  ];
+  const git = async (args: string[]) => ({ stdout: args[0] === 'ls-tree' ? `${collisionPaths.join('\n')}\n` : '' });
+  const selected = await resolveDocsPruneSelection('/repo', git as never);
+  expect(selected.removable).toContain('.docs/coherence/2026-10-01-alpha.md');
+  expect(selected.removable).not.toContain('.docs/conflicts/alpha.md');
+  expect(selected.excluded).toContain('.docs/conflicts/alpha.md');
+});

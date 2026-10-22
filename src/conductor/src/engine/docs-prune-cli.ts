@@ -7,7 +7,7 @@ import { createGuardedGithubOperationRunner } from './tracker-client.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import { requestExplicitGithubOperationApproval, hasExplicitGithubOperationApproval } from './github-operation-approval.js';
 import { createTerminalGithubOperationConfirmation } from './github-operation-terminal-confirmation.js';
-import type { GithubOperationRequest } from './github-operations.js';
+import { decodeGithubOperationRequest } from './github-operations.js';
 
 export type DocsPruneCommand = { kind: 'run' } | { kind: 'guide' };
 export const DOCS_PRUNE_USAGE = 'conduct docs-prune';
@@ -23,16 +23,18 @@ export interface DocsPruneCliDependencies {
   publish?: (input: Omit<DocsPrunePublisher, 'push' | 'operations'>) => Promise<{ pullRequestUrl?: string; branch: string }>;
   report?: (message: string) => void;
   reportError?: (message: string) => void;
+  /** Testable interactive boundary; production defaults to the terminal prompt. */
+  confirmation?: unknown;
 }
 
 /** Compose the only production publication path: guarded Git, guarded gh, and exact terminal approval. */
-export function makeProductionDocsPrunePublisher(git: GitRunner, gh: GhRunner, cwd: string): NonNullable<DocsPruneCliDependencies['publish']> {
-  const confirmation = createTerminalGithubOperationConfirmation();
+export function makeProductionDocsPrunePublisher(git: GitRunner, gh: GhRunner, cwd: string, confirmation: unknown = createTerminalGithubOperationConfirmation()): NonNullable<DocsPruneCliDependencies['publish']> {
   let approval: Awaited<ReturnType<typeof requestExplicitGithubOperationApproval>> | undefined;
   let repository = '';
   const approve = async (request: unknown): Promise<boolean> => {
-    const typed = request as GithubOperationRequest;
-    approval = await requestExplicitGithubOperationApproval(typed, confirmation);
+    const decoded = decodeGithubOperationRequest(request);
+    if (decoded.kind === 'refused') return false;
+    approval = await requestExplicitGithubOperationApproval(decoded.request, confirmation);
     return approval.kind === 'approved';
   };
   const operations = createGuardedGithubOperationRunner(gh, {
@@ -84,9 +86,13 @@ export async function dispatchDocsPrune(cmd: DocsPruneCommand, cwd: string, deps
     const outcome = applyOpenPullRequestDeferral(selection, prs, operatorLogin);
     let pullRequestUrl: string | undefined;
     if (outcome.removable.length) {
-      const startPoint = (await git(['rev-parse', 'origin/main'], { cwd })).stdout.trim();
+      const ownedPr = prs.find((pr) => pr.headRef.startsWith('docs-prune/') && pr.author === operatorLogin);
+      if (ownedPr) await git(['fetch', 'origin', ownedPr.headRef], { cwd });
+      // Continuing an owned PR must be a fast-forward of its observed head;
+      // a new prune branch still begins at the fetched main tip.
+      const startPoint = (await git(['rev-parse', ownedPr ? 'FETCH_HEAD' : 'origin/main'], { cwd })).stdout.trim();
       const commit = await commitDocsPruneDeletion({ repoDir: cwd, startPoint, removable: outcome.removable, git });
-      const publish = deps.publish ?? makeProductionDocsPrunePublisher(git, gh, cwd);
+      const publish = deps.publish ?? makeProductionDocsPrunePublisher(git, gh, cwd, deps.confirmation);
       const repository = await resolveDocsPruneRepository(gh, cwd);
       const published = await publish({ repoDir: cwd, repository, operatorLogin, branch: `docs-prune/${new Date().toISOString().slice(0, 10)}`, commit, outcome, openPullRequests: prs });
       pullRequestUrl = published.pullRequestUrl;

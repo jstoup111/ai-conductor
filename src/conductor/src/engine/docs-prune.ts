@@ -58,7 +58,7 @@ export async function resolveDocsPruneSelection(repoDir: string, git: GitRunner)
   const shipped = tree.filter((p) => p.startsWith('.docs/shipped/') && p.endsWith('.md')).map((p) => p.slice('.docs/shipped/'.length, -3));
   const plans = new Set(tree.filter((p) => p.startsWith('.docs/plans/')).map((p) => p.slice('.docs/plans/'.length, -3)));
   const stems = new Map<string, string[]>(); const excluded: string[] = [];
-  for (const stem of shipped) { const paths = prunableFilesForStem(tree, stem).filter((path) => { const family = DOCS_RETENTION_POLICY.normalizedStemFamilies.find((candidate) => path.startsWith(`.docs/${candidate}/`)); const undated = family ? path.slice(`.docs/${family}/`.length, -3).replace(/^\d{4}-\d{2}-\d{2}-/, '') : undefined; if (undated && [...plans].filter((s) => s.replace(/^\d{4}-\d{2}-\d{2}-/, '') === undated).length > 1) { excluded.push(path); return false; } return true; }); stems.set(stem, paths); }
+  for (const stem of shipped) { const paths = prunableFilesForStem(tree, stem).filter((path) => { const family = DOCS_RETENTION_POLICY.normalizedStemFamilies.find((candidate) => path.startsWith(`.docs/${candidate}/`)); const basename = family ? path.slice(`.docs/${family}/`.length, -3) : undefined; const undated = basename?.replace(/^\d{4}-\d{2}-\d{2}-/, ''); if (basename !== stem && undated && [...plans].filter((s) => s.replace(/^\d{4}-\d{2}-\d{2}-/, '') === undated).length > 1) { excluded.push(path); return false; } return true; }); stems.set(stem, paths); }
   const skipped = [...plans].filter((stem) => !shipped.includes(stem)).map((stem) => ({ stem, reason: 'no-shipped-record' as const }));
   return { removable: [...stems.values()].flat(), deferred: [], skipped, excluded, stems };
 }

@@ -617,6 +617,9 @@ async function auditImplementationCandidate(
   if (historicalVerdict?.kind === 'valid') {
     return { ...row(source, 'aligned', 'valid durable record is committed after implementation merge'), implementationPr: pr, verdict: historicalVerdict };
   }
+  if (historicalVerdict?.kind === 'pruned') {
+    return { ...row(source, 'unresolved', historicalVerdict.code), implementationPr: pr };
+  }
   if (historicalVerdict?.kind === 'refusal') {
     if (isContradictoryEvidence(historicalVerdict.code)) {
       return { ...row(source, 'contradictory', `extant evidence conflicts: ${historicalVerdict.code}`), implementationPr: pr, verdict: historicalVerdict };
@@ -707,10 +710,22 @@ async function evaluateHistoricalRecord(
   options: ShipmentAuditOptions,
   plan: { path: string; slug: string },
   pullRequest: MergedPullRequest,
-): Promise<ShipmentEvidenceResult | undefined> {
+): Promise<ShipmentEvidenceResult | { readonly kind: 'pruned'; readonly code: 'shipment-plan-pruned' } | undefined> {
   const auditHead = (await git(options, ['rev-parse', 'HEAD'])).trim();
   const recordPath = `.docs/shipped/${plan.slug}.md`;
   if (await committedFile(options, auditHead, recordPath) === null) return undefined;
+  // The implementation head can predate a docs-prune. Recover only an absent
+  // plan; a present plan must not trigger a deletion-history lookup.
+  const historicalPlan = await readPlanOrPruned(
+    async (commit, path) => committedFile(options, commit, path),
+    async (args) => {
+      try { return { stdout: await git(options, args), stderr: '', exitCode: 0 }; }
+      catch (error) { return { stdout: '', stderr: errorMessage(error), exitCode: 1 }; }
+    },
+    pullRequest.headSha,
+    plan.path,
+  );
+  if (!Buffer.isBuffer(historicalPlan)) return { kind: 'pruned', code: historicalPlan.code };
   const evaluateEvidence = options.evaluateEvidence ?? evaluateShipmentEvidence;
   return evaluateEvidence(
     {
@@ -722,7 +737,9 @@ async function evaluateHistoricalRecord(
     {
       readFile: async (path) => path === recordPath
         ? committedFile(options, auditHead, path)
-        : committedFile(options, pullRequest.headSha, path),
+        : path === plan.path
+          ? historicalPlan
+          : committedFile(options, pullRequest.headSha, path),
       gitRunner: async (args) => strictGit(options, args),
       githubRunner: async () => ({ url: pullRequest.url, headRefOid: auditHead }),
     },

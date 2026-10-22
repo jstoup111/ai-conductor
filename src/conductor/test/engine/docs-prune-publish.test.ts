@@ -1,6 +1,7 @@
 // Covers: task:6, task:7
 import { expect, it, vi } from 'vitest';
 import { DocsPruneRefusal, publishDocsPrune } from '../../src/engine/docs-prune.js';
+import { makeProductionDocsPrunePublisher } from '../../src/engine/docs-prune-cli.js';
 
 const outcome = { removable: ['.docs/plans/alpha.md'], deferred: [], skipped: [], excluded: [] };
 const operations = { run: vi.fn(async () => ({})) };
@@ -42,4 +43,28 @@ it('refuses a failed push before writing a pull request', async () => {
   const push = vi.fn(async () => ({ kind: 'refused' as const, detail: 'explicit approval required' }));
   await expect(publishDocsPrune({ repoDir: '/repo', repository: 'o/r', operatorLogin: 'me', branch: 'docs-prune/2026-10-22', commit: 'abc', outcome, openPullRequests: [], push, operations, approve: async () => true })).rejects.toThrow('push explicit approval required');
   expect(operations.run).not.toHaveBeenCalled();
+});
+
+it('production publisher refuses a declined interactive approval before any remote write', async () => {
+  const git = vi.fn(async () => ({ stdout: '' }));
+  const gh = vi.fn(async () => ({ stdout: '' }));
+  const publish = makeProductionDocsPrunePublisher(git as never, gh as never, '/repo', {
+    mode: 'interactive', confirm: async () => false,
+  });
+  await expect(publish({ repoDir: '/repo', repository: 'o/r', operatorLogin: 'me', branch: 'docs-prune/2026-10-22', commit: 'abc', outcome, openPullRequests: [] }))
+    .rejects.toBeInstanceOf(DocsPruneRefusal);
+  expect(git).not.toHaveBeenCalled();
+  expect(gh).not.toHaveBeenCalled();
+});
+
+it('production publisher refuses a non-interactive confirmation before any remote write', async () => {
+  const git = vi.fn(async () => ({ stdout: '' }));
+  const gh = vi.fn(async () => ({ stdout: '' }));
+  const publish = makeProductionDocsPrunePublisher(git as never, gh as never, '/repo', {
+    mode: 'automatic', confirm: async () => true,
+  });
+  await expect(publish({ repoDir: '/repo', repository: 'o/r', operatorLogin: 'me', branch: 'docs-prune/2026-10-22', commit: 'abc', outcome, openPullRequests: [] }))
+    .rejects.toThrow('remote-ref.push');
+  expect(git).not.toHaveBeenCalled();
+  expect(gh).not.toHaveBeenCalled();
 });
