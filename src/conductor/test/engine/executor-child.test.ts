@@ -35,7 +35,11 @@ const execFile = promisify(execFileCallback);
 class FakePort {
   readonly sent: unknown[] = [];
   private readonly listeners = new Map<string, Array<(value?: unknown) => void>>();
-  send(value: unknown): boolean { this.sent.push(value); return true; }
+  send(value: unknown, callback?: (error: Error | null) => void): boolean {
+    this.sent.push(value);
+    if (callback) queueMicrotask(() => callback(null));
+    return true;
+  }
   on(event: 'message' | 'disconnect', listener: (value?: unknown) => void): this {
     const listeners = this.listeners.get(event) ?? [];
     listeners.push(listener);
@@ -236,6 +240,44 @@ describe('executor child entrypoint', () => {
     expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
       { kind: 'outcome', outcome: { slug: 'feature', status: 'parked', reason: 'supervisor shutdown' } },
     ]);
+  });
+
+  it('flushes the outcome to the supervisor before disconnecting and exiting', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-'));
+    const port = new FakePort();
+    const lifecycle: string[] = [];
+    let flushOutcome: (() => void) | undefined;
+    const send = port.send.bind(port);
+    port.send = (value, callback) => {
+      if ((value as { kind?: string }).kind !== 'outcome') return send(value, callback);
+      port.sent.push(value);
+      lifecycle.push('outcome-queued');
+      flushOutcome = () => { lifecycle.push('outcome-flushed'); callback?.(null); };
+      return true;
+    };
+    const disconnect = port.disconnect.bind(port);
+    port.disconnect = () => { lifecycle.push('disconnect'); disconnect(); };
+    const done = runExecutorChild(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => {
+        const path = join(root!, '.worktrees', 'feature');
+        await import('node:fs/promises').then(({ mkdir }) => mkdir(path, { recursive: true }));
+        return { path };
+      },
+      run: async () => ({ slug: 'feature', status: 'done', prUrl: 'https://github.com/example/repo/pull/1' }),
+      exit: () => { lifecycle.push('exit'); },
+    });
+
+    port.dispatch({ kind: 'work-order', order });
+    await vi.waitFor(() => expect(flushOutcome).toBeDefined());
+    // Drain every pending microtask: without the flush, disconnect and exit
+    // would already have run.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(lifecycle).toEqual(['outcome-queued']);
+
+    flushOutcome!();
+    await done;
+    expect(lifecycle).toEqual(['outcome-queued', 'outcome-flushed', 'disconnect', 'exit']);
   });
 
   it('takes the identical parked shutdown path when the supervisor disconnects', async () => {
