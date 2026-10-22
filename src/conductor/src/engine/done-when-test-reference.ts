@@ -107,6 +107,27 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+export type CitationProvenance = 'task-added' | 'not-task-added';
+
+/** Classify a cited title using only the task start-window diff. */
+export function classifyCitationProvenance(input: {
+  readonly path: string;
+  readonly title: string;
+  readonly diffText: string;
+}): CitationProvenance {
+  const quotedPath = input.path.replace(/\\/g, '/');
+  let current: string | undefined;
+  const added: string[] = [];
+  for (const line of input.diffText.split(/\r?\n/)) {
+    const header = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+    if (header) { current = header[2]; continue; }
+    if (current === quotedPath && line.startsWith('+') && !line.startsWith('+++')) added.push(line.slice(1));
+  }
+  return normalizeWhitespace(added.join('\n')).includes(normalizeWhitespace(input.title))
+    ? 'task-added'
+    : 'not-task-added';
+}
+
 function citedCriterionIds(taskText: string, storiesText: string): Set<string> {
   const storyIds = parsePlanTaskStoryIds(taskText);
   const criteria = extractStoryCriterionIds(storiesText);

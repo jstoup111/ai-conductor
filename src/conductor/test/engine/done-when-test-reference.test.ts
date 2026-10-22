@@ -1,8 +1,9 @@
-// Covers: task:2, task:4, task:7
+// Covers: task:2, task:4, task:5, task:7
 import { describe, expect, it } from 'vitest';
 import {
   collectUnverifiedDoneWhenChecks,
   parseDoneWhenCloseSource,
+  classifyCitationProvenance,
   verifyDoneWhenTestReference,
 } from '../../src/engine/done-when-test-reference.js';
 
@@ -65,6 +66,20 @@ describe('verifyDoneWhenTestReference', () => {
         blobs,
       })).toMatchObject({ kind: 'verified' });
     }
+  });
+});
+
+describe('classifyCitationProvenance', () => {
+  it('finds a normalized title across added lines only in the cited file', () => {
+    expect(classifyCitationProvenance({ path: 'test/a.test.ts', title: 'proves   the thing', diffText: [
+      'diff --git a/test/a.test.ts b/test/a.test.ts', '@@', '+it("proves', '+ the thing", () => {})',
+    ].join('\n') })).toBe('task-added');
+    expect(classifyCitationProvenance({ path: 'test/a.test.ts', title: 'proves the thing', diffText: [
+      'diff --git a/test/a.test.ts b/test/a.test.ts', '@@', ' it("proves the thing", () => {})', '+expect(true).toBe(true)',
+    ].join('\n') })).toBe('not-task-added');
+    expect(classifyCitationProvenance({ path: 'test/a.test.ts', title: 'proves the thing', diffText: [
+      'diff --git a/test/b.test.ts b/test/b.test.ts', '@@', '+it("proves the thing", () => {})',
+    ].join('\n') })).toBe('not-task-added');
   });
 });
 
