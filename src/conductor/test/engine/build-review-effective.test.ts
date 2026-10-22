@@ -375,7 +375,7 @@ describe('live build-review effective resolver', () => {
       await expect(withCases(aggregate(), 'unreadable')).resolves.toMatchObject(blocked);
     });
 
-    it('keeps a source live when an open case supersedes a settled resolved link', async () => {
+    it('derives the coordinator-equivalent unsettled set for resolved R and open N on S', async () => {
       const sourceId = `testQuality:${builtinId}`;
       const resolved = caseRecord(sourceId, 'reject');
       const open = caseRecord(sourceId, 'act', { kind: 'action', status: 'reserved' });

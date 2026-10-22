@@ -173,7 +173,7 @@ describe('remediation case store', () => {
     });
   });
 
-  it('settles sources only when their authoritative link satisfies the existing settlement rules', () => {
+  it('returns no settled source for resolved R and open N on S when N is authoritative', () => {
     const sourceId = 'testQuality:shared';
     const settled: RemediationCaseRecord = {
       ...CASE_STATE.cases[0],

@@ -154,7 +154,7 @@ describe('build-review findings CLI', () => {
     });
   });
 
-  it('keeps a shared source live when the authoritative case is open', async () => {
+  it('passes the coordinator-equivalent unsettled set for resolved R and open N on S to the CLI verdict', async () => {
     const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
     const sourceId = `testQuality:${identity.id}`;
     const resolved = {
