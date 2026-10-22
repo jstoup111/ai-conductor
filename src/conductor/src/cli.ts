@@ -145,7 +145,6 @@ export type BuildReviewFindingsDispatch = {
   readonly kind: 'findings';
   readonly feature: string;
   readonly format: 'human' | 'json';
-  readonly child?: string;
 };
 
 export type BuildReviewAcceptDispatch = {
@@ -172,18 +171,15 @@ export type BuildReviewRecordReducedCoverageDispatch = {
   readonly rationale: string;
 };
 
-/** Detect the read-only `build-review findings --feature <slug> [--child <id>] [--json]` command. */
+/** Detect the read-only `build-review findings --feature <slug> [--json]` command. */
 export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFindingsDispatch | null {
   if (argv[2] !== 'build-review' || argv[3] !== 'findings') return null;
   const args = argv.slice(4);
   const featureIndex = args.indexOf('--feature');
   const feature = featureIndex >= 0 ? args[featureIndex + 1] : undefined;
-  const childIndex = args.indexOf('--child');
-  const child = childIndex >= 0 ? args[childIndex + 1] : undefined;
-  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), ...(args.includes('--json') ? ['--json'] : [])];
-  const recognized = args.length === expected.length && expected.every((value, index) => args[index] === value);
+  const recognized = args.length === 3 && featureIndex >= 0 && args.includes('--json') || args.length === 2 && featureIndex >= 0;
   if (!feature || !recognized || !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
-  return { kind: 'findings', feature, format: args.includes('--json') ? 'json' : 'human', ...(child === undefined ? {} : { child }) };
+  return { kind: 'findings', feature, format: args.includes('--json') ? 'json' : 'human' };
 }
 
 /** Detect only the fully bound, operator-only acceptance grammar. */
@@ -876,7 +872,6 @@ export function createProgram(): Command {
     .command('findings')
     .description('Render current findings for a feature worktree')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
-    .option('--child <child>', 'Child case-store scope')
     .option('--json', 'Render machine-readable JSON');
   buildReview
     .command('accept')

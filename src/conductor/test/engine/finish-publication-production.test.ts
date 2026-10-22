@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:24
+// Covers: task:1, task:2, task:3, task:4
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -1302,32 +1302,16 @@ describe('production FINISH publication composition', () => {
       version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
       finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };
-    const caseRead = {
-      ok: true as const,
-      state: {
-        version: 'v3' as const, feature: accepted.feature, prdWideningCases: [], suppressions: [], outbox: [],
-        cases: [{
-          id: 'case-O', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, rationale: 'private', confidence: 'high' as const, resolution: 'resolved' as const,
-          sources: [{ sourceId: `testQuality:${finding.id}`, outcome: 'carried' as const, recordedAt: '2026-10-22T00:00:00.000Z' }],
-          effect: { id: 'effect-O', kind: 'action' as const, status: 'applied' as const, workOrderId: 'work-O' },
-          operatorAcceptance: { origins: [{ sourceId: `testQuality:${finding.id}`, lapId: 'lap-origin' }] },
-          operatorResolution: { operator: 'operator', rationale: 'private resolution', resolvedAt: '2026-10-22T01:00:00.000Z' },
-        }],
-      },
-    } as const;
     const gh = vi.fn(async () => commandResult);
     const operations = { run: vi.fn(async () => ({})) };
 
     await expect(publishAcceptedBuildReviewRiskToRetainedPr({
-      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [accepted], caseRead, operations,
+      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [accepted], operations,
     })).resolves.toEqual({ ok: true, changed: true });
     expect(operations.run).toHaveBeenCalledWith(expect.objectContaining({
       operation: 'pull-request.edit',
       target: { repository: 'acme/conductor', kind: 'pull-request', number: 1 },
     }));
-    const body = (operations.run.mock.calls[0]![0].payload as { body: string }).body;
-    expect(body).toContain(`Carried finding: \`${finding.id}\` — rubric: testQuality; carried from: \`testQuality:${finding.id}\` (lap lap-origin)`);
-    expect(body).not.toMatch(/operator|private|2026-10-22/);
     expect(gh).not.toHaveBeenCalled();
     await expect(publishAcceptedBuildReviewRiskToRetainedPr({
       prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [{ ...accepted, rationale: '' }], operations,

@@ -116,8 +116,6 @@ describe('CLI', () => {
   it('detects only the explicit read-only build-review findings grammar', () => {
     expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings', '--feature', 'review-rubrics', '--json']))
       .toEqual({ kind: 'findings', feature: 'review-rubrics', format: 'json' });
-    expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings', '--feature', 'review-rubrics', '--child', '2', '--json']))
-      .toEqual({ kind: 'findings', feature: 'review-rubrics', child: '2', format: 'json' });
     expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings'])).toBeNull();
   });
   it('requires exact accept identity inputs and never accepts an operator override', () => {

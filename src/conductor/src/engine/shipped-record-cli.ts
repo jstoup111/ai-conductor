@@ -36,7 +36,6 @@ import {
   writeShippedRecord,
 } from './shipped-record.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
-import { RemediationCaseStore } from './remediation-case-store.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { computeCostRollup } from './cost-rollup.js';
@@ -207,11 +206,7 @@ export async function dispatchShippedRecord(
         version: 'v1', repository, feature: identity.slug,
       });
       if (!dispositions.ok) throw new Error(dispositions.message);
-      recordBody = appendBuildReviewAcceptedRisk(
-        recordBody,
-        dispositions.records,
-        await new RemediationCaseStore(cwd, { version: 'v1', repository, feature: identity.slug }).read(),
-      );
+      recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
 
       const reducedCoverage = await new BuildReviewDispositionStore(cwd).listReducedCoverage({
         version: 'v1', repository, feature: identity.slug,

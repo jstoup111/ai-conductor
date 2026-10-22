@@ -1,4 +1,4 @@
-// Covers: task:8, task:24, task:26, task:rem-prd-audit-8-5
+// Covers: task:8, task:26, task:rem-prd-audit-8-5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,7 +24,6 @@ import {
   type BuildReviewDispositionRecord,
 } from '../../src/engine/build-review-dispositions.js';
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
-import type { RemediationCaseStoreReadResult } from '../../src/engine/remediation-case-store.js';
 
 class MemoryFilesystem implements BuildReviewDispositionFilesystem {
   readonly files = new Map<string, string>();
@@ -660,38 +659,5 @@ describe('build-review dispositions', () => {
     expect(matchesBuildReviewDisposition(feature, changedContent.findings[0].identity, records)).toBe(false);
     expect(matchesBuildReviewDisposition(feature, changedDeclaration.findings[0].identity, records)).toBe(false);
     expect(renderBuildReviewAcceptedRisk(records)).toMatchObject({ ok: true, section: expect.stringContaining(judged.findings[0].identity.id) });
-  });
-
-  it('renders carried and operator-resolved risk without publishing operator-only detail', () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
-      anchor: { rubric: 'testQuality', locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture' } },
-    })!;
-    const caseRead = {
-      ok: true as const,
-      state: {
-        version: 'v3' as const, feature: { version: 'v1' as const, repository: 'repo', feature: 'feature' }, prdWideningCases: [], suppressions: [], outbox: [],
-        cases: [{
-          id: 'case-resolved', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const,
-          rationale: 'private case rationale', confidence: 'high' as const, resolution: 'resolved' as const,
-          sources: [{ sourceId: `testQuality:${identity.id}`, outcome: 'carried' as const, recordedAt: '2026-10-22T00:00:00.000Z' }],
-          effect: { id: 'effect', kind: 'action' as const, status: 'applied' as const, workOrderId: 'work' },
-          operatorAcceptance: { origins: [{ sourceId: `testQuality:${identity.id}`, lapId: 'lap-origin' }] },
-          operatorResolution: { operator: 'operator-name', rationale: 'private operator rationale', resolvedAt: '2026-10-22T01:00:00.000Z' },
-        }],
-      },
-    } satisfies RemediationCaseStoreReadResult;
-
-    const rendered = renderBuildReviewAcceptedRisk([], caseRead);
-
-    expect(rendered).toMatchObject({ ok: true, section: expect.stringContaining(`Carried finding: \`${identity.id}\` — rubric: testQuality; carried from: \`testQuality:${identity.id}\` (lap lap-origin)`) });
-    if (!rendered.ok) return;
-    expect(rendered.section).toContain('Operator-resolved case: `case-resolved` — source ids: `testQuality:');
-    expect(rendered.section).not.toMatch(/operator-name|private operator rationale|private case rationale|2026-10-22/);
-  });
-
-  it('keeps direct accepted risk while reporting an unreadable case store', () => {
-    const rendered = renderBuildReviewAcceptedRisk([], { ok: false, reason: 'malformed-state' });
-    expect(rendered).toMatchObject({ ok: true, section: expect.stringContaining('Remediation case store: unreadable.') });
   });
 });
