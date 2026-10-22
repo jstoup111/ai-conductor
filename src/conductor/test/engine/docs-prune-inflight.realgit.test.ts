@@ -38,15 +38,20 @@ it('keeps a local edit or stops with the pruned path conflict; it never silently
   await writeFile(join(repo, path), 'feature edit that must survive\n');
   await gitOk(git, ['commit', '-am', 'feature edits coherence']);
   await gitOk(git, ['checkout', 'main']);
+  const prePruneHead = (await gitOk(git, ['rev-parse', 'main'])).trim();
   const pruneCommit = await commitDocsPruneDeletion({ repoDir: repo, startPoint: 'main', removable: [path], git });
+  expect(pruneCommit, 'the prune produced a new commit').not.toBe(prePruneHead);
+  expect(await gitOk(git, ['show', '--name-status', '--format=', pruneCommit]), 'the prune commit deletes the artifact').toContain(`D\t${path}`);
   await gitOk(git, ['update-ref', 'refs/heads/main', pruneCommit]);
   await gitOk(git, ['push', 'origin', 'main']);
+  expect(await gitOk(git, ['ls-tree', '-r', '--name-only', 'origin/main']), 'origin/main no longer carries the artifact').not.toContain(path);
   await gitOk(git, ['checkout', 'feature']);
 
   const outcome = await performRebase(git, repo, 'main');
-  expect(['changed', 'noop', 'conflict_halt'], 'production rebase returns a success or conflict-stop shape').toContain(outcome.kind);
-  if (outcome.kind !== 'conflict_halt') {
-    await expect(readFile(join(repo, path), 'utf8'), 'rebase succeeded and retained the feature edit').resolves.toContain('feature edit that must survive');
+  expect(['changed', 'conflict_halt'], `a real upstream deletion must change or stop the rebase (got ${outcome.kind})`).toContain(outcome.kind);
+  if (outcome.kind === 'changed') {
+    expect((await git(['merge-base', '--is-ancestor', pruneCommit, 'HEAD'])).exitCode, 'the rebased feature descends from the prune commit').toBe(0);
+    await expect(readFile(join(repo, path), 'utf8'), 'rebase replayed the feature edit over the deletion').resolves.toContain('feature edit that must survive');
     return;
   }
 
