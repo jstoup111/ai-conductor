@@ -686,7 +686,28 @@ export async function completeTaskDoneWhen(
     };
   });
 
+  // A Done-when citation refusal is narrower than an ordinary repair
+  // obligation: only the check that the judge refused can settle it, and the
+  // replacement must be mechanically verified.  Re-closing with another
+  // pending citation (or an explicit unverified disposition) must leave the
+  // refusal open for its bounded retry/demotion path.
+  const previouslyRefusedCitationChecks = new Set(
+    Array.isArray(task.doneWhen)
+      ? task.doneWhen.flatMap((rawClose, index) => {
+        if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) return [];
+        const close = rawClose as Record<string, unknown>;
+        return close.source === 'judged' && close.verdict === 'does-not-assert' ? [index + 1] : [];
+      })
+      : [],
+  );
+  const refusedCitationsReverified = previouslyRefusedCitationChecks.size > 0 &&
+    [...previouslyRefusedCitationChecks].every((index) => doneWhenRecords[index - 1]?.source === 'verified');
+
   for (const obligationId of openObligationIds) {
+    const obligation = standing.kind === 'live'
+      ? standing.live.find(({ id: candidateId }) => candidateId === obligationId)
+      : undefined;
+    if (obligation?.source.authority === 'done-when-citation' && !refusedCitationsReverified) continue;
     const closure = await repairs.close({
       planPath: activePlanPath,
       taskId: id,

@@ -963,6 +963,66 @@ describe('runTaskDone', () => {
     });
   });
 
+  it.each([
+    ['verified replacement', true, 'resolved'],
+    ['pending replacement', false, 'open'],
+  ])('settles a done-when citation refusal only for a %s', async (_name, addAfterStart, expectedStatus) => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.mkdir(join(dir, 'test'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+      '### Task 7: Repair refused citation',
+      '**Done when:**',
+      '- [test] repaired behavior is covered.',
+      '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+      activePlanPath: '.docs/plans/feature.md',
+    }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '7', status: 'pending' }],
+    }));
+    const testPath = join(dir, 'test', 'citation-repair.test.ts');
+    const testText = "// Covers: task:7\nit('repaired behavior is covered', () => {});\n";
+    if (!addAfterStart) await fsPromises.writeFile(testPath, testText);
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'seed citation repair'], { cwd: dir });
+    const startHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    if (addAfterStart) {
+      await fsPromises.writeFile(testPath, testText);
+      await execa('git', ['add', 'test/citation-repair.test.ts'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'add repaired citation test'], { cwd: dir });
+    }
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{
+        id: '7', status: 'pending', startHead,
+        doneWhen: [{
+          check: '[test] repaired behavior is covered.',
+          evidence: 'test:test/citation-repair.test.ts::repaired behavior is covered',
+          source: 'judged', verdict: 'does-not-assert', reason: 'prior citation was refused',
+        }],
+      }],
+    }));
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const admitted = await repairs.admitOrReplay('citation-refusal', {
+      id: 'citation-refusal', planPath: '.docs/plans/feature.md', taskIds: ['7'],
+      source: { findingId: 'citation-refusal', authority: 'done-when-citation', instruction: 'repair refused citation' },
+      baseline: { head: startHead, tree: 'tree', resolvedTaskIds: [] },
+    });
+    if (!admitted.ok) throw new Error(admitted.message);
+
+    await expect(runTaskDone(dir, '7', [{
+      index: 1,
+      evidence: 'test:test/citation-repair.test.ts::repaired behavior is covered',
+    }])).resolves.toBe(0);
+
+    const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(state.repairObligations.records['citation-refusal'].tasks['7'].status).toBe(expectedStatus);
+  });
+
   it('keeps a legacy plan_amendment close unresolved until a post-boundary Task trailer', async () => {
     await execa('git', ['init', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
