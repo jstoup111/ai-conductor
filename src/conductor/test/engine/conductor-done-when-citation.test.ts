@@ -1,4 +1,5 @@
 // Covers: task:9, task:10, task:11, task:14, task:17
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -202,5 +203,35 @@ describe('BUILD Done-when citation judgement boundary', () => {
     })]));
     const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
     expect(engine.repairObligations).toBeUndefined();
+  });
+
+  it('settles a crash-persisted second refusal at its bound before replay admission', async () => {
+    const check = '[test] first';
+    const refusalKey = createHash('sha256').update(JSON.stringify({
+      taskId: '7', checkIndex: 1,
+      checkDigest: createHash('sha256').update(JSON.stringify(check)).digest('hex'),
+    })).digest('hex');
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ repairObligations: {
+      version: 1, records: {}, currentByPlan: {}, admissionsByPlan: {},
+      citationRefusals: { [refusalKey]: 1 }, citationRefusalAdmissions: {},
+    } }));
+
+    const dispatch = await run({ tasks: [{ id: '7', status: 'completed', doneWhen: [
+      // This is the durable state left when the process crashes immediately
+      // after persisting the second refusal verdict.
+      { check, evidence: 'test:test/one.test.ts::first', source: 'judged', verdict: 'does-not-assert', reason: 'the cited test proves another behavior' },
+    ] }] });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
+    expect(status.tasks).toContainEqual(expect.objectContaining({
+      id: '7', status: 'completed', doneWhen: [expect.objectContaining({
+        source: 'unverified', reason: 'the cited test proves another behavior',
+      })],
+    }));
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(engine.repairObligations).toEqual(expect.objectContaining({
+      records: {}, citationRefusals: { [refusalKey]: 1 },
+    }));
   });
 });

@@ -12086,13 +12086,16 @@ export class Conductor {
                     // completion below owns the ordinary missing-artifact path
                   } else {
                   const pending = collectPendingCitations(status);
-                  // Replay every persisted refusal before settlement so a
-                  // restart between any durable refusal effects repairs the
-                  // same admission, count, restage, and supersession.
-                  await admitCitationRefusals(this.projectRoot, planPath, [], [], status);
                   // A refusal is allowed one repair lap.  This runs even
-                  // when no new citation was re-closed in this session.
+                  // when no new citation was re-closed in this session. It
+                  // must precede replay admission: a crash after a second
+                  // refusal verdict is already at its bound, so recovery
+                  // demotes it instead of reopening the task once more.
                   await settleCitationRefusals(this.projectRoot, planPath, status, attempt >= stepMaxRetries);
+                  // Replay only the refusal records still eligible after
+                  // settlement. This repairs an interrupted first-refusal
+                  // admission without resurrecting a bounded disposition.
+                  await admitCitationRefusals(this.projectRoot, planPath, [], [], status);
                   if (pending.length > 0) {
                     const planText = planPath ? await readFile(planPath, 'utf8') : '';
                     const blobs = await readGitBlobs(

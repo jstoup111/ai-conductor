@@ -308,9 +308,19 @@ export async function admitCitationRefusals(
     currentCommitSha(projectRoot), currentTreeHash(projectRoot), countResolvedTasks(projectRoot),
   ]);
   const repairs = createRepairObligationStore(projectRoot, join(projectRoot, '.pipeline', 'engine-state.json'));
+  const refusalCounts = await repairs.read();
+  if (!refusalCounts.ok) throw new Error(`could not read Done-when citation refusals: ${refusalCounts.message}`);
   const admissions: CitationRefusalAdmission[] = [];
   for (const [taskId, unsorted] of byTask) {
-    const checks = [...unsorted].sort((a, b) => a.checkIndex - b.checkIndex);
+    // Recovery can observe the verdict persistence after its counter write but
+    // before settlement. A bound refusal is already terminal, so do not mint
+    // an altered admission key that would restage the task or spend it again.
+    const checks = [...unsorted]
+      .filter(({ checkIndex, check }) =>
+        (refusalCounts.value.citationRefusals[digest({ taskId, checkIndex, checkDigest: digest(check) })] ?? 0) < 1,
+      )
+      .sort((a, b) => a.checkIndex - b.checkIndex);
+    if (checks.length === 0) continue;
     const finding = checks.map(({ checkIndex, check, path, title }) => ({
       checkIndex, checkDigest: digest(check), reference: { path, title },
     }));
