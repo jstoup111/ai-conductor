@@ -180,27 +180,32 @@ describe('remediation case reconciler', () => {
     ['a failed action with an effective origin', durableAction({
       effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
       operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-old' }] },
-    }), new Set(['testQuality:finding-1']), true],
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, true],
     ['a reserved action with every source accepted this lap', durableAction({
       effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
-    }), new Set(['testQuality:finding-1']), true],
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, true],
+    ['a failed action whose source is absent on a mechanically healthy lap', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+    }), new Set<string>(), new Set<string>(), true, true],
+    ['a failed action whose source is absent on a mechanically unhealthy lap', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+    }), new Set<string>(), new Set<string>(), false, false],
     ['an open failed deferral whose sources are accepted', durableAction({
       disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'failed', diagnostic: 'intake failed' },
-    }), new Set(['testQuality:finding-1']), false],
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, false],
     ['an open reserved deferral whose sources are accepted', durableAction({
       disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' },
-    }), new Set(['testQuality:finding-1']), false],
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, false],
     ['an open decision stop whose sources are accepted', durableAction({
       disposition: 'escalate', effect: { kind: 'none' }, escalation: { owner: 'plan' },
-    }), new Set(['testQuality:finding-1']), false],
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, false],
     ['a failed action whose only origin was withdrawn while its source remains raised', durableAction({
       effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
       operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-old' }] },
-    }), new Set<string>(), false],
-  ] as const)('retires open cases only when %s', (_label, record, effectiveAcceptedSourceIds, expected) => {
+    }), new Set<string>(), new Set(['testQuality:finding-1']), true, false],
+  ] as const)('retires open cases only when %s', (_label, record, effectiveAcceptedSourceIds, liveSourceIds, mechanicallyHealthy, expected) => {
     expect(retiresOpenBuildReviewCase(record, {
-      liveSourceIds: new Set(['testQuality:finding-1']), effectiveAcceptedSourceIds,
-      mechanicallyHealthy: true,
+      liveSourceIds, effectiveAcceptedSourceIds, mechanicallyHealthy,
     })).toBe(expected);
   });
 

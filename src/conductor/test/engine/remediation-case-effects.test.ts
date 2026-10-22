@@ -141,6 +141,54 @@ describe('remediation case effects', () => {
     } });
   });
 
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it.each([
+    ['the lap is mechanically unhealthy', new Set<string>(), false],
+    ['the only origin was withdrawn and its source remains live', new Set(['testQuality:accepted-stranded-action']), true],
+  ] as const)('leaves a stranded reservation open when %s', async (_reason, liveSourceIds, mechanicallyHealthy) => {
+    const sourceId = 'testQuality:accepted-stranded-action';
+    const store = await storeWith({
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        ...openAppliedActionRecord(),
+        effect: { id: 'effect-stranded', kind: 'action', status: 'reserved' },
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-old' }] },
+      }],
+    });
+
+    await expect(settleStrandedBuildReviewActionReservations({
+      store, liveSourceIds, effectiveAcceptedSourceIds: new Set(), mechanicallyHealthy,
+      lapId: 'lap-current', readPublishedCaseIds: async () => new Set(),
+    })).resolves.toEqual({ ok: true, settled: [] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'reserved' }) })],
+    } });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it('keeps a failed action live when its only acceptance origin was withdrawn', async () => {
+    const sourceId = 'testQuality:withdrawn-origin';
+    const store = await storeWith({
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        ...openAppliedActionRecord(),
+        effect: { id: 'effect-withdrawn', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-old' }] },
+      }],
+    });
+
+    await expect(resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: new Set([sourceId]), lapId: 'lap-current',
+    })).resolves.toEqual({ ok: true, settled: [] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'failed' }) })],
+    } });
+  });
+
   // Covers: task:6
   it('converges an unbound replayed owner stop despite link timestamp and rationale drift', async () => {
     const original: RemediationCaseRecord = {
