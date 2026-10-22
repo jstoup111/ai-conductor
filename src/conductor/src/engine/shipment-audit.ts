@@ -12,6 +12,7 @@ import {
 import type { GhRunner, GitRunner } from './pr-labels.js';
 import { renderShippedRecord, specHash } from './shipped-record.js';
 import { runTrackerAmbientRead, runTrackerGraphqlRead } from './tracker-client.js';
+import { listPullRequestsWithFiles } from './pull-request-files.js';
 
 export const DEFAULT_SHIPMENT_AUDIT_REPORT =
   '.docs/audits/2026-07-25-durable-shipped-record-backfill.json';
@@ -230,6 +231,17 @@ async function latestCommittedFile(options: ShipmentAuditOptions, path: string):
 }
 
 async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promise<MergedPullRequest[]> {
+  const shared = await listPullRequestsWithFiles({ runGh: options.runGh, cwd: options.cwd, state: 'MERGED' });
+  return shared.map((pullRequest) => ({
+    number: pullRequest.number,
+    url: pullRequest.url,
+    body: pullRequest.body,
+    changedPaths: pullRequest.changedPaths,
+    headSha: pullRequest.headSha,
+    headRef: pullRequest.headRef,
+    mergedAt: pullRequest.mergedAt ?? '',
+  }));
+  /* legacy implementation retained below temporarily for historical query fixtures. */
   const repository = await repositoryName(options);
   const [owner, name] = repository.split('/');
   if (!owner || !name || repository.split('/').length !== 2) {
