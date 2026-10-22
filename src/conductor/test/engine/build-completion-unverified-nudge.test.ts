@@ -108,6 +108,14 @@ describe('BUILD completion nudge for unverified Done-when checks', () => {
 
     expect(isNoTaskProgressBuildStall({
       attempt: 2,
+      resolvedTasksBefore: 1,
+      resolvedTasksAfter: 1,
+      headMovedThisAttempt: false,
+      completionReason: 'Done-when citation refused: Task 7 must repair its refused test citation(s): check 1 ([test] expected behavior; test:test/example.test.ts::proves expected behavior; cited test proves another behavior)',
+    })).toBe(false);
+
+    expect(isNoTaskProgressBuildStall({
+      attempt: 2,
       resolvedTasksBefore: 0,
       resolvedTasksAfter: 0,
       headMovedThisAttempt: false,
