@@ -851,3 +851,21 @@ Task 9, Task 19 ─▶ Task 23, Task 24 (slice 2)
 **Done when:**
 - adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5 is satisfied by this task.
 - The repair for task rem-as-built-R16e is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R17c: In build-review-adjudication.ts reduceBuildReviewAdjudication (and its coordinator caller in build-review-adjudication-coordinator.ts), name the blocking case when an open act case with a failed effect still has a raised, unaccepted current source. The halt reason must contain `ai-conductor build-review resolve-case --feature <slug> --case <id>`, plus ` --child <child>` when the store is child-scoped; thread feature/child scope into the reducer input as required fields. Keep the generic 'remediation effect is not finalized' reason for reserved/in-flight effects. Add conductor build_review step tests for the flat and child-scoped shapes of Task 17 doneWhen #2: open action O, failed effect, source F1 still raised and unaccepted. Assert both halt texts, and assert that a failed deferral or open decision stop keeps its pre-change reason.
+**Gate:** prd-audit
+**Rationale:** Verified, 95%: the only halt naming `ai-conductor build-review resolve-case` is the clean-PASS surviving-obligation halt at conductor.ts:5441. A failed action whose source is still raised and unaccepted never reaches it, because at clean PASS it is retired by absence. In the coordinator it is stopped by reduceBuildReviewAdjudication's generic 'remediation effect is not finalized' (build-review-adjudication.ts:77), which names neither the case nor the command. This is clear implementation drift against Task 17 doneWhen #2 and ADR D7. No architectural decision is needed, so it routes to BUILD bound to Task 17.
+**Criterion:** S9.4
+**Parent task:** 17
+**Done when:**
+- [test] S9.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R17c is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R20a: In remediation-case-reconciler.ts reconcileState, when admitsCarry and the source already has a historical link on the case, append a 'carried' link (or upgrade the current link to carried) instead of `continue`. Emit the carried outbox/event exactly as for a new source. In remediation-case-store.ts finalizedBuildReviewSourceIds, treat a current link on a case with operatorResolution as finalized. Add conductor build_review tests for Task 20. (a) After resolve-case resolves O (act, failed effect), the next lap re-raises F with the same source id bound to O. F settles as carried with no halt, no work order and zero chargeEffect calls. (b) That lap's drain persists exactly one remediation_case_operator_resolved event for O before the lap's build_review_acceptance_carried event. (c) A new source id bound to O also carries (regression).
+**Gate:** prd-audit
+**Rationale:** Verified, 95%: in remediation-case-reconciler.ts:336-338, a carry binding whose source id already exists in the case's links hits `if (historical) { if (admitsCarry) continue; }`, so no carried link and no carry event are recorded. In remediation-case-store.ts:160-172, finalizedBuildReviewSourceIds settles only 'carried' links and never consults operatorResolution. So the normal re-raise of finding F onto operator-resolved case O, whose link stays 'acted' with a failed effect, stays unresolved, and Task 20 has no test. ADR D3 already decides the behavior, so this is BUILD work bound to Task 20.
+**Criterion:** S10.3
+**Parent task:** 20
+**Done when:**
+- [test] S10.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R20a is committed and its targeted tests pass.
