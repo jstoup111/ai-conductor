@@ -4,6 +4,19 @@ spec_hash: dfd72002a0ff034b6848763b5b924ac7682d8747ccb69044a4287b70120e18c1
 pr: https://github.com/jstoup111/ai-conductor/pull/3335
 shipped: 2026-10-22
 engine_version: 20261021T234255Z-d50d13381061
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "No plan task or story covers daemon build-token read counts. The change loosens an existing assertion on daemon scheduler behavior that is unrelated to pending-growth projection. It is test-only, so not user-visible, but it reduces coverage outside the feature's intent."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "No story or task covers OTel spool wiring. This is a test-synchronization fix unrelated to the growth-halt feature. It is test-only and not user-visible."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
