@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:5, task:6
+// Covers: task:1, task:2, task:3, task:5, task:6, task:7
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -261,6 +261,81 @@ describe('remediation case reconciler', () => {
             { sourceId: 'testQuality:finding-2', outcome: 'acted', recordedAt: '2026-08-30T13:00:00.000Z' },
           ],
         }],
+      },
+    });
+  });
+
+  it('carries a newly bound source and atomically queues its acceptance occurrence', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const acceptedCase = durableAction({
+      id: 'case-C',
+      resolution: 'resolved',
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+    });
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [acceptedCase] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'carry-case', existingCaseId: 'case-C' }, [
+        { sourceId: 'testQuality:finding-2', outcome: 'acted', caseRef: 'carry-case' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: generatedIds('carry-event-1'),
+      carry: { caseRefs: ['carry-case'], lapId: 'lap-2' },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: {
+        cases: [{
+          id: 'case-C', disposition: 'act', resolution: 'resolved',
+          effect: { id: 'effect-1', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+          operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+          sources: [
+            { sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: RECORDED_AT },
+            { sourceId: 'testQuality:finding-2', outcome: 'carried', recordedAt: '2026-08-30T13:00:00.000Z' },
+          ],
+        }],
+        outbox: [{
+          eventId: 'carry-event-1', occurredAt: '2026-08-30T13:00:00.000Z',
+          event: {
+            type: 'build_review_acceptance_carried', eventId: 'carry-event-1', feature: 'case-reconciler',
+            lapId: 'lap-2', sourceId: 'testQuality:finding-2', caseId: 'case-C',
+            originSourceIds: ['testQuality:finding-1'], originLapIds: ['lap-1'],
+          },
+        }],
+      },
+    });
+  });
+
+  it('does not duplicate a carried link or its outbox occurrence on replay', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: {
+      ...state,
+      cases: [durableAction({
+        id: 'case-C', resolution: 'resolved',
+        operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+      })],
+    } }));
+    const input = {
+      graph: graph({ ...ACTION_CASE, caseRef: 'carry-case', existingCaseId: 'case-C' }, [
+        { sourceId: 'testQuality:finding-2', outcome: 'acted', caseRef: 'carry-case' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z', carry: { caseRefs: ['carry-case'], lapId: 'lap-2' },
+    };
+
+    await reconcileRemediationCases(store, { ...input, generateId: generatedIds('carry-event-1') });
+    const replay = await reconcileRemediationCases(store, { ...input, generateId: () => 'must-not-be-used' });
+
+    expect(replay).toMatchObject({
+      ok: true,
+      state: {
+        cases: [{ sources: [
+          { sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: RECORDED_AT },
+          { sourceId: 'testQuality:finding-2', outcome: 'carried', recordedAt: '2026-08-30T13:00:00.000Z' },
+        ] }],
+        outbox: [{ eventId: 'carry-event-1' }],
       },
     });
   });
