@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:9
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -240,7 +240,7 @@ describe('remediation case store', () => {
     const settled: RemediationCaseRecord = {
       ...CASE_STATE.cases[0],
       id: 'settled', disposition: 'defer', resolution: 'resolved',
-      sources: [{ sourceId, outcome: 'deferred', recordedAt: '2026-10-19T12:00:00.000Z' }],
+      sources: [{ sourceId, outcome: 'carried', recordedAt: '2026-10-19T12:00:00.000Z' }],
       effect: { id: 'settled-effect', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/settled' },
     };
     const unsettled: RemediationCaseRecord = {
@@ -263,6 +263,21 @@ describe('remediation case store', () => {
     expect(finalizedBuildReviewSourceIds([unsettled, laterSettled])).toEqual(new Set([sourceId]));
     expect(finalizedBuildReviewSourceIds([settled, unsettled])).toEqual(new Set());
     expect(finalizedBuildReviewSourceIds([settled, open])).toEqual(new Set());
+  });
+
+  it('settles carried authoritative links for built-in and custom rubric sources', () => {
+    const carried = (id: string, sourceId: string): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0],
+      id,
+      resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'carried', recordedAt: '2026-10-21T12:00:00.000Z' }],
+      effect: { id: `${id}-effect`, kind: 'action', status: 'applied', workOrderId: `${id}-work-order` },
+    });
+
+    expect(finalizedBuildReviewSourceIds([
+      carried('built-in-case', 'testQuality:built-in-finding'),
+      carried('custom-case', 'portablePolicy:custom-finding'),
+    ])).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
   });
 
   it('preserves the former any-link settlement result when no source is shared', () => {

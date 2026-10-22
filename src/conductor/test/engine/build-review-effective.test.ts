@@ -1,4 +1,4 @@
-// Covers: task:2, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
+// Covers: task:2, task:9, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -366,6 +366,23 @@ describe('live build-review effective resolver', () => {
       await expect(withCases(raw, [caseRecord(`portablePolicy:${findingId}`, 'reject')])).resolves.toMatchObject({ ok: true, effective: {
         rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [], settledFindingIds: [findingId],
       } });
+    });
+
+    it('passes built-in and custom findings whose authoritative case links are carried', async () => {
+      const carriedCase = (sourceId: string) => ({
+        ...caseRecord(sourceId, 'act', { id: 'action-effect', kind: 'action', status: 'applied', workOrderId: 'work-order' }),
+        resolution: 'resolved' as const,
+        sources: [{ sourceId, outcome: 'carried' as const }],
+      });
+      const { aggregate: customRaw, findingId: customFindingId } = customAggregate(undefined);
+
+      await expect(Promise.all([
+        withCases(aggregate(), [carriedCase(`testQuality:${builtinId}`)]),
+        withCases(customRaw, [carriedCase(`portablePolicy:${customFindingId}`)]),
+      ])).resolves.toMatchObject([
+        { ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', settledFindingIds: [builtinId] } },
+        { ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', settledFindingIds: [customFindingId] } },
+      ]);
     });
 
     it('keeps the finding blocking for an open action case, another rubric, or unreadable case state', async () => {
