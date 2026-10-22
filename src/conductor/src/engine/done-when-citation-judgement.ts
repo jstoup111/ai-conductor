@@ -2,6 +2,8 @@ import {
   parseDoneWhenCloseSource,
   parseDoneWhenTestReference,
 } from './done-when-test-reference.js';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 /** The bounded amount of a cited test supplied to the citation judge. */
 export const DONE_WHEN_CITATION_WINDOW_LINES = 80;
@@ -76,9 +78,10 @@ export function collectPendingCitations(status: unknown): PendingCitation[] {
   const root = record(status);
   if (!root) return [];
   const tasks = 'tasks' in root ? root.tasks : root;
+  const taskMap = record(tasks);
   const rows: readonly (readonly [string | undefined, unknown])[] = Array.isArray(tasks)
     ? tasks.map((row) => [undefined, row] as const)
-    : record(tasks) ? Object.entries(tasks) : [];
+    : taskMap ? Object.entries(taskMap) : [];
   const pending: PendingCitation[] = [];
   for (const [legacyId, value] of rows) {
     const task = record(value);
@@ -168,7 +171,7 @@ export function validateCitationJudgementOutput(
     }
     const result: CitationJudgementResult = {
       taskId: verdict.taskId,
-      checkIndex: verdict.checkIndex,
+      checkIndex: verdict.checkIndex as number,
       verdict: verdict.verdict,
       reason: verdict.reason,
     };
@@ -181,4 +184,49 @@ export function validateCitationJudgementOutput(
   const missing = [...expected].filter((key) => !seen.has(key));
   if (missing.length > 0) return { kind: 'invalid', reason: 'citation judgement omitted a pending citation verdict' };
   return { kind: 'valid', verdicts };
+}
+
+/**
+ * Persist terminal judge results for precisely the citations that were pending
+ * in the status snapshot.  Unknown verdicts are intentionally ignored: the
+ * native-output validator accepts them so an otherwise complete batch need
+ * not be retried, but they must never rewrite another task's close record.
+ */
+export async function applyCitationVerdicts(
+  projectRoot: string,
+  status: unknown,
+  verdicts: readonly CitationJudgementResult[],
+): Promise<void> {
+  const root = record(status);
+  if (!root) throw new Error('task-status.json root is not an object');
+  const tasks = root.tasks;
+  if (!Array.isArray(tasks)) throw new Error('task-status.json does not have a tasks array');
+
+  const pending = new Set(collectPendingCitations(root).map(({ taskId, checkIndex }) => `${taskId}\u0000${checkIndex}`));
+  const byKey = new Map(verdicts.map((verdict) => [`${verdict.taskId}\u0000${verdict.checkIndex}`, verdict]));
+  for (const rawTask of tasks) {
+    const task = record(rawTask);
+    if (!task || typeof task.id !== 'string' || !Array.isArray(task.doneWhen)) continue;
+    for (const [offset, rawClose] of task.doneWhen.entries()) {
+      const close = record(rawClose);
+      if (!close) continue;
+      const key = `${task.id}\u0000${offset + 1}`;
+      const verdict = byKey.get(key);
+      if (!pending.has(key) || !verdict || parseDoneWhenCloseSource(close.source) !== 'pending-judgement') continue;
+      close.source = 'judged';
+      close.reason = verdict.reason;
+      close.verdict = verdict.verdict;
+    }
+  }
+
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+  const path = join(pipelineDir, 'task-status.json');
+  const temp = join(pipelineDir, `.task-status.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
+  try {
+    await writeFile(temp, JSON.stringify(root, null, 2));
+    await rename(temp, path);
+  } catch (error) {
+    throw new Error(`failed to write task-status.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

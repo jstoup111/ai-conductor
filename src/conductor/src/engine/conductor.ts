@@ -119,6 +119,12 @@ import {
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
+import {
+  applyCitationVerdicts,
+  buildCitationJudgementInput,
+  collectPendingCitations,
+} from './done-when-citation-judgement.js';
+import { readGitBlobs } from './git-blob-batch.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -12059,6 +12065,33 @@ export class Conductor {
             }
             let completion = handshake;
             if (!completion) {
+              // Citation provenance is settled exactly once at the BUILD
+              // session boundary, before its task-status predicate observes
+              // the close records.  A missing runner capability is handled by
+              // the later bounded fallback task; this happy-path boundary
+              // only applies durable verdicts from a valid native dispatch.
+              if (step.name === 'build' && this.stepRunner.dispatchDoneWhenCitationJudgement) {
+                try {
+                  const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')) as unknown;
+                  const pending = collectPendingCitations(status);
+                  if (pending.length > 0) {
+                    const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
+                    const planText = planPath ? await readFile(planPath, 'utf8') : '';
+                    const blobs = await readGitBlobs(
+                      this.projectRoot,
+                      'HEAD',
+                      [...new Set(pending.map((citation) => citation.path))],
+                    ).catch(() => new Map());
+                    const input = buildCitationJudgementInput(pending, parsePlanTaskBodies(planText), blobs);
+                    const judgement = await this.stepRunner.dispatchDoneWhenCitationJudgement(input);
+                    if (judgement.kind === 'valid') await applyCitationVerdicts(this.projectRoot, status, judgement.verdicts);
+                  }
+                } catch {
+                  // A judgement boundary must not turn an otherwise normal
+                  // BUILD completion check into a conductor crash. Its
+                  // unavailable/demotion policy is applied by the next task.
+                }
+              }
               completion = await checkStepCompletion(
                 this.projectRoot,
                 step.name,
