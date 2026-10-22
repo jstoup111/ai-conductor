@@ -60,8 +60,8 @@ export function makeProductionDocsPrunePublisher(git: GitRunner, gh: GhRunner, c
 }
 
 async function resolveDocsPruneRepository(gh: GhRunner, cwd: string): Promise<string> {
-  const raw = await gh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
-  const repository = (JSON.parse(raw.stdout) as { nameWithOwner?: unknown }).nameWithOwner;
+  const raw = await runTrackerAmbientRead(gh, cwd, 'ambient.repository.read', ['repo', 'view', '--json', 'nameWithOwner']);
+  const repository = (JSON.parse(raw) as { nameWithOwner?: unknown }).nameWithOwner;
   if (typeof repository !== 'string' || !repository) throw new DocsPruneRefusal('docs-prune publication refused: repository resolution failed');
   return repository;
 }
