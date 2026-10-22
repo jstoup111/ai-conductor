@@ -10,7 +10,8 @@
     {
       "id": "2",
       "name": "Implement",
-      "status": "in_progress"
+      "status": "in_progress",
+      "startHead": "71dc30e4011db95c8f33f4479b13abb419b53860"
     },
     {
       "id": "3",

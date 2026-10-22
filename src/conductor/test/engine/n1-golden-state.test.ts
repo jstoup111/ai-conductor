@@ -87,7 +87,8 @@ describe('N=1 golden state', () => {
       // sliceMembership and storyOwnership are the permitted distinctions.
       const comparable = (value: string) => value
         .replaceAll(/00000000-0000-4000-8000-\d{12}/g, '<EXECUTION_ID>')
-        .replaceAll(/"tree(?:Before|After)":"[a-f0-9]+"/g, '"tree":"<TREE>"');
+        .replaceAll(/"tree(?:Before|After)":"[a-f0-9]+"/g, '"tree":"<TREE>"')
+        .replaceAll(/"startHead": "[a-f0-9]+"/g, '"startHead": "<START_HEAD>"');
       expect(comparable(actual)).toBe(comparable(unsliced.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '')));
     };
 
