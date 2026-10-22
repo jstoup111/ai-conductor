@@ -3043,7 +3043,7 @@ describe('engine/conductor', () => {
       events,
       stateStore,
     });
-    const state: ConductState = {};
+    const state: ConductState = { feature_desc: 'feature' };
 
     await expect((conductor as unknown as {
       resolveTrack(state: ConductState): Promise<Track>;
@@ -3053,6 +3053,45 @@ describe('engine/conductor', () => {
     expect(stateStore.apply).toHaveBeenCalledWith(expect.objectContaining({
       field: 'track', expected: undefined, next: 'technical',
     }));
+  });
+
+  describe('track marker ownership (#3334)', () => {
+    // A worktree inherits every feature's committed `.docs/track` marker from
+    // its base branch; only the marker this branch wrote may decide the track.
+    const branchGit = (changedOnBranch: string[]) => vi.fn(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n', exitCode: 0 };
+      if (args[0] === 'merge-base') return { stdout: 'base-sha\n', exitCode: 0 };
+      if (args[0] === 'diff' && args[2] === 'base-sha..HEAD') return { stdout: changedOnBranch.join('\n'), exitCode: 0 };
+      return { stdout: '', exitCode: 0 };
+    });
+    const resolveTrackFor = (conductor: Conductor, state: ConductState) =>
+      (conductor as unknown as { resolveTrack(state: ConductState): Promise<Track> }).resolveTrack(state);
+
+    it('resolves the marker this branch wrote, not the alphabetically last inherited one', async () => {
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'explore-named-this.md'), 'Track: technical\n');
+      await writeFile(join(dir, '.docs', 'track', 'zzz-other-feature.md'), 'Track: product\n');
+      const git = branchGit(['.docs/track/explore-named-this.md']);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events, git,
+      });
+
+      await expect(resolveTrackFor(conductor, { feature_desc: 'Make interactive runs faster' }))
+        .resolves.toBe('technical');
+      expect(git).toHaveBeenCalledWith(['merge-base', 'origin/main', 'HEAD'], expect.anything());
+    });
+
+    it('defaults to product without caching when only other features own markers', async () => {
+      await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'track', 'zzz-other-feature.md'), 'Track: technical\n');
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events, git: branchGit([]),
+      });
+      const state: ConductState = { feature_desc: 'my-feature' };
+
+      await expect(resolveTrackFor(conductor, state)).resolves.toBe('product');
+      expect(state.track).toBeUndefined();
+    });
   });
 
   it('propagates rejected initialization and DECIDE mutations', async () => {
@@ -3493,7 +3532,7 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: technical\n');
       await writeState(statePath, {
         worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        complexity_tier: 'M',
+        complexity_tier: 'M', feature_desc: 'feat',
       } as ConductState);
 
       const stepsRun: StepName[] = [];
@@ -3516,7 +3555,7 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: product\n');
       await writeState(statePath, {
         worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        complexity_tier: 'M',
+        complexity_tier: 'M', feature_desc: 'feat',
       } as ConductState);
 
       const stepsRun: StepName[] = [];

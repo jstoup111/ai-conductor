@@ -16729,19 +16729,28 @@ export class Conductor {
    */
   /**
    * Resolve the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). Prefers `state.track` (daemon-seeded);
-   * otherwise reads the committed `.docs/track/<slug>.md` marker that `/explore`
-   * wrote in the interactive flow (newest file wins — one feature per worktree),
-   * caches it into `state.track`, and persists. Defaults to `product` when no
-   * usable marker exists, so PRD / prd-audit run unless the work was explicitly
-   * classified `technical`. Best-effort: any fs error falls back to `product`.
+   * otherwise reads the `.docs/track/<slug>.md` marker that `/explore` wrote in
+   * the interactive flow, caches it into `state.track`, and persists. Only this
+   * feature's own marker counts (#3334): one named by a feature identity, else
+   * the single marker this branch changed — never another feature's marker
+   * inherited from the base branch. Defaults to `product` when no own marker
+   * exists, so PRD / prd-audit run unless the work was explicitly classified
+   * `technical`. Best-effort: any fs error falls back to `product`.
    */
   private async resolveTrack(state: ConductState): Promise<Track> {
     if (state.track) return state.track;
     try {
       const dir = join(this.projectRoot, '.docs', 'track');
-      const entries = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
-      if (entries.length > 0) {
-        const content = await readFile(join(dir, entries[entries.length - 1]), 'utf-8');
+      const markers = (await readdir(dir)).filter((f) => f.endsWith('.md'));
+      const { featureIdentities, changedPaths } = await buildArtifactResolutionContext(this.projectRoot, {
+        featureDesc: state.feature_desc ?? this.featureSlug ?? this.featureDesc,
+        git: this.prdAuditGit(),
+      });
+      const changed = markers.filter((f) => changedPaths.has(`.docs/track/${f}`));
+      const own = featureIdentities.map((id) => `${id}.md`).find((f) => markers.includes(f))
+        ?? (changed.length === 1 ? changed[0] : undefined);
+      if (own) {
+        const content = await readFile(join(dir, own), 'utf-8');
         const parsed = parseTrack(content);
         if (parsed) {
           const persisted = await this.currentStateForMutation();

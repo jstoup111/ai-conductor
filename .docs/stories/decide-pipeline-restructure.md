@@ -39,6 +39,7 @@
   exists, then DECIDE blocks at `prd` (cannot proceed to architecture without the product spec).
 - **Negative (SHIP gate tracks):** Given `Track: technical`, when SHIP runs, then `prd-audit`
   runs against the stories with explicit no-PRD context; given `Track: product`, it also receives applicable PRD intent.
+- **Negative (only the feature's own marker counts):** Given an interactive run with no seeded track in a worktree that inherits other features' `.docs/track` markers, when the track is resolved, then it comes from the marker named for this feature or the single marker this branch wrote, adding, removing, or renaming other features' markers never changes it, and with no marker of its own the run defaults to `product`.
 
 ## S4 — PRD is product-only with the external-constraint carve-out (FR-4)
 
