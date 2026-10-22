@@ -589,7 +589,9 @@ ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<
 ```
 
 When the budget view identifies exhausted **plan growth**, recover it with `raise`: it extends the
-growth allowance. `reset` is for lap evidence only and cannot recover a plan-growth halt.
+growth allowance. `reset` is for lap evidence only and cannot recover a plan-growth halt. The
+`Pending growth:` line states the `minimum raise` that lets the pending repair settle, and the
+halt's recovery command already uses it as `--by`; a smaller raise halts again.
 
 A `prd_audit` or as-built `kickback-cap` halt fires at the `build` transition, after the repair's tasks
 are already appended and `pending`. Once the authorization is consumed, the feature resumes into `build`
