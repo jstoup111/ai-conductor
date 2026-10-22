@@ -400,6 +400,19 @@ function reconcileState(
     }
   }
 
+  // An empty graph is restart/no-current-source settlement, not evidence that
+  // an owner changed the approved baseline. Unlike ordinary non-action
+  // history, a durable decision stop cannot be retired by that absence: doing
+  // so would let the caller turn an unresolved current-outcome gap into PASS.
+  // A later non-empty admitted graph remains the explicit re-evaluation lane.
+  if (
+    input.resolveAbsentOpenNonActionCases
+    && input.graph.sourceOutcomes.length === 0
+    && state.cases.some((record) => record.resolution === 'open' && record.disposition === 'escalate')
+  ) {
+    return { ok: false, reason: 'decision-stop-pending' };
+  }
+
   let changed = additions.length > 0 || replacements.size > 0;
   // Resolved here, but named by no `caseRef` — reported separately so the
   // caller can emit one lifecycle occurrence per persisted transition.
