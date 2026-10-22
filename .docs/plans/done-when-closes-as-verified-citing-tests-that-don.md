@@ -705,3 +705,45 @@ Search hints: `admit(`, `restageExistingRemediationTaskStatuses`, `unverifiedDon
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-9: In conductor.ts session-end citation block, tolerate a missing .pipeline/task-status.json and an unresolved planPath (skip settlement/dispatch when no close records or no plan) as the final-attempt block does since 68f867293c; add tests in conductor-done-when-citation.test.ts that BUILD with no task-status file and with no resolved plan makes no dispatchDoneWhenCitationJudgement call and does not fail
+**Gate:** prd-audit
+**Rationale:** Implementation defect within approved Task 9: the session-end judgement block in conductor.ts reads .pipeline/task-status.json unguarded and calls settleCitationRefusals with planPath '' before the pending check, so a BUILD with no pending citation (missing task-status or unresolved plan) throws 'citation judgement unavailable' instead of skipping. Architecture is unambiguous (no pending citation => no dispatch, no failure); fix in code plus a regression test. Task 9's existing no-pending test and 68f867293c's empty-plan auto-park behavior must survive.
+**Criterion:** S4.3
+**Parent task:** 9
+**Done when:**
+- [test] S4.3 is satisfied by this task.
+- The repair for task rem-prd-audit-9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-14: Remove the immediate build_done_when_unverified emission from the unavailable-judgement branch in conductor.ts so demoted checks get the event only via the existing nudge-spent completion path; extend conductor-done-when-citation.test.ts with a multi-attempt run asserting exactly one event per demoted check and that the one BUILD nudge still occurs
+**Gate:** prd-audit
+**Rationale:** Task 14 requires demoted checks to receive the build_done_when_unverified event exactly as other unverified checks. The unavailable branch emits the event immediately and the existing nudge-spent completion path emits it again, double-emitting across attempts. Remove the early emission so demoted checks flow solely through the existing path; strengthen the test to multi-attempt (maxRetries>1) asserting exactly one event.
+**Criterion:** S6.4
+**Parent task:** 14
+**Done when:**
+- [test] S6.4 is satisfied by this task.
+- The repair for task rem-prd-audit-14 is committed and its targeted tests pass.
+
+### Task rem-as-built-15: In done-when-accept-cli.ts parse every close record's source against the closed seven-value set before acceptance; exit 1 naming the unknown source (for the target check and any other listed check of the obligation) with task-status and engine-state byte-identical; add tests in done-when-accept-cli.test.ts
+**Gate:** as-built
+**Rationale:** Conforming implementation drift against ADR done-when-evidence D17 (closed source set, unknown sources rejected by name). Admitted by Task 15 (handler refusals name the offending value, byte-identical state) and Task 16 (settlement through shared bookkeeping). No architectural decision needed.
+**Governing clause:** adr-2026-08-22-done-when-evidence-at-task-close decision 17
+**Done when:**
+- adr-2026-08-22-done-when-evidence-at-task-close decision 17 is satisfied by this task.
+- The repair for task rem-as-built-15 is committed and its targeted tests pass.
+
+### Task rem-as-built-16: In done-when-accept-cli.ts treat listed checks with source pending-judgement as outstanding so accepting one refused check never closes the citation obligation while another listed check awaits judgement; add a done-when-accept-cli.test.ts case with check 2 pending-judgement and check 3 accepted asserting the obligation stays open
+**Gate:** as-built
+**Rationale:** Violates reopened-task-resolution D13: a listed check in pending-judgement is still open. Task 16 explicitly requires the obligation to close only after every other listed check settles. Code fix plus test within Task 16.
+**Governing clause:** adr-2026-09-06-reopened-task-resolution decision 13
+**Done when:**
+- adr-2026-09-06-reopened-task-resolution decision 13 is satisfied by this task.
+- The repair for task rem-as-built-16 is committed and its targeted tests pass.
+
+### Task rem-as-built-10: Make refusal application in done-when-citation-judgement.ts and conductor.ts crash-recoverable: on session end also collect judged refusals whose admission/count/restage/supersession is unfinished (not only pending records), and replay each effect idempotently (admission keyed, count recorded once per refusal identity, restage and supersede re-applied safely); add tests simulating a crash after each write boundary asserting one live obligation, task reopened and unchanged counts
+**Gate:** as-built
+**Rationale:** Violates reopened-task-resolution D2 (recoverable, idempotent replay). Task 10 step 1/done-when already requires replay after simulated restart to admit nothing new, keep task reopened and keep counts; the as-built shows the crash windows between judged-record persistence, admission, counting, restaging and supersession are unrecovered. Approved architecture is authoritative; this is implementation work.
+**Governing clause:** adr-2026-09-06-reopened-task-resolution decision 2
+**Done when:**
+- adr-2026-09-06-reopened-task-resolution decision 2 is satisfied by this task.
+- The repair for task rem-as-built-10 is committed and its targeted tests pass.
