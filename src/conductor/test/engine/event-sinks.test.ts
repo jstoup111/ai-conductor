@@ -84,26 +84,35 @@ const maintenancePhaseContract: MaintenancePhaseIsClosed & MaintenancePhaseOutco
 void maintenancePhaseContract;
 const maintenancePhaseFixtures = [
   { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed' },
-  { type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: 1, outcome: 'skipped-unchanged' },
+  { type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: 1, outcome: 'completed' },
   { type: 'daemon_maintenance_phase', phase: 'rekick', durationMs: 1, outcome: 'failed' },
-  { type: 'daemon_maintenance_phase', phase: 'startup-dashboard', durationMs: 1, outcome: 'deferred' },
+  { type: 'daemon_maintenance_phase', phase: 'startup-dashboard', durationMs: 1, outcome: 'failed' },
   { type: 'daemon_maintenance_phase', phase: 'halt-pr-reconcile', durationMs: 1, outcome: 'completed' },
-  { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'completed' },
+  { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'skipped-unchanged' },
   { type: 'daemon_maintenance_phase', phase: 'provider-scratch', durationMs: 1, outcome: 'completed' },
   { type: 'daemon_maintenance_phase', phase: 'mergeable-sweep', durationMs: 1, outcome: 'completed' },
-  { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'completed', prUrl: 'https://example.test/pr/1', slug: 'repair-slug' },
+  { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'deferred', prUrl: 'https://example.test/pr/1', slug: 'repair-slug' },
 ] satisfies ConductorEvent[];
 void maintenancePhaseFixtures;
 // @ts-expect-error repairs always identify their PR.
 const repairWithoutPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'completed' };
 // @ts-expect-error non-repair phases cannot carry repair identity.
 const refreshWithPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', prUrl: 'https://example.test/pr/1' };
+// @ts-expect-error only repairs are deferred.
+const deferredRefresh: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'deferred' };
+// @ts-expect-error only parked reconciliation skips unchanged inputs.
+const skippedRepair: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'skipped-unchanged', prUrl: 'https://example.test/pr/1' };
+// @ts-expect-error parked reconciliation is never deferred.
+const deferredParkedReconcile: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'deferred' };
 // @ts-expect-error parked reconciliation summaries have a closed vocabulary.
 const parkedSummaryWithUnknownKey: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'completed', summary: { retained: 1 } };
 // @ts-expect-error summaries are only meaningful for the reconciliation phase.
 const refreshWithSummary: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', summary: { reconciled: 1 } };
 void repairWithoutPrUrl;
 void refreshWithPrUrl;
+void deferredRefresh;
+void skippedRepair;
+void deferredParkedReconcile;
 void parkedSummaryWithUnknownKey;
 void refreshWithSummary;
 type GithubWriteCredentialFallbackEvent = Extract<
