@@ -356,7 +356,7 @@ import {
   type chargeBuildReviewEffectInLedger,
   type PlanGrowth,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, renderKickbackRecoveryHint, withPendingGrowth } from './kickback-budget-view.js';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
@@ -10135,14 +10135,14 @@ export class Conductor {
             const fallbackLapCap = remediationLapCapForGate(gate, this.config);
             const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
-              : {
+              : withPendingGrowth({
                   ...settlementGrowth,
                   cap: growthCap,
                   capSource: settlementLedger?.effectiveGrowthCap === undefined
                     ? 'config-derived' as const
                     : 'raised' as const,
                   authoredSource: settlementAuthoredSource,
-                };
+                }, settlementLedger?.pendingRepair);
             const detail = settlementFailure === undefined
               ? renderKickbackBudgetView(
                   settlementLedger?.gates[gate],
@@ -10177,6 +10177,9 @@ export class Conductor {
                 slug: state.feature_desc,
                 gate,
                 allowance,
+                ...(allowance === 'growth' && settlementFailure === undefined && growthView?.pendingGrowth?.minimumRaise !== undefined && growthView.pendingGrowth.minimumRaise > 0
+                  ? { by: growthView.pendingGrowth.minimumRaise }
+                  : {}),
               }),
             );
             await this.writeHaltMarker(

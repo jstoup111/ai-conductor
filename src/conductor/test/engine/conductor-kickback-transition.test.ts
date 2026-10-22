@@ -1,5 +1,5 @@
 // Covers: task:6, task:12, task:rem-prd-audit-11-r3
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +50,8 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       buildOutcome?: BuildOutcomeStore;
       treeHash?: string | null;
       effort?: 'low' | 'medium' | 'high';
+      growthCap?: number;
+      authoredTasks?: number;
       buildResult?: { success: true; model?: string; effort?: 'low' | 'medium' | 'high' };
     } = {},
   ): Promise<{
@@ -65,6 +67,13 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
       tasks: [{ id: 'rem-1', status: 'pending' }],
     }));
+    if (options.authoredTasks !== undefined) {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'transition.md'), Array.from(
+        { length: options.authoredTasks },
+        (_, index) => `### Task ${index + 1}: Authored work`,
+      ).join('\n'));
+    }
     await writeKickbackLedger(dir, { ...ledger, pendingRepair } as KickbackLedger);
     if (options.buildOutcome !== undefined) {
       await writeFile(join(dir, '.pipeline', 'build-outcome.json'), JSON.stringify(options.buildOutcome));
@@ -89,7 +98,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
       config: {
         defaults: { model: 'test-model', effort: options.effort ?? 'medium', max_retries: 1, escalate: false },
-        prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
+        prd_audit: { max_remediation_laps: 1, max_appended_tasks: options.growthCap ?? 5, max_appended_ratio: 1 },
         architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
       },
     } as never).run();
@@ -432,6 +441,157 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/kickback|allowance/i);
+  });
+
+  it('renders projected pending growth and its minimum raise when BUILD growth is exhausted', async () => {
+    const { build } = await runBuild({
+      receiptId: 'growth-projection', taskIds: ['rem-1'],
+      charges: {
+        prd_audit: { laps: 1, growth: 3 },
+        architecture_review_as_built: { laps: 1, growth: 8 },
+      },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 0, byGate: {} },
+    }, { growthCap: 10, authoredTasks: 40 });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(
+      'Plan growth: 0/10 added; 0 remaining (config-derived cap)\n' +
+      'Pending growth: 11 (prd_audit 3, architecture_review_as_built 8); would reach 11/10 when build dispatches; minimum raise 1',
+    );
+    expect(halt).toContain(
+      'Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature transition --gate architecture_review_as_built --by 1 --rationale "«why»"',
+    );
+    const uncharged = await readKickbackLedger(dir);
+    expect(uncharged.gates).toMatchObject({
+      prd_audit: { laps: 0 },
+      architecture_review_as_built: { laps: 0, capEvidence: { allowance: 'growth' } },
+    });
+    expect(uncharged.growth).toMatchObject({ added: 0, byGate: {} });
+  });
+
+  it('renders the projected minimum raise for raised and at-cap growth exhaustion', async () => {
+    const raised = await runBuild({
+      receiptId: 'raised-growth-projection', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 2 } },
+    }, {
+      version: 1, effectiveGrowthCap: 13,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 9, byGate: { prd_audit: 9 } },
+    }, { authoredTasks: 40 });
+    expect(raised.build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Plan growth: 9/13 added; 0 remaining (raised cap)\nPending growth: 5 (prd_audit 3, architecture_review_as_built 2); would reach 14/13 when build dispatches; minimum raise 1',
+    );
+
+    const atCap = await runBuild({
+      receiptId: 'at-cap-growth-projection', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 2 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry() },
+      growth: { authored: 40, added: 10, byGate: { prd_audit: 10 } },
+    }, { growthCap: 10, authoredTasks: 40 });
+    expect(atCap.build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Plan growth: 10/10 added; 0 remaining (config-derived cap)\nPending growth: 2 (prd_audit 2); would reach 12/10 when build dispatches; minimum raise 2',
+    );
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'BUILD dispatch halted: prd_audit growth allowance exhausted',
+    );
+  });
+
+  it('settles the projected repair after a raise and leaves no HALT', async () => {
+    const { build } = await runBuild({
+      receiptId: 'raised-settlement', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 8 } },
+    }, {
+      version: 1, effectiveGrowthCap: 11,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 0, byGate: {} },
+    }, { authoredTasks: 40 });
+
+    expect(build).toHaveBeenCalledOnce();
+    const settled = await readKickbackLedger(dir);
+    expect(settled.growth?.added).toBe(11);
+    expect(settled.pendingRepair).toBeUndefined();
+    await expect(access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
+  });
+
+  it('keeps a projected growth repair byte-identical when no raise is applied twice', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'unraised-growth-projection', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 8 } },
+    };
+    const ledger: KickbackLedger = {
+      version: 1,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 0, byGate: {} },
+      pendingRepair,
+    };
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])), build: 'pending',
+      session_started_at: Date.now() - 1_000, run_started_at: Date.now() - 1_000, feature_desc: 'transition',
+    });
+    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: 'rem-1', status: 'pending' }] }));
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'plans', 'transition.md'), Array.from(
+      { length: 40 }, (_, index) => `### Task ${index + 1}: Authored work`,
+    ).join('\n'));
+    await writeKickbackLedger(dir, ledger);
+    const before = (await readKickbackLedger(dir)).pendingRepair;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const build = vi.fn(async () => ({ success: true }));
+      await new Conductor({
+        stateFilePath: statePath, projectRoot: dir, stepRunner: { run: async (step) => step === 'build' ? build() : { success: true } },
+        events: new ConductorEventEmitter(), mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false,
+        config: {
+          defaults: { model: 'test-model', effort: 'medium', max_retries: 1, escalate: false },
+          prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 },
+          architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 },
+        },
+      } as never).run();
+      expect(build).not.toHaveBeenCalled();
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('minimum raise 1');
+      const after = await readKickbackLedger(dir);
+      expect(JSON.stringify(after.pendingRepair)).toBe(JSON.stringify(before));
+      expect(after.gates).toMatchObject({ prd_audit: { laps: 0 }, architecture_review_as_built: { laps: 0 } });
+      expect(after.growth).toMatchObject({ added: 0, byGate: {} });
+    }
+  });
+
+  it('does not offer a growth raise for lap exhaustion or malformed pending repairs', async () => {
+    await runBuild({
+      receiptId: 'lap-with-growth', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 3 } },
+    }, {
+      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 40, added: 2, byGate: {} },
+    }, { growthCap: 10, authoredTasks: 40 });
+    const lapHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(lapHalt).toContain('laps allowance exhausted');
+    expect(lapHalt).toContain('Pending growth: 3 (prd_audit 3); would reach 3/10 when build dispatches');
+    expect(lapHalt).not.toContain('minimum raise');
+    expect(lapHalt).toContain('--by «N»');
+
+    await runBuild({
+      receiptId: 'lap-without-growth', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 0 } },
+    }, {
+      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 40, added: 0, byGate: {} },
+    }, { growthCap: 10, authoredTasks: 40 });
+    const lapsOnlyHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(lapsOnlyHalt).toContain('Plan growth: 0/10 added; 10 remaining (config-derived cap)');
+    expect(lapsOnlyHalt).not.toContain('Pending growth:');
+
+    await runBuild({ receiptId: '', taskIds: [], charges: {} }, {
+      version: 1, gates: { prd_audit: entry() }, growth: { authored: 40, added: 0, byGate: {} },
+    });
+    const malformedHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(malformedHalt).toContain('Kickback budget (prd_audit): growth allowance unavailable (');
+    expect(malformedHalt).not.toContain('Pending growth:');
+    expect(malformedHalt).toContain('--by «N»');
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toContain('needs-human');
   });
 
   it.each(['build_review', 'test_suite', 'manual_test'] as const)(
