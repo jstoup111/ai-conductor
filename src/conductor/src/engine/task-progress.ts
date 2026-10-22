@@ -396,7 +396,7 @@ export interface DoneWhenUnverifiedInput {
 export interface DoneWhenEvidenceRecord {
   check: string;
   evidence: string;
-  source: 'verified' | 'reported' | 'verify-only' | 'unverified';
+  source: 'verified' | 'reported' | 'verify-only' | 'unverified' | 'pending-judgement' | 'judged' | 'operator-accepted';
   reason?: string;
 }
 

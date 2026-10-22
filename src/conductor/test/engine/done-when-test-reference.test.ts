@@ -1,7 +1,8 @@
-// Covers: task:2, task:7
+// Covers: task:2, task:4, task:7
 import { describe, expect, it } from 'vitest';
 import {
   collectUnverifiedDoneWhenChecks,
+  parseDoneWhenCloseSource,
   verifyDoneWhenTestReference,
 } from '../../src/engine/done-when-test-reference.js';
 
@@ -68,6 +69,12 @@ describe('verifyDoneWhenTestReference', () => {
 });
 
 describe('collectUnverifiedDoneWhenChecks', () => {
+  it('accepts exactly the persisted done-when close sources', () => {
+    for (const source of ['verified', 'reported', 'verify-only', 'unverified', 'pending-judgement', 'judged', 'operator-accepted']) {
+      expect(parseDoneWhenCloseSource(source)).toBe(source);
+    }
+    expect(parseDoneWhenCloseSource('bogus')).toBeUndefined();
+  });
   it('returns only explicit unverified close records across current and legacy task-status shapes', () => {
     expect(collectUnverifiedDoneWhenChecks({
       tasks: [

@@ -38,6 +38,25 @@ export interface UnverifiedDoneWhenCheck {
   readonly reason: string;
 }
 
+export type DoneWhenCloseSource =
+  | 'verified' | 'reported' | 'verify-only' | 'unverified'
+  | 'pending-judgement' | 'judged' | 'operator-accepted';
+
+/** Parse persisted close sources at the trust boundary; unknown values never
+ * acquire semantics merely because a future writer serialized one. */
+export function parseDoneWhenCloseSource(value: unknown): DoneWhenCloseSource | undefined {
+  switch (value) {
+    case 'verified': return value;
+    case 'reported': return value;
+    case 'verify-only': return value;
+    case 'unverified': return value;
+    case 'pending-judgement': return value;
+    case 'judged': return value;
+    case 'operator-accepted': return value;
+  }
+  return undefined;
+}
+
 /**
  * Collects only explicit unverified close records from task-status content.
  * Legacy rows and malformed status data are non-authoritative and ignored.
@@ -63,7 +82,7 @@ export function collectUnverifiedDoneWhenChecks(status: unknown): UnverifiedDone
       if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
       const close = record as Record<string, unknown>;
       if (
-        close.source === 'unverified'
+        parseDoneWhenCloseSource(close.source) === 'unverified'
         && typeof close.check === 'string'
         && typeof close.reason === 'string'
       ) {
