@@ -391,12 +391,12 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   }
 
-  // Covers: task:7 — the decision-stop persistence seam retains graph-refusal evidence for the event spine.
+  // Covers: task:7
   it('coordinateBuildReviewAdjudication emits a refused explicit-escalation transition with the owner, proposed stop, and source', async () => {
     await expectRefusedDecisionStopTransition(false);
   });
 
-  // Covers: task:7 — the decision-stop persistence seam retains graph-refusal evidence for the event spine.
+  // Covers: task:7
   it('coordinateBuildReviewAdjudication emits a refused blocked-consistency transition with the owner, stop, and source', async () => {
     await expectRefusedDecisionStopTransition(true);
   });

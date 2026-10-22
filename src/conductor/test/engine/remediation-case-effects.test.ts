@@ -87,7 +87,7 @@ describe('remediation case effects', () => {
     expect(isBuildReviewSettlementObligationCase(record(effect as RemediationCaseRecord['effect'], overrides as Partial<RemediationCaseRecord>))).toBe(expected);
   });
 
-  // Covers: task:6 — an unbound replay converges on its open owner stop without writing.
+  // Covers: task:6
   it('converges an unbound replayed owner stop despite link timestamp and rationale drift', async () => {
     const original: RemediationCaseRecord = {
       id: 'case-owner-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
@@ -109,7 +109,7 @@ describe('remediation case effects', () => {
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [original] } });
   });
 
-  // Covers: task:6 — a bound replay ignores refreshed source-link timestamps.
+  // Covers: task:6
   it('converges a bound replayed stop despite fresh link timestamps', async () => {
     const original: RemediationCaseRecord = {
       id: 'case-owner-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
@@ -150,7 +150,7 @@ describe('remediation case effects', () => {
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [original] } });
   });
 
-  // Covers: task:6 — bound owner and source-set changes remain conflicting.
+  // Covers: task:6
   it('keeps a bound owner or source-set change conflicting', async () => {
     const original: RemediationCaseRecord = {
       id: 'case-owner-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
@@ -168,7 +168,7 @@ describe('remediation case effects', () => {
     })).resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
   });
 
-  // Covers: task:7 — a rejected next-state preserves the store's transition evidence.
+  // Covers: task:7
   it('returns a refused decision-stop transition with its invariant', async () => {
     const owner: RemediationCaseRecord = {
       id: 'case-owner', domain: 'build_review', disposition: 'act', priority: 'high',
@@ -210,12 +210,12 @@ describe('remediation case effects', () => {
       expect(result).not.toHaveProperty('violation');
   }
 
-  // Covers: task:7 — non-transition store failures never acquire trusted-history detail.
+  // Covers: task:7
   it('persistBuildReviewDecisionStop returns case store lock-timeout with no violation', async () => {
     await expectOrdinaryDecisionStopStoreFailure('lock-timeout');
   });
 
-  // Covers: task:7 — non-transition store failures never acquire trusted-history detail.
+  // Covers: task:7
   it('persistBuildReviewDecisionStop returns case store malformed-state with no violation', async () => {
     await expectOrdinaryDecisionStopStoreFailure('malformed-state');
   });

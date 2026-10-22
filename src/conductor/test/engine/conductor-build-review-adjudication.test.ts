@@ -454,12 +454,12 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(halt).toContain('persisted case history is valid and unchanged');
   }
 
-  // Covers: task:7 — production build_review persists the refusal detail into the needs-human HALT.
+  // Covers: task:7
   it('through build_review writes a needs-human HALT for the refused explicit-escalation lap', async () => {
     await expectRefusedDecisionStopHalt(false);
   });
 
-  // Covers: task:7 — production build_review persists the refusal detail into the needs-human HALT.
+  // Covers: task:7
   it('through build_review writes a needs-human HALT for the refused blocked-consistency lap', async () => {
     await expectRefusedDecisionStopHalt(true);
   });
