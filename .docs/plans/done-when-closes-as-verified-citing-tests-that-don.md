@@ -747,3 +747,28 @@ Search hints: `admit(`, `restageExistingRemediationTaskStatuses`, `unverifiedDon
 **Done when:**
 - adr-2026-09-06-reopened-task-resolution decision 2 is satisfied by this task.
 - The repair for task rem-as-built-10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-17: In done-when-citation-judgement.ts exclude dropped and settled refusals from replay: when settleCitationRefusals drops a listed check whose text is no longer in the current plan task, persist it in a terminal non-replayable state, and make the admitCitationRefusals replay skip records whose check text is absent from the plan or whose obligation admitOrReplay reports resolved, never calling restageExistingRemediationTaskStatuses for them; add tests in done-when-citation-judgement.test.ts / conductor-done-when-citation.test.ts that a stale-check refusal is dropped, its obligation closes, and a later session end leaves task 24 status unchanged and admits nothing
+**Gate:** prd-audit
+**Rationale:** Verified (99%, read done-when-citation-judgement.ts replay loop and conductor.ts:12040-12090): the persisted-record replay in admitCitationRefusals collects every judged/does-not-assert close record with no check of whether its check text is still in the plan or its obligation is already resolved, then unconditionally restages the task. settleCitationRefusals drops stale-check refusals with `continue` and closes the obligation but leaves the record replay-eligible. Approved architecture (D13/D14) is clear; this is implementation drift inside task 11's settlement contract, so BUILD.
+**Criterion:** S5.12
+**Parent task:** 11
+**Done when:**
+- [test] S5.12 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-17 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-18: In conductor.ts and done-when-citation-judgement.ts make crash recovery apply the same bounded disposition as uninterrupted execution: run settleCitationRefusals (bound demotion) before the replay admission and have replay skip any refusal whose task/check-index/check-digest refusal count already reached the bound or which settlement demoted; add a conductor-done-when-citation.test.ts case simulating a crash right after a second refusal's verdict persistence asserting the check is demoted unverified with the judge's reason, no new obligation is minted, the refusal counter is unchanged, and the task is not restaged
+**Gate:** as-built
+**Rationale:** Verified (99%): conductor.ts calls the replay admitCitationRefusals before settleCitationRefusals at session start, whereas the uninterrupted path settles (demotes at the bound) before admitting and excludes demoted keys. After a crash following verdict persistence, a second refusal for the same check identity is therefore admitted, counted and restaged instead of demoted. ADR-2026-09-06 D2 requires recovery to replay the same disposition; the fix is ordering/exclusion in existing code, so BUILD.
+**Governing clause:** adr-2026-09-06-reopened-task-resolution decision 2
+**Done when:**
+- adr-2026-09-06-reopened-task-resolution decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-18 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-19: In conductor.ts unavailable-judgement branch write pending citations directly as source unverified with the unavailability reason in one task-status write, never persisting an intermediate judged/does-not-assert record; add a conductor-done-when-citation.test.ts case simulating a crash after that write (and a following session end) asserting no citation obligation is admitted, no refusal is counted, and the task is not restaged
+**Gate:** as-built
+**Rationale:** Verified (99%): the unavailable branch in conductor.ts first persists synthesized judged/does-not-assert records via applyCitationVerdicts, then demotes them in a second write; a crash between the two lets the new replay admit and count provider unavailability as a refusal, contradicting ADR-2026-08-22 D13. Making the demotion a single durable write is conforming implementation work in BUILD (task 14 owns unavailable demotion).
+**Governing clause:** adr-2026-08-22-done-when-evidence-at-task-close decision 13
+**Done when:**
+- adr-2026-08-22-done-when-evidence-at-task-close decision 13 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-19 is committed and its targeted tests pass.
