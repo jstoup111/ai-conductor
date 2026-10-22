@@ -1429,7 +1429,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.calls).not.toContain('build');
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('kickback-cap');
     const halt = await readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain('Findings: S2.1');
+    expect(halt).toContain('Findings (prd_audit): S2.1');
     expect(halt).not.toMatch(/Findings:.*rem-prd-audit-refusal-/);
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toContain('rem-prd-audit-refusal-dec-refuse-s21');
     expect(fixture.state.ok && fixture.state.value.build).not.toBe('done');
