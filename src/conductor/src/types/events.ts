@@ -496,6 +496,15 @@ export interface SessionEventDeliveryDiagnosticEvent {
 }
 
 type ConductorEventBody =
+  | {
+      /** Operator-run cleanup of transient DECIDE artifacts for shipped work. */
+      type: 'decide_artifacts_pruned';
+      removed: string[];
+      deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[];
+      skipped: { stem: string; reason: 'no-shipped-record' }[];
+      excluded: string[];
+      pullRequestUrl?: string;
+    }
   | BotCoAuthorSkippedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
