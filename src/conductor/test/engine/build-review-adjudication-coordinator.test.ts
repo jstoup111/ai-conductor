@@ -987,6 +987,40 @@ describe('coordinateBuildReviewAdjudication', () => {
     ]);
   });
 
+  it.each([
+    ['operatorAcceptance', (judgement: RemediationCaseJudgement) => ({
+      ...judgement,
+      cases: [{ ...judgement.cases[0]!, operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-1' }] } }],
+    }), 'operator-owned-acceptance'],
+    ['operatorResolution', (judgement: RemediationCaseJudgement) => ({
+      ...judgement,
+      cases: [{ ...judgement.cases[0]!, operatorResolution: { operator: 'operator', rationale: 'Accepted risk.', resolvedAt: '2026-10-21T00:00:00.000Z' } }],
+    }), 'operator-owned-resolution'],
+    ['carried source outcome', (judgement: RemediationCaseJudgement) => ({
+      ...judgement,
+      sourceOutcomes: [{ ...judgement.sourceOutcomes[0]!, outcome: 'carried' }],
+    }), 'operator-owned-carried-source-outcome'],
+  ] as const)('fails closed without mutating case state for provider-owned %s', async (_name, inject, rejection) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'unrelated-resolved-case', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'low',
+        rationale: 'An unrelated prior finding was rejected.', resolution: 'resolved',
+        sources: [{ sourceId: 'testQuality:unrelated', outcome: 'rejected', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        effect: { kind: 'none' },
+      }],
+    });
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => inject(actionJudgement()) as RemediationCaseJudgement),
+    });
+
+    expect(result).toEqual({ ok: false, detail: `invalid remediation judgement ${rejection}` });
+    await expect(readFile(remediationCaseStorePath(root), 'utf8')).resolves.toBe(before);
+  });
+
   it('bypasses the provider but still settles case state when every current source is operator-resolved', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async () => actionJudgement());

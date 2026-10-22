@@ -142,7 +142,7 @@ const LIMITS = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
 // Keyed by the store's own vocabularies: a value the store learns to persist
 // fails to compile here until this boundary represents it too.
 const OUTCOMES: Readonly<Record<RemediationCaseSourceOutcome, true>> = Object.freeze({
-  acted: true, deferred: true, rejected: true, refuted: true, merged: true, escalate: true,
+  acted: true, deferred: true, rejected: true, refuted: true, merged: true, escalate: true, carried: true,
 });
 const DISPOSITIONS: Readonly<Record<RemediationCaseDisposition, true>> = Object.freeze({
   act: true, defer: true, reject: true, refute: true, escalate: true,

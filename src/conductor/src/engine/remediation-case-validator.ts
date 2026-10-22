@@ -11,6 +11,7 @@ export type RemediationCaseGraphRejection =
   | 'unknown-source'
   | 'duplicate-source'
   | 'missing-source'
+  | 'operator-owned-carried-source-outcome'
   | 'unknown-case-reference'
   | 'duplicate-case-reference'
   | 'contradictory-case-disposition'
@@ -19,6 +20,8 @@ export type RemediationCaseGraphRejection =
   | 'invalid-action-effect'
   | 'invalid-deferral-effect'
   | 'invalid-reject-effect'
+  | 'operator-owned-acceptance'
+  | 'operator-owned-resolution'
   | 'refute-without-binding'
   | 'refutation-without-refuted-assertion'
   | 'refutation-confidence-not-high'
@@ -73,6 +76,16 @@ function hasProviderDurableId(caseRow: RemediationCaseRow): boolean {
   const candidate = caseRow as unknown as Record<string, unknown>;
   const effect = caseRow.effect as unknown as Record<string, unknown>;
   return ['caseId', 'effectId', 'id'].some((key) => hasOwn(candidate, key) || hasOwn(effect, key));
+}
+
+function providerOperatorOwnedState(caseRow: RemediationCaseRow):
+  | 'operator-owned-acceptance'
+  | 'operator-owned-resolution'
+  | undefined {
+  const candidate = caseRow as unknown as Record<string, unknown>;
+  if (hasOwn(candidate, 'operatorAcceptance')) return 'operator-owned-acceptance';
+  if (hasOwn(candidate, 'operatorResolution')) return 'operator-owned-resolution';
+  return undefined;
 }
 
 function validateEffect(
@@ -183,6 +196,8 @@ export function validateRemediationCaseGraph(
   const casesByRef = new Map<string, RemediationCaseRow>();
   for (const caseRow of judgement.cases) {
     if (hasProviderDurableId(caseRow)) return { ok: false, reason: 'provider-durable-id' };
+    const operatorState = providerOperatorOwnedState(caseRow);
+    if (operatorState) return { ok: false, reason: operatorState };
     if (judgement.mode === 'case-v2' && caseRow.existingCaseId &&
       !(references.existingCaseIds ?? []).includes(caseRow.existingCaseId)) {
       return { ok: false, reason: 'unknown-existing-case' };
@@ -205,6 +220,7 @@ export function validateRemediationCaseGraph(
   const sourcesByCase = new Map<string, RemediationCaseSourceRow[]>();
   const seenSources = new Set<string>();
   for (const source of judgement.sourceOutcomes) {
+    if (source.outcome === 'carried') return { ok: false, reason: 'operator-owned-carried-source-outcome' };
     if (!currentSources.has(source.sourceId)) return { ok: false, reason: 'unknown-source' };
     if (seenSources.has(source.sourceId)) return { ok: false, reason: 'duplicate-source' };
 
