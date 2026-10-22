@@ -1618,13 +1618,14 @@ export async function settlePendingRepair(
     ]>;
     const initialGrowth = ledger.growth ?? budgets[0]?.growth;
     if (initialGrowth === undefined) throw new Error('pending repair settlement requires a growth budget');
+    const cap = charges.length === 0 ? null : budgetByGate.get(charges[0]![0])?.growthCap ?? null;
+    const projection = projectPendingGrowth(initialGrowth.added, pendingRepair.charges, cap);
     const nextGrowth: PlanGrowthRecord = {
       authored: initialGrowth.authored,
       added: initialGrowth.added,
       byGate: { ...initialGrowth.byGate },
     };
     const nextGates = { ...ledger.gates };
-    let growthCap: number | undefined;
 
     for (const [gate, charge] of charges) {
       const budget = budgetByGate.get(gate);
@@ -1636,11 +1637,9 @@ export async function settlePendingRepair(
       if ((current.laps ?? 0) + charge.laps > budget.lapCap) {
         return { result: { kind: 'exhausted', gate, allowance: 'laps' } as const };
       }
-      const cap = growthCap ?? budget.growthCap;
-      if (nextGrowth.added + charge.growth > cap) {
+      if (projection?.exceedingGate === gate) {
         return { result: { kind: 'exhausted', gate, allowance: 'growth' } as const };
       }
-      growthCap = cap;
       nextGates[gate] = { ...current, laps: (current.laps ?? 0) + charge.laps };
       if (charge.growth > 0) {
         nextGrowth.added += charge.growth;
@@ -1652,7 +1651,7 @@ export async function settlePendingRepair(
     const growthChanged = charges.some(([, charge]) => charge.growth > 0);
     const recordedGrowth = growthChanged
       ? await recordGrowth(projectRoot, nextGrowth, {
-          cap: growthCap ?? nextGrowth.added,
+          cap: cap ?? nextGrowth.added,
           prepareOnly: true,
         })
       : undefined;
