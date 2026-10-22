@@ -5,6 +5,7 @@ import { createRepairObligationStore } from './repair-obligations.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import type { ConductorEvent } from '../types/events.js';
+import { parseDoneWhenCloseSource } from './done-when-test-reference.js';
 
 export interface DoneWhenAcceptCommand { readonly kind: 'accept'; readonly feature: string; readonly taskId: string; readonly check: number; readonly reason: string; }
 
@@ -47,6 +48,11 @@ export async function dispatchDoneWhenAccept(command: DoneWhenAcceptCommand, dep
   if (!task) { print(`done-when accept: refused: unknown task '${command.taskId}'.`); return 1; }
   const records = task.doneWhen;
   if (!Array.isArray(records) || command.check > records.length) { print(`done-when accept: refused: unknown check '${command.check}' for task '${command.taskId}'.`); return 1; }
+  for (const value of records) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const source = parseDoneWhenCloseSource((value as Record<string, unknown>).source);
+    if (source instanceof Error) { print(`done-when accept: refused: ${source.message}.`); return 1; }
+  }
   const record = records[command.check - 1];
   if (!record || typeof record !== 'object' || Array.isArray(record) || !hasRefusedCitation(record as Record<string, unknown>)) { print(`done-when accept: refused: check '${command.check}' has no refused citation.`); return 1; }
   const accepted = record as Record<string, unknown>;
@@ -62,7 +68,11 @@ export async function dispatchDoneWhenAccept(command: DoneWhenAcceptCommand, dep
   });
   // An obligation remains open while another refused citation for the task is
   // outstanding.  Settling the last one makes the task eligible for completion.
-  const stillRefused = records.some((value) => value && typeof value === 'object' && !Array.isArray(value) && hasRefusedCitation(value as Record<string, unknown>));
+  const stillRefused = records.some((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const source = (value as Record<string, unknown>).source;
+    return source === 'pending-judgement' || hasRefusedCitation(value as Record<string, unknown>);
+  });
   if (!stillRefused) {
     const planPath = typeof (status as Record<string, unknown>).plan_ref === 'string'
       ? (status as Record<string, unknown>).plan_ref as string : '';

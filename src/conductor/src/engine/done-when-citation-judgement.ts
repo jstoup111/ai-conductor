@@ -260,6 +260,7 @@ export async function admitCitationRefusals(
   planPath: string,
   pending: readonly PendingCitation[],
   verdicts: readonly CitationJudgementResult[],
+  status?: unknown,
 ): Promise<CitationRefusalAdmission[]> {
   const byTask = new Map<string, RefusedCitation[]>();
   const citations = new Map(pending.map((citation) => [`${citation.taskId}\u0000${citation.checkIndex}`, citation]));
@@ -272,6 +273,27 @@ export async function admitCitationRefusals(
     task.push(refusal);
     byTask.set(refusal.taskId, task);
   }
+  // A crash can occur after judgement persistence but before admission,
+  // counting, restaging, or supersession.  The persisted close records are
+  // therefore the replay authority, not merely the in-memory verdict batch.
+  const root = record(status);
+  if (root && Array.isArray(root.tasks)) {
+    for (const rawTask of root.tasks) {
+      const task = record(rawTask);
+      if (!task || typeof task.id !== 'string' || !Array.isArray(task.doneWhen)) continue;
+      for (const [offset, rawClose] of task.doneWhen.entries()) {
+        const close = record(rawClose);
+        if (!close || close.source !== 'judged' || close.verdict !== 'does-not-assert' ||
+          typeof close.check !== 'string' || typeof close.evidence !== 'string' || typeof close.reason !== 'string') continue;
+        const reference = parseDoneWhenTestReference(close.evidence);
+        if (!reference) continue;
+        const citation = { taskId: task.id, checkIndex: offset + 1, check: close.check, path: reference.path, title: reference.title, reason: close.reason };
+        const checks = byTask.get(task.id) ?? [];
+        if (!checks.some((check) => check.checkIndex === citation.checkIndex)) checks.push(citation);
+        byTask.set(task.id, checks);
+      }
+    }
+  }
   if (byTask.size === 0) return [];
   const [head, tree, resolvedCount] = await Promise.all([
     currentCommitSha(projectRoot), currentTreeHash(projectRoot), countResolvedTasks(projectRoot),
@@ -280,8 +302,8 @@ export async function admitCitationRefusals(
   const admissions: CitationRefusalAdmission[] = [];
   for (const [taskId, unsorted] of byTask) {
     const checks = [...unsorted].sort((a, b) => a.checkIndex - b.checkIndex);
-    const finding = checks.map(({ checkIndex, check }) => ({
-      checkIndex, checkDigest: digest(check),
+    const finding = checks.map(({ checkIndex, check, path, title }) => ({
+      checkIndex, checkDigest: digest(check), reference: { path, title },
     }));
     const findingId = digest({ taskId, checks: finding });
     const admitted = await repairs.admitOrReplay(`done-when-citation:${findingId}`, {
@@ -296,25 +318,14 @@ export async function admitCitationRefusals(
       baseline: { head: head ?? '', tree: tree ?? '', resolvedTaskIds: [], resolvedCount },
     });
     if (!admitted.ok) throw new Error(`could not admit Done-when citation refusal: ${admitted.message}`);
-    if (!admitted.replayed) {
-      const counts = await repairs.recordCitationRefusals(`done-when-citation:${findingId}`, finding.map((check) => digest({ taskId, ...check })));
-      if (!counts.ok) throw new Error(`could not record Done-when citation refusal: ${counts.message}`);
-    }
+    // The store receipt makes this safe even if admission succeeded before a
+    // crash prevented the counter write.
+    const counts = await repairs.recordCitationRefusals(`done-when-citation:${findingId}`, checks.map(({ checkIndex, check }) =>
+      digest({ taskId, checkIndex, checkDigest: digest(check) }),
+    ));
+    if (!counts.ok) throw new Error(`could not record Done-when citation refusal: ${counts.message}`);
     const restaged = await restageExistingRemediationTaskStatuses(projectRoot, planPath, new Set([taskId]));
     if (restaged.kind === 'failed') throw new Error(restaged.detail);
-    // A later refusal becomes the single live authority for this task.  The
-    // current status still carries every unresolved check, so settlement can
-    // close the replacement only after all of them are resolved.
-    const existing = await repairs.read();
-    if (!existing.ok) throw new Error(`could not read Done-when citation refusals: ${existing.message}`);
-    for (const prior of Object.values(existing.value.records)) {
-      if (prior.id === admitted.obligation.id || prior.source.authority !== 'done-when-citation' || prior.tasks[taskId]?.status !== 'open') continue;
-      const closed = await repairs.close({
-        planPath, taskId, obligationId: prior.id,
-        evidence: { kind: 'superseded-by-citation-refusal', value: admitted.obligation.id },
-      });
-      if (!closed.ok) throw new Error(`could not supersede Done-when citation refusal: ${closed.message}`);
-    }
     admissions.push({ obligation: admitted.obligation, taskId, checks, replayed: admitted.replayed });
   }
   return admissions;

@@ -260,18 +260,18 @@ export function createRepairObligationStore(
           settlement: 'unsettled',
           tasks: Object.fromEntries(taskIds.map((taskId) => [taskId, { status: 'open' as const }])),
         };
-        // A rewritten plan task supersedes only an earlier rewrite of that
-        // same task.  Review/gate obligations deliberately remain open: the
-        // resolver folds every open record, rather than treating this index as
-        // the sole source of authority.
-        if (admission.source.authority === 'plan_amendment') {
+        // A replacement authority supersedes its own earlier authority for
+        // the same task.  Review/gate obligations deliberately remain open:
+        // the resolver folds every open record, rather than treating this
+        // index as the sole source of authority.
+        if (admission.source.authority === 'plan_amendment' || admission.source.authority === 'done-when-citation') {
           for (const prior of Object.values(section.records)) {
-            if (prior.planIdentity !== planIdentity || prior.source.authority !== 'plan_amendment') continue;
+            if (prior.planIdentity !== planIdentity || prior.source.authority !== admission.source.authority) continue;
             for (const taskId of taskIds) {
               if (prior.tasks[taskId]?.status === 'open') {
                 prior.tasks[taskId] = {
                   status: 'resolved',
-                  evidence: { kind: 'superseded-by-plan-amendment', value: admission.id },
+                  evidence: { kind: admission.source.authority === 'plan_amendment' ? 'superseded-by-plan-amendment' : 'superseded-by-citation-refusal', value: admission.id },
                 };
               }
             }

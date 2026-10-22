@@ -69,6 +69,22 @@ describe('done-when accept CLI', () => {
     expect(files).toEqual(before);
   });
 
+  it('rejects an unknown source in any listed check without changing either state file', async () => {
+    const files = refusalFixture();
+    const status = JSON.parse(files.get('/main/.worktrees/done-when-citations/.pipeline/task-status.json')!);
+    status.tasks[0].doneWhen[0].source = 'not-a-source';
+    files.set('/main/.worktrees/done-when-citations/.pipeline/task-status.json', JSON.stringify(status));
+    const before = new Map(files);
+    const print = vi.fn();
+    await expect(dispatchDoneWhenAccept(command, {
+      resolveWorktree: async () => '/main/.worktrees/done-when-citations',
+      readFile: async (path) => files.get(path) ?? Promise.reject(new Error('missing fixture')),
+      print,
+    })).resolves.toBe(1);
+    expect(print).toHaveBeenCalledWith(expect.stringMatching(/unknown done-when close source: not-a-source/i));
+    expect(files).toEqual(before);
+  });
+
   it('records operator acceptance and emits its canonical event', async () => {
     const files = refusalFixture();
     const emitted: unknown[] = [];
@@ -138,5 +154,28 @@ describe('done-when accept CLI', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('keeps an obligation open when another listed check still awaits judgement', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'done-when-accept-pending-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
+        plan_ref: 'citation.md', tasks: [{ id: '24', status: 'pending', doneWhen: [
+          { check: 'first check', source: 'judged', verdict: 'asserts' },
+          { check: 'second check', source: 'pending-judgement' },
+          { check: 'third check', source: 'judged', verdict: 'does-not-assert', reason: 'not enough' },
+        ] }],
+      }));
+      const repairs = createRepairObligationStore(root, join(root, '.pipeline', 'engine-state.json'));
+      await repairs.admitOrReplay('citation-24', {
+        id: 'citation-24', planPath: 'citation.md', taskIds: ['24'],
+        source: { findingId: 'citation-24', authority: 'done-when-citation', instruction: 'repair citations' },
+        baseline: { head: '', tree: '', resolvedTaskIds: [] },
+      });
+      await expect(dispatchDoneWhenAccept(command, { resolveWorktree: async () => root, print: vi.fn(), emit: async () => {} })).resolves.toBe(0);
+      const state = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+      expect(state.repairObligations.records['citation-24'].tasks['24'].status).toBe('open');
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

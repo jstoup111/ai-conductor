@@ -34,15 +34,15 @@ describe('BUILD Done-when citation judgement boundary', () => {
       { taskId: '9', checkIndex: 1, verdict: 'asserts' as const, reason: 'second assertion' },
     ],
   })), events = new ConductorEventEmitter(), maxRetries = 1) {
-    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(status));
+    if (status !== undefined) await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(status));
     let dispatches = 0;
     const runner: StepRunner = {
       run: async () => {
         // A retry continues from the prior BUILD session's durable status; it
         // must not resurrect citations that the previous boundary settled.
         if (dispatches++ === 0) {
-          const completed = structuredClone(status) as { tasks?: Array<{ status?: string }> };
-          for (const task of completed.tasks ?? []) task.status = 'completed';
+          const completed = structuredClone(status) as { tasks?: Array<{ status?: string }> } | undefined;
+          for (const task of completed?.tasks ?? []) task.status = 'completed';
           await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(completed));
         }
         return { success: true };
@@ -82,18 +82,33 @@ describe('BUILD Done-when citation judgement boundary', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it('does not dispatch or fail when BUILD has no task-status file', async () => {
+    const dispatch = await run(undefined);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch or fail when BUILD has no resolved plan', async () => {
+    await rm(join(root, '.docs', 'plans', 'citation.md'));
+    const dispatch = await run({ tasks: [{ id: '7', status: 'pending', doneWhen: [
+      { check: '[test] pending', evidence: 'test:test/one.test.ts::pending', source: 'pending-judgement' },
+    ] }] });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('demotes an unavailable citation judgement without admitting a repair obligation', async () => {
     const events = new ConductorEventEmitter();
     const observed: unknown[] = [];
     events.on('build_done_when_unverified', (event) => { observed.push(event); });
     const dispatch = await run({ tasks: [{ id: '7', status: 'pending', doneWhen: [
       { check: '[test] pending', evidence: 'test:test/one.test.ts::pending', source: 'pending-judgement' },
-    ] }] }, vi.fn(async () => ({ kind: 'unavailable' as const, cause: 'native schema unsupported' })), events);
+    ] }] }, vi.fn(async () => ({ kind: 'unavailable' as const, cause: 'native schema unsupported' })), events, 2);
     // The direct demotion produces the normal one unverified-check review lap
     // without dispatching a second citation judgement.
     expect(dispatch).toHaveBeenCalledOnce();
     const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
     expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'unverified', reason: 'citation judgement unavailable: native schema unsupported' });
+    // Demotion consumes the ordinary single BUILD nudge, even over a retry
+    // budget with more than one attempt; it must not emit at demotion time.
     expect(observed).toHaveLength(1);
     const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
     expect(engine.repairObligations).toBeUndefined();

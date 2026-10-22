@@ -334,6 +334,29 @@ describe('repair obligations', () => {
     })).resolves.toMatchObject({ ok: true, obligation: { tasks: { '1': { status: 'resolved' } } } });
   });
 
+  it('supersedes an earlier citation obligation through the admission transition', async () => {
+    const { projectRoot, statePath } = await createStatePath();
+    const repairs = createRepairObligationStore(projectRoot, statePath);
+    const first = await repairs.admitOrReplay('citation:first', admission({
+      id: 'citation:first', taskIds: ['24'],
+      source: { findingId: 'first', authority: 'done-when-citation', instruction: 'Repair first refusal.' },
+    }));
+    const later = await repairs.admitOrReplay('citation:later', admission({
+      id: 'citation:later', taskIds: ['24'],
+      source: { findingId: 'later', authority: 'done-when-citation', instruction: 'Repair all open refusals.' },
+    }));
+    if (!first.ok || !later.ok) throw new Error('expected citation admissions');
+
+    await expect(repairs.read()).resolves.toMatchObject({ ok: true, value: { records: {
+      'citation:first': { tasks: { '24': { status: 'resolved', evidence: { kind: 'superseded-by-citation-refusal', value: 'citation:later' } } } },
+      'citation:later': { tasks: { '24': { status: 'open' } } },
+    } } });
+    await expect(repairs.close({
+      planPath: '.docs/plans/current.md', taskId: '24', obligationId: first.obligation.id,
+      evidence: { kind: 'citation-settled', value: 'stale' },
+    })).resolves.toMatchObject({ ok: false, kind: 'stale' });
+  });
+
   it('refuses to close an obligation through a different plan that reuses its task id', async () => {
     const { projectRoot, statePath } = await createStatePath();
     const repairs = createRepairObligationStore(projectRoot, statePath);
