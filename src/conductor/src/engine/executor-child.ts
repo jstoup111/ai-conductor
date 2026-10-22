@@ -113,10 +113,20 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
   let started = false;
   let complete = false;
   let finishWaitingForOrder: (() => void) | undefined;
-  const sendOutcome = (outcome: FeatureExecutionOutcome) => {
-    if (complete) return;
+  // The child disconnects and exits right after its outcome, so the send
+  // must be flushed first: an unflushed outcome is dropped and the supervisor
+  // records a shipped feature as `executor exited before outcome`.
+  const sendOutcome = (outcome: FeatureExecutionOutcome): Promise<void> => {
+    if (complete) return Promise.resolve();
     complete = true;
-    port.send({ kind: 'outcome', outcome });
+    return new Promise<void>((resolve) => {
+      try {
+        port.send({ kind: 'outcome', outcome }, () => resolve());
+      } catch {
+        // A closed channel cannot deliver; there is nothing left to flush.
+        resolve();
+      }
+    });
   };
   const stop = (reason: string) => {
     if (!controller.signal.aborted) controller.abort(reason);
@@ -163,9 +173,9 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
             ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
             : await deps.run({ order, engineVersionId, effectiveConcurrency, events, signal: controller.signal });
           persister.stop();
-          sendOutcome(outcome);
+          await sendOutcome(outcome);
         } catch (error) {
-          sendOutcome({ slug: order.slug, status: 'error', reason: error instanceof Error ? error.message : String(error) });
+          await sendOutcome({ slug: order.slug, status: 'error', reason: error instanceof Error ? error.message : String(error) });
         } finally { resolve(); }
       })();
     };

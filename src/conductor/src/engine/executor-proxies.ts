@@ -4,7 +4,11 @@ import type { RateLimitEpisode } from './rate-limit-episode.js';
 
 /** Minimal IPC port shared by the real Node channel and deterministic tests. */
 export interface ExecutorIpcPort {
-  send(message: unknown): boolean | void;
+  /**
+   * Node's `process.send` invokes `callback` once the message is handed to the
+   * channel. Messages are ordered, so it also covers every earlier send.
+   */
+  send(message: unknown, callback?: (error: Error | null) => void): boolean | void;
   on(event: 'message' | 'disconnect', listener: (message?: unknown) => void): unknown;
   off?(event: 'message' | 'disconnect', listener: (message?: unknown) => void): unknown;
   disconnect?(): void;
