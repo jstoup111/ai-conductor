@@ -325,7 +325,7 @@ function decisionStopScope() {
 
 function failOnlyDecisionStopMutation(reason: 'lock-timeout' | 'malformed-state') {
   const originalMutate = RemediationCaseStore.prototype.mutate;
-  return vi.spyOn(RemediationCaseStore.prototype, 'mutate').mockImplementation(async function (callback) {
+  return vi.spyOn(RemediationCaseStore.prototype, 'mutate').mockImplementation(async function (this: RemediationCaseStore, callback) {
     // Probe the reducer without writing. Decision-stop persistence is the only
     // mutation here whose value has this terminal status shape.
     const probe = await callback({ version: 'v1', feature, cases: [] });

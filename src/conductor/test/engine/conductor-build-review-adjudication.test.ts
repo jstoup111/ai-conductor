@@ -60,7 +60,7 @@ const RE_RAISED_SOURCE_ID = `testQuality:${RE_RAISED_FINDING_ID}`;
 
 function failOnlyDecisionStopMutation() {
   const originalMutate = RemediationCaseStore.prototype.mutate;
-  return vi.spyOn(RemediationCaseStore.prototype, 'mutate').mockImplementation(async function (callback) {
+  return vi.spyOn(RemediationCaseStore.prototype, 'mutate').mockImplementation(async function (this: RemediationCaseStore, callback) {
     const probe = await callback({ version: 'v1', feature: { version: 'v1', repository: 'probe', feature: 'probe' }, cases: [] });
     const value = (probe as { value?: unknown }).value;
     if (typeof value === 'object' && value !== null && 'status' in value &&
@@ -625,7 +625,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
       effect: { id: 'effect-R', kind: 'action', status: 'failed', diagnostic: 'BUILD did not close the finding.' },
     };
-    const charge = vi.fn(async () => ({
+    const charge = vi.fn(async (..._args: unknown[]) => ({
       status: 'charged' as const, exhausted: false, cumulativeExhausted: false,
       entry: { count: 2, cumulative: 5 },
     }));
