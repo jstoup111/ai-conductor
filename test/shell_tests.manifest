@@ -107,6 +107,7 @@ test_install_worktree_guard.sh shell-runner verifies installer worktree-root gua
 test_bin_update.sh shell-runner verifies standalone update flow behavior
 # triage: test_bin_setup_failure_propagation.sh kept — isolated runner PASS
 test_bin_setup_failure_propagation.sh shell-runner verifies setup failure propagation and worktree isolation
+test_conductor_npm_no_audit.sh shell-runner verifies install paths skip npm audit and fund lookups
 
 # Triage: Codex and documentation acceptance runners and their children.
 # triage: run_first_class_codex_harness_parity_904_acceptance.sh deleted — obsolete: duplicate runner; child shell scripts are classified below and its Vitest acceptance file is in the default suite
