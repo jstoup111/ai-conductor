@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:6, task:26, task:15
+// Covers: task:1, task:2, task:3, task:6, task:12, task:26, task:15
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
