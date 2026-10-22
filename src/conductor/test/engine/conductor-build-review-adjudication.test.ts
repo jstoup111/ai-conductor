@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:7, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
+// Covers: task:1, task:4, task:5, task:7, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -46,12 +46,36 @@ const FINDING_ID = canonicalizeBuildReviewFindingIdentity({
 })!.id;
 const SOURCE_ID = `testQuality:${FINDING_ID}`;
 
+const RE_RAISED_FINDING: BuildReviewFinding = {
+  concernKind: 'test-insensitive',
+  summary: 'A second changed assertion still passes against reverted production.',
+  evidenceLocations: ['test/another-example.test.ts:12'],
+  anchor: { rubric: 'testQuality', locus: { path: 'test/another-example.test.ts', contentHash: `sha256:${'d'.repeat(64)}`, display: 'another example behavior' } },
+};
+const RE_RAISED_FINDING_ID = canonicalizeBuildReviewFindingIdentity({
+  rubric: 'testQuality', contractVersion: 'v3', concernKind: RE_RAISED_FINDING.concernKind, anchor: RE_RAISED_FINDING.anchor,
+})!.id;
+const RE_RAISED_SOURCE_ID = `testQuality:${RE_RAISED_FINDING_ID}`;
+
 function aggregate(kind: 'judged' | 'mixed'): unknown {
   return joinBuildReviewRubricOutcomes({
     lapId: LAP_ID, snapshotDigest: SNAPSHOT,
     results: kind === 'judged'
       ? { testQuality: { kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT, contractVersion: 'v3', findings: [FINDING], verdict: 'FAIL' } }
       : { testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' } },
+  });
+}
+
+/** Incident 1: S was attempted and failed under R; a new judgement merges S into N with fresh live work. */
+function reRaisedAggregate(): unknown {
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [FINDING, RE_RAISED_FINDING], verdict: 'FAIL',
+      },
+    },
   });
 }
 
@@ -139,6 +163,21 @@ function actionJudgement(): unknown {
   };
 }
 
+function reRaisedActionJudgement(): unknown {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: [
+      { sourceId: SOURCE_ID, outcome: 'merged', caseRef: 'case-N' },
+      { sourceId: RE_RAISED_SOURCE_ID, outcome: 'acted', caseRef: 'case-N' },
+    ],
+    cases: [{
+      caseRef: 'case-N', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The re-raised evidence and the new assertion need one focused repair.',
+      effect: { kind: 'action', route: 'build', tasks: [{ title: 'test/another-example.test.ts:12 — assert the rejection path' }] },
+    }],
+  };
+}
+
 function deferralJudgement(): unknown {
   return {
     mode: 'case-v1', domain: 'build_review',
@@ -206,6 +245,8 @@ interface FixtureOptions {
   readonly custom?: boolean;
   /** A feature-owned creation capability is available unless this fake denies it. */
   readonly featureCreationAuthorized?: boolean;
+  /** Replays incident 1: an action already failed on S and a judgement re-raises it with new work. */
+  readonly reRaised?: boolean;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -232,7 +273,7 @@ async function fixture(options: FixtureOptions = {}) {
   const mixed = options.infrastructure && options.infrastructure !== 'none';
   const scopeIncomplete = options.scopeIncomplete !== undefined;
   const clean = options.rawVerdict === 'PASS';
-  const raw = clean ? passAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
+  const raw = clean ? passAggregate() : options.reRaised ? reRaisedAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -245,7 +286,7 @@ async function fixture(options: FixtureOptions = {}) {
       if (step === 'build') throw new Error('stop after BUILD dispatch');
       if (step === 'remediate') {
         remediateDispatches += 1;
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify(options.judgement ?? actionJudgement()), 'utf8');
+        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify(options.judgement ?? (options.reRaised ? reRaisedActionJudgement() : actionJudgement())), 'utf8');
         return { success: true };
       }
       if (step === 'build_review') {
@@ -272,7 +313,8 @@ async function fixture(options: FixtureOptions = {}) {
         rawVerdict: clean ? ('PASS' as const) : ('FAIL' as const),
         verdict: effectivePass ? ('PASS' as const) : ('FAIL' as const),
         acceptedFindingIds,
-        unresolvedFindingIds: mixed || scopeIncomplete || effectivePass || acceptedFindingIds.includes(FINDING_ID) ? [] : [FINDING_ID],
+        unresolvedFindingIds: mixed || scopeIncomplete || effectivePass || acceptedFindingIds.includes(FINDING_ID)
+          ? [] : options.reRaised ? [FINDING_ID, RE_RAISED_FINDING_ID] : [FINDING_ID],
         suppressedFindingIds,
         skippedRubrics: [],
         infrastructureFailureRubrics: [...infrastructureRubrics],
@@ -529,6 +571,73 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.retryReasons.get('build')).toContain('test/example.test.ts:8 — assert the rejection path');
     // BUILD attempt evidence is stamped before provider work, durably.
     expect(order.attemptedCaseIds).toHaveLength(1);
+  });
+
+  // Covers: task:5
+  it('charges one re-raised action effect and dispatches BUILD with its durable case N work order', async () => {
+    const resolvedR = {
+      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high',
+      rationale: 'The earlier repair was attempted but did not settle S.', confidence: 'high', resolution: 'resolved',
+      sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action', status: 'failed', diagnostic: 'BUILD did not close the finding.' },
+    };
+    const charge = vi.fn(async () => ({
+      status: 'charged' as const, exhausted: false, cumulativeExhausted: false,
+      entry: { count: 2, cumulative: 5 },
+    }));
+    const run = await fixture({
+      reRaised: true,
+      chargeEffect: charge as never,
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' }, cases: [resolvedR],
+        }), 'utf8');
+      },
+    });
+    const cases = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ id: string; effect: { id: string } }> };
+    const reRaisedN = cases.cases.find((record) => record.id !== 'case-R')!;
+    const order = await run.readJson('.pipeline/build-review-work-order.json') as { effectId: string; cases: Array<{ caseId: string }> };
+
+    expect(charge).toHaveBeenCalledTimes(1);
+    expect(charge.mock.calls[0]![1]).toBe(reRaisedN.effect.id);
+    expect(run.dispatched).toContain('build');
+    expect(order).toMatchObject({ effectId: reRaisedN.effect.id, cases: [expect.objectContaining({ caseId: reRaisedN.id })] });
+    expect(JSON.stringify(cases.cases.find((record) => record.id === 'case-R'))).toBe(JSON.stringify(resolvedR));
+  });
+
+  // Covers: task:5
+  it('halts a re-raised action at the cumulative cap without a rejected case-store transition', async () => {
+    const resolvedR = {
+      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high',
+      rationale: 'The earlier repair was attempted but did not settle S.', confidence: 'high', resolution: 'resolved',
+      sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action', status: 'failed', diagnostic: 'BUILD did not close the finding.' },
+    };
+    const charge = vi.fn(async () => ({
+      status: 'charged' as const, exhausted: false, cumulativeExhausted: true,
+      entry: { count: 3, cumulative: 6 },
+    }));
+    const run = await fixture({
+      reRaised: true,
+      chargeEffect: charge as never,
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' }, cases: [resolvedR],
+        }), 'utf8');
+      },
+    });
+    const cases = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ id: string; effect: { id: string } }> };
+    const reRaisedN = cases.cases.find((record) => record.id !== 'case-R')!;
+    const halt = await run.haltMarker();
+    const forbidden = /case transition rejected|source-linked-by-multiple-cases|duplicate-case-id|duplicate-effect-id|invalid-next-state/;
+
+    expect(charge).toHaveBeenCalledTimes(1);
+    expect(run.dispatched).not.toContain('build');
+    expect(halt).toContain(`build-review kickback budget exhausted (cumulative): blocked cases ${reRaisedN.id} (effect ${reRaisedN.effect.id})`);
+    expect(halt).not.toMatch(forbidden);
+    expect(run.lifecycle).not.toContainEqual(expect.objectContaining({ rejectedTransition: expect.anything() }));
+    expect(run.lifecycle.map((event) => JSON.stringify(event)).join('\n')).not.toMatch(forbidden);
+    expect(JSON.stringify(cases.cases.find((record) => record.id === 'case-R'))).toBe(JSON.stringify(resolvedR));
   });
 
   it('selects case-v2 for a custom source and releases only its shared authorized action after settlement', async () => {
