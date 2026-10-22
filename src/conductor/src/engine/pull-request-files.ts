@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { runTrackerGraphqlRead, type GhRunner } from './tracker-client.js';
+import { runTrackerAmbientRead, runTrackerGraphqlRead, type GhRunner } from './tracker-client.js';
 
 export interface PullRequestWithFiles { number: number; url: string; body: string; headSha: string; headRef: string; mergedAt?: string; author: string; changedPaths: string[] }
 export interface PullRequestFilesOptions { runGh: GhRunner; cwd: string; state: 'OPEN' | 'MERGED' }
@@ -7,7 +7,12 @@ const MAX_PAGES = 10_000;
 
 /** Read the complete changed-file set for every PR.  Cursor defects are refusals. */
 export async function listPullRequestsWithFiles(options: PullRequestFilesOptions): Promise<PullRequestWithFiles[]> {
-  const repo = JSON.parse((await options.runGh(['repo', 'view', '--json', 'nameWithOwner'], { cwd: options.cwd, credential: 'operator' })).stdout) as { nameWithOwner?: string };
+  const repo = JSON.parse(await runTrackerAmbientRead(
+    options.runGh,
+    options.cwd,
+    'ambient.repository.read',
+    ['repo', 'view', '--json', 'nameWithOwner'],
+  )) as { nameWithOwner?: string };
   const [owner, name] = (repo.nameWithOwner ?? '').split('/');
   if (!owner || !name) throw new Error('repository name is malformed for pull-request enumeration');
   const out: PullRequestWithFiles[] = []; let cursor: string | null = null; const seen = new Set<string>();
