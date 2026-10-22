@@ -10,6 +10,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
 import { formatHeartbeatAge } from './engine/step-heartbeat.js';
+import { FULL_SUITE_OUTPUT_LOG } from './engine/full-suite-evidence.js';
 import {
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
@@ -3624,11 +3625,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.dim(`⊘ ${event.step} skipped: ${event.expression}${undefinedNote}`)}`);
       break;
     }
-    case 'step_failed':
+    case 'step_failed': {
+      // A failed suite's error carries raw suite output; keep only its summary
+      // line here, since the complete output is persisted beside the evidence.
+      const [summary = '', ...omitted] = event.step === 'test_suite' ? event.error.split('\n') : [event.error];
+      const error = omitted.length > 0
+        ? `${summary} (+${omitted.length} more lines omitted; full output in ${FULL_SUITE_OUTPUT_LOG})`
+        : summary;
       log(
-        `${dot} ${chalk.red('✗')} ${chalk.red(`${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${event.error}`)}`,
+        `${dot} ${chalk.red('✗')} ${chalk.red(`${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${error}`)}`,
       );
       break;
+    }
     case 'step_interrupted':
       log(`${dot} ${chalk.yellow('⏸')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} interrupted: ${event.reason}`)}`);
       break;

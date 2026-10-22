@@ -2249,11 +2249,7 @@ describe('ClaudeProvider', () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
       await provider.invoke({ ...baseOptions, interactive: false });
       const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(opts).toMatchObject({
-        input: 'Do the thing',
-        stdout: ['pipe', 'inherit'],
-        stderr: ['pipe', 'inherit'],
-      });
+      expect(opts).toMatchObject({ input: 'Do the thing' });
       // The machine envelope selects print mode — `-p` used to do that implicitly.
       expect(args).toContain('--print');
       expect(args).not.toContain('-p');
@@ -2278,6 +2274,19 @@ describe('ClaudeProvider', () => {
       expect(opts).toMatchObject({ input: oversized });
       const longestArg = Math.max(...args.map((a) => Buffer.byteLength(a, 'utf8')));
       expect(longestArg).toBeLessThan(131_072);
+    });
+
+    it('captures print-mode output without inheriting it, even with no diagnostic log (#3337)', async () => {
+      // A print-mode dispatch emits stream-json. Inheriting it wrote raw
+      // provider JSON into whatever stdout the parent had: under the
+      // child-process executor that is daemon.log. Live visibility on a
+      // non-REPL dispatch comes from the stream consumer instead
+      // (adr-2026-08-24-streaming-dispatch-requests-the-machine-envelope D3).
+      mockExeca.mockResolvedValue({ exitCode: 0 } as any);
+      await provider.invoke({ ...baseOptions, interactive: false });
+      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts.stdout).toBe('pipe');
+      expect(opts.stderr).toBe('pipe');
     });
 
     it('inherits REPL input while streaming and capturing output', async () => {
@@ -2442,8 +2451,8 @@ describe('ClaudeProvider', () => {
         // mode is set; the interactive ('missing executable') case still
         // inherits the terminal.
         stdin: name === 'missing executable' ? 'inherit' : undefined,
-        stdout: ['pipe', 'inherit'],
-        stderr: ['pipe', 'inherit'],
+        stdout: name === 'missing executable' ? ['pipe', 'inherit'] : 'pipe',
+        stderr: name === 'missing executable' ? ['pipe', 'inherit'] : 'pipe',
       })),
     );
   });
