@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
 import { applyOpenPullRequestDeferral, resolveDocsPruneSelection } from '../../src/engine/docs-prune.js';
 
