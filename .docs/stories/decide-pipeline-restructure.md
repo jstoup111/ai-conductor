@@ -92,7 +92,11 @@
 ## S8 — architecture-review is convergent under kickback (FR-12)
 
 - **Happy (full pass):** Given the pre-stories run, when `architecture-review` executes, then it does
-  a full feasibility/alignment pass and produces APPROVED ADRs.
+  a full feasibility/alignment pass over the PRD's functional requirements (product) or the explore
+  output (technical), produces APPROVED ADRs, and hands off to `stories`.
+- **Negative (no not-yet-existing inputs):** Given the pre-stories run, when `architecture-review`
+  follows its instructions and verification checklist, then none of them requires stories or a plan,
+  which do not exist yet at that point.
 - **Happy (amendment):** Given a story or conflict re-opens architecture with a specific structural
   gap, when `architecture-review` re-runs, then it performs a targeted amendment addressing only that
   gap (not a from-scratch re-derivation) and converges.

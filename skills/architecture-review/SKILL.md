@@ -129,7 +129,8 @@ precedent affects the approach.
 
 ### 2. Technical Feasibility
 
-For each story in the plan, assess:
+For each PRD functional requirement (product track) or each part of the explore output's technical
+intent (technical track), assess the proposed design:
 
 | Check | Question | Flag If |
 |---|---|---|
@@ -177,10 +178,10 @@ above the ceiling then needs a `**Scope-exception:**` with that decision as its 
 
 ### 4. Architectural Alignment
 
-Check stories and plan against documented architecture:
+Check the proposed design against documented architecture:
 
 **Domain boundaries:**
-- Does the story respect existing module/domain boundaries?
+- Does the design respect existing module/domain boundaries?
 - Does it introduce coupling between domains that should be independent?
 - Are database queries staying within their domain, or reaching across to other domains' tables?
 
@@ -218,12 +219,12 @@ Check stories and plan against documented architecture:
 
 ### 5. Domain Integrity Pre-Check
 
-Before implementation begins, check the plan for domain modeling issues:
+Before stories and the plan are written, check the proposed design for domain modeling issues:
 
 | Principle | Check | Veto If |
 |---|---|---|
-| **No primitive obsession** | Plan uses domain types, not raw strings/ints | IDs, statuses, money, or email stored as primitives |
-| **Parse, don't validate** | Validation at construction, trusted types throughout | Plan validates same field in multiple places |
+| **No primitive obsession** | Design uses domain types, not raw strings/ints | IDs, statuses, money, or email stored as primitives |
+| **Parse, don't validate** | Validation at construction, trusted types throughout | Design validates same field in multiple places |
 | **Invalid states unrepresentable** | Type system prevents impossible combinations | Booleans where enums should exist, nullable fields that must be present |
 | **Semantic types** | Types answer "what IS this?" not "what is this LIKE?" | `NonEmptyString` instead of `UserName` |
 | **Exhaustive matching** | No catch-all defaults for domain states | `else` / `default` on status/type switches |
@@ -317,7 +318,7 @@ Terminal ADR declarations use only `Status: APPROVED` or `Status: SUPERSEDED by 
 - Superseded ADRs get `Status: SUPERSEDED` and a `Superseded by:` reference
 
 **HARD GATE: No feature proceeds past architecture-review with DRAFT ADRs. All ADRs created
-during the review must reach APPROVED status before `/writing-system-tests` can begin.**
+during the review must reach APPROVED status before `/stories` can begin.**
 
 ### 8. Output
 
@@ -326,7 +327,7 @@ Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md
 ```markdown
 # Architecture Review: [Feature Name]
 **Date:** YYYY-MM-DD
-**Stories reviewed:** [list]
+**Inputs reviewed:** [PRD functional requirements, or explore output for the technical track]
 **Verdict:** APPROVED | APPROVED WITH CONDITIONS | BLOCKED
 
 ## Feasibility
@@ -366,7 +367,7 @@ with it.
 
 ### 9. Verdict Enforcement
 
-**APPROVED** — Proceed to `/writing-system-tests`.
+**APPROVED** — Proceed to `/stories`.
 
 **APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. `build_review` and as-built review check conditions. Unmet conditions at `/finish` are blocking.
 
@@ -598,8 +599,8 @@ Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Tas
 
 ## Verification
 
-- [ ] All stories assessed for feasibility
-- [ ] Complexity rated per story
+- [ ] Every PRD functional requirement (product) or technical-intent item (technical) assessed for feasibility
+- [ ] Complexity rated for the proposed design
 - [ ] Alignment checked against .docs/decisions/ and CLAUDE.md
 - [ ] Domain integrity pre-checked
 - [ ] Risk register populated
