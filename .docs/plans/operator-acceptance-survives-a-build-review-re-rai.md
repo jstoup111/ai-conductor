@@ -869,3 +869,20 @@ Task 9, Task 19 ─▶ Task 23, Task 24 (slice 2)
 **Done when:**
 - [test] S10.3 is satisfied by this task.
 - The repair for task rem-prd-audit-rem-prd-audit-R20a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-R17d: In conductor.ts build_review adjudication, derive a separate absence-retirement health input that is false when the lap had any infrastructure failure or scope-incomplete rubric, covered or not, or any recorded reduced-coverage decision. Keep the existing 'mechanical' lane value for retry/halt routing only. Pass that input as mechanicallyHealthy to settleStrandedBuildReviewActionReservations, finalize's retiresOpenBuildReviewCase, reconcile, and resolveAbsentFailedBuildReviewCases, and replace the hard-coded mechanicallyHealthy: true at the clean-PASS settlement sites (~:5388, ~:5421). Add conductor build_review step tests for two laps whose infrastructure failure is covered by a reduced-coverage decision: an open failed action case and an open reserved action case whose source is not raised. Assert neither is retired, no remediation_case_reconciled event is written, and the healthy-lap absence retirement test still passes.
+**Gate:** prd-audit
+**Rationale:** Verified at 95%. conductor.ts:13524 sets mechanical='healthy' whenever the *uncovered* infrastructure and scope-incomplete lists are empty, so a lap with reduced coverage counts as healthy. That value flows into retiresOpenBuildReviewCase as mechanicallyHealthy, and settlement sites at conductor.ts:5388 and :5421 hard-code mechanicallyHealthy: true. As a result, an action case can be retired by absence when its rubric never ran. That breaks Task 17 doneWhen #3 and ADR D5's healthy-absence condition. The approved architecture already covers the fix; this is implementation and test drift inside Task 17, so it goes to BUILD.
+**Criterion:** S9.5
+**Parent task:** 17
+**Done when:**
+- [test] S9.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-R17d is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-R17e: Change the recovery command emitted at build-review-adjudication.ts reduceBuildReviewAdjudication (~:94) and conductor.ts clean-PASS settlement (~:5441) to the ADR D7 order: `ai-conductor build-review resolve-case --feature <slug> --child <child> --case <id> --rationale "<why>"`, with --child placed before --case and only when child-scoped. Prefer one shared formatter used by both sites. Update the flat and child-scoped halt-text tests to assert the full ADR-ordered command. Add a test that feeds the emitted child-scoped command's argv to the cli.ts resolve-case detector and asserts it parses as kind 'resolve-case' with the expected feature, child and case.
+**Gate:** as-built
+**Rationale:** Verified at 99%. ADR D7 line 211 fixes the canonical grammar as `resolve-case --feature <slug> [--child <child>] --case <id> --rationale`, and the cli.ts:215-221 detector enforces that exact order. The emitters at build-review-adjudication.ts:94 and conductor.ts:5441 instead append --child after --case, so the printed recovery command is rejected as unknown. The architecture is clear and the emitters are the drift, so this goes to BUILD within Task 17's halt-text obligation.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 7
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 7 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-R17e is committed and its targeted tests pass.
