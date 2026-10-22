@@ -74,6 +74,7 @@ import { maskProjectOwnedRegions, restoreRegion } from './pr-body-regions.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import {
@@ -159,6 +160,7 @@ export interface ProductionFinishPublicationDeps {
   /** Task 38 seams: overridable in tests; production defaults resolve the real worktree identity and store. */
   resolveFeatureIdentity?: (projectRoot: string) => Promise<BuildReviewFeatureIdentity | undefined>;
   createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list' | 'listReducedCoverage'>;
+  createCaseStore?: (projectRoot: string, feature: BuildReviewFeatureIdentity) => { read(): Promise<RemediationCaseStoreReadResult> };
 }
 
 export interface ProductionReleaseReadinessObserverInput {
@@ -173,9 +175,10 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   /** A prior retained-PR projection may have changed the body before risk upsert. */
   originalBody?: string;
   records: readonly BuildReviewDispositionRecord[];
+  caseRead?: RemediationCaseStoreReadResult;
   operations?: GithubOperationRunner;
 }): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
-  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records);
+  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records, input.caseRead);
   if (!upserted.ok) return upserted;
   if (upserted.changed || (input.originalBody !== undefined && upserted.body !== input.originalBody)) {
     const mutation = await mutateRetainedPullRequest({
@@ -1306,6 +1309,9 @@ export function createProductionFinishPublicationCoordinator(
       ?? ((root: string) => new BuildReviewDispositionStore(root)))(deps.projectRoot);
     const listed = await store.list(feature);
     if (!listed.ok) throw new Error(`accepted-risk projection: ${listed.message}`);
+    const caseRead = await (deps.createCaseStore
+      ?? ((root: string, caseFeature: BuildReviewFeatureIdentity) => new RemediationCaseStore(root, caseFeature))
+    )(deps.projectRoot, feature).read();
     const reducedCoverage = await store.listReducedCoverage(feature);
     if (!reducedCoverage.ok) throw new Error(`accepted-risk projection: ${reducedCoverage.message}`);
     const aggregate = await readFile(join(deps.projectRoot, '.pipeline', 'build-review.json'), 'utf8')
@@ -1342,6 +1348,7 @@ export function createProductionFinishPublicationCoordinator(
       body: reducedCoverageBody.body,
       originalBody: typeof body === 'string' ? body : '',
       records: listed.records,
+      caseRead,
       operations,
     });
     if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);
