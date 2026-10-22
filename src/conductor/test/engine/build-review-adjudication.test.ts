@@ -309,7 +309,7 @@ describe('reduceBuildReviewAdjudication', () => {
   // Covers: task:rem-prd-audit-rem-prd-audit-R17c
   it.each([
     { feature: 'operator-acceptance', child: undefined, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action' },
-    { feature: 'operator-acceptance', child: 2 as never, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action --child 2' },
+    { feature: 'operator-acceptance', child: 2 as never, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --child 2 --case case-action' },
   ])('names the failed action case and its scoped operator-resolution command', ({ feature, child, command }) => {
     expect(reduceBuildReviewAdjudication(reducerInput({
       feature, child, cases: [action('failed')],

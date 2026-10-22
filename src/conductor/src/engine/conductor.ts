@@ -5451,7 +5451,7 @@ export class Conductor {
     // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
       const actionResolution = survivingObligation.effect.kind === 'action'
-        ? `; resolve with ai-conductor build-review resolve-case --feature ${feature.feature} --case ${survivingObligation.id}${this.activeRegionChild === undefined ? '' : ` --child ${this.activeRegionChild}`} --rationale "<why>"`
+        ? `; resolve with ai-conductor build-review resolve-case --feature ${feature.feature}${this.activeRegionChild === undefined ? '' : ` --child ${this.activeRegionChild}`} --case ${survivingObligation.id} --rationale "<why>"`
         : '';
       return {
         kind: 'invalid',

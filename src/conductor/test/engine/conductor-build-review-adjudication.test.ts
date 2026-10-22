@@ -1450,7 +1450,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       settleRemediationCasesOnCleanBuildReview: () => Promise<{ kind: string; reason?: string }>;
     }).settleRemediationCasesOnCleanBuildReview()).resolves.toEqual(expect.objectContaining({
       kind: 'invalid',
-      reason: expect.stringContaining('resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --case case-child --child 2'),
+      reason: expect.stringContaining('resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --child 2 --case case-child'),
     }));
   });
 

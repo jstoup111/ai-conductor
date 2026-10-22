@@ -15,6 +15,7 @@ import {
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
+  detectBuildReviewResolveCaseCommand,
 } from '../../src/cli.js';
 import { DAEMON_RUN_FLAGS } from '../../src/engine/daemon-command.js';
 import { detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
@@ -133,6 +134,11 @@ describe('CLI', () => {
     expect(detectBuildReviewRecordReducedCoverageCommand([
       'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'unknown', '--rationale', 'risk',
     ])).toMatchObject({ kind: 'record-reduced-coverage', rubric: 'unknown' });
+  });
+  it('accepts the child-scoped resolve-case command rendered in build-review halts', () => {
+    expect(detectBuildReviewResolveCaseCommand([
+      'node', 'conduct', 'build-review', 'resolve-case', '--feature', 'review-rubrics', '--child', '2', '--case', 'case-open', '--rationale', 'known risk',
+    ])).toEqual({ kind: 'resolve-case', feature: 'review-rubrics', child: '2', caseId: 'case-open', rationale: 'known risk' });
   });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);
