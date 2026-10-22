@@ -22,6 +22,7 @@ export interface BuildReviewAdjudicationTransition {
 export type BuildReviewMechanicalState = 'healthy' | 'retry' | 'halt';
 
 /** Render the exact operator recovery command for an open action case. */
+// ai-conductor:session-command-context=operator-only
 export function formatBuildReviewResolveCaseCommand(input: {
   readonly feature: string;
   readonly child: number | undefined;
@@ -29,6 +30,7 @@ export function formatBuildReviewResolveCaseCommand(input: {
 }): string {
   return `ai-conductor build-review resolve-case --feature ${input.feature}${input.child === undefined ? '' : ` --child ${input.child}`} --case ${input.caseId} --rationale "<why>"`;
 }
+// /ai-conductor:session-command-context
 
 /**
  * The application boundary receives no actionable cases until the whole v2
