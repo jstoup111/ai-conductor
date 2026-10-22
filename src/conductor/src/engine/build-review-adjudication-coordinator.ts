@@ -772,10 +772,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       ? failStore('case store', { reason: linked.storeReason, violation: linked.violation })
       : fail(`case reconciliation ${linked.reason}`);
   };
-  const blockedConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
+  // Carry removes a case from every autonomous effect and escalation lane.
+  // The action authority above already derives consistency from that filtered
+  // judgement; use the same projection for the stop writer so a consistency
+  // verdict concerning only carried sources cannot manufacture a new owner
+  // stop after the action lane correctly proceeds.
+  const blockedConsistency = actionEffectJudgement.mode === 'case-v2' && actionEffectJudgement.consistency.verdict === 'blocked'
     ? {
-      sourceIds: judgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
-      rationale: judgement.consistency.rationale,
+      sourceIds: actionEffectJudgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
+      rationale: actionEffectJudgement.consistency.rationale,
     }
     : undefined;
   if (blockedConsistency && blockedConsistency.sourceIds.length === 0) {

@@ -417,7 +417,7 @@ describe('coordinateBuildReviewAdjudication', () => {
           }] },
         },
       ],
-      consistency: { verdict: 'consistent', sourceIds: [carriedSourceId, actionSourceId], caseRefs: ['F2', 'A'], rationale: 'The carried decision does not cover the independent repair.' },
+      consistency: { verdict: 'blocked', sourceIds: [carriedSourceId], caseRefs: ['F2'], rationale: 'The carried decision does not cover the independent repair.' },
     };
     const events: RemediationCaseLifecycleEvent[] = [];
 
@@ -603,6 +603,8 @@ describe('coordinateBuildReviewAdjudication', () => {
         const effective = await resolveEffectiveBuildReviewVerdict(root, aggregate, {
           resolveMainRoot: async () => '/repo',
           realpath: async (path) => path === '/repo' ? '/repo' : '/repo/.worktrees/feature',
+          child: undefined,
+          adjudicationEnabled: true,
         });
         if (!effective.ok) throw new Error(effective.reason);
         return new Set(effective.effective.acceptedFindingIds);
@@ -2153,7 +2155,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const after = await store.read();
     if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
     expect(after.state.cases.find((record) => record.id === sibling.id)).toEqual(siblingBefore);
-    expect(after.state.outbox).toEqual([]);
+    expect(after.state.version === 'v3' ? after.state.outbox : []).toEqual([]);
     expect(events.map((event) => event.type)).not.toContain('remediation_case_reconciled');
   });
 

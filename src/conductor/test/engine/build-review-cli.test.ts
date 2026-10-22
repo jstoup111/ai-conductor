@@ -8,6 +8,7 @@ import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/e
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { remediationCaseStorePath, RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
+import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from '../../src/engine/build-review-cli.js';
 import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
@@ -1259,7 +1260,7 @@ describe('build-review findings with current custom rubrics', () => {
 describe('build-review resolve-case', () => {
   const feature = { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' };
 
-  async function openCaseStore(root: string, child?: 1) {
+  async function openCaseStore(root: string, child?: ChildId) {
     const caseStore = new RemediationCaseStore(root, feature, { child });
     await caseStore.mutate(async (state) => ({
       value: undefined,
@@ -1317,8 +1318,9 @@ describe('build-review resolve-case', () => {
               effect: { id: 'effect-open', kind: 'action', status: 'failed', diagnostic: 'Resolved by operator.' },
             }],
             outbox: [{
+              eventId: expect.any(String),
               occurredAt: '2026-10-22T13:00:00.000Z',
-              event: { type: 'remediation_case_operator_resolved', feature: 'review-rubrics', caseId: 'case-open', sourceIds: ['testQuality:finding-1'] },
+              event: { type: 'remediation_case_operator_resolved', eventId: expect.any(String), feature: 'review-rubrics', caseId: 'case-open', sourceIds: ['testQuality:finding-1'] },
             }],
           },
         },
@@ -1332,8 +1334,8 @@ describe('build-review resolve-case', () => {
 
   it('writes only the requested child case store', async () => {
     const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-child-'));
-    const flat = await openCaseStore(root);
-    const child = await openCaseStore(root, 1);
+    await openCaseStore(root);
+    const child = await openCaseStore(root, parseChildId(1)!);
     const flatBefore = await readFile(remediationCaseStorePath(root), 'utf8');
 
     try {

@@ -132,7 +132,12 @@ function scopeAggregate(resolution: 'indeterminate' | 'resolved', includeTestQua
   } });
 }
 
-const identityDeps = { resolveMainRoot: async () => root, realpath: async (path: string) => path };
+const identityDeps = {
+  resolveMainRoot: async () => root,
+  realpath: async (path: string) => path,
+  child: undefined,
+  adjudicationEnabled: true,
+};
 
 describe('live build-review effective resolver', () => {
   it('keeps an above-floor implementation-quality finding unresolved and suppresses a below-floor one', () => {
