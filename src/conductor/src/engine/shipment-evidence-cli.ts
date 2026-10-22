@@ -33,6 +33,7 @@ import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import { runTrackerRead } from './tracker-client.js';
 import { GhRunnerError } from './tracker-client.js';
 import { specHash } from './shipped-record.js';
+import { readPlanOrPruned } from './pruned-plan.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import {
   createGuardedGithubOperationRunner,
@@ -240,6 +241,7 @@ async function publishRecordOnlyRepair(input: {
       : (path) => readFile(join(input.cwd, path)).catch(() => null),
     input.slug,
     input.shipped,
+    input.specCommit ? { runGit: input.runGit, cwd: input.cwd, commit: input.specCommit } : undefined,
   );
   const evidence = await evaluateAtCandidateHead(
     input.implementationPr,
@@ -457,10 +459,26 @@ async function expectedReconciledRecord(
   readSpec: (path: string) => Promise<Buffer | null>,
   slug: string,
   shipped: string,
+  history?: { runGit: GitRunner; cwd: string; commit: string },
 ): Promise<{ specHash: string; shipped: string }> {
   const planPath = `.docs/plans/${slug}.md`;
-  const plan = await readSpec(planPath);
-  if (plan === null) throw new Error(`plan ${planPath} is unavailable`);
+  const resolved = history
+    ? await readPlanOrPruned(
+      async (commit, path) => readCommittedFile(history.runGit, history.cwd, commit, path)
+        .then((content) => content === null ? null : Buffer.from(content, 'utf8')),
+      async (args) => {
+        const result = await history.runGit(args, { cwd: history.cwd });
+        return { stdout: result.stdout, stderr: '', exitCode: result.exitCode ?? 0 };
+      },
+      history.commit,
+      planPath,
+    )
+    : await readSpec(planPath);
+  if (resolved === null || (typeof resolved === 'object' && 'kind' in resolved)) {
+    const detail = resolved && typeof resolved === 'object' && 'detail' in resolved ? `: ${resolved.detail}` : '';
+    throw new Error(`shipment-plan-pruned: ${planPath}${detail}`);
+  }
+  const plan = resolved;
   const planContent = plan.toString('utf8');
   const reference = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
   let stories: Buffer | null = null;
@@ -471,6 +489,7 @@ async function expectedReconciledRecord(
   }
   return { specHash: specHash(plan, stories).digest, shipped };
 }
+
 
 function implementationPrNumber(pr: string): number {
   const value = /\/pull\/(\d+)(?:$|[/?#])/.exec(pr)?.[1];
