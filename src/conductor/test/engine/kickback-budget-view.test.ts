@@ -1,4 +1,4 @@
-// Covers: task:3, task:5, task:8, task:10, task:12
+// Covers: task:3, task:5, task:6, task:8, task:10, task:12
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { kickbackBudgetView, renderKickbackBudgetView, renderKickbackRecoveryHint, withPendingGrowth } from '../../src/engine/kickback-budget-view.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
+import { projectPendingGrowth } from '../../src/engine/kickback-ledger.js';
 
 async function makeFeature(ledger: unknown, config?: string): Promise<{ root: string; worktree: string }> {
   const root = await mkdtemp(join(tmpdir(), 'kickback-budget-view-'));
@@ -308,6 +309,90 @@ describe('kickback budget view', () => {
     );
     expect(rendered).toContain('1 remaining');
     expect(rendered).toContain('Pending charge: 2 laps (charged when build dispatches)');
+  });
+
+  // Covers: task:6
+  it('shows a pending two-gate growth projection through inspect human and JSON output', async () => {
+    const charges = {
+      prd_audit: { laps: 1, growth: 3 },
+      architecture_review_as_built: { laps: 1, growth: 8 },
+    };
+    const fixture = await makeFeature({
+      version: 1,
+      gates: {},
+      growth: { authored: 40, added: 0, byGate: {} },
+      pendingRepair: { receiptId: 'repair-1', taskIds: ['rem-prd-1', 'rem-as-built-1'], charges },
+    }, 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n');
+    try {
+      const human: string[] = [];
+      const json: string[] = [];
+      for (const [format, output] of [['human', human], ['json', json]] as const) {
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format },
+          { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+        )).toBe(0);
+      }
+
+      const expected = projectPendingGrowth(0, charges, 10);
+      const expectedView = { total: 11, byGate: { prd_audit: 3, architecture_review_as_built: 8 }, projected: 11, minimumRaise: 1 };
+      expect(expected).toMatchObject(expectedView);
+      for (const gate of ['prd_audit', 'architecture_review_as_built']) {
+        const block = human[0].split('\n\n').find((candidate) => candidate.includes(`Kickback budget (${gate}):`));
+        expect(block).toContain('Plan growth: 0/10 added; 0 remaining (config-derived cap)\nPending growth: 11 (prd_audit 3, architecture_review_as_built 8); would reach 11/10 when build dispatches; minimum raise 1');
+      }
+      const views = (JSON.parse(json[0]) as { gates: Array<{ gate: string; planGrowth?: unknown }> }).gates;
+      for (const gate of ['prd_audit', 'architecture_review_as_built']) {
+        expect(views.find((view) => view.gate === gate)?.planGrowth).toMatchObject({ remaining: 0, pendingGrowth: expectedView });
+      }
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:6
+  it('keeps pending growth absent for no-growth pending repairs and projects remaining capacity through inspect', async () => {
+    const pendingFixture = await makeFeature({
+      version: 1,
+      gates: {},
+      growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } },
+      pendingRepair: { receiptId: 'repair-1', taskIds: ['rem-prd-1'], charges: { prd_audit: { laps: 1, growth: 3 } } },
+    }, 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n');
+    const lapsOnlyFixture = await makeFeature({
+      version: 1,
+      gates: {},
+      growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } },
+      pendingRepair: { receiptId: 'repair-2', taskIds: ['rem-prd-2'], charges: { prd_audit: { laps: 1, growth: 0 } } },
+    }, 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n');
+    try {
+      const pendingHuman: string[] = [];
+      const pendingJson: string[] = [];
+      for (const [format, output] of [['human', pendingHuman], ['json', pendingJson]] as const) {
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format },
+          { cwd: pendingFixture.root, resolveMainRoot: async () => pendingFixture.root, print: (line) => output.push(line) },
+        )).toBe(0);
+      }
+      expect(pendingHuman[0]).toContain('Plan growth: 2/10 added; 5 remaining (config-derived cap)\nPending growth: 3 (prd_audit 3); would reach 5/10 when build dispatches');
+      expect(pendingHuman[0]).not.toContain('minimum raise');
+      const pendingViews = (JSON.parse(pendingJson[0]) as { gates: Array<{ gate: string; planGrowth?: unknown }> }).gates;
+      expect(pendingViews.find((view) => view.gate === 'prd_audit')?.planGrowth).toMatchObject({
+        remaining: 5,
+        pendingGrowth: { total: 3, byGate: { prd_audit: 3 }, projected: 5 },
+      });
+
+      const lapsOnlyHuman: string[] = [];
+      const lapsOnlyJson: string[] = [];
+      for (const [format, output] of [['human', lapsOnlyHuman], ['json', lapsOnlyJson]] as const) {
+        expect(await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format },
+          { cwd: lapsOnlyFixture.root, resolveMainRoot: async () => lapsOnlyFixture.root, print: (line) => output.push(line) },
+        )).toBe(0);
+      }
+      expect(lapsOnlyHuman[0]).not.toContain('Pending growth:');
+      expect(JSON.stringify(JSON.parse(lapsOnlyJson[0]))).not.toContain('pendingGrowth');
+    } finally {
+      await Promise.all([pendingFixture.root, lapsOnlyFixture.root].map((root) => rm(root, { recursive: true, force: true })));
+    }
   });
 
   it('keeps a malformed adjustment history explicitly unavailable in JSON', async () => {
