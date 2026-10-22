@@ -4389,6 +4389,7 @@ export class Conductor {
     let activePlanTaskIds: ReadonlySet<string> | undefined;
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
+    const escalatedAsBuiltGaps: RemediationGap[] = [];
     const gateAdmissions = (gapId: string) => ({
       prdAuditAdmits: prdAuditValidated && prdAuditFindings.has(gapId.toUpperCase()),
       asBuiltAdmits: asBuiltValidated && asBuiltFindings.has(gapId),
@@ -4491,6 +4492,13 @@ export class Conductor {
         }
         continue;
       }
+      // A task-free step disposition is the planner escalating the finding to
+      // that step (#3320): credit it, then halt with it below.
+      if (remediationDispositionAppendsToPlan(gap.disposition) && gap.tasks.length === 0 && asBuiltFindings.has(gap.id)) {
+        escalatedAsBuiltGaps.push(gap);
+        admittedAsBuiltFindingCounts.set(gap.id, (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1);
+        continue;
+      }
       if (
         !sealedArtifactGapIds.has(gap.id) &&
         remediationDispositionAppendsToPlan(gap.disposition) &&
@@ -4554,7 +4562,8 @@ export class Conductor {
       const duplicate = [...admittedAsBuiltFindingCounts]
         .filter(([, count]) => count !== 1)
         .map(([id]) => id);
-      if (missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0) {
+      const mismatched = missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0;
+      if (mismatched || escalatedAsBuiltGaps.length > 0) {
         // A halt disposition is credited above by finding id, so a planner that
         // keyed one by anything else — its governing clause, in every observed
         // case — misses that credit and lands here instead. This exit then
@@ -4570,7 +4579,11 @@ export class Conductor {
         // unchanged; only the operator's copy of the reason is restored.
         const plannerHalts = gaps.filter((gap) => gap.disposition === 'halt');
         const detail = [
-          'As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.',
+          ...(escalatedAsBuiltGaps.length > 0
+            ? ['As-built review remediation planner escalated findings to a non-build step: ' +
+                escalatedAsBuiltGaps.map((gap) => `${gap.id}→${gap.disposition} (${gap.rationale})`).join('; ') + '.']
+            : []),
+          ...(mismatched ? ['As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.'] : []),
           ...(missing.length > 0 ? [`Missing: ${missing.join(', ')}.`] : []),
           ...(duplicate.length > 0 ? [`Duplicate: ${duplicate.join(', ')}.`] : []),
           ...(unexpectedAsBuiltGapIds.size > 0

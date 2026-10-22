@@ -428,6 +428,8 @@ async function createAsBuiltRemediationCapFixture(input: {
   plannerFindingIds?: string[];
   /** Findings the planner dispositions `halt` (needs a human, no plan growth). */
   plannerHaltFindingIds?: string[];
+  /** Findings the planner escalates, task-free, to a non-build step (finding id -> step). */
+  plannerEscalations?: Record<string, string>;
   /** Decision 6 kill switch. Default true, matching production. */
   remediationEnabled?: boolean;
   /** Add a validated prd_audit FIXABLE finding + its evidence, for mixed rounds. */
@@ -551,8 +553,16 @@ async function createAsBuiltRemediationCapFixture(input: {
           rationale: `${id} needs a human decision.`,
           tasks: [],
           })),
+          ...Object.entries(input.plannerEscalations ?? {}).map(([id, disposition]) => ({
+          id,
+          disposition,
+          category: null,
+          rationale: `${id} contradicts an approved ADR; more BUILD work would keep cycling.`,
+          tasks: [],
+          })),
           ...(input.plannerFindingIds ?? findings.map((finding) => finding.id))
             .filter((id) => !(input.plannerHaltFindingIds ?? []).includes(id))
+            .filter((id) => !(id in (input.plannerEscalations ?? {})))
             .map((id) => ({
           id,
           disposition: 'build',
@@ -2486,6 +2496,36 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome.detail).not.toContain('Missing: AB-1');
     expect(fixture.outcome.detail).toContain('AB-1');
     expect(fixture.outcome.detail).toContain('needs a human decision');
+  });
+
+  it('halts an escalated as-built finding naming its target step and rationale, not as missing', async () => {
+    // An `architecture_review` disposition with no tasks is the planner
+    // escalating the finding to approved architecture. Only `halt` and
+    // `existing-task` were credited, so the escalation reached the operator as
+    // `Missing` set arithmetic and was retried as a bookkeeping fault (#3320).
+    const fixture = await createAsBuiltRemediationCapFixture({
+      plannerEscalations: { 'AB-1': 'architecture_review', 'AB-2': 'architecture_review' },
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    expect(fixture.outcome.detail).not.toContain('Missing');
+    expect(fixture.outcome.detail).not.toContain('do not exactly match');
+    expect(fixture.outcome.detail).toContain('escalated');
+    expect(fixture.outcome.detail).toContain(
+      '→architecture_review (AB-1 contradicts an approved ADR; more BUILD work would keep cycling.)',
+    );
+    expect(fixture.outcome.detail).toContain('→architecture_review (AB-2 contradicts');
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
+  });
+
+  it('does not route a sibling build repair around an escalated as-built finding', async () => {
+    const fixture = await createAsBuiltRemediationCapFixture({
+      plannerEscalations: { 'AB-1': 'plan' },
+    });
+
+    expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+    expect(fixture.outcome.detail).toContain('→plan (AB-1 contradicts');
+    await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
 
   it('does not persist an as-built answer with an unprojected finding', async () => {
