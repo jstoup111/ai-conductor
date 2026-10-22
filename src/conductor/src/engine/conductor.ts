@@ -124,6 +124,7 @@ import {
   admitCitationRefusals,
   buildCitationJudgementInput,
   collectPendingCitations,
+  demoteUnavailableCitations,
   settleCitationRefusals,
 } from './done-when-citation-judgement.js';
 import { readGitBlobs } from './git-blob-batch.js';
@@ -12120,11 +12121,10 @@ export class Conductor {
                       }
                     } else {
                       const reason = `citation judgement unavailable: ${judgement.cause}`;
-                      await applyCitationVerdicts(this.projectRoot, status, pending.map((citation) => ({ taskId: citation.taskId, checkIndex: citation.checkIndex, verdict: 'does-not-assert' as const, reason })));
-                      // Unavailability is not a refusal: demote directly and never admit a repair obligation.
-                      const persisted = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')) as { tasks?: Array<{ doneWhen?: Array<Record<string, unknown>> }> };
-                      for (const task of persisted.tasks ?? []) for (const close of task.doneWhen ?? []) if (close.source === 'judged' && close.reason === reason) { close.source = 'unverified'; delete close.verdict; }
-                      await writeFile(join(this.projectRoot, '.pipeline', 'task-status.json'), JSON.stringify(persisted, null, 2));
+                      // Unavailability is not a refusal: persist the terminal
+                      // demotion directly so crash recovery never observes a
+                      // judged does-not-assert record to replay.
+                      await demoteUnavailableCitations(this.projectRoot, status, pending, reason);
                       await emitTracked({ type: 'done_when_citation_judged', citations: pending.map((citation) => ({ taskId: citation.taskId, check: citation.checkIndex, unavailable: judgement.cause })) });
                     }
                   }

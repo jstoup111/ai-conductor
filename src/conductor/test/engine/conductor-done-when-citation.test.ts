@@ -1,4 +1,4 @@
-// Covers: task:9, task:10, task:11, task:14, task:17
+// Covers: task:9, task:10, task:11, task:14, task:17, task:rem-as-built-rem-as-built-19
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,6 +10,23 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+const crashAfterTaskStatusWrite = Symbol.for('conductor.done-when-citation.crash-after-task-status-write');
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rename: async (from: string, to: string) => {
+      await actual.rename(from, to);
+      const crash = (globalThis as typeof globalThis & { [crashAfterTaskStatusWrite]?: Error })[crashAfterTaskStatusWrite];
+      if (to.endsWith('/.pipeline/task-status.json') && crash) {
+        delete (globalThis as typeof globalThis & { [crashAfterTaskStatusWrite]?: Error })[crashAfterTaskStatusWrite];
+        throw crash;
+      }
+    },
+  };
+});
 
 describe('BUILD Done-when citation judgement boundary', () => {
   let root: string;
@@ -124,6 +141,60 @@ describe('BUILD Done-when citation judgement boundary', () => {
     // Demotion consumes the ordinary single BUILD nudge, even over a retry
     // budget with more than one attempt; it must not emit at demotion time.
     expect(observed).toHaveLength(1);
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(engine.repairObligations).toBeUndefined();
+  });
+
+  it('does not replay an unavailable judgement when a crash follows its persistence write', async () => {
+    const crash = new Error('simulated crash after unavailable judgement persistence');
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
+      id: '7', status: 'pending', doneWhen: [
+        { check: '[test] pending', evidence: 'test:test/one.test.ts::pending', source: 'pending-judgement' },
+      ],
+    }] }));
+    const crashRunner: StepRunner = {
+      run: async () => {
+        await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
+          id: '7', status: 'completed', doneWhen: [
+            { check: '[test] pending', evidence: 'test:test/one.test.ts::pending', source: 'pending-judgement' },
+          ],
+        }] }));
+        return { success: true };
+      },
+      dispatchDoneWhenCitationJudgement: vi.fn(async () => ({
+        kind: 'unavailable' as const,
+        cause: 'native schema unsupported',
+      })),
+    };
+    (globalThis as typeof globalThis & { [crashAfterTaskStatusWrite]?: Error })[crashAfterTaskStatusWrite] = crash;
+    try {
+      await new Conductor({
+        projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        stepRunner: crashRunner, events: new ConductorEventEmitter(), mode: 'auto', resume: true,
+        fromStep: 'build', verifyArtifacts: true, maxRetries: 1,
+      } as never).run();
+    } finally {
+      delete (globalThis as typeof globalThis & { [crashAfterTaskStatusWrite]?: Error })[crashAfterTaskStatusWrite];
+    }
+
+    const replayJudgement = vi.fn();
+    const replayRunner: StepRunner = {
+      run: vi.fn(async () => ({ success: true })),
+      dispatchDoneWhenCitationJudgement: replayJudgement,
+    };
+    await new Conductor({
+      projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      stepRunner: replayRunner, events: new ConductorEventEmitter(), mode: 'auto', resume: true,
+      fromStep: 'build', verifyArtifacts: true, maxRetries: 1,
+    } as never).run();
+
+    expect(replayJudgement).not.toHaveBeenCalled();
+    const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
+    expect(status.tasks).toContainEqual(expect.objectContaining({
+      id: '7', status: 'completed', doneWhen: [expect.objectContaining({
+        source: 'unverified', reason: 'citation judgement unavailable: native schema unsupported',
+      })],
+    }));
     const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
     expect(engine.repairObligations).toBeUndefined();
   });

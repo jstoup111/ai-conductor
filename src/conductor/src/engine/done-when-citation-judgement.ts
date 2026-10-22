@@ -234,6 +234,50 @@ export async function applyCitationVerdicts(
   }
 }
 
+/**
+ * A provider outage is terminal evidence, not a judge refusal. Persist its
+ * direct unverified disposition in one write so crash recovery has no
+ * refusal-shaped record to replay.
+ */
+export async function demoteUnavailableCitations(
+  projectRoot: string,
+  status: unknown,
+  pending: readonly PendingCitation[],
+  reason: string,
+): Promise<void> {
+  const root = record(status);
+  if (!root) throw new Error('task-status.json root is not an object');
+  const tasks = root.tasks;
+  if (!Array.isArray(tasks)) throw new Error('task-status.json does not have a tasks array');
+
+  const pendingKeys = new Set(pending.map(({ taskId, checkIndex }) => `${taskId}\u0000${checkIndex}`));
+  for (const rawTask of tasks) {
+    const task = record(rawTask);
+    if (!task || typeof task.id !== 'string' || !Array.isArray(task.doneWhen)) continue;
+    for (const [offset, rawClose] of task.doneWhen.entries()) {
+      const close = record(rawClose);
+      if (!close || !pendingKeys.has(`${task.id}\u0000${offset + 1}`)) continue;
+      const source = parseDoneWhenCloseSource(close.source);
+      if (source instanceof Error) throw source;
+      if (source !== 'pending-judgement') continue;
+      close.source = 'unverified';
+      close.reason = reason;
+      delete close.verdict;
+    }
+  }
+
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+  const path = join(pipelineDir, 'task-status.json');
+  const temp = join(pipelineDir, `.task-status.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
+  try {
+    await writeFile(temp, JSON.stringify(root, null, 2));
+    await rename(temp, path);
+  } catch (error) {
+    throw new Error(`failed to write task-status.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 interface RefusedCitation extends PendingCitation {
   readonly reason: string;
 }
