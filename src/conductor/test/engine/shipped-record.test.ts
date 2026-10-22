@@ -1,4 +1,4 @@
-// Covers: task:1, task:20
+// Covers: task:1, task:20, task:24
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -529,6 +529,29 @@ describe('accepted build-review risk shipped projection', () => {
     expect(appended).not.toContain('2026-08-14T12:00:00.000Z');
     expect(appendBuildReviewAcceptedRisk(body, [])).toBe(body);
     expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
+  });
+
+  it('carries accepted case state into the shipped record without operator detail', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
+    const state = {
+      ok: true as const,
+      state: {
+        version: 'v3' as const, feature: { version: 'v1' as const, repository: 'repo', feature: 'feature' }, prdWideningCases: [], suppressions: [], outbox: [],
+        cases: [{
+          id: 'case-O', domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, rationale: 'private', confidence: 'high' as const, resolution: 'resolved' as const,
+          sources: [{ sourceId: `testQuality:${finding.id}`, outcome: 'carried' as const, recordedAt: '2026-10-22T00:00:00.000Z' }],
+          effect: { id: 'effect-O', kind: 'action' as const, status: 'applied' as const, workOrderId: 'work-O' },
+          operatorAcceptance: { origins: [{ sourceId: `testQuality:${finding.id}`, lapId: 'lap-origin' }] },
+          operatorResolution: { operator: 'operator', rationale: 'private resolution', resolvedAt: '2026-10-22T01:00:00.000Z' },
+        }],
+      },
+    } as const;
+
+    const appended = appendBuildReviewAcceptedRisk('## Summary', [], state);
+
+    expect(appended).toContain(`Carried finding: \`${finding.id}\` — rubric: testQuality; carried from: \`testQuality:${finding.id}\` (lap lap-origin)`);
+    expect(appended).toContain('Operator-resolved case: `case-O` — source ids:');
+    expect(appended).not.toMatch(/operator|private|2026-10-22/);
   });
 
   it('upserts the accepted-risk section idempotently: a repeat with the same records changes nothing', () => {

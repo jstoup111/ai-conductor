@@ -1,4 +1,4 @@
-// Covers: task:2, task:19, task:27
+// Covers: task:2, task:19, task:23, task:27
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -209,6 +209,48 @@ describe('build-review findings CLI', () => {
       createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }), print,
     })).resolves.toBe(0);
     expect(print).toHaveBeenCalledWith(expect.stringContaining('Autonomous case outcomes: none'));
+  });
+
+  it('lists carried, operator-resolved, and pending child case state in both output formats', async () => {
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const disposition = {
+      version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' },
+      finding: identity, sourceLapId: lapId, summary: 'accepted', rationale: 'accepted risk', operator: 'operator', acceptedAt: '2026-10-21T00:00:00.000Z',
+    };
+    const state: RemediationCaseStoreState = {
+      version: 'v3', feature: disposition.feature, prdWideningCases: [], suppressions: [],
+      cases: [{
+        ...refutedCaseStore.cases[0]!, id: 'case-carried', disposition: 'act', resolution: 'resolved',
+        sources: [{ sourceId: `testQuality:${identity.id}`, outcome: 'carried', recordedAt: '2026-10-22T00:00:00.000Z' }],
+        effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'work-carried' },
+        operatorAcceptance: { origins: [{ sourceId: `testQuality:${identity.id}`, lapId: 'lap-origin' }] },
+        operatorResolution: { operator: 'operator', rationale: 'resolved risk', resolvedAt: '2026-10-22T01:00:00.000Z' },
+      }],
+      outbox: [{
+        eventId: 'event-pending', occurredAt: '2026-10-22T01:00:00.000Z',
+        event: { type: 'remediation_case_operator_resolved', eventId: 'event-pending', feature: 'review-rubrics', caseId: 'case-carried', sourceIds: [`testQuality:${identity.id}`] },
+      }],
+    };
+    const human = vi.fn();
+    const json = vi.fn();
+    const createCaseStore = vi.fn(() => ({ read: async () => ({ ok: true as const, state }) }));
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [disposition] }), append: vi.fn() }),
+      createCaseStore, readMechanicalFaults: async () => 0,
+    };
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '1', format: 'human' }, { ...deps, print: human })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '1', format: 'json' }, { ...deps, print: json })).resolves.toBe(0);
+
+    expect(createCaseStore).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', disposition.feature, 1);
+    expect(human).toHaveBeenCalledWith(expect.stringMatching(/Carried source:.*case-carried.*accepted risk[\s\S]*Operator-resolved case: case-carried.*resolved risk[\s\S]*Pending remediation-case outbox entry/));
+    expect(JSON.parse(json.mock.calls[0]![0])).toMatchObject({
+      carriedSources: [{ sourceId: `testQuality:${identity.id}`, caseId: 'case-carried', origins: [{ sourceId: `testQuality:${identity.id}`, lapId: 'lap-origin', operator: 'operator', rationale: 'accepted risk' }] }],
+      operatorResolvedCases: [{ caseId: 'case-carried', operator: 'operator', rationale: 'resolved risk', resolvedAt: '2026-10-22T01:00:00.000Z' }],
+      pendingOutbox: [{ eventId: 'event-pending' }],
+    });
   });
 
   it('records reduced coverage for an interactive resolved local operator using the engine-derived cause', async () => {
@@ -591,7 +633,7 @@ describe('build-review findings CLI', () => {
     const machineOutput = JSON.parse(machine.mock.calls[0]![0]);
     expect(machineOutput.lastMechanicalFault).toEqual(fault);
     expect(Object.keys(machineOutput).sort()).toEqual([
-      'acceptedDispositions', 'acceptedFindingIds', 'cases', 'feature', 'infrastructureFailureRubrics', 'lapId', 'lastMechanicalFault',
+      'acceptedDispositions', 'acceptedFindingIds', 'carriedSources', 'cases', 'feature', 'infrastructureFailureRubrics', 'lapId', 'lastMechanicalFault', 'operatorResolvedCases', 'pendingOutbox',
       'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'suppressedFindingIds', 'unresolvedFindingIds', 'verdict',
     ]);
     expect(human).toHaveBeenCalledWith(expect.stringContaining(
@@ -621,7 +663,7 @@ describe('build-review findings CLI', () => {
     expect(JSON.parse(print.mock.calls[0]![0]).exhaustedMechanicalFaults).toBeUndefined();
   });
 
-  it('keeps a report without a ledger fault byte-identical to the existing output', async () => {
+  it('reports empty carry and operator-resolution collections when the case store has none', async () => {
     const faultFree = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: {
         testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
@@ -645,7 +687,7 @@ describe('build-review findings CLI', () => {
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
       acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security', 'implementationQuality'], infrastructureFailureRubrics: [], acceptedDispositions: [],
-      cases: [],
+      cases: [], carriedSources: [], operatorResolvedCases: [], pendingOutbox: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([
