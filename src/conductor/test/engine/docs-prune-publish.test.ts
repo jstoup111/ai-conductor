@@ -1,4 +1,4 @@
-// Covers: task:6, task:7
+// Covers: task:6, task:7, task:rem-prd-audit-6-r2
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
