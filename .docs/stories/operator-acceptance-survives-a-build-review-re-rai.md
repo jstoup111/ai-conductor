@@ -254,7 +254,7 @@ As an operator, I want a clean build_review PASS to settle an action case whose 
 
 #### Negative Paths
 - Given open action case O with a `failed` effect whose source is still raised and unaccepted, when a PASS is attempted, then settlement halts naming O and the exact command `ai-conductor build-review resolve-case --feature <slug> --case <O>`, with `--child <child>` when the case store is child-scoped.
-- Given open action case O whose source is not raised on a lap with an infrastructure failure or reduced coverage, when the lap settles, then O is not retired by absence.
+- Given open action case O whose source is not raised on a lap where any built-in or custom rubric had an infrastructure failure or incomplete scope, even when a reduced-coverage decision covers it, when the lap settles, then O is not retired by absence.
 - Given a failed deferral or an open decision stop that no operator resolved with `build-review resolve-case`, when a clean PASS is attempted, then settlement still blocks exactly as today.
 - Given settlement runs again after a crash, when O is retired, then O is resolved once and exactly one `remediation_case_reconciled` event exists for it.
 

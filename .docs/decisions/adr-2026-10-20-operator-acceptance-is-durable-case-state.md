@@ -179,6 +179,15 @@ component may re-implement that rule. Other components consume only its output.
    - **Failed and unbuilt actions can retire.** An `act` case whose action effect is `failed` or
      `reserved` retires when every source is covered or, on a mechanically healthy lap, not
      raised. Today such cases are excluded.
+   - **Mechanically healthy, for absence.** A lap is mechanically healthy for absence retirement
+     only when no current built-in or custom rubric had an infrastructure failure or an
+     incomplete scope in that lap. A reduced-coverage decision does not make a lap healthy for
+     absence: it lets the lap route past the fault (`adr-2026-08-29-build-review-remediate-case-adjudication`
+     D3.3), but a rubric that did not judge is no evidence that its findings are gone. Only the
+     current lap counts; reduced-coverage records from earlier laps play no part. This is a
+     separate input from the lap's `mechanical` routing value (`healthy` / `retry` / `halt`),
+     which keeps its existing meaning. One helper computes it, and every retirement caller uses
+     that helper.
    - **On retirement:** the case becomes `resolved`. A `reserved` effect becomes `failed` with a
      diagnostic naming the reason. Every link and earlier effect state is kept.
    - **Still blocks:** a failed action case whose source is still raised and unaccepted. A failed
@@ -265,7 +274,7 @@ is the drain, which emits on the existing bus to the existing persister.
 | A4 | Every production caller of the effective-verdict resolver has its child scope and the adjudication flag in reach | verified | 90% | yes | Some callers would need plumbing before they could pass the required parameters | — |
 | A5 | Operator-resolved cases should carry later bindings, and a case with any unaccepted source should never carry | unverified | 90% | yes | Too broad: silent suppression. Too narrow: halt loops | APPROVED by operator 2026-10-20 |
 | A6 | Leaving already-carried links settled after an origin disposition is invalidated is acceptable, because invalidation re-keys finding ids | inferred | 85% | yes | A stale carry could hide a re-keyed recurrence | APPROVED by operator 2026-10-20 |
-| A7 | A failed or reserved action case whose sources are all accepted or absent in a mechanically healthy lap is safe to retire | inferred | 85% | yes | A real defect hidden by a failed effect could be dropped | APPROVED by operator 2026-10-20 |
+| A7 | A failed or reserved action case whose sources are all accepted or absent in a mechanically healthy lap (decision 5: no current built-in or custom rubric failed or was scope-incomplete in that lap, reduced coverage notwithstanding) is safe to retire | inferred | 85% | yes | A real defect hidden by a failed effect could be dropped | APPROVED by operator 2026-10-20 |
 | A8 | #3292's build (D5.4–D5.7, `currentBuildReviewSourceLinks`) merges before this feature builds, enforced by the native edge "#3271 blocked by #3292", which the daemon's blocker resolver honors while #3292 is open | verified | 90% | yes | This plan would target seams that do not exist yet, and #3292's build would have to reconcile against this code | APPROVED by operator 2026-10-21 |
 
 ## Consequences
