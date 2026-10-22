@@ -157,7 +157,7 @@ self-host candidates — both providers, invoke and interactive paths) carries
 run — printing `ai-conductor may not be invoked from inside a daemon-managed session; the engine owns
 all conductor operations for this run (blocked subcommand: <name>).` and exiting 1 — before any
 subcommand parsing. `<name>` is a bounded identity: a recognized subcommand (`daemon`, `config`,
-`test-suite`, `build-review`, `finish-record`, `docs-prune`, or a sanctioned one), `unknown` for any other text, or
+`test-suite`, `build-review`, `done-when`, `finish-record`, `docs-prune`, or a sanctioned one), `unknown` for any other text, or
 `<none>`. Unrecognized argv is never echoed. When the engine supplied a managed-session context, the
 refusal also records a [`session_command_refused`](artifacts.md#managed-session-occurrence-events)
 event; without that context the command prints `session refusal telemetry unavailable` and still
@@ -218,6 +218,29 @@ mismatch is refused without changing the store and exits 1. A resolved case can 
 later same-substance findings; see
 [post-join build-review adjudication](../explanation/gates.md#post-join-build-review-adjudication).
 Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case).
+
+## `ai-conductor done-when`
+
+```bash
+ai-conductor done-when accept --feature <slug> --task <id> --check <n> --reason <text>
+```
+
+Operator-only. Overrides one refused `[test]` citation: a check the
+[citation judge](../explanation/gates.md#per-task-done-when-evidence) answered `does-not-assert`,
+whether still open or already demoted to `unverified`. All four flags are required, in this order;
+any other shape is not recognized as this command. `<n>` is the one-based check number.
+
+On success the check's record in the feature worktree's `.pipeline/task-status.json` becomes
+`source: "operator-accepted"` with the trimmed reason, and its verdict is removed. When no other
+check on the task is pending or refused, the task's open `done-when-citation` repair obligation is
+closed. The command appends `done_when_citation_accepted` to the feature's
+[`events.jsonl`](artifacts.md#pipelineeventsjsonl) and exits 0.
+
+It exits 1 without writing when the reason is blank, the feature or task is unknown, the check number
+exceeds the task's close records, any close record has an unknown source, the check has no refused
+citation, or the repair state cannot be read or closed. A citation demoted because the judge was
+unavailable carries no verdict and cannot be accepted. A
+[daemon-managed session](#daemon-session-refusal) is refused before parsing.
 
 ## `ai-conductor scope-check`
 
@@ -942,7 +965,9 @@ Exactly two positionals: the verb and a task id matching `[A-Za-z0-9._-]+` (for 
 `rem-fr10-1`). A missing or unknown verb, or a missing id, prints the guide to stderr and exits 2.
 
 `start` reads `.pipeline/task-status.json`, flips the matching row's status to `in_progress`, writes it
-back atomically, then writes the id into `.pipeline/current-task`. It exits 1 when the status file is
+back atomically, then writes the id into `.pipeline/current-task`. A row with no `startHead` also gets
+the current `git rev-parse HEAD`. A later start never moves that field, and a git failure leaves it
+absent without failing the start. It exits 1 when the status file is
 unreadable, corrupt, not an object, or has no `tasks` array; when the id is not found (the error lists
 the valid ids); or when either write fails.
 
@@ -953,7 +978,11 @@ close and names the check. A check tagged `[test]` needs `--done-when <n>=test:<
 file must exist at `HEAD`, contain the title, and carry a `Covers:` marker for the task or one of its
 cited story criteria; otherwise the close is refused and names the failing part. A tagged check that no
 test can verify may close with `--unverified <n>=<reason>` instead; the reason must be non-empty, and an
-untagged check refuses the flag. `--plan-gap` refuses a tagged check. Both verbs resolve the
+untagged check refuses the flag. An accepted `[test]` citation closes `verified` only when
+`git diff <startHead> HEAD -- <path>` adds the cited title. Otherwise, including a row with no
+`startHead`, it closes `pending-judgement` for the
+[citation judgement](../explanation/gates.md#per-task-done-when-evidence) at BUILD session end.
+`--plan-gap` refuses a tagged check. Both verbs resolve the
 repository root first, so they work from a nested directory. Without a stamp, re-closing an already `completed` or `skipped` row with
 no open repair exits 0 without rewriting `task-status.json`. `--plan-gap <n> --reason <text>` halts
 the task with or without a stamp; when no active plan is recorded, it resolves the plan from the
