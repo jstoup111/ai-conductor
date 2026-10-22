@@ -135,27 +135,27 @@ export interface ParkedReconcileMaintenanceSummary {
   skipped: number;
 }
 
-type DaemonMaintenancePhaseBase = {
+type DaemonMaintenancePhaseBase<Outcome extends MaintenancePhaseOutcome> = {
   type: 'daemon_maintenance_phase';
   durationMs: number;
-  outcome: MaintenancePhaseOutcome;
+  outcome: Outcome;
 };
 
-/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data. */
+/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data or another phase's outcome. */
 export type DaemonMaintenancePhaseEvent =
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed' | 'deferred'> & {
       phase: 'repair';
       prUrl: string;
       slug?: string;
       summary?: never;
     })
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'skipped-unchanged' | 'failed'> & {
       phase: 'parked-reconcile';
       summary?: ParkedReconcileMaintenanceSummary;
       prUrl?: never;
       slug?: never;
     })
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed'> & {
       phase: Exclude<MaintenancePhase, 'repair' | 'parked-reconcile'>;
       prUrl?: never;
       slug?: never;

@@ -1045,7 +1045,7 @@ phase.
 |---|---|
 | `phase` | `startup-refresh`, `first-claim`, `rekick`, `startup-dashboard`, `halt-pr-reconcile`, `parked-reconcile`, `provider-scratch`, `mergeable-sweep`, or `repair` |
 | `durationMs` | Wall-clock duration of the phase |
-| `outcome` | `completed`, `skipped-unchanged`, `failed`, or `deferred` |
+| `outcome` | `completed` or `failed` for every phase; `skipped-unchanged` is `parked-reconcile` only and `deferred` is `repair` only |
 | `prUrl`, `slug` | `repair` only; `prUrl` is required and `slug` is optional |
 | `summary` | `parked-reconcile` only, optional: `reconciled`, `deferred`, `orphaned`, `parked`, `refused`, `skipped` counts |
 
