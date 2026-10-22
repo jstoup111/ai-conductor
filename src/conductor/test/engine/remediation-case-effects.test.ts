@@ -168,6 +168,31 @@ describe('remediation case effects', () => {
     })).resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
   });
 
+  // Covers: task:7 — a rejected next-state preserves the store's transition evidence.
+  it('returns a refused decision-stop transition with its invariant', async () => {
+    const owner: RemediationCaseRecord = {
+      id: 'case-owner', domain: 'build_review', disposition: 'act', priority: 'high',
+      rationale: 'The existing repair remains open.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'finding-a', outcome: 'acted', recordedAt: '2026-10-01T00:00:00.000Z' }],
+      effect: { id: 'effect-owner', kind: 'action', status: 'applied', workOrderId: 'order-owner' },
+    };
+    const store = await storeWith({ version: 'v1', feature, cases: [owner] });
+    const result = await persistBuildReviewDecisionStop({
+      store,
+      record: {
+        id: 'case-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+        rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false, reason: 'rejected-transition',
+      violation: { invariant: 'source-linked-by-multiple-cases', caseIds: ['case-owner', 'case-stop'], sourceIds: ['finding-a'] },
+    });
+  });
+
   it('publishes and charges a stable action order once', async () => {
     const store = await storeWith({ version: 'v1', feature, cases: [{
       id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',
