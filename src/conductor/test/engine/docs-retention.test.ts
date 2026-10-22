@@ -61,8 +61,9 @@ describe('prunableFilesForStem', () => {
 
   it('matches undated and dated family artifacts through normalized identity', () => {
     expect([...prunableFilesForStem(paths, '2026-10-01-alpha')].sort()).toEqual([
-      ...PRUNABLE_FAMILIES.map((family) => `.docs/${family}/2026-10-01-alpha.md`),
-      ...PRUNABLE_FAMILIES.map((family) => `.docs/${family}/alpha.md`),
+      '.docs/plans/2026-10-01-alpha.md',
+      ...PRUNABLE_FAMILIES.filter((family) => family !== 'plans')
+        .flatMap((family) => [`.docs/${family}/2026-10-01-alpha.md`, `.docs/${family}/alpha.md`]),
       '.docs/retros/2026-10-02-alpha.md',
     ].sort());
   });
