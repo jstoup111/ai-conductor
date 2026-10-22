@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:1, task:3, task:6, task:7, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -314,6 +314,57 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  // Covers: task:7 — the decision-stop persistence seam retains graph-refusal evidence for the event spine.
+  it.each([
+    ['an explicit escalation', false],
+    ['a blocked-consistency stop', true],
+  ] as const)('emits a refused transition for %s', async (_label, blockedConsistency) => {
+    const root = await projectRoot();
+    const mixed = customMixedAggregate();
+    const currentSource = projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!;
+    const currentSourceId = buildReviewAdjudicationSourceId(currentSource);
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The existing repair remains open.', resolution: 'open',
+        sources: [{ sourceId: currentSourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        effect: { id: 'effect-owner', kind: 'action', status: 'applied', workOrderId: 'order-owner' },
+      }],
+    });
+    const events: ConductorEvent[] = [];
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: currentSourceId, outcome: 'escalate', caseRef: 'case-stop' }],
+      cases: [{
+        caseRef: 'case-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'The owner must decide.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+      consistency: blockedConsistency
+        ? { verdict: 'blocked', sourceIds: [currentSourceId], caseRefs: ['case-stop'], rationale: 'The proposals conflict.' }
+        : { verdict: 'consistent', sourceIds: [currentSourceId], caseRefs: ['case-stop'], rationale: 'The owner stop is the only outcome.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixed, mechanical: 'retry',
+      generateId: () => 'case-stop',
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [] }),
+      emit: async (event) => { events.push(event); },
+    });
+    const failed = events.find((event) => event.type === 'remediation_adjudication_failed');
+
+    expect(result).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('case transition rejected: source-linked-by-multiple-cases'),
+    });
+    expect(result.detail).toContain('persisted case history is valid and unchanged');
+    expect(failed).toMatchObject({
+      type: 'remediation_adjudication_failed',
+      rejectedTransition: { invariant: 'source-linked-by-multiple-cases', caseIds: expect.arrayContaining(['case-owner', 'case-stop']), sourceIds: [currentSourceId] },
+    });
+  });
+
   it('emits the rejected case transition detail from reconciliation', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

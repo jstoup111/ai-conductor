@@ -193,6 +193,27 @@ describe('remediation case effects', () => {
     });
   });
 
+  // Covers: task:7 — non-transition store failures never acquire trusted-history detail.
+  it.each(['lock-timeout', 'malformed-state'] as const)(
+    'keeps a decision-stop %s failure as an ordinary case-store failure',
+    async (reason) => {
+      const store = await storeWith({ version: 'v1', feature, cases: [] });
+      vi.spyOn(store, 'mutate').mockResolvedValue({ ok: false, reason });
+      const result = await persistBuildReviewDecisionStop({
+        store,
+        record: {
+          id: 'case-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+          rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
+          sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+        },
+      });
+
+      expect(result).toEqual({ ok: false, reason: `case store ${reason}` });
+      expect(result).not.toHaveProperty('violation');
+    },
+  );
+
   it('publishes and charges a stable action order once', async () => {
     const store = await storeWith({ version: 'v1', feature, cases: [{
       id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'repair', confidence: 'high', resolution: 'open',

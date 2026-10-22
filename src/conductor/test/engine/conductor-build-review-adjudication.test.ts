@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
+// Covers: task:1, task:4, task:7, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -369,6 +369,53 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
+  // Covers: task:7 — production build_review persists the refusal detail into the needs-human HALT.
+  it.each([
+    ['an explicit escalation', false],
+    ['a blocked-consistency stop', true],
+  ] as const)('writes the refused decision-stop invariant to the HALT for %s', async (_label, blockedConsistency) => {
+    const customSource = projectBuildReviewAggregateSources(customAggregate())![0]!;
+    const sourceId = buildReviewAdjudicationSourceId(customSource);
+    const run = await fixture({
+      custom: true,
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+          cases: [{
+            id: 'case-owner', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The existing repair remains open.', resolution: 'open',
+            sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+            effect: { id: 'effect-owner', kind: 'action', status: 'applied', workOrderId: 'order-owner' },
+          }],
+        }), 'utf8');
+      },
+      judgement: {
+        mode: 'case-v2', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'case-stop' }],
+        cases: [{
+          caseRef: 'case-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'The owner must decide.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        }],
+        consistency: blockedConsistency
+          ? { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['case-stop'], rationale: 'The proposals conflict.' }
+          : { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-stop'], rationale: 'The owner stop is the only outcome.' },
+      },
+    });
+    const halt = await run.haltMarker();
+    const failed = run.lifecycle.find((event) => event.type === 'remediation_adjudication_failed');
+    if (!failed || failed.type !== 'remediation_adjudication_failed' || !failed.rejectedTransition) {
+      throw new Error('expected the refused decision-stop transition event');
+    }
+    const proposedStopId = failed.rejectedTransition.caseIds.find((caseId) => caseId !== 'case-owner');
+
+    expect(await readFile(join(run.projectRoot, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');
+    expect(halt).toContain('case transition rejected: source-linked-by-multiple-cases');
+    expect(halt).toContain('case-owner');
+    expect(halt).toContain(proposedStopId ?? 'missing-proposed-stop');
+    expect(halt).toContain(sourceId);
+    expect(halt).toContain('persisted case history is valid and unchanged');
+  });
+
   it('halts a rejected transition with trusted-history recovery guidance before BUILD dispatch', async () => {
     let persisted = '';
     const run = await fixture({
