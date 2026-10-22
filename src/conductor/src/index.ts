@@ -171,6 +171,7 @@ import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
 } from './engine/shipment-evidence-cli.js';
+import { detectDocsPruneCommand, dispatchDocsPrune } from './engine/docs-prune-cli.js';
 
 import {
   detectFinishRecordCommand,
@@ -1094,6 +1095,12 @@ async function dispatchCliCommand(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  const docsPruneCmd = detectDocsPruneCommand(process.argv);
+  if (docsPruneCmd) {
+    const code = await dispatchDocsPrune(docsPruneCmd, process.cwd());
     process.exit(code);
   }
 

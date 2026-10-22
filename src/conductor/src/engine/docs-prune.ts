@@ -4,9 +4,43 @@ import { join } from 'node:path';
 import type { GitRunner } from './pr-labels.js';
 import { prunableFilesForStem } from './docs-retention.js';
 import type { PullRequestWithFiles } from './pull-request-files.js';
+import type { GithubOperationRunner } from './github-operations.js';
+import { executeGithubOperation } from './github-operations.js';
 
 export interface DocsPruneSelection { removable: string[]; deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[]; skipped: { stem: string; reason: 'no-shipped-record' }[]; excluded: string[]; stems: Map<string, string[]> }
 export class DocsPruneRefusal extends Error {}
+
+export interface DocsPrunePublisher {
+  repoDir: string;
+  repository: string;
+  operatorLogin: string;
+  branch: string;
+  commit: string;
+  outcome: Pick<DocsPruneSelection, 'removable' | 'deferred' | 'skipped' | 'excluded'>;
+  openPullRequests: PullRequestWithFiles[];
+  /** The push is deliberately injected: callers must use the guarded remote-git boundary. */
+  push(branch: string, commit: string): Promise<{ kind: 'executed' | 'refused' | 'failed'; detail?: string }>;
+  operations: GithubOperationRunner;
+}
+
+/** Publish only to a docs-prune branch.  It neither merges nor enables auto-merge. */
+export async function publishDocsPrune(input: DocsPrunePublisher): Promise<{ pullRequestUrl?: string; branch: string }> {
+  const foreign = input.openPullRequests.find((pr) => pr.headRef.startsWith('docs-prune/') && pr.author !== input.operatorLogin);
+  if (foreign) throw new DocsPruneRefusal(`docs-prune publication refused: another operator owns ${foreign.url}`);
+  const existing = input.openPullRequests.find((pr) => pr.headRef.startsWith('docs-prune/') && pr.author === input.operatorLogin);
+  const branch = existing?.headRef || input.branch;
+  const pushed = await input.push(branch, input.commit);
+  if (pushed.kind !== 'executed') throw new DocsPruneRefusal(`docs-prune publication refused: push ${pushed.detail ?? pushed.kind}`);
+  const body = renderDocsPruneReport(input.outcome);
+  if (existing) {
+    const result = await executeGithubOperation({ operation: 'pull-request.edit', repository: input.repository, resource: { kind: 'pull-request', number: existing.number }, context: { actor: input.operatorLogin }, payload: { body } }, input.operations);
+    if (result.kind !== 'executed') throw new DocsPruneRefusal(`docs-prune publication refused: pull-request.edit`);
+    return { pullRequestUrl: existing.url, branch };
+  }
+  const result = await executeGithubOperation({ operation: 'pull-request.create', repository: input.repository, resource: { kind: 'repository' }, context: { actor: input.operatorLogin }, payload: { title: 'docs: prune shipped DECIDE artifacts', body, head: branch, base: 'main' } }, input.operations);
+  if (result.kind !== 'executed') throw new DocsPruneRefusal(`docs-prune publication refused: pull-request.create`);
+  return { branch };
+}
 
 export async function resolveDocsPruneSelection(repoDir: string, git: GitRunner): Promise<DocsPruneSelection> {
   await git(['fetch', 'origin', 'main'], { cwd: repoDir });

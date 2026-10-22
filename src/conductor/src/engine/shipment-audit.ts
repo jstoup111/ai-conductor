@@ -13,6 +13,7 @@ import type { GhRunner, GitRunner } from './pr-labels.js';
 import { renderShippedRecord, specHash } from './shipped-record.js';
 import { runTrackerAmbientRead, runTrackerGraphqlRead } from './tracker-client.js';
 import { listPullRequestsWithFiles } from './pull-request-files.js';
+import { readPlanOrPruned } from './pruned-plan.js';
 
 export const DEFAULT_SHIPMENT_AUDIT_REPORT =
   '.docs/audits/2026-07-25-durable-shipped-record-backfill.json';
@@ -149,13 +150,26 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
   ])).split('\n').filter(Boolean));
   const planPaths = paths.filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
   const plans = new Map(planPaths.map((path) => [path, { path, slug: stem(path) }]));
-  const sources: AuditSource[] = planPaths.map((path) => ({
-    path,
-    kind: 'plan',
-    plan: plans.get(path),
-    relatedSourcePaths: [],
-    ...(!currentPaths.has(path) ? { reason: 'historical plan is not present at the audit head' } : {}),
-  }));
+  const sources: AuditSource[] = [];
+  for (const path of planPaths) {
+    let reason: string | undefined;
+    if (!currentPaths.has(path)) {
+      const resolved = await readPlanOrPruned(
+        async (commit, candidate) => committedFile(options, commit, candidate),
+        async (args) => {
+          try {
+            return { stdout: await git(options, args), stderr: '', exitCode: 0 };
+          } catch (error) {
+            return { stdout: '', stderr: errorMessage(error), exitCode: 1 };
+          }
+        },
+        auditHead,
+        path,
+      );
+      if (typeof resolved === 'object' && 'kind' in resolved) reason = resolved.code;
+    }
+    sources.push({ path, kind: 'plan', plan: plans.get(path), relatedSourcePaths: [], ...(reason ? { reason } : {}) });
+  }
   const sourcesByPlanPath = new Map(sources.flatMap((source) => source.plan ? [[source.plan.path, source]] : []));
 
   for (const path of paths.filter((candidate) => candidate.startsWith('.docs/specs/') && candidate.endsWith('.md'))) {
