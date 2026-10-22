@@ -298,7 +298,7 @@ async function atomicWriteJson(
 /**
  * Rewrites every mapped sha occurrence in `.pipeline/task-evidence.json`
  * (EvidenceStamp `sha`, `citedShas[]`, `verdictAnchor`) and
- * `.pipeline/task-status.json` (TaskStatusRecord `commit`, both full and
+ * `.pipeline/task-status.json` (TaskStatusRecord `commit` and `startHead`, both full and
  * short-sha forms) through `map`, in place. Shas that are not keys in `map`
  * are left byte-identical. Missing files are silently skipped (no-op).
  *
@@ -350,6 +350,10 @@ async function applyMapToPipelineStore(
         if (task && typeof task.commit === 'string') {
           const resolved = resolveThroughMap(task.commit, map);
           task.commit = resolved.slice(0, task.commit.length);
+        }
+        if (task && typeof task.startHead === 'string') {
+          const resolved = resolveThroughMap(task.startHead, map);
+          task.startHead = resolved.slice(0, task.startHead.length);
         }
       }
 

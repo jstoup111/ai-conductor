@@ -606,9 +606,9 @@ describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
     return {
       plan_ref: 'some-plan.md',
       tasks: [
-        { id: 'T1', name: 'first task', status: 'completed', commit: OLD_FULL_A },
-        { id: 'T2', name: 'second task', status: 'completed', commit: OLD_SHORT_B },
-        { id: 'T3', name: 'third task', status: 'completed', commit: UNMAPPED_FULL },
+        { id: 'T1', name: 'first task', status: 'completed', commit: OLD_FULL_A, startHead: OLD_FULL_A },
+        { id: 'T2', name: 'second task', status: 'completed', commit: OLD_SHORT_B, startHead: OLD_SHORT_B },
+        { id: 'T3', name: 'third task', status: 'completed', commit: UNMAPPED_FULL, startHead: UNMAPPED_FULL },
         { id: 'T4', name: 'unstarted task', status: 'pending' },
       ],
     };
@@ -667,10 +667,13 @@ describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
     );
 
     expect(byId.T1.commit).toBe(NEW_FULL_A);
+    expect(byId.T1.startHead).toBe(NEW_FULL_A);
     // T2's original commit was recorded short-form (OLD_SHORT_B); the fix
     // preserves that original width when writing back the resolved value.
     expect(byId.T2.commit).toBe(NEW_SHORT_B);
+    expect(byId.T2.startHead).toBe(NEW_SHORT_B);
     expect(byId.T3.commit).toBe(UNMAPPED_FULL);
+    expect(byId.T3.startHead).toBe(UNMAPPED_FULL);
     expect(byId.T4.commit).toBeUndefined();
   });
 
