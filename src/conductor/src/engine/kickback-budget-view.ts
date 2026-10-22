@@ -1,10 +1,16 @@
-import type { KickbackGateEntry, PlanGrowth } from './kickback-ledger.js';
+import { projectPendingGrowth, type KickbackGateEntry, type PendingRepair, type PlanGrowth } from './kickback-ledger.js';
 import type { ChildId } from './child-context.js';
 
 export interface KickbackPlanGrowthView extends PlanGrowth {
   cap: number | null;
   capSource: 'raised' | 'config-derived';
   authoredSource: 'plan' | 'ledger' | 'unresolved';
+  pendingGrowth?: {
+    total: number;
+    byGate: Record<string, number>;
+    projected: number;
+    minimumRaise?: number;
+  };
 }
 
 export interface KickbackResumeAuthorizationView {
@@ -33,16 +39,39 @@ export function renderKickbackRecoveryHint({
   slug,
   gate,
   allowance,
+  by,
 }: {
   slug?: string;
   gate: string;
   allowance: 'laps' | 'growth' | 'restacks';
+  by?: number;
 }): string {
   // ai-conductor:session-command-context=operator-only
   const allowanceName = allowance === 'growth' ? 'Plan-growth' : allowance === 'restacks' ? 'Restack' : 'Lap';
   return `${allowanceName} allowance exhausted. Recover with: ` +
-    `ai-conductor kickback-budget raise --feature ${slug ?? '«slug»'} --gate ${gate} --by «N» --rationale "«why»"`;
+    `ai-conductor kickback-budget raise --feature ${slug ?? '«slug»'} --gate ${gate} --by ${by ?? '«N»'} --rationale "«why»"`;
   // /ai-conductor:session-command-context
+}
+
+export function withPendingGrowth(
+  view: KickbackPlanGrowthView,
+  pendingRepair?: Pick<PendingRepair, 'charges'>,
+): KickbackPlanGrowthView {
+  const pendingGrowth = projectPendingGrowth(view.added, pendingRepair?.charges, view.cap);
+  if (pendingGrowth === undefined || pendingGrowth.total === 0) return view;
+
+  return {
+    ...view,
+    remaining: Math.max(0, view.remaining - pendingGrowth.total),
+    pendingGrowth: {
+      total: pendingGrowth.total,
+      byGate: pendingGrowth.byGate,
+      projected: pendingGrowth.projected,
+      ...(pendingGrowth.minimumRaise && pendingGrowth.minimumRaise > 0
+        ? { minimumRaise: pendingGrowth.minimumRaise }
+        : {}),
+    },
+  };
 }
 
 export function kickbackBudgetView(
@@ -128,6 +157,15 @@ export function renderKickbackBudgetView(
       view.planGrowth.authoredSource === 'unresolved' && view.planGrowth.cap === null
         ? `Plan growth: plan unresolved; ${view.planGrowth.added} added`
         : `Plan growth: ${view.planGrowth.added}/${view.planGrowth.cap} added; ${view.planGrowth.remaining} remaining (${view.planGrowth.capSource} cap)`,
+      ...(view.planGrowth.pendingGrowth === undefined ? [] : [
+        `Pending growth: ${view.planGrowth.pendingGrowth.total} (${Object.entries(view.planGrowth.pendingGrowth.byGate).map(([gate, amount]) => `${gate} ${amount}`).join(', ')})` +
+          (view.planGrowth.cap === null
+            ? ''
+            : `; would reach ${view.planGrowth.pendingGrowth.projected}/${view.planGrowth.cap} when build dispatches` +
+              (view.planGrowth.pendingGrowth.minimumRaise && view.planGrowth.pendingGrowth.minimumRaise > 0
+                ? `; minimum raise ${view.planGrowth.pendingGrowth.minimumRaise}`
+                : '')),
+      ]),
     ]),
     ...(view.mechanicalFaults === undefined ? [] : [`Mechanical faults: ${view.mechanicalFaults}`]),
   ].join('\n');

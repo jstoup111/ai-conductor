@@ -1,10 +1,10 @@
-// Covers: task:5, task:8, task:10, task:12
+// Covers: task:3, task:5, task:8, task:10, task:12
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { kickbackBudgetView, renderKickbackBudgetView, renderKickbackRecoveryHint } from '../../src/engine/kickback-budget-view.js';
+import { kickbackBudgetView, renderKickbackBudgetView, renderKickbackRecoveryHint, withPendingGrowth } from '../../src/engine/kickback-budget-view.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 
 async function makeFeature(ledger: unknown, config?: string): Promise<{ root: string; worktree: string }> {
@@ -113,11 +113,79 @@ describe('kickback budget view', () => {
     expect(rendered).not.toContain('config-derived cap');
   });
 
+  // Covers: task:3
+  it('renders pending growth immediately after the exhausted config-derived plan growth view', () => {
+    const view = withPendingGrowth(
+      { authored: 40, added: 0, byGate: {}, remaining: 0, cap: 10, capSource: 'config-derived', authoredSource: 'plan' },
+      { charges: {
+        prd_audit: { laps: 1, growth: 3 },
+        architecture_review_as_built: { laps: 1, growth: 8 },
+      } },
+    );
+
+    expect(view.pendingGrowth).toEqual({
+      total: 11,
+      byGate: { prd_audit: 3, architecture_review_as_built: 8 },
+      projected: 11,
+      minimumRaise: 1,
+    });
+    expect(Object.keys(view.pendingGrowth ?? {})).toEqual(['total', 'byGate', 'projected', 'minimumRaise']);
+    expect(renderKickbackBudgetView(baseEntry, 'prd_audit', 2, view)).toContain(
+      'Plan growth: 0/10 added; 0 remaining (config-derived cap)\nPending growth: 11 (prd_audit 3, architecture_review_as_built 8); would reach 11/10 when build dispatches; minimum raise 1',
+    );
+  });
+
+  // Covers: task:3
+  it('renders pending growth that remains within the plan growth cap without a minimum raise', () => {
+    const view = withPendingGrowth(
+      { authored: 40, added: 2, byGate: { prd_audit: 2 }, remaining: 8, cap: 10, capSource: 'config-derived', authoredSource: 'plan' },
+      { charges: { prd_audit: { laps: 1, growth: 3 } } },
+    );
+    const rendered = renderKickbackBudgetView(baseEntry, 'prd_audit', 2, view);
+
+    expect(rendered).toContain(
+      'Plan growth: 2/10 added; 5 remaining (config-derived cap)\nPending growth: 3 (prd_audit 3); would reach 5/10 when build dispatches',
+    );
+    expect(rendered).not.toContain('minimum raise');
+  });
+
+  // Covers: task:3
+  it('renders pending growth without a cap projection when the growth cap is unknown', () => {
+    const view = withPendingGrowth(
+      { authored: 40, added: 2, byGate: { prd_audit: 2 }, remaining: 0, cap: null, capSource: 'config-derived', authoredSource: 'plan' },
+      { charges: { prd_audit: { laps: 1, growth: 3 } } },
+    );
+    const rendered = renderKickbackBudgetView(baseEntry, 'prd_audit', 2, view);
+
+    expect(rendered.split('\n').find((line) => line.startsWith('Pending growth:'))).toBe('Pending growth: 3 (prd_audit 3)');
+    expect(rendered).not.toContain('would reach');
+    expect(rendered).not.toContain('minimum raise');
+  });
+
+  // Covers: task:3
+  it('leaves plan growth unchanged for a laps-only pending charge', () => {
+    const planGrowth = { authored: 40, added: 2, byGate: { prd_audit: 2 }, remaining: 5, cap: 10, capSource: 'config-derived' as const, authoredSource: 'plan' as const };
+    const view = withPendingGrowth(planGrowth, { charges: { prd_audit: { laps: 1, growth: 0 } } });
+
+    expect(view).not.toHaveProperty('pendingGrowth');
+    expect(renderKickbackBudgetView(baseEntry, 'prd_audit', 2, view)).toBe(
+      renderKickbackBudgetView(baseEntry, 'prd_audit', 2, planGrowth),
+    );
+  });
+
   it('names the exhausted allowance and renders the exact recovery command', () => {
     expect(renderKickbackRecoveryHint({ slug: 'feat-x', gate: 'prd_audit', allowance: 'growth' })).toBe(
       'Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature feat-x --gate prd_audit --by «N» --rationale "«why»"',
     );
     expect(renderKickbackRecoveryHint({ gate: 'prd_audit', allowance: 'laps' })).toContain('--feature «slug»');
+  });
+
+  // Covers: task:3
+  it('renders a concrete recovery raise when supplied and keeps the placeholder when omitted', () => {
+    expect(renderKickbackRecoveryHint({ slug: 'feat-x', gate: 'architecture_review_as_built', allowance: 'growth', by: 1 })).toBe(
+      'Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature feat-x --gate architecture_review_as_built --by 1 --rationale "«why»"',
+    );
+    expect(renderKickbackRecoveryHint({ slug: 'feat-x', gate: 'architecture_review_as_built', allowance: 'growth' })).toContain('--by «N»');
   });
 
   it('inspects every gate through the CLI and keeps JSON aligned with the rendered gates', async () => {
