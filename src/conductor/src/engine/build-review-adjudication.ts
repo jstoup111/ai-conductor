@@ -81,6 +81,7 @@ export function reduceBuildReviewAdjudication(input: {
   // still live. Name that case and its exact scoped command before the generic
   // unfinished-effect branch so the coordinator does not discard the
   // actionable identity that clean-PASS settlement retains.
+  // ai-conductor:session-command-context=operator-only
   const failedActionWithCurrentSource = input.cases.find((record) =>
     record.disposition === 'act' && record.resolution === 'open' &&
     record.effect.kind === 'action' && record.effect.status === 'failed' &&
@@ -93,6 +94,7 @@ export function reduceBuildReviewAdjudication(input: {
       reason: `open action case ${failedActionWithCurrentSource.id} has a failed effect while a current remediation source remains unaccepted; resolve with ai-conductor build-review resolve-case --feature ${input.feature} --case ${failedActionWithCurrentSource.id}${input.child === undefined ? '' : ` --child ${input.child}`} --rationale "<why>"`,
     };
   }
+  // /ai-conductor:session-command-context
   if (input.cases.some(hasUnfinishedEffect)) {
     return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'remediation effect is not finalized' };
   }
