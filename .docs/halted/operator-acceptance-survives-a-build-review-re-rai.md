@@ -7,8 +7,8 @@ Halting step: build
 Phase: BUILD
 Branch: feat/daemon-operator-acceptance-survives-a-build-review-re-rai
 Child: 2
-Head SHA: a98383689688c745a4ef09dbfe4cf875b46674f8
-Halted at: 2026-10-22T23:54:19.059Z
+Head SHA: 00f25b7b7906dd79e12c1ce3978df21ab2e8b026
+Halted at: 2026-10-22T23:54:21.931Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
