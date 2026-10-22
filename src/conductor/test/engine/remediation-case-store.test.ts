@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  currentBuildReviewSourceLinks,
+  finalizedBuildReviewSourceIds,
   parseRemediationCaseDomainRecord,
   RemediationCaseStore,
   selectBuildReviewRemediationCases,
@@ -13,6 +15,7 @@ import {
 } from '../../src/engine/remediation-case-store.js';
 import type {
   RemediationCaseDomainRecord,
+  RemediationCaseRecord,
   RemediationCaseStoreFilesystem,
   RemediationCaseStoreState,
 } from '../../src/engine/remediation-case-store.js';
@@ -139,6 +142,88 @@ afterEach(async () => {
 });
 
 describe('remediation case store', () => {
+  it('selects the open link or the latest resolved link for every shared source', () => {
+    const sourceId = 'testQuality:shared';
+    const resolved = (id: string, recordedAt: string, outcome: 'merged' | 'deferred'): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0],
+      id,
+      disposition: outcome === 'merged' ? 'act' : 'defer',
+      resolution: 'resolved',
+      sources: [{ sourceId, outcome, recordedAt }],
+      effect: outcome === 'merged'
+        ? { id: `${id}-effect`, kind: 'action', status: 'applied', workOrderId: `${id}-work-order` }
+        : { id: `${id}-effect`, kind: 'deferral', status: 'applied', issueUrl: `https://example.test/${id}` },
+    });
+    const open: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T12:00:00.000Z' }],
+    };
+    const earlier = resolved('earlier', '2026-10-18T12:00:00.000Z', 'merged');
+    const latest = resolved('latest', '2026-10-19T12:00:00.000Z', 'deferred');
+    const tiedLater = resolved('tied-later', '2026-10-19T12:00:00.000Z', 'merged');
+
+    expect(currentBuildReviewSourceLinks([earlier, latest, tiedLater]).get(sourceId)).toEqual({
+      record: tiedLater,
+      link: tiedLater.sources[0],
+    });
+    expect(currentBuildReviewSourceLinks([earlier, open, tiedLater]).get(sourceId)).toEqual({
+      record: open,
+      link: open.sources[0],
+    });
+  });
+
+  it('settles sources only when their authoritative link satisfies the existing settlement rules', () => {
+    const sourceId = 'testQuality:shared';
+    const settled: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'settled', disposition: 'defer', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'deferred', recordedAt: '2026-10-19T12:00:00.000Z' }],
+      effect: { id: 'settled-effect', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/settled' },
+    };
+    const unsettled: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'unsettled', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T12:00:00.000Z' }],
+      effect: { id: 'unsettled-effect', kind: 'action', status: 'failed', diagnostic: 'build failed' },
+    };
+    const open: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+
+    const laterSettled = {
+      ...settled,
+      sources: [{ ...settled.sources[0]!, recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+
+    expect(finalizedBuildReviewSourceIds([unsettled, laterSettled])).toEqual(new Set([sourceId]));
+    expect(finalizedBuildReviewSourceIds([settled, unsettled])).toEqual(new Set());
+    expect(finalizedBuildReviewSourceIds([settled, open])).toEqual(new Set());
+  });
+
+  it('preserves the former any-link settlement result when no source is shared', () => {
+    const records: RemediationCaseRecord[] = [
+      { ...CASE_STATE.cases[0], id: 'settled-rejection', disposition: 'reject', resolution: 'resolved', effect: { kind: 'none' } },
+      { ...CASE_STATE.cases[0], id: 'unsettled-action', sources: [{ sourceId: 'security:unsettled', outcome: 'acted', recordedAt: '2026-10-20T12:00:00.000Z' }] },
+      {
+        ...CASE_STATE.cases[0], id: 'settled-action', resolution: 'resolved',
+        sources: [{ sourceId: 'security:settled', outcome: 'merged', recordedAt: '2026-10-20T12:00:00.000Z' }],
+        effect: { id: 'settled-action-effect', kind: 'action', status: 'applied', workOrderId: 'work-order' },
+      },
+    ];
+    const formerAnyLinkRule = new Set(records.flatMap((record) =>
+      record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+        ? record.sources.map((source) => source.sourceId)
+        : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
+          ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
+          : [],
+    ));
+
+    expect(finalizedBuildReviewSourceIds(records)).toEqual(formerAnyLinkRule);
+  });
+
   it('parses separate domain records and selects only their domain without sharing display ordinals', () => {
     const buildReview = parseRemediationCaseDomainRecord({
       ...CASE_STATE.cases[0],

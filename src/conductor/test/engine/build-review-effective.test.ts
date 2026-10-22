@@ -1,4 +1,4 @@
-// Covers: task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
+// Covers: task:2, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -8,6 +8,7 @@ import { deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIde
 import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
 import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
 import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
+import { finalizedBuildReviewSourceIds } from '../../src/engine/remediation-case-store.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 const root = '/repo';
@@ -372,6 +373,18 @@ describe('live build-review effective resolver', () => {
       await expect(withCases(aggregate(), [caseRecord(`testQuality:${builtinId}`, 'act', { kind: 'action', status: 'reserved' })])).resolves.toMatchObject(blocked);
       await expect(withCases(aggregate(), [caseRecord(`security:${builtinId}`, 'reject')])).resolves.toMatchObject(blocked);
       await expect(withCases(aggregate(), 'unreadable')).resolves.toMatchObject(blocked);
+    });
+
+    it('keeps a source live when an open case supersedes a settled resolved link', async () => {
+      const sourceId = `testQuality:${builtinId}`;
+      const resolved = caseRecord(sourceId, 'reject');
+      const open = caseRecord(sourceId, 'act', { kind: 'action', status: 'reserved' });
+      const cases = [resolved, open];
+
+      expect(finalizedBuildReviewSourceIds(cases as never)).toEqual(new Set());
+      await expect(withCases(aggregate(), cases)).resolves.toMatchObject({ ok: true, effective: {
+        verdict: 'FAIL', unresolvedFindingIds: [builtinId],
+      } });
     });
   });
 
