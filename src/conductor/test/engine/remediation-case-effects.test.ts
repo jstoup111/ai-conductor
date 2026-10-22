@@ -193,10 +193,7 @@ describe('remediation case effects', () => {
     });
   });
 
-  // Covers: task:7 — non-transition store failures never acquire trusted-history detail.
-  it.each(['lock-timeout', 'malformed-state'] as const)(
-    'keeps a decision-stop %s failure as an ordinary case-store failure',
-    async (reason) => {
+  async function expectOrdinaryDecisionStopStoreFailure(reason: 'lock-timeout' | 'malformed-state') {
       const store = await storeWith({ version: 'v1', feature, cases: [] });
       vi.spyOn(store, 'mutate').mockResolvedValue({ ok: false, reason });
       const result = await persistBuildReviewDecisionStop({
@@ -211,8 +208,17 @@ describe('remediation case effects', () => {
 
       expect(result).toEqual({ ok: false, reason: `case store ${reason}` });
       expect(result).not.toHaveProperty('violation');
-    },
-  );
+  }
+
+  // Covers: task:7 — non-transition store failures never acquire trusted-history detail.
+  it('persistBuildReviewDecisionStop returns case store lock-timeout with no violation', async () => {
+    await expectOrdinaryDecisionStopStoreFailure('lock-timeout');
+  });
+
+  // Covers: task:7 — non-transition store failures never acquire trusted-history detail.
+  it('persistBuildReviewDecisionStop returns case store malformed-state with no violation', async () => {
+    await expectOrdinaryDecisionStopStoreFailure('malformed-state');
+  });
 
   it('publishes and charges a stable action order once', async () => {
     const store = await storeWith({ version: 'v1', feature, cases: [{

@@ -314,11 +314,7 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
-  // Covers: task:7 — the decision-stop persistence seam retains graph-refusal evidence for the event spine.
-  it.each([
-    ['an explicit escalation', false],
-    ['a blocked-consistency stop', true],
-  ] as const)('emits a refused transition for %s', async (_label, blockedConsistency) => {
+  async function expectRefusedDecisionStopTransition(blockedConsistency: boolean) {
     const root = await projectRoot();
     const mixed = customMixedAggregate();
     const currentSource = projectBuildReviewAggregateSources(mixed)!.find((source) => source.rubric === 'security')!;
@@ -363,6 +359,16 @@ describe('coordinateBuildReviewAdjudication', () => {
       type: 'remediation_adjudication_failed',
       rejectedTransition: { invariant: 'source-linked-by-multiple-cases', caseIds: expect.arrayContaining(['case-owner', 'case-stop']), sourceIds: [currentSourceId] },
     });
+  }
+
+  // Covers: task:7 — the decision-stop persistence seam retains graph-refusal evidence for the event spine.
+  it('coordinateBuildReviewAdjudication emits a refused explicit-escalation transition with the owner, proposed stop, and source', async () => {
+    await expectRefusedDecisionStopTransition(false);
+  });
+
+  // Covers: task:7 — the decision-stop persistence seam retains graph-refusal evidence for the event spine.
+  it('coordinateBuildReviewAdjudication emits a refused blocked-consistency transition with the owner, stop, and source', async () => {
+    await expectRefusedDecisionStopTransition(true);
   });
 
   it('emits the rejected case transition detail from reconciliation', async () => {

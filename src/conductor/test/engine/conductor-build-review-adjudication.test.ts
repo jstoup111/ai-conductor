@@ -369,11 +369,7 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
-  // Covers: task:7 — production build_review persists the refusal detail into the needs-human HALT.
-  it.each([
-    ['an explicit escalation', false],
-    ['a blocked-consistency stop', true],
-  ] as const)('writes the refused decision-stop invariant to the HALT for %s', async (_label, blockedConsistency) => {
+  async function expectRefusedDecisionStopHalt(blockedConsistency: boolean) {
     const customSource = projectBuildReviewAggregateSources(customAggregate())![0]!;
     const sourceId = buildReviewAdjudicationSourceId(customSource);
     const run = await fixture({
@@ -414,6 +410,16 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(halt).toContain(proposedStopId ?? 'missing-proposed-stop');
     expect(halt).toContain(sourceId);
     expect(halt).toContain('persisted case history is valid and unchanged');
+  }
+
+  // Covers: task:7 — production build_review persists the refusal detail into the needs-human HALT.
+  it('through build_review writes a needs-human HALT for the refused explicit-escalation lap', async () => {
+    await expectRefusedDecisionStopHalt(false);
+  });
+
+  // Covers: task:7 — production build_review persists the refusal detail into the needs-human HALT.
+  it('through build_review writes a needs-human HALT for the refused blocked-consistency lap', async () => {
+    await expectRefusedDecisionStopHalt(true);
   });
 
   it('halts a rejected transition with trusted-history recovery guidance before BUILD dispatch', async () => {
