@@ -4,6 +4,11 @@ import {
 } from './done-when-test-reference.js';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { currentCommitSha, currentTreeHash } from './project-prelude.js';
+import { createRepairObligationStore, type RepairObligation } from './repair-obligations.js';
+import { restageExistingRemediationTaskStatuses } from './repair-restage.js';
+import { countResolvedTasks } from './task-progress.js';
 
 /** The bounded amount of a cited test supplied to the citation judge. */
 export const DONE_WHEN_CITATION_WINDOW_LINES = 80;
@@ -229,4 +234,82 @@ export async function applyCitationVerdicts(
   } catch (error) {
     throw new Error(`failed to write task-status.json: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+interface RefusedCitation extends PendingCitation {
+  readonly reason: string;
+}
+
+function digest(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+export interface CitationRefusalAdmission {
+  readonly obligation: RepairObligation;
+  readonly taskId: string;
+  readonly checks: readonly RefusedCitation[];
+  readonly replayed: boolean;
+}
+
+/**
+ * Turn one judge refusal batch into the durable repair authority which keeps
+ * historic Task: trailers from resolving the reopened task.  The admission
+ * key is content-addressed, so an interrupted/restarted boundary replays the
+ * same obligation and never increments a refusal count twice.
+ */
+export async function admitCitationRefusals(
+  projectRoot: string,
+  planPath: string,
+  pending: readonly PendingCitation[],
+  verdicts: readonly CitationJudgementResult[],
+): Promise<CitationRefusalAdmission[]> {
+  const byTask = new Map<string, RefusedCitation[]>();
+  const citations = new Map(pending.map((citation) => [`${citation.taskId}\u0000${citation.checkIndex}`, citation]));
+  for (const verdict of verdicts) {
+    if (verdict.verdict !== 'does-not-assert') continue;
+    const citation = citations.get(`${verdict.taskId}\u0000${verdict.checkIndex}`);
+    if (!citation) continue;
+    const refusal = { ...citation, reason: verdict.reason };
+    const task = byTask.get(refusal.taskId) ?? [];
+    task.push(refusal);
+    byTask.set(refusal.taskId, task);
+  }
+  if (byTask.size === 0) return [];
+  const [head, tree, resolvedCount] = await Promise.all([
+    currentCommitSha(projectRoot), currentTreeHash(projectRoot), countResolvedTasks(projectRoot),
+  ]);
+  const repairs = createRepairObligationStore(projectRoot, join(projectRoot, '.pipeline', 'engine-state.json'));
+  const admissions: CitationRefusalAdmission[] = [];
+  for (const [taskId, unsorted] of byTask) {
+    const checks = [...unsorted].sort((a, b) => a.checkIndex - b.checkIndex);
+    const finding = checks.map(({ checkIndex, check, path, title }) => ({
+      checkIndex, checkDigest: digest(check), reference: `test:${path}::${title}`,
+    }));
+    const findingId = digest({ taskId, checks: finding });
+    const admitted = await repairs.admitOrReplay(`done-when-citation:${findingId}`, {
+      id: `done-when-citation-${findingId.slice(0, 16)}`,
+      planPath,
+      taskIds: [taskId],
+      source: {
+        findingId,
+        authority: 'done-when-citation',
+        instruction: formatCitationRefusalRetryHint(taskId, checks),
+      },
+      baseline: { head: head ?? '', tree: tree ?? '', resolvedTaskIds: [], resolvedCount },
+    });
+    if (!admitted.ok) throw new Error(`could not admit Done-when citation refusal: ${admitted.message}`);
+    if (!admitted.replayed) {
+      const counts = await repairs.recordCitationRefusals(finding.map((check) => digest({ taskId, ...check })));
+      if (!counts.ok) throw new Error(`could not record Done-when citation refusal: ${counts.message}`);
+    }
+    const restaged = await restageExistingRemediationTaskStatuses(projectRoot, planPath, new Set([taskId]));
+    if (restaged.kind === 'failed') throw new Error(restaged.detail);
+    admissions.push({ obligation: admitted.obligation, taskId, checks, replayed: admitted.replayed });
+  }
+  return admissions;
+}
+
+export function formatCitationRefusalRetryHint(taskId: string, checks: readonly RefusedCitation[]): string {
+  return `Done-when citation refused: Task ${taskId} must repair its refused test citation(s): ` +
+    checks.map((check) => `check ${check.checkIndex} (${check.check}; test:${check.path}::${check.title}; ${check.reason})`).join('; ');
 }

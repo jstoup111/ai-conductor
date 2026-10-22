@@ -121,6 +121,7 @@ import { createEngineStateStore } from './engine-state-store.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import {
   applyCitationVerdicts,
+  admitCitationRefusals,
   buildCitationJudgementInput,
   collectPendingCitations,
 } from './done-when-citation-judgement.js';
@@ -12070,6 +12071,7 @@ export class Conductor {
               // the close records.  A missing runner capability is handled by
               // the later bounded fallback task; this happy-path boundary
               // only applies durable verdicts from a valid native dispatch.
+              let citationRefusalReason: string | undefined;
               if (step.name === 'build' && this.stepRunner.dispatchDoneWhenCitationJudgement) {
                 try {
                   const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')) as unknown;
@@ -12084,7 +12086,16 @@ export class Conductor {
                     ).catch(() => new Map());
                     const input = buildCitationJudgementInput(pending, parsePlanTaskBodies(planText), blobs);
                     const judgement = await this.stepRunner.dispatchDoneWhenCitationJudgement(input);
-                    if (judgement.kind === 'valid') await applyCitationVerdicts(this.projectRoot, status, judgement.verdicts);
+                    if (judgement.kind === 'valid') {
+                      await applyCitationVerdicts(this.projectRoot, status, judgement.verdicts);
+                      const admissions = await admitCitationRefusals(this.projectRoot, planPath ?? '', pending, judgement.verdicts);
+                      if (admissions.length > 0) {
+                        citationRefusalReason = admissions.map(({ taskId, checks }) =>
+                          `Done-when citation refused: Task ${taskId} must repair its refused test citation(s): ` +
+                          checks.map((check) => `check ${check.checkIndex} (${check.check}; test:${check.path}::${check.title}; ${check.reason})`).join('; '),
+                        ).join('\n');
+                      }
+                    }
                   }
                 } catch {
                   // A judgement boundary must not turn an otherwise normal
@@ -12097,6 +12108,7 @@ export class Conductor {
                 step.name,
                 await this.completionCtx(state),
               );
+              if (citationRefusalReason) completion = { ...completion, done: false, reason: citationRefusalReason };
             }
 
             // Task 2, session-fresh-verdict-artifacts: audit-trail event for
