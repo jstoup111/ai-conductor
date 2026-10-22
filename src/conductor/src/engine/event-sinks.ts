@@ -203,6 +203,8 @@ export const EVENT_SINKS = {
   build_review_repair_context: { render: false, persist: true, audit: false, otel: false },
   mode_skip: { render: false, persist: true, audit: false, otel: false },
   build_done_when_unverified: { render: false, persist: true, audit: false, otel: false },
+  done_when_citation_judged: { render: false, persist: true, audit: false, otel: false },
+  done_when_citation_accepted: { render: false, persist: true, audit: false, otel: false },
   build_stall: { render: true, persist: true, audit: false, otel: true },
   build_progress: { render: true, persist: true, audit: false, otel: true },
   step_in_flight: { render: true, persist: true, audit: false, otel: false },

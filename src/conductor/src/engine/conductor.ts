@@ -12091,6 +12091,7 @@ export class Conductor {
                     const input = buildCitationJudgementInput(pending, parsePlanTaskBodies(planText), blobs);
                     const judgement = await this.stepRunner.dispatchDoneWhenCitationJudgement(input);
                     if (judgement.kind === 'valid') {
+                      await emitTracked({ type: 'done_when_citation_judged', citations: judgement.verdicts.map((verdict) => ({ taskId: verdict.taskId, check: verdict.checkIndex, verdict: verdict.verdict })) });
                       await applyCitationVerdicts(this.projectRoot, status, judgement.verdicts);
                       const demoted = await settleCitationRefusals(this.projectRoot, planPath ?? '', status, attempt >= stepMaxRetries);
                       const demotedKeys = new Set(demoted.map(({ taskId, checkIndex }) => `${taskId}\u0000${checkIndex}`));
@@ -12102,6 +12103,14 @@ export class Conductor {
                           checks.map((check) => `check ${check.checkIndex} (${check.check}; test:${check.path}::${check.title}; ${check.reason})`).join('; '),
                         ).join('\n');
                       }
+                    } else {
+                      const reason = `citation judgement unavailable: ${judgement.cause}`;
+                      await applyCitationVerdicts(this.projectRoot, status, pending.map((citation) => ({ taskId: citation.taskId, checkIndex: citation.checkIndex, verdict: 'does-not-assert' as const, reason })));
+                      // Unavailability is not a refusal: demote directly and never admit a repair obligation.
+                      const persisted = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')) as { tasks?: Array<{ doneWhen?: Array<Record<string, unknown>> }> };
+                      for (const task of persisted.tasks ?? []) for (const close of task.doneWhen ?? []) if (close.source === 'judged' && close.reason === reason) { close.source = 'unverified'; delete close.verdict; }
+                      await writeFile(join(this.projectRoot, '.pipeline', 'task-status.json'), JSON.stringify(persisted, null, 2));
+                      await emitTracked({ type: 'done_when_citation_judged', citations: pending.map((citation) => ({ taskId: citation.taskId, check: citation.checkIndex, unavailable: judgement.cause })) });
                     }
                   }
                 } catch {

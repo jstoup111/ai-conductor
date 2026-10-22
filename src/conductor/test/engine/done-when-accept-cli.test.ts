@@ -1,4 +1,4 @@
-// Covers: task:15
+// Covers: task:15, task:16, task:17
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -63,5 +63,22 @@ describe('done-when accept CLI', () => {
     expect(code).toBe(1);
     expect(print).toHaveBeenCalledWith(expect.stringMatching(expected));
     expect(files).toEqual(before);
+  });
+
+  it('records operator acceptance and emits its canonical event', async () => {
+    const files = refusalFixture();
+    const emitted: unknown[] = [];
+    const code = await dispatchDoneWhenAccept(command, {
+      resolveWorktree: async () => '/main/.worktrees/done-when-citations',
+      readFile: async (path) => files.get(path) ?? Promise.reject(new Error('missing fixture')),
+      writeFile: async (path, data) => { files.set(path, data); },
+      emit: async (_worktree, event) => { emitted.push(event); },
+      print: vi.fn(),
+    });
+
+    expect(code).toBe(0);
+    const status = JSON.parse(files.get('/main/.worktrees/done-when-citations/.pipeline/task-status.json')!);
+    expect(status.tasks[0].doneWhen[2]).toMatchObject({ source: 'operator-accepted', reason: command.reason });
+    expect(emitted).toEqual([expect.objectContaining({ type: 'done_when_citation_accepted', taskId: '24', check: 3, reason: command.reason })]);
   });
 });

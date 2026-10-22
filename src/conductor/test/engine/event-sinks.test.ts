@@ -197,6 +197,8 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'auto_heal',
   'mode_skip',
   'build_done_when_unverified',
+  'done_when_citation_judged',
+  'done_when_citation_accepted',
   'build_progress',
   'unattributed_progress',
   'build_no_progress',

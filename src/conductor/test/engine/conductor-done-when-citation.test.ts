@@ -1,4 +1,4 @@
-// Covers: task:9, task:10, task:11
+// Covers: task:9, task:10, task:11, task:14, task:17
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,6 +74,16 @@ describe('BUILD Done-when citation judgement boundary', () => {
       { check: '[test] proven', evidence: 'test:test/one.test.ts::proven', source: 'verified' },
     ] }] });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('demotes an unavailable citation judgement without admitting a repair obligation', async () => {
+    const dispatch = await run({ tasks: [{ id: '7', status: 'pending', doneWhen: [
+      { check: '[test] pending', evidence: 'test:test/one.test.ts::pending', source: 'pending-judgement' },
+    ] }] }, vi.fn(async () => ({ kind: 'unavailable' as const, cause: 'native schema unsupported' })));
+    // The direct demotion produces the normal one unverified-check review lap.
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
+    expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'unverified', reason: 'citation judgement unavailable: native schema unsupported' });
   });
 
   it('reopens a refused citation through one durable done-when-citation obligation', async () => {
