@@ -18,7 +18,11 @@ const MAX_REFUTATION_EVIDENCE = 8;
  * build-review disposition vocabulary.
  */
 export type RemediationCaseDomain = 'build_review' | 'prd_widening';
-export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'merged' | 'escalate';
+/**
+ * `carried` is persisted case-store history only. Provider judgements retain
+ * their closed source-outcome grammar in `parseSourceRow` below.
+ */
+export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'merged' | 'escalate' | 'carried';
 export type RemediationCaseDisposition = 'act' | 'defer' | 'reject' | 'refute' | 'escalate';
 export type RemediationCasePriority = 'critical' | 'high' | 'medium' | 'low';
 export type RemediationCaseConfidence = 'high' | 'medium' | 'low';

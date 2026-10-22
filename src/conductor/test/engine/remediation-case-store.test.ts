@@ -48,6 +48,68 @@ const CASE_STATE: RemediationCaseStoreState = {
   suppressions: [],
 };
 
+const CURRENT_CASE_STATE = { ...CASE_STATE, version: 'v3' as const, outbox: [] };
+
+const V3_OPERATOR_CASE = {
+  ...CASE_STATE.cases[0],
+  sources: [{ ...CASE_STATE.cases[0].sources[0], outcome: 'carried' }],
+  operatorAcceptance: {
+    origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-origin' }],
+  },
+  operatorResolution: {
+    operator: 'operator@example.test',
+    rationale: 'The remaining risk was explicitly accepted by the operator.',
+    resolvedAt: '2026-10-21T12:00:00.000Z',
+  },
+};
+
+const V3_OUTBOX = [
+  {
+    eventId: 'outbox-carried-1',
+    occurredAt: '2026-10-21T12:01:00.000Z',
+    event: {
+      type: 'build_review_acceptance_carried',
+      eventId: 'outbox-carried-1',
+      feature: FEATURE.feature,
+      lapId: 'lap-carried',
+      sourceId: 'testQuality:finding-2',
+      caseId: 'case-1',
+      originSourceIds: ['testQuality:finding-1'],
+      originLapIds: ['lap-origin'],
+    },
+  },
+  {
+    eventId: 'outbox-operator-resolved-1',
+    occurredAt: '2026-10-21T12:02:00.000Z',
+    event: {
+      type: 'remediation_case_operator_resolved',
+      eventId: 'outbox-operator-resolved-1',
+      feature: FEATURE.feature,
+      caseId: 'case-1',
+      sourceIds: ['testQuality:finding-1'],
+    },
+  },
+  {
+    eventId: 'outbox-reconciled-1',
+    occurredAt: '2026-10-21T12:03:00.000Z',
+    event: {
+      type: 'remediation_case_reconciled',
+      eventId: 'outbox-reconciled-1',
+      domain: 'build_review',
+      lapId: 'lap-reconciled',
+      caseId: 'case-1',
+      resolution: 'resolved',
+    },
+  },
+] as const;
+
+const V3_STATE = {
+  ...CASE_STATE,
+  version: 'v3',
+  cases: [V3_OPERATOR_CASE],
+  outbox: V3_OUTBOX,
+} as const;
+
 const REFUTATION = {
   claim: 'The alleged missing coverage is present in the focused regression test.',
   assertions: [{
@@ -256,7 +318,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v2', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [] },
+      state: { version: 'v3', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [], outbox: [] },
     });
   });
 
@@ -269,7 +331,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: CASE_STATE,
+      state: CURRENT_CASE_STATE,
     });
   });
 
@@ -288,34 +350,185 @@ describe('remediation case store', () => {
 
     await expect(writer.mutate(async () => ({ value: 'seeded' as const, nextState: state })))
       .resolves.toEqual({ ok: true, value: 'seeded' });
-    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: true, state });
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: { ...state, version: 'v3', outbox: [] },
+    });
   });
 
-  it('migrates a v1 envelope under the store lease without losing build-review history or suppression entries', async () => {
-    const projectRoot = await createProjectRoot();
-    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
-    const v1State = {
+  it('reads a v2 envelope without changing any case, link, effect, or suppression', async () => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(CASE_STATE)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    }).read()).resolves.toEqual({ ok: true, state: CASE_STATE });
+    expect({ writes: tracked.writes, renames: tracked.renames }).toEqual({ writes: [], renames: [] });
+  });
+
+  it('reads a v3 case with operator-owned state and every supported outbox event without changing it', async () => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(V3_STATE)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    }).read()).resolves.toEqual({ ok: true, state: V3_STATE });
+    expect({ writes: tracked.writes, renames: tracked.renames }).toEqual({ writes: [], renames: [] });
+  });
+
+  it.each([
+    ['v1', {
       version: 'v1',
       feature: FEATURE,
       cases: CASE_STATE.cases,
       suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
-    };
-    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await writeFile(statePath, JSON.stringify(v1State), 'utf8');
-    const store = new RemediationCaseStore(projectRoot, FEATURE);
-    await expect(store.mutate(async (state) => ({ value: 'migrated' as const, nextState: state }))).resolves.toEqual({ ok: true, value: 'migrated' });
-    await expect(store.read()).resolves.toEqual({
-      ok: true,
-      state: { ...CASE_STATE, suppressions: v1State.suppressions },
-    });
-    const serializedV2 = `${JSON.stringify({
+    }, {
       ...CASE_STATE,
-      suppressions: v1State.suppressions,
-    })}\n`;
-    await expect(readFile(statePath, 'utf8')).resolves.toBe(serializedV2);
-    expect(predecessorV1Decoder(JSON.parse(serializedV2))).toBe(false);
-    await expect(store.mutate(async (state) => ({ value: 'repeated' as const, nextState: state }))).resolves.toEqual({ ok: true, value: 'repeated' });
-    await expect(store.read()).resolves.toEqual({ ok: true, state: { ...CASE_STATE, suppressions: v1State.suppressions } });
+      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
+    }],
+    ['v2', CASE_STATE, CASE_STATE],
+  ] as const)('upgrades a valid %s envelope on its first mutation without inventing optional state', async (_version, legacyState, preservedState) => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(legacyState)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+    const expectedState = { ...preservedState, version: 'v3', outbox: [] };
+
+    await expect(store.mutate(async (state) => ({ value: 'migrated' as const, nextState: state })))
+      .resolves.toEqual({ ok: true, value: 'migrated' });
+    expect(JSON.parse(tracked.contents)).toEqual(expectedState);
+    expect(JSON.parse(tracked.contents).cases[0]).not.toHaveProperty('operatorAcceptance');
+    expect(JSON.parse(tracked.contents).cases[0]).not.toHaveProperty('operatorResolution');
+    expect(JSON.parse(tracked.contents).outbox).toEqual([]);
+    expect(predecessorV1Decoder(JSON.parse(tracked.contents))).toBe(false);
+  });
+
+  it.each([
+    ['an envelope key', { ...CASE_STATE, version: 'v3', outbox: [], unexpected: true }],
+    ['a case key', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{ ...CASE_STATE.cases[0], unexpected: true }],
+    }],
+    ['a source-link key', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{
+        ...CASE_STATE.cases[0],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], unexpected: true }],
+      }],
+    }],
+    ['an effect key', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{ ...CASE_STATE.cases[0], effect: { ...CASE_STATE.cases[0].effect, unexpected: true } }],
+    }],
+    ['an unknown source outcome', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{
+        ...CASE_STATE.cases[0],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], outcome: 'unknown' }],
+      }],
+    }],
+    ['an extra operator-acceptance key', {
+      ...V3_STATE,
+      cases: [{ ...V3_OPERATOR_CASE, operatorAcceptance: { ...V3_OPERATOR_CASE.operatorAcceptance, unexpected: true } }],
+    }],
+    ['a malformed operator-acceptance origins value', {
+      ...V3_STATE,
+      cases: [{ ...V3_OPERATOR_CASE, operatorAcceptance: { origins: [] } }],
+    }],
+    ['an extra acceptance-origin key', {
+      ...V3_STATE,
+      cases: [{
+        ...V3_OPERATOR_CASE,
+        operatorAcceptance: { origins: [{ ...V3_OPERATOR_CASE.operatorAcceptance.origins[0], unexpected: true }] },
+      }],
+    }],
+    ['a malformed acceptance-origin lap id', {
+      ...V3_STATE,
+      cases: [{
+        ...V3_OPERATOR_CASE,
+        operatorAcceptance: { origins: [{ ...V3_OPERATOR_CASE.operatorAcceptance.origins[0], lapId: '' }] },
+      }],
+    }],
+    ['an extra operator-resolution key', {
+      ...V3_STATE,
+      cases: [{ ...V3_OPERATOR_CASE, operatorResolution: { ...V3_OPERATOR_CASE.operatorResolution, unexpected: true } }],
+    }],
+    ['a malformed operator-resolution value', {
+      ...V3_STATE,
+      cases: [{ ...V3_OPERATOR_CASE, operatorResolution: { ...V3_OPERATOR_CASE.operatorResolution, resolvedAt: 'not-a-time' } }],
+    }],
+    ['an extra outbox-entry key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[0], unexpected: true }],
+    }],
+    ['a malformed outbox-entry occurrence time', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[0], occurredAt: 'not-a-time' }],
+    }],
+    ['an unknown outbox event type', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [{
+        eventId: 'event-1',
+        occurredAt: '2026-10-21T12:00:00.000Z',
+        event: { type: 'unknown_event' },
+      }],
+    }],
+    ['an outbox event whose body is invalid', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [{
+        eventId: 'event-1',
+        occurredAt: '2026-10-21T12:00:00.000Z',
+        event: { type: 'build_review_acceptance_carried' },
+      }],
+    }],
+    ['an extra carried-event key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[0], event: { ...V3_OUTBOX[0].event, unexpected: true } }],
+    }],
+    ['a malformed carried-event value', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[0], event: { ...V3_OUTBOX[0].event, originLapIds: [] } }],
+    }],
+    ['an extra operator-resolution-event key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[1], event: { ...V3_OUTBOX[1].event, unexpected: true } }],
+    }],
+    ['a malformed operator-resolution-event value', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[1], event: { ...V3_OUTBOX[1].event, sourceIds: [] } }],
+    }],
+    ['an extra reconciled-event key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[2], event: { ...V3_OUTBOX[2].event, unexpected: true } }],
+    }],
+    ['a malformed reconciled-event value', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[2], event: { ...V3_OUTBOX[2].event, resolution: 'unknown' } }],
+    }],
+  ])('fails closed for v3 with %s without writing it', async (_description, malformedState) => {
+    const original = `${JSON.stringify(malformedState)}\n`;
+    const tracked = createTrackedFilesystem(original);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+
+    await expect(store.read()).resolves.toEqual({ ok: false, reason: 'malformed-state' });
+    await expect(store.mutate(async () => ({ value: null, nextState: CASE_STATE })))
+      .resolves.toEqual({ ok: false, reason: 'malformed-state' });
+    expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
+      .toEqual({ contents: original, writes: [], renames: [] });
   });
 
   it('leaves the original v1 envelope readable when migration replacement is interrupted', async () => {
@@ -348,7 +561,7 @@ describe('remediation case store', () => {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], domain: 'prd_audit' }],
     }, 'foreign-domain'],
-    ['an unsupported state version', { ...CASE_STATE, version: 'v3' }, 'unknown-version'],
+    ['an unsupported state version', { ...CASE_STATE, version: 'v4' }, 'unknown-version'],
     ['a mismatched action effect', {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } }],
@@ -414,7 +627,7 @@ describe('remediation case store', () => {
   it.each([
     ['foreign feature', JSON.stringify({ ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }), 'foreign-feature'],
     ['malformed JSON', '{not-json', 'malformed-json'],
-    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v3' }), 'unknown-version'],
+    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v4' }), 'unknown-version'],
   ])('does not overwrite %s while refusing it', async (_description, original, reason) => {
     const projectRoot = await createProjectRoot();
     const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
@@ -510,11 +723,12 @@ describe('remediation case store', () => {
 
     await expect(store
       .mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({ ok: true, value: null });
-    expect(tracked.contents).toBe(`${JSON.stringify(proposedState)}\n`);
-    await expect(store.read()).resolves.toEqual({ ok: true, state: proposedState });
+    const currentState = { ...proposedState, version: 'v3' as const, outbox: [] };
+    expect(tracked.contents).toBe(`${JSON.stringify(currentState)}\n`);
+    await expect(store.read()).resolves.toEqual({ ok: true, state: currentState });
     await expect(store.mutate(async (state) => ({ value: state.cases, nextState: state }))).resolves.toEqual({
       ok: true,
-      value: proposedState.cases,
+      value: currentState.cases,
     });
     expect(JSON.stringify((JSON.parse(tracked.contents) as RemediationCaseStoreState).cases[0])).toBe(resolvedRow);
   });
@@ -553,10 +767,11 @@ describe('remediation case store', () => {
     const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
 
     await expect(store.mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({ ok: true, value: null });
-    await expect(store.read()).resolves.toEqual({ ok: true, state: proposedState });
+    const currentState = { ...proposedState, version: 'v3' as const, outbox: [] };
+    await expect(store.read()).resolves.toEqual({ ok: true, state: currentState });
     await expect(store.mutate(async (state) => ({ value: state.cases, nextState: state }))).resolves.toEqual({
       ok: true,
-      value: proposedState.cases,
+      value: currentState.cases,
     });
     const written = (JSON.parse(tracked.contents) as RemediationCaseStoreState).cases;
     expect(written.map((record) => record.id)).toEqual(['case-R1', 'case-R2', 'case-N']);
