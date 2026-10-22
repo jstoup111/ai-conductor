@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-22T09:53:30.609Z
 Slug: operator-acceptance-survives-a-build-review-re-rai
 Class: needs-human
 Halting step: unknown
