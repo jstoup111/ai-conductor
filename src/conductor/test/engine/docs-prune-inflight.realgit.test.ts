@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 
 import { initTestRepo } from '../fixtures/git-repo.js';
-import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
+import { commitDocsPruneDeletion } from '../../src/engine/docs-prune.js';
+import { makeGitRunner, performRebase, runTier1, type GitRunner } from '../../src/engine/rebase.js';
 
 const roots: string[] = [];
 
@@ -23,25 +24,37 @@ it('keeps a local edit or stops with the pruned path conflict; it never silently
   await initTestRepo(repo);
   const git = makeGitRunner(repo);
   const path = '.docs/coherence/alpha.md';
+  const origin = join(repo, 'origin.git');
+  await gitOk(git, ['init', '--bare', '--initial-branch=main', origin]);
   await mkdir(join(repo, '.docs', 'coherence'), { recursive: true });
   await writeFile(join(repo, path), 'base coherence\n');
   await gitOk(git, ['add', '-A']);
   await gitOk(git, ['commit', '-qm', 'base artifact']);
+  await gitOk(git, ['remote', 'add', 'origin', origin]);
+  await gitOk(git, ['push', '-u', 'origin', 'main']);
+  await gitOk(git, ['remote', 'set-head', 'origin', '--auto']);
   await gitOk(git, ['branch', 'feature']);
   await gitOk(git, ['checkout', 'feature']);
   await writeFile(join(repo, path), 'feature edit that must survive\n');
   await gitOk(git, ['commit', '-am', 'feature edits coherence']);
   await gitOk(git, ['checkout', 'main']);
-  await gitOk(git, ['rm', path]);
-  await gitOk(git, ['commit', '-qm', 'docs prune alpha']);
+  const pruneCommit = await commitDocsPruneDeletion({ repoDir: repo, startPoint: 'main', removable: [path], git });
+  await gitOk(git, ['update-ref', 'refs/heads/main', pruneCommit]);
+  await gitOk(git, ['push', 'origin', 'main']);
   await gitOk(git, ['checkout', 'feature']);
 
-  const rebased = await git(['rebase', 'main']);
-  if (rebased.exitCode === 0) {
-    await expect(readFile(join(repo, path), 'utf8')).resolves.toContain('feature edit that must survive');
+  const outcome = await performRebase(git, repo, 'main');
+  expect(['changed', 'noop', 'conflict_halt'], 'production rebase returns a success or conflict-stop shape').toContain(outcome.kind);
+  if (outcome.kind === 'changed' || outcome.kind === 'noop') {
+    await expect(readFile(join(repo, path), 'utf8'), 'rebase succeeded and retained the feature edit').resolves.toContain('feature edit that must survive');
     return;
   }
-  const conflicts = await gitOk(git, ['diff', '--name-only', '--diff-filter=U']);
-  expect(conflicts, 'rebase stopped, and the conflict identifies the pruned file').toContain(path);
+
+  const tier1 = await runTier1(git, repo);
+  if (tier1.remaining.includes(path)) {
+    expect(outcome.conflicts, 'tier-1 stopped and the original rebase stop reported the pruned path').toContain(path);
+  } else {
+    await expect(readFile(join(repo, path), 'utf8'), 'tier-1 resolved the conflict and retained the feature edit').resolves.toContain('feature edit that must survive');
+  }
   await git(['rebase', '--abort']);
 });
