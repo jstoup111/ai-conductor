@@ -9,7 +9,7 @@ import { AuditTrailWriter } from './audit-trail.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readGrowth, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackGateEntry, type KickbackLedger } from './kickback-ledger.js';
-import { kickbackBudgetView, renderKickbackBudgetView, type KickbackPlanGrowthView } from './kickback-budget-view.js';
+import { kickbackBudgetView, renderKickbackBudgetView, withPendingGrowth, type KickbackPlanGrowthView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { HALT_CLASS_MARKER } from './halt-marker.js';
@@ -53,12 +53,12 @@ async function planGrowthViewFor(worktree: string, ledger: KickbackLedger, child
   const config = await loadConfig(worktree);
   if (child === undefined) {
     const budget = await readPlanGrowthBudget(worktree, config.ok ? config.config : {} as HarnessConfig, { persist: false });
-    return {
+    return withPendingGrowth({
       ...budget.growth,
       cap: budget.authoredSource === 'unresolved' && budget.capSource === 'config-derived' ? null : budget.cap,
       capSource: budget.capSource,
       authoredSource: budget.authoredSource,
-    };
+    }, ledger.pendingRepair);
   }
 
   // Child inspections retain their child-ledger accounting path. Feature-wide
@@ -70,13 +70,13 @@ async function planGrowthViewFor(worktree: string, ledger: KickbackLedger, child
     storedGrowth.authored,
   );
   const cap = ledger.effectiveGrowthCap ?? configGrowthCap;
-  return {
+  return withPendingGrowth({
     ...storedGrowth,
     remaining: Math.max(0, cap - storedGrowth.added),
     cap,
     capSource: ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised',
     authoredSource: ledger.growth === undefined ? 'unresolved' : 'ledger',
-  };
+  }, ledger.pendingRepair);
 }
 
 export interface KickbackBudgetCliDeps {

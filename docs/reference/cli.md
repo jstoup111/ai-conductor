@@ -473,8 +473,13 @@ so far (broken down by the gate that added them, when any), and how many remain 
 The authored count comes from the feature's resolved plan — the same selection the daemon uses — so
 the line reports the budget remediation enforces. When no plan resolves and the ledger records no
 authored count, the line reads `plan unresolved; added <n>` instead of a zero authored count and
-zero cap, appending `remaining <r>/<cap>` only when the cap was raised. The line never rewrites the
-ledger.
+zero cap, appending `remaining <r>/<cap>` only when the cap was raised. While an appended
+[pending repair](../explanation/gates.md#remediation-caps-settle-at-the-build-transition) carries plan
+growth, `remaining` subtracts it and the line appends `; pending <total> (<gate> <n>, ...)`, plus
+`, minimum raise <k>` when settling it would exceed the cap — for example
+`PLAN GROWTH [<slug>]: authored 40; added 0; remaining 0/10; pending 11 (prd_audit 3, architecture_review_as_built 8), minimum raise 1`.
+For an unresolved plan the pending segment replaces `remaining` and carries no minimum raise. The line
+never rewrites the ledger.
 When the growth accounting cannot be read, the line reads `PLAN GROWTH [<slug>]: unavailable (<error>)`
 and the budget lines still print.
 
@@ -1252,6 +1257,15 @@ that `build` has not yet charged, so it reads `0` as soon as the next `build` di
 the cap. `consumed` and `laps` count only charged laps. Human output adds
 `Pending charge: <n> lap(s) (charged when build dispatches)` while a charge is pending; JSON reports
 `pendingLaps` (`0` when none) on both remediation gates.
+
+Plan growth follows the same rule: the plan-growth `remaining` also subtracts a pending repair's growth
+(floored at `0`). Human output prints, directly after the `Plan growth:` line,
+`Pending growth: <total> (<gate> <n>, ...); would reach <projected>/<cap> when build dispatches`,
+appending `; minimum raise <k>` when the pending growth would exceed the cap; `<k>` is the smallest
+plan-growth `raise --by` that lets `build` settle the repair. Without a resolved cap only
+`Pending growth: <total> (<gate> <n>, ...)` prints. JSON adds
+`planGrowth.pendingGrowth: { total, byGate, projected, minimumRaise? }`. A pending repair that charges
+laps but no growth adds neither.
 
 Inspect reports each gate's resume authorization against the live halt generation. Human output
 prints one `Resume authorization:` line per gate:

@@ -576,7 +576,12 @@ When `build` next dispatches, the conductor settles the pending repair all or no
 lease. Within every allowance, each named gate is charged its lap and growth, `plan_growth` is emitted,
 and the record is removed, so a retried or restarted `build` charges nothing again. When any named
 allowance is exhausted, nothing is charged, `build` stays not done, and the feature halts `kickback-cap`
-naming the gate, the allowance, and every finding with a fresh halt generation. A consumed
+naming the gate, the allowance, and every finding with a fresh halt generation. The halt lists the
+halting gate's findings as `Findings (<gate>): ...` (its `Pending remediation tasks:` when it has
+none) and the other gate's as `Also pending (<gate>): ...`. Its budget detail adds a `Pending growth:`
+line projecting where the repair would take plan growth; a plan-growth halt's recovery command uses
+that projection's minimum raise as `--by`. Settlement, the halt, `kickback-budget inspect`, and
+`daemon status` share one projection, so a raise of that size settles the repair. A consumed
 [`kickback-budget raise`](../reference/cli.md#ai-conductor-kickback-budget) therefore resumes straight
 into `build` on the already-appended tasks instead of re-auditing unchanged code; a raise that is too
 small or names the other gate halts again at the same boundary.
