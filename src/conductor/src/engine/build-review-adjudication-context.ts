@@ -2,6 +2,7 @@ import { BUILD_REVIEW_FINDING_VOCABULARIES } from './build-review-domain.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewAggregate, BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { projectBuildReviewAggregateSources } from './build-review-aggregate.js';
+import { isCarryEligibleRemediationCase, type RemediationCaseCarryInput } from './remediation-case-reconciler.js';
 import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink, RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 import type {
   RemediationCaseDisposition,
@@ -35,6 +36,11 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly resolution: RemediationCaseRecord['resolution'];
   readonly sources: readonly RemediationCaseSourceLink[];
   readonly effect: RemediationCaseEffect;
+  /** Engine-projected evidence that this prior case may carry a later binding. */
+  readonly operatorAccepted?: {
+    readonly originSourceIds: readonly string[];
+    readonly originLapIds: readonly string[];
+  };
   readonly refutation?: RemediationCaseRefutation;
   /** The decision owner of a persisted `escalate` stop, exactly as stored. */
   readonly escalation?: RemediationCaseRecord['escalation'];
@@ -120,6 +126,8 @@ export interface AssembleBuildReviewAdjudicationContextInput {
   readonly operatorResolvedFindingIds?: ReadonlySet<string>;
   /** Exact source identities settled from finalized durable case history. */
   readonly excludedSourceIds?: ReadonlySet<string>;
+  /** Current-lap carry authority, resolved by the disposition owner. */
+  readonly carryInput?: RemediationCaseCarryInput;
   readonly planContract?: BuildReviewAdjudicationPlanContract;
   readonly taskStatus?: BuildReviewAdjudicationTaskStatus;
   /** Durable work-order attempt evidence; renders into `effectPointers`. */
@@ -387,10 +395,20 @@ function effectPointerFor(caseRecord: RemediationCaseRecord, attempted: Readonly
   return `case ${caseRecord.id}: ${effect.kind} effect ${effect.id} ${effect.status}${reference}${attempt}`;
 }
 
-function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationPriorCase {
+function freezePriorCase(
+  caseRecord: RemediationCaseRecord,
+  carryInput: RemediationCaseCarryInput | undefined,
+): BuildReviewAdjudicationPriorCase {
   const sources = [...caseRecord.sources].sort((left, right) =>
     `${left.recordedAt}\u0000${left.sourceId}`.localeCompare(`${right.recordedAt}\u0000${right.sourceId}`),
   ).map((source) => Object.freeze({ ...source }));
+  const origins = caseRecord.operatorAcceptance?.origins ?? [];
+  const operatorAccepted = carryInput !== undefined && isCarryEligibleRemediationCase(caseRecord, carryInput)
+    ? Object.freeze({
+      originSourceIds: Object.freeze(origins.map((origin) => origin.sourceId)),
+      originLapIds: Object.freeze(origins.map((origin) => origin.lapId)),
+    })
+    : undefined;
   return Object.freeze({
     id: caseRecord.id,
     disposition: caseRecord.disposition,
@@ -400,6 +418,7 @@ function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudica
     resolution: caseRecord.resolution,
     sources: Object.freeze(sources),
     effect: Object.freeze({ ...caseRecord.effect }) as RemediationCaseEffect,
+    ...(operatorAccepted === undefined ? {} : { operatorAccepted }),
     ...(caseRecord.disposition === 'refute' ? { refutation: freezeRefutation(caseRecord.refutation!) } : {}),
     ...(caseRecord.escalation === undefined ? {} : { escalation: Object.freeze({ owner: caseRecord.escalation.owner }) }),
     ...(caseRecord.consistencyStop === undefined ? {} : {
@@ -487,7 +506,7 @@ export function assembleBuildReviewAdjudicationContext(
     if (stop) return { ok: false, stop };
     if (caseIds.has(caseRecord.id)) return { ok: false, stop: { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'duplicate-id' } };
     caseIds.add(caseRecord.id);
-    priorCases.push(freezePriorCase(caseRecord));
+    priorCases.push(freezePriorCase(caseRecord, input.carryInput));
   }
   priorCases.sort((left, right) => left.id.localeCompare(right.id));
 

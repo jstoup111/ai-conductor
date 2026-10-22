@@ -147,9 +147,10 @@ The engine stamps durable ids, reconciles history, reserves and applies effects,
 order, charges the kickback, and derives the effective route.
 
 Never omit, duplicate, or replace a supplied source outcome. A `merged` source is a trace outcome,
-not a case disposition; it still names its canonical `caseRef`. Never assert or create operator
-acceptance, and never treat an autonomous case outcome as accepted risk. Do not apply an effect,
-file an intake issue, navigate BUILD, charge a budget, or mutate durable state. Do not append to the
+not a case disposition; it still names its canonical `caseRef`. A same-substance finding may be bound
+by `existingCaseId` to a prior case marked `operatorAccepted`. Never assert or create operator
+acceptance, and never treat an autonomous case outcome as accepted risk. Do not apply an effect, file
+an intake issue, navigate BUILD, charge a budget, or mutate durable state. Do not append to the
 approved plan. In this mode the only write is the schema-constrained `.pipeline/remediation.json`
 artifact.
 
