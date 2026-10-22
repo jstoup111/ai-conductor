@@ -1,22 +1,24 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-10-22T23:57:00.590Z
+Status: halted
 Slug: operator-acceptance-survives-a-build-review-re-rai
-Class: protected-artifact
+Class: needs-human
 Halting step: build
 Phase: BUILD
 Branch: feat/daemon-operator-acceptance-survives-a-build-review-re-rai
-Child: 2
-Head SHA: 00f25b7b7906dd79e12c1ce3978df21ab2e8b026
-Halted at: 2026-10-22T23:54:21.931Z
+Head SHA: b8f921cbe615612767efb1517f8646d8216b3b3d
+Halted at: 2026-10-22T23:57:11.512Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Protected artifact changed: .docs/decisions/adr-2026-10-20-operator-acceptance-is-durable-case-state.md
-Attribution: feature-authored (committed on this branch since merge-base 5a7d0ea3b1fb51b3b8649da1a4d31cd492977889)
+feature errored — will re-dispatch on the next scan
+loop ended without DONE or HALT marker
+
+Resume procedure:
+  1. Fix the cause of the error above (project setup / config / environment / a crashed step).
+  2. rm .pipeline/HALT
+  3. Re-queue the feature (restart the daemon if it was excluded this run).
 ```
