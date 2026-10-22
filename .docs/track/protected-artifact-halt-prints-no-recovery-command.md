@@ -1,0 +1,23 @@
+# Track: Protected-artifact halt prints no recovery command
+
+Track: technical
+
+Scope boundary: Issue outcomes (intake jstoup111/ai-conductor#3321; scope delegated by the operator to the issue's stated outcomes). Included: a protected-artifact seal halt raised at BUILD/SHIP entry appends the exact `ai-conductor reseal` invocation that approves the change, with the feature slug and every protected path that invocation must name, plus where and how to run it; the line is printed only when that exact invocation would pass reseal's own checks against the current worktree, so the printed command succeeds as shown. Excluded: reseal refusal messages naming their remedy and non-TTY operator authorization (#1852); auditing every other halt class's recovery hint (#3188); approving an added, deleted, or uncommitted protected artifact (reseal cannot approve these by design, adr-2026-08-09-operator-only-scoped-artifact-reseal D1/D3), for which the halt text stays as it is today; `describeLiveHalt`/unpark wording; any change to reseal's flags, checks, or audit records.
+
+Internal operator tooling diagnostics with no product requirements; it adds observable halt output, so it is not a maintenance change. Acceptance criteria live in stories.
+
+## Approach decision
+
+- **Chosen — derive the hint from a dry run of reseal's own pre-write checks (not derived from the filer's sketch).** Split `resealProtectedArtifactSeal` into its validation/recompute part and its persist part. At halt time, start from the path the seal verdict names and run the validation part with reseal's exact inputs (slug = worktree directory name, feature description = slug, base branch resolved the way `dispatchResealCommand` resolves it). While it refuses naming another sealed path, add that path and retry; print the command only when the dry run passes. Est. effort ~half day (S). Impact: the printed command is correct by construction and stays correct as reseal's checks evolve, because there is one definition of what reseal accepts (adr-2026-08-09-operator-only-scoped-artifact-reseal D2's one-definition principle).
+- **Rejected — render the command from the halt's named path only (filer-shaped minimal hint).** Smallest diff, but the seal verdict names only the first violating path, so with two changed artifacts the printed command refuses on the second. It would also print a reseal for added or uncommitted artifacts that reseal always refuses. Fails outcome 2 ("succeeds as shown"). Est. ~1-2h.
+- **Rejected — make `inspectSeal` collect every violation and render the hint from that list.** Changes the verdict shape every seal caller consumes and still duplicates reseal's acceptance rules (sealed-only, committed-only, worktree layout) in a second place that can drift. Est. ~1 day.
+
+## Verified facts (source on main `5a7d0ea3b1`)
+
+- The observed halt text comes from `inspectSeal`'s changed branch, `Protected artifact changed: <path>` plus `attributionLine` (`src/conductor/src/engine/protected-artifact-seal.ts:1265`, attribution text at `:1100-1101`). Basis: verified.
+- `inspectSeal` returns on the first violation, so a halt names one path even when several changed. Basis: verified (`:1229-1267`).
+- `resealProtectedArtifactSeal` refuses unsealed targets, unresolvable commits, any violation outside the named paths (via `inspectSeal` with the named paths excluded), deleted targets not inherited from base, and targets with uncommitted changes; it persists only after all pass (`:1566-1677`, `createScopedProtectedArtifactSeal` `:880-928`). Basis: verified.
+- `dispatchResealCommand` resolves the worktree as `<cwd>/.worktrees/<slug>`, passes `featureDesc: slug`, resolves the base branch as `originDefaultBranch(...) ?? 'main'`, requires a non-empty `--reason` and an interactive terminal, and `--clear-halt` clears only a `protected-artifact` HALT (`src/conductor/src/engine/reseal-cli.ts:137-330`). Basis: verified.
+- The BUILD/SHIP seal check stores `sealVerdict.reason` as the dispatch issue; both HALT writes for it (`conductor.ts:10855-10858` at attempt 2, and the refusal path `:13121-13125`) use that text with class `protected-artifact`. Basis: verified.
+- Engine strings containing an `ai-conductor <subcommand>` must sit inside an `ai-conductor:session-command-context=operator-only` region or the session-command audit fails (`src/conductor/src/engine/session-command-audit.ts`; precedent `kickback-budget-view.ts:49-53`). Basis: verified.
+- The reported reseal worked first try from the repository root with `--clear-halt` (issue #3321 Observed). Basis: verified by the filer's observation.
