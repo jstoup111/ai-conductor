@@ -361,6 +361,25 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate({ ...aggregate, reasons: ['[wiring] historical reason'] })).toBeUndefined();
   });
 
+  it('joins a stacked leaf whose security result judged the whole-feature snapshot', () => {
+    const wholeFeatureDigest = 'sha256:whole-feature';
+    const leafSecurity = { ...securityJudged(), snapshotDigest: wholeFeatureDigest };
+
+    expect(() => joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged(), leafSecurity) })).toThrow();
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, securitySnapshotDigest: wholeFeatureDigest, results: results(judged(), leafSecurity),
+    });
+
+    expect(aggregate).toMatchObject({ verdict: 'PASS', snapshotDigest, securitySnapshotDigest: wholeFeatureDigest });
+    expect(parseBuildReviewAggregate(JSON.parse(JSON.stringify(aggregate)))).toEqual(aggregate);
+    expect(parseBuildReviewAggregate({
+      ...aggregate, results: { ...aggregate.results, testQuality: { ...judged(), snapshotDigest: wholeFeatureDigest } },
+    })).toBeUndefined();
+    expect(parseBuildReviewAggregate({ ...aggregate, securitySnapshotDigest: '' })).toBeUndefined();
+    expect(joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, securitySnapshotDigest: snapshotDigest, results: results(judged()) }))
+      .not.toHaveProperty('securitySnapshotDigest');
+  });
+
   it('rejects a stale-lap result, a mismatched snapshot, and an extra top-level key', () => {
     const aggregate = currentAggregate();
 
