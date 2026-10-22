@@ -12131,8 +12131,17 @@ export class Conductor {
               // Mark its nudge spent before evaluating completion so a forced
               // demotion remains a successful terminal disposition.
               if (step.name === 'build' && attempt >= stepMaxRetries) {
-                const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8'));
-                if (collectUnverifiedDoneWhenChecks(status).length > 0) {
+                // An empty or missing plan reaches BUILD before a task-status
+                // file exists.  Let the completion predicate classify that
+                // gate miss (and the daemon auto-park contradiction guard)
+                // rather than turning it into a conductor error here.
+                const status = await readFile(
+                  join(this.projectRoot, '.pipeline', 'task-status.json'),
+                  'utf8',
+                )
+                  .then((raw) => JSON.parse(raw) as unknown)
+                  .catch(() => undefined);
+                if (status !== undefined && collectUnverifiedDoneWhenChecks(status).length > 0) {
                   await this.recordUnverifiedDoneWhenNudge(state);
                 }
               }
