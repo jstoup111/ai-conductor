@@ -5465,12 +5465,14 @@ export class Conductor {
     // guard entirely, so a deferral whose intake create failed (effect still
     // reserved) settled into a terminal PASS with its intake unfiled.
     const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
+    // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
       return {
         kind: 'invalid',
         reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status}); resolve with ai-conductor build-review resolve-case --feature ${feature.feature}${this.activeRegionChild === undefined ? '' : ` --child ${this.activeRegionChild}`} --case ${survivingObligation.id} --rationale "<why>"`,
       };
     }
+    // /ai-conductor:session-command-context
     await drainOutbox();
     return { kind: 'settled' };
   }
