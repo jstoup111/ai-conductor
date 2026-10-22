@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -339,6 +339,106 @@ function failOnlyDecisionStopMutation(reason: 'lock-timeout' | 'malformed-state'
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  const customAggregate = customMixedAggregate();
+  const customSource = projectBuildReviewAggregateSources(customAggregate)!.find((source) => source.rubric === 'security')!;
+  it.each([
+    ['built-in finding on an open case', aggregate, rawSource, 'open'],
+    ['built-in finding on a resolved case', aggregate, rawSource, 'resolved'],
+    ['custom-rubric finding on an open case', customAggregate, customSource, 'open'],
+    ['custom-rubric finding on a resolved case', customAggregate, customSource, 'resolved'],
+  ] as const)('records an acceptance origin while finalizing a %s', async (_kind, currentAggregate, currentSource, initialResolution) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const currentSourceId = buildReviewAdjudicationSourceId(currentSource);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-open', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The finding needs a focused repair.', resolution: initialResolution,
+        sources: [{ sourceId: currentSourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' }],
+        effect: { id: 'effect-open', kind: 'action', status: 'applied', workOrderId: 'order-open' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), aggregate: currentAggregate,
+      operatorResolvedFindingIds: new Set([currentSource.findingId]),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]).toMatchObject({
+      resolution: 'resolved',
+      operatorAcceptance: { origins: [{ sourceId: currentSourceId, lapId: currentAggregate.lapId }] },
+    });
+  });
+
+  it('records only an exact unsuppressed acceptance once on a partially open case', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const acceptedSourceId = buildReviewAdjudicationSourceId(acceptedSource);
+    const liveSourceId = buildReviewAdjudicationSourceId(liveSource);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-partial', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The second finding still needs a focused repair.', resolution: 'open',
+        sources: [
+          { sourceId: acceptedSourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' },
+          { sourceId: liveSourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' },
+        ],
+        effect: { id: 'effect-partial', kind: 'action', status: 'applied', workOrderId: 'order-partial' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: liveSourceId, outcome: 'acted', caseRef: 'case-partial' }],
+      cases: [{
+        caseRef: 'case-partial', existingCaseId: 'case-partial', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The second finding still needs a focused repair.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the second test' }] },
+      }],
+    };
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate,
+      operatorResolvedFindingIds: new Set([acceptedSource.findingId]),
+    });
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate,
+      operatorResolvedFindingIds: new Set([acceptedSource.findingId]),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]).toMatchObject({
+      resolution: 'open',
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: mixedAggregate.lapId }] },
+    });
+  });
+
+  it('does not record an origin for a confidence-suppressed finding', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-suppressed', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The finding needs a focused repair.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' }],
+        effect: { id: 'effect-suppressed', kind: 'action', status: 'applied', workOrderId: 'order-suppressed' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), suppressedFindingIds: new Set([findingId]),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]?.operatorAcceptance).toBeUndefined();
+  });
+
   it('publishes only the open action as the durable BUILD repair for a shared resolved source', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

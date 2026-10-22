@@ -369,7 +369,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     for (;;) {
     settleRounds += 1;
     const acceptedSourceIds = new Set(sources
-      .filter((source) => exitResolved.has(source.findingId))
+      .filter((source) => exitResolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId))
       .map(buildReviewAdjudicationSourceId));
     // Operator disposition remains its own authority. This leased mutation only
     // retires autonomous rows it covers, then keeps the published order bound to
@@ -384,25 +384,37 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     >(async (state) => {
       const retirementTransitions: OperatorRetirementTransition[] = [];
       const cases = state.cases.map((record) => {
-        if (record.resolution !== 'open' || record.sources.length === 0 ||
-          !record.sources.every((source) => acceptedSourceIds.has(source.sourceId))) return record;
+        const newOrigins = record.sources
+          .filter((source) => acceptedSourceIds.has(source.sourceId) && source.outcome !== 'carried')
+          .filter((source) => !record.operatorAcceptance?.origins.some((origin) => origin.sourceId === source.sourceId))
+          .map((source) => ({ sourceId: source.sourceId, lapId: input.aggregate.lapId }));
+        const withOrigins = newOrigins.length === 0
+          ? record
+          : {
+            ...record,
+            operatorAcceptance: {
+              origins: [...(record.operatorAcceptance?.origins ?? []), ...newOrigins],
+            },
+          };
+        if (withOrigins.resolution !== 'open' || withOrigins.sources.length === 0 ||
+          !withOrigins.sources.every((source) => acceptedSourceIds.has(source.sourceId))) return withOrigins;
         // An accepted source never completed this reserved effect. Preserve the
         // durable row as a retired failure rather than falsely recording work as
         // applied; the reducer ignores resolved rows through the shared open-case
         // vocabulary.
         let retiredEffect: OperatorRetirementTransition['retiredEffect'];
-        const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
+        const effect = withOrigins.effect.kind !== 'none' && withOrigins.effect.status === 'reserved'
           ? (() => {
             retiredEffect = {
-              effectId: record.effect.id,
-              effectKind: record.effect.kind,
+              effectId: withOrigins.effect.id,
+              effectKind: withOrigins.effect.kind,
               reason: 'retired by operator acceptance',
             };
-            return { id: record.effect.id, kind: record.effect.kind, status: 'failed' as const, diagnostic: retiredEffect.reason };
+            return { id: withOrigins.effect.id, kind: withOrigins.effect.kind, status: 'failed' as const, diagnostic: retiredEffect.reason };
           })()
-          : record.effect;
-        retirementTransitions.push({ caseId: record.id, ...(retiredEffect ? { retiredEffect } : {}) });
-        return { ...record, resolution: 'resolved' as const, effect };
+          : withOrigins.effect;
+        retirementTransitions.push({ caseId: withOrigins.id, ...(retiredEffect ? { retiredEffect } : {}) });
+        return { ...withOrigins, resolution: 'resolved' as const, effect };
       });
       const eligible = cases.filter(isBuildEligibleActionCase);
       if (eligible.length === 0 || !options.republishWorkOrder) {
