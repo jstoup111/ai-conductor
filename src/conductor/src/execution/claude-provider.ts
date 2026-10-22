@@ -613,19 +613,20 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'interactive' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, interactive, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`${claudeDisplayName()} process spawn denied: ${permit.reason}`);
     }
     const subprocess = this.subprocessFactory(selfHost?.executable ?? this.executable, args, {
       ...execaOptions,
-      // A daemon feature must retain the diagnostic in its scoped/persisted
-      // log. Other callers preserve the existing live inherited stdio path.
-      stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
-      stderr: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
+      // Only the REPL inherits stdio. Print-mode stream-json reaches the
+      // operator through the stream consumer, never the parent's stdout
+      // (adr-2026-08-24-streaming-dispatch-requests-the-machine-envelope D3/D4).
+      stdout: diagnosticLog || !interactive ? 'pipe' : ['pipe', 'inherit'],
+      stderr: diagnosticLog || !interactive ? 'pipe' : ['pipe', 'inherit'],
     });
     // Wire optional spawn and activity observations on the LIVE subprocess
     // before awaiting, so observers receive the spawn event and streamed
@@ -735,6 +736,7 @@ export class ClaudeProvider implements LLMProvider {
           cwd: options.cwd,
           ...(options.abortSignal === undefined ? {} : { cancelSignal: options.abortSignal }),
           diagnosticLog: options.diagnosticLog,
+          interactive: options.interactive,
           onActivity: options.onActivity,
           onProviderStream: options.interactive
             ? undefined
