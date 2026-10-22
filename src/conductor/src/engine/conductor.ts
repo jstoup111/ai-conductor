@@ -124,6 +124,7 @@ import {
   admitCitationRefusals,
   buildCitationJudgementInput,
   collectPendingCitations,
+  settleCitationRefusals,
 } from './done-when-citation-judgement.js';
 import { readGitBlobs } from './git-blob-batch.js';
 import { createRepairObligationStore } from './repair-obligations.js';
@@ -12076,8 +12077,11 @@ export class Conductor {
                 try {
                   const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')) as unknown;
                   const pending = collectPendingCitations(status);
+                  const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
+                  // A refusal is allowed one repair lap.  This runs even
+                  // when no new citation was re-closed in this session.
+                  await settleCitationRefusals(this.projectRoot, planPath ?? '', status, attempt >= stepMaxRetries);
                   if (pending.length > 0) {
-                    const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
                     const planText = planPath ? await readFile(planPath, 'utf8') : '';
                     const blobs = await readGitBlobs(
                       this.projectRoot,
@@ -12088,7 +12092,10 @@ export class Conductor {
                     const judgement = await this.stepRunner.dispatchDoneWhenCitationJudgement(input);
                     if (judgement.kind === 'valid') {
                       await applyCitationVerdicts(this.projectRoot, status, judgement.verdicts);
-                      const admissions = await admitCitationRefusals(this.projectRoot, planPath ?? '', pending, judgement.verdicts);
+                      const demoted = await settleCitationRefusals(this.projectRoot, planPath ?? '', status, attempt >= stepMaxRetries);
+                      const demotedKeys = new Set(demoted.map(({ taskId, checkIndex }) => `${taskId}\u0000${checkIndex}`));
+                      const admissions = await admitCitationRefusals(this.projectRoot, planPath ?? '', pending,
+                        judgement.verdicts.filter(({ taskId, checkIndex }) => !demotedKeys.has(`${taskId}\u0000${checkIndex}`)));
                       if (admissions.length > 0) {
                         citationRefusalReason = admissions.map(({ taskId, checks }) =>
                           `Done-when citation refused: Task ${taskId} must repair its refused test citation(s): ` +

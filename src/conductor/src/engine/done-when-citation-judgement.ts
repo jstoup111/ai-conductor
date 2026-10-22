@@ -313,3 +313,60 @@ export function formatCitationRefusalRetryHint(taskId: string, checks: readonly 
   return `Done-when citation refused: Task ${taskId} must repair its refused test citation(s): ` +
     checks.map((check) => `check ${check.checkIndex} (${check.check}; test:${check.path}::${check.title}; ${check.reason})`).join('; ');
 }
+
+/** Settle a refusal that has consumed its one BUILD repair opportunity. */
+export async function settleCitationRefusals(
+  projectRoot: string,
+  planPath: string,
+  status: unknown,
+  force = false,
+): Promise<Array<{ taskId: string; checkIndex: number }>> {
+  const root = record(status);
+  if (!root || !Array.isArray(root.tasks)) return [];
+  const repairs = createRepairObligationStore(projectRoot, join(projectRoot, '.pipeline', 'engine-state.json'));
+  const read = await repairs.read();
+  if (!read.ok) throw new Error(`could not read Done-when citation refusals: ${read.message}`);
+  const demoted: Array<{ taskId: string; checkIndex: number }> = [];
+  let changed = false;
+  for (const rawTask of root.tasks) {
+    const task = record(rawTask);
+    if (!task || typeof task.id !== 'string' || !Array.isArray(task.doneWhen)) continue;
+    for (const [offset, rawClose] of task.doneWhen.entries()) {
+      const close = record(rawClose);
+      if (!close || parseDoneWhenCloseSource(close.source) !== 'judged' || close.verdict !== 'does-not-assert' ||
+        typeof close.check !== 'string' || typeof close.evidence !== 'string' || typeof close.reason !== 'string') continue;
+      const reference = parseDoneWhenTestReference(close.evidence);
+      if (!reference) continue;
+      const key = digest({ taskId: task.id, checkIndex: offset + 1, checkDigest: digest(close.check), reference: `test:${reference.path}::${reference.title}` });
+      if (!force && (read.value.citationRefusals[key] ?? 0) < 1) continue;
+      close.source = 'unverified';
+      delete close.verdict;
+      demoted.push({ taskId: task.id, checkIndex: offset + 1 });
+      changed = true;
+    }
+  }
+  if (changed) {
+    const pipelineDir = join(projectRoot, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    const path = join(pipelineDir, 'task-status.json');
+    const temp = join(pipelineDir, `.task-status.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
+    await writeFile(temp, JSON.stringify(root, null, 2));
+    await rename(temp, path);
+  }
+  for (const obligation of Object.values(read.value.records)) {
+    if (obligation.source.authority !== 'done-when-citation') continue;
+    for (const taskId of obligation.taskIds) {
+      if (obligation.tasks[taskId]?.status !== 'open') continue;
+      const task = root.tasks.map(record).find((row) => row?.id === taskId);
+      const stillRefused = Array.isArray(task?.doneWhen) && task.doneWhen.some((rawClose) => {
+        const close = record(rawClose);
+        return close?.source === 'judged' && close.verdict === 'does-not-assert';
+      });
+      if (!stillRefused) {
+        const closed = await repairs.close({ planPath, taskId, obligationId: obligation.id, evidence: { kind: 'citation-settled', value: 'demoted' } });
+        if (!closed.ok) throw new Error(`could not settle Done-when citation refusal: ${closed.message}`);
+      }
+    }
+  }
+  return demoted;
+}

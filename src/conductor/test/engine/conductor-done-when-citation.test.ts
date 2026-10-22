@@ -1,4 +1,4 @@
-// Covers: task:9, task:10
+// Covers: task:9, task:10, task:11
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,5 +74,25 @@ describe('BUILD Done-when citation judgement boundary', () => {
       { check: '[test] proven', evidence: 'test:test/one.test.ts::proven', source: 'verified' },
     ] }] });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('reopens a refused citation through one durable done-when-citation obligation', async () => {
+    const dispatch = await run({ tasks: [{ id: '7', status: 'pending', doneWhen: [
+      { check: '[test] first', evidence: 'test:test/one.test.ts::first', source: 'pending-judgement' },
+    ] }] }, vi.fn(async () => ({
+      kind: 'valid' as const,
+      verdicts: [{ taskId: '7', checkIndex: 1, verdict: 'does-not-assert' as const, reason: 'the cited test proves another behavior' }],
+    })));
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
+    expect(status.tasks).toEqual(expect.arrayContaining([expect.objectContaining({ id: '7', status: 'pending' })]));
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    const obligations = Object.values(engine.repairObligations.records) as Array<Record<string, unknown>>;
+    expect(obligations).toHaveLength(1);
+    expect(obligations[0]).toMatchObject({
+      source: { authority: 'done-when-citation' },
+      taskIds: ['7'], tasks: { '7': { status: 'open' } },
+    });
   });
 });
