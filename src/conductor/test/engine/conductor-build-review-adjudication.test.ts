@@ -23,6 +23,7 @@ import { parseChildId, pipelinePathFor } from '../../src/engine/child-context.js
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -263,6 +264,8 @@ interface FixtureOptions {
   readonly featureCreationAuthorized?: boolean;
   /** Replays incident 1: an action already failed on S and a judgement re-raises it with new work. */
   readonly reRaised?: boolean;
+  /** Attach the production event-spine persister when a test observes durable event order. */
+  readonly persistEvents?: boolean;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -350,6 +353,10 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   const events = new ConductorEventEmitter();
+  const persister = options.persistEvents
+    ? new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events)
+    : undefined;
+  persister?.start();
   const kickbacks: Array<{ from: string; to: string }> = [];
   const kickbackEvidence: string[] = [];
   const gateVerdicts: Array<{ step: StepName; satisfied: boolean }> = [];
@@ -410,9 +417,13 @@ async function fixture(options: FixtureOptions = {}) {
     await stat(join(projectRoot, relative)).then((metadata) => artifactMtimes.set(relative, metadata.mtimeMs)).catch(() => {});
   }
 
-  await conductor.run().catch((error: unknown) => {
-    if (!(error instanceof Error) || !error.message.startsWith('stop after')) throw error;
-  });
+  try {
+    await conductor.run().catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.startsWith('stop after')) throw error;
+    });
+  } finally {
+    persister?.stop();
+  }
 
   return {
     projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, gateVerdicts, lifecycle, loopHalts, ghCalls, resolver,
@@ -421,6 +432,8 @@ async function fixture(options: FixtureOptions = {}) {
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
     state: async (): Promise<ConductState> =>
       JSON.parse(await readFile(statePath, 'utf8')) as ConductState,
+    events: async (): Promise<ConductorEvent[]> => (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as ConductorEvent),
     haltMarker: async (): Promise<string> => readFile(join(projectRoot, '.pipeline/HALT'), 'utf8').catch(() => ''),
   };
 }
@@ -1206,12 +1219,13 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     ]);
   });
 
-  // Covers: task:20
+  // Covers: task:20, task:rem-prd-audit-rem-prd-audit-R20a
   it('carries a same-id re-raise of an operator-resolved action case before any new effect', async () => {
     const charge = vi.fn(async () => ({
       status: 'charged' as const, exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 },
     }));
     const run = await fixture({
+      persistEvents: true,
       chargeEffect: charge as never,
       judgement: {
         mode: 'case-v1', domain: 'build_review',
@@ -1263,9 +1277,15 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     ]);
     expect(caseEvents.filter((event) => event.type === 'remediation_case_operator_resolved')).toHaveLength(1);
     expect(caseEvents.filter((event) => event.type === 'build_review_acceptance_carried')).toHaveLength(1);
+    const persistedCaseEvents = (await run.events()).filter((event) =>
+      event.type === 'remediation_case_operator_resolved' || event.type === 'build_review_acceptance_carried');
+    expect(persistedCaseEvents.map((event) => event.type)).toEqual([
+      'remediation_case_operator_resolved',
+      'build_review_acceptance_carried',
+    ]);
   });
 
-  // Covers: task:20
+  // Covers: task:20, task:rem-prd-audit-rem-prd-audit-R20a
   it('also carries a new source bound to an operator-resolved action case', async () => {
     const charge = vi.fn(async () => ({
       status: 'charged' as const, exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 },
@@ -1430,7 +1450,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       settleRemediationCasesOnCleanBuildReview: () => Promise<{ kind: string; reason?: string }>;
     }).settleRemediationCasesOnCleanBuildReview()).resolves.toEqual(expect.objectContaining({
       kind: 'invalid',
-      reason: expect.stringContaining('resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --child 2 --case case-child'),
+      reason: expect.stringContaining('resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --case case-child --child 2'),
     }));
   });
 
