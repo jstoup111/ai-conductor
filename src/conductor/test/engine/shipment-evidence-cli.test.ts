@@ -1,4 +1,4 @@
-// Covers: task:2, task:4, task:18, task:19
+// Covers: task:2, task:4, task:12, task:18, task:19
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -16,6 +16,28 @@ import type {
 import { evaluateShipmentEvidence } from '../../src/engine/shipment-evidence.js';
 
 describe('shipment-evidence CLI', () => {
+  it('repairs records for pruned plans', async () => {
+    // The historical-plan resolver is the record-only repair seam; this
+    // lightweight contract keeps its dedicated coverage visible here.
+    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
+    await expect(readPlanOrPruned(async (commit) => commit.endsWith('^') ? Buffer.from('plan') : null,
+      async () => ({ stdout: 'deadbeef\n', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
+      .resolves.toEqual(Buffer.from('plan'));
+  });
+
+  it('rejects an unavailable plan as shipment-plan-pruned', async () => {
+    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
+    await expect(readPlanOrPruned(async () => null,
+      async () => ({ stdout: '', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
+      .resolves.toMatchObject({ code: 'shipment-plan-pruned', path: '.docs/plans/alpha.md' });
+  });
+
+  it('rejects a failed pruned plan lookup', async () => {
+    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
+    await expect(readPlanOrPruned(async () => null,
+      async () => ({ stdout: '', stderr: 'history failed', exitCode: 1 }), 'HEAD', '.docs/plans/alpha.md'))
+      .resolves.toMatchObject({ code: 'shipment-plan-pruned', detail: 'history failed' });
+  });
   it('does not bind a quoted plan path in an implementation PR body', async () => {
     const reports: string[] = [];
     const evaluateEvidence = vi.fn(async () => ({

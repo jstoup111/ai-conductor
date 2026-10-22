@@ -1,4 +1,4 @@
-// Covers: task:19, task:rem-as-built-R16, task:rem-as-built-rem-v3-audit-child-exclusion
+// Covers: task:13, task:19, task:rem-as-built-R16, task:rem-as-built-rem-v3-audit-child-exclusion
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { runShipmentAudit } from '../../src/engine/shipment-audit.js';
 
 describe('shipment audit', () => {
+  it('classifies pruned plans through their deleting commit', async () => {
+    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
+    await expect(readPlanOrPruned(async (commit) => commit.endsWith('^') ? Buffer.from('plan') : null,
+      async () => ({ stdout: 'deadbeef\n', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
+      .resolves.toEqual(Buffer.from('plan'));
+  });
+
+  it('classifies an unreachable plan as shipment-plan-pruned', async () => {
+    const { readPlanOrPruned } = await import('../../src/engine/pruned-plan.js');
+    await expect(readPlanOrPruned(async () => null,
+      async () => ({ stdout: '', stderr: '', exitCode: 0 }), 'HEAD', '.docs/plans/alpha.md'))
+      .resolves.toMatchObject({ code: 'shipment-plan-pruned' });
+  });
   it('selects a merged PR head ref and leaves a missing one unclassified', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'shipment-audit-head-ref-'));
     const runGh = vi.fn(async (args: string[]) => {
