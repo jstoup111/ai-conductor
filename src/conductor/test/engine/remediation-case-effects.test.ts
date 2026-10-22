@@ -110,23 +110,29 @@ describe('remediation case effects', () => {
   });
 
   // Covers: task:6
-  it('converges a bound replayed stop despite fresh link timestamps', async () => {
+  it('converges a bound replayed stop despite fresh link timestamps and consistency drift', async () => {
     const original: RemediationCaseRecord = {
       id: 'case-owner-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
       rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
       sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-01T00:00:00.000Z' }],
-      escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+      escalation: { owner: 'architecture' },
+      consistencyStop: { sourceIds: ['finding-a'], rationale: 'Architecture must decide.' },
+      effect: { kind: 'none' },
     };
     const store = await storeWith({ version: 'v1', feature, cases: [original] });
 
     await expect(persistBuildReviewDecisionStop({
       store,
-      record: { ...original, sources: [{ ...original.sources[0]!, recordedAt: '2026-10-02T00:00:00.000Z' }] },
+      record: {
+        ...original,
+        sources: [{ ...original.sources[0]!, recordedAt: '2026-10-02T00:00:00.000Z' }],
+        consistencyStop: { sourceIds: ['finding-a'], rationale: 'A later lap explains the same stop differently.' },
+      },
     })).resolves.toEqual({ ok: true, status: 'already-persisted', caseId: original.id });
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [original] } });
   });
 
-  it('converges an unbound replayed consistency stop with the same source outcomes', async () => {
+  it('converges an unbound ownerless consistency stop despite consistency rationale and source-order drift', async () => {
     const original: RemediationCaseRecord = {
       id: 'case-consistency-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
       rationale: 'The proposals contradict each other.', confidence: 'high', resolution: 'open',
@@ -142,6 +148,7 @@ describe('remediation case effects', () => {
       ...original,
       id: 'new-case-id',
       sources: [...original.sources].reverse().map((source) => ({ ...source, recordedAt: '2026-10-02T00:00:00.000Z' })),
+      consistencyStop: { sourceIds: ['finding-b', 'finding-a'], rationale: 'The later review words the conflict differently.' },
     };
 
     await expect(persistBuildReviewDecisionStop({ store, record: replayed })).resolves.toEqual({

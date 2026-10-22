@@ -323,6 +323,21 @@ function decisionStopScope() {
   };
 }
 
+function failOnlyDecisionStopMutation(reason: 'lock-timeout' | 'malformed-state') {
+  const originalMutate = RemediationCaseStore.prototype.mutate;
+  return vi.spyOn(RemediationCaseStore.prototype, 'mutate').mockImplementation(async function (callback) {
+    // Probe the reducer without writing. Decision-stop persistence is the only
+    // mutation here whose value has this terminal status shape.
+    const probe = await callback({ version: 'v1', feature, cases: [] });
+    const value = (probe as { value?: unknown }).value;
+    if (typeof value === 'object' && value !== null && 'status' in value &&
+      ['persisted', 'already-persisted', 'already-resolved'].includes((value as { status?: string }).status ?? '')) {
+      return { ok: false, reason } as never;
+    }
+    return originalMutate.call(this, callback);
+  });
+}
+
 describe('coordinateBuildReviewAdjudication', () => {
   it('publishes only the open action as the durable BUILD repair for a shared resolved source', async () => {
     const root = await projectRoot();
@@ -478,6 +493,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       cases: [{
         id: 'case-D', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Architecture must decide.', resolution: 'open',
         sources: [{ sourceId: scope.sourceId, outcome: 'escalate', recordedAt: '2026-10-18T00:00:00.000Z' }], effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        consistencyStop: { sourceIds: [scope.sourceId], rationale: 'Plan must decide.' },
       }],
     });
     const before = await readFile(remediationCaseStorePath(root), 'utf8');
@@ -494,6 +510,57 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(result.detail).toContain('case-new');
     expect(result.detail).toContain(scope.sourceId);
     await expect(readFile(remediationCaseStorePath(root), 'utf8')).resolves.toBe(before);
+  });
+
+  it.each(['lock-timeout', 'malformed-state'] as const)('reports a decision-stop %s without trusted-history recovery guidance', async (reason) => {
+    const root = await projectRoot();
+    const scope = decisionStopScope();
+    const events: ConductorEvent[] = [];
+    const mutation = failOnlyDecisionStopMutation(reason);
+    try {
+      const result = await coordinateBuildReviewAdjudication({
+        ...input(root, async () => ({
+          mode: 'case-v2', domain: 'build_review', sourceOutcomes: [{ sourceId: scope.sourceId, outcome: 'escalate', caseRef: 'stop' }],
+          cases: [{ caseRef: 'stop', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'An owner must decide.', effect: { kind: 'none' }, escalation: { owner: 'architecture' } }],
+          consistency: { verdict: 'consistent', sourceIds: [scope.sourceId], caseRefs: ['stop'], rationale: 'One owner decision is needed.' },
+        })), ...scope, generateId: () => 'case-stop', emit: async (event) => { events.push(event); },
+      });
+
+      expect(result).toEqual({ ok: false, detail: `decision stop case store ${reason}` });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'remediation_adjudication_failed', reason: `decision stop case store ${reason}`,
+      }));
+      expect(events.find((event) => event.type === 'remediation_adjudication_failed')).not.toHaveProperty('rejectedTransition');
+      expect(result.detail).not.toContain('persisted case history is valid');
+    } finally {
+      mutation.mockRestore();
+    }
+  });
+
+  it('reports a conflicting bound decision stop without trusted-history recovery guidance', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const scope = decisionStopScope();
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-D', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Architecture must decide.', resolution: 'open',
+        sources: [{ sourceId: scope.sourceId, outcome: 'escalate', recordedAt: '2026-10-18T00:00:00.000Z' }],
+        effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+      }],
+    });
+    const events: ConductorEvent[] = [];
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => ({
+        mode: 'case-v2', domain: 'build_review', sourceOutcomes: [{ sourceId: scope.sourceId, outcome: 'escalate', caseRef: 'stop' }],
+        cases: [{ caseRef: 'stop', existingCaseId: 'case-D', disposition: 'escalate', priority: 'high', confidence: 'high', rationale: 'Plan must decide.', effect: { kind: 'none' }, escalation: { owner: 'plan' } }],
+        consistency: { verdict: 'consistent', sourceIds: [scope.sourceId], caseRefs: ['stop'], rationale: 'One owner decision is needed.' },
+      })), ...scope, emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toEqual({ ok: false, detail: 'decision stop conflicting-case-id' });
+    expect(events.find((event) => event.type === 'remediation_adjudication_failed')).not.toHaveProperty('rejectedTransition');
+    expect(result.detail).not.toContain('persisted case history is valid');
   });
 
   it('rejects an unbound decision stop over an open action owner with named invariant and unchanged store', async () => {

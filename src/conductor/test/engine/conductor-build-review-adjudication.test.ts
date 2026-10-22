@@ -22,6 +22,7 @@ import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
+import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -56,6 +57,19 @@ const RE_RAISED_FINDING_ID = canonicalizeBuildReviewFindingIdentity({
   rubric: 'testQuality', contractVersion: 'v3', concernKind: RE_RAISED_FINDING.concernKind, anchor: RE_RAISED_FINDING.anchor,
 })!.id;
 const RE_RAISED_SOURCE_ID = `testQuality:${RE_RAISED_FINDING_ID}`;
+
+function failOnlyDecisionStopMutation() {
+  const originalMutate = RemediationCaseStore.prototype.mutate;
+  return vi.spyOn(RemediationCaseStore.prototype, 'mutate').mockImplementation(async function (callback) {
+    const probe = await callback({ version: 'v1', feature: { version: 'v1', repository: 'probe', feature: 'probe' }, cases: [] });
+    const value = (probe as { value?: unknown }).value;
+    if (typeof value === 'object' && value !== null && 'status' in value &&
+      ['persisted', 'already-persisted', 'already-resolved'].includes((value as { status?: string }).status ?? '')) {
+      return { ok: false, reason: 'malformed-state' } as never;
+    }
+    return originalMutate.call(this, callback);
+  });
+}
 
 function aggregate(kind: 'judged' | 'mixed'): unknown {
   return joinBuildReviewRubricOutcomes({
@@ -462,6 +476,36 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   // Covers: task:7
   it('through build_review writes a needs-human HALT for the refused blocked-consistency lap', async () => {
     await expectRefusedDecisionStopHalt(true);
+  });
+
+  it('writes a decision-stop malformed-state HALT without rejected-transition recovery guidance', async () => {
+    const customSource = projectBuildReviewAggregateSources(customAggregate())![0]!;
+    const sourceId = buildReviewAdjudicationSourceId(customSource);
+    const mutation = failOnlyDecisionStopMutation();
+    try {
+      const run = await fixture({
+        custom: true,
+        judgement: {
+          mode: 'case-v2', domain: 'build_review',
+          sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'case-stop' }],
+          cases: [{
+            caseRef: 'case-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+            rationale: 'The owner must decide.', effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+          }],
+          consistency: { verdict: 'consistent', sourceIds: [sourceId], caseRefs: ['case-stop'], rationale: 'One owner decision is needed.' },
+        },
+      });
+      const halt = await run.haltMarker();
+      const failed = run.lifecycle.find((event) => event.type === 'remediation_adjudication_failed');
+
+      expect(await readFile(join(run.projectRoot, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');
+      expect(halt).toContain('decision stop case store malformed-state');
+      expect(halt).not.toMatch(/case transition rejected|source-linked-by-multiple-cases|persisted case history is valid/);
+      expect(failed).toMatchObject({ type: 'remediation_adjudication_failed', reason: 'decision stop case store malformed-state' });
+      expect(failed).not.toHaveProperty('rejectedTransition');
+    } finally {
+      mutation.mockRestore();
+    }
   });
 
   it('halts a rejected transition with trusted-history recovery guidance before BUILD dispatch', async () => {

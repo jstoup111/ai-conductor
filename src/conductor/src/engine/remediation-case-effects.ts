@@ -69,7 +69,7 @@ function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRec
   return left.id === right.id && left.disposition === 'escalate' && right.disposition === 'escalate' &&
     left.effect.kind === 'none' && right.effect.kind === 'none' &&
     left.escalation?.owner === right.escalation?.owner &&
-    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && sameSourceOutcomes(left, right);
+    sameSourceOutcomes(left, right);
 }
 
 function sameSourceOutcomes(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
@@ -79,8 +79,11 @@ function sameSourceOutcomes(left: RemediationCaseRecord, right: RemediationCaseR
 }
 
 function sameDecisionStopOwnerOrConsistency(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
-  return (left.escalation?.owner !== undefined && left.escalation.owner === right.escalation?.owner) ||
-    (left.consistencyStop !== undefined && JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop));
+  // D5.7 defines an unbound stop's convergence key as its owner and source
+  // set. This deliberately treats two ownerless consistency stops as having
+  // the same owner, while never letting matching consistency prose bridge an
+  // owner mismatch.
+  return left.escalation?.owner === right.escalation?.owner;
 }
 
 function sameSourceIds(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
