@@ -65,16 +65,21 @@ export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolea
 }
 
 function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
-  return left.id === right.id && left.domain === right.domain && left.disposition === 'escalate' &&
-    right.disposition === 'escalate' && left.priority === right.priority && left.rationale === right.rationale &&
-    left.confidence === right.confidence && left.resolution === right.resolution &&
+  return left.id === right.id && left.disposition === 'escalate' && right.disposition === 'escalate' &&
     left.effect.kind === 'none' && right.effect.kind === 'none' &&
     left.escalation?.owner === right.escalation?.owner &&
-    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && left.sources.length === right.sources.length &&
-    left.sources.every((source, index) => {
-      const other = right.sources[index];
-      return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome && source.recordedAt === other.recordedAt;
-    });
+    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && sameSourceOutcomes(left, right);
+}
+
+function sameSourceOutcomes(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  return left.sources.length === right.sources.length && left.sources.every((source) =>
+    right.sources.some((other) => source.sourceId === other.sourceId && source.outcome === other.outcome),
+  );
+}
+
+function sameDecisionStopOwnerOrConsistency(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  return (left.escalation?.owner !== undefined && left.escalation.owner === right.escalation?.owner) ||
+    (left.consistencyStop !== undefined && JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop));
 }
 
 function sameSourceIds(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
@@ -112,6 +117,13 @@ export async function persistBuildReviewDecisionStop(input: {
           ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id }
           : { ok: false as const, reason: 'conflicting-case-id' as const },
       };
+    }
+    const converged = state.cases.find((record) =>
+      isBuildReviewDecisionStop(record) && record.disposition === 'escalate' &&
+      sameDecisionStopOwnerOrConsistency(record, input.record) && sameSourceOutcomes(record, input.record),
+    );
+    if (converged) {
+      return { value: { ok: true as const, status: 'already-persisted' as const, caseId: converged.id } };
     }
     return {
       value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id },
