@@ -54,9 +54,9 @@ export interface BuildReviewEffectiveResolverDeps {
   /** Resolved operator floors, supplied by the live build-review runner. */
   readonly minConfidence?: Partial<Record<string, number>>;
   /** The active stacked child; settled links are never read from its sibling. */
-  readonly child?: ChildId;
+  readonly child: ChildId | undefined;
   /** Disabled adjudication has no case-store authority. */
-  readonly adjudicationEnabled?: boolean;
+  readonly adjudicationEnabled: boolean;
 }
 
 export type BuildReviewEffectiveResolution =
@@ -219,7 +219,7 @@ async function readSettledBuildReviewSourceIds(
 export async function resolveEffectiveBuildReviewVerdict(
   projectRoot: string,
   value: unknown,
-  deps: BuildReviewEffectiveResolverDeps = {},
+  deps: BuildReviewEffectiveResolverDeps,
 ): Promise<BuildReviewEffectiveResolution> {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return { ok: false, reason: 'build-review aggregate is invalid' };

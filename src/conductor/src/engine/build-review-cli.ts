@@ -298,7 +298,7 @@ function carriedSourceFindings(
           const findingId = findingIdForSource(origin.sourceId);
           const disposition = findingId === undefined
             ? undefined
-            : records.find((record) => record.finding.id === findingId && record.sourceLapId === origin.lapId);
+            : records.find((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}` === origin.sourceId);
           return {
             sourceId: origin.sourceId,
             lapId: origin.lapId,

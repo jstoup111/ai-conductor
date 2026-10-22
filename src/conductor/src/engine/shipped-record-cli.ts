@@ -37,6 +37,7 @@ import {
 } from './shipped-record.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { RemediationCaseStore } from './remediation-case-store.js';
+import { listExistingChildren } from './child-context.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { computeCostRollup } from './cost-rollup.js';
@@ -206,7 +207,15 @@ export async function dispatchShippedRecord(
       const feature = { version: 'v1' as const, repository, feature: identity.slug };
       const dispositions = await new BuildReviewDispositionStore(cwd).list(feature);
       if (!dispositions.ok) throw new Error(dispositions.message);
-      const caseRead = await new RemediationCaseStore(cwd, feature).read();
+      const caseReads = await Promise.all([
+        new RemediationCaseStore(cwd, feature).read(),
+        ...(await listExistingChildren(cwd)).map((child) => new RemediationCaseStore(cwd, feature, { child }).read()),
+      ]);
+      const unreadableCaseRead = caseReads.find((read) => !read.ok);
+      const readableCaseReads = caseReads.filter((read): read is Extract<typeof read, { ok: true }> => read.ok);
+      const caseRead = unreadableCaseRead && !unreadableCaseRead.ok
+        ? unreadableCaseRead
+        : { ok: true as const, state: { ...readableCaseReads[0]!.state, cases: readableCaseReads.flatMap((read) => read.state.cases) } };
       recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records, caseRead);
 
       const reducedCoverage = await new BuildReviewDispositionStore(cwd).listReducedCoverage(feature);

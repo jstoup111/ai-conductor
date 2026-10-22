@@ -1,4 +1,5 @@
 import type { RemediationCaseRow } from './remediation-case-artifact.js';
+import { randomUUID } from 'node:crypto';
 import { hasReservedOrFailedRemediationEffect } from './remediation-case-effects.js';
 import {
   type RemediationCaseEffect,
@@ -7,7 +8,7 @@ import {
   type RemediationCaseStoreFailureReason,
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
-  prdWideningCasesForState,
+  appendRemediationCaseOutbox,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 import type { RemediationCaseGraph } from './remediation-case-validator.js';
@@ -23,6 +24,8 @@ export interface ReconcileRemediationCasesInput {
   readonly attemptedCaseIds?: readonly string[];
   /** A clean PASS with no order settles absent non-action case history too. */
   readonly resolveAbsentOpenNonActionCases?: boolean;
+  /** The occurrence lap for any absence retirement performed in this mutation. */
+  readonly lapId?: string;
   /** Case identities known by the caller to belong to another feature/domain. */
   readonly foreignCaseIds?: readonly string[];
   /** Proposals classified as `carry` by `classifyRemediationCaseReuse`. */
@@ -98,13 +101,19 @@ export function retiresOpenBuildReviewCase(
     readonly liveSourceIds: ReadonlySet<string>;
     readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
     readonly mechanicallyHealthy: boolean;
+    /** Clean-PASS settlement has no surviving work order; ordinary laps do. */
+    readonly settleReservedByAbsence?: boolean;
   },
 ): boolean {
   if (record.resolution !== 'open') return false;
-  const accepted = record.sources.length > 0 && record.sources.every((source) => input.effectiveAcceptedSourceIds.has(source.sourceId));
-  const absentFailed = input.mechanicallyHealthy && record.disposition === 'act' && record.effect.kind === 'action' && record.effect.status === 'failed'
-    && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId));
-  return accepted || absentFailed;
+  const originSourceIds = new Set(record.operatorAcceptance?.origins.map((origin) => origin.sourceId) ?? []);
+  const covered = record.sources.length > 0 && record.sources.every((source) =>
+    input.effectiveAcceptedSourceIds.has(source.sourceId) || originSourceIds.has(source.sourceId) || source.outcome === 'carried');
+  if (covered) return true;
+  const absent = input.mechanicallyHealthy && record.disposition === 'act' && record.effect.kind === 'action' &&
+    (record.effect.status === 'failed' || (record.effect.status === 'reserved' && input.settleReservedByAbsence === true)) &&
+    record.sources.every((source) => !input.liveSourceIds.has(source.sourceId));
+  return absent;
 }
 
 export function classifyRemediationCaseReuse(
@@ -201,7 +210,7 @@ function reconcileState(
   const referencedExisting = new Set<string>();
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
-  const carryOutbox: RemediationCaseOutboxEntry[] = [];
+  const outbox: RemediationCaseOutboxEntry[] = [];
   const caseIdsByRef = new Map<string, string>();
   const claimed = new Set<string>();
 
@@ -250,7 +259,8 @@ function reconcileState(
     if (!existing) return { ok: false, reason: 'unknown-case-binding' };
     if (existing.domain !== 'build_review') return { ok: false, reason: 'foreign-case-binding' };
     if (referencedExisting.has(existingCaseId)) return { ok: false, reason: 'duplicate-case-binding' };
-    const admitsRefutation = caseRow.disposition === 'refute'
+    const admitsCarry = carriedCaseRefs.has(caseRow.caseRef);
+    const admitsRefutation = !admitsCarry && caseRow.disposition === 'refute'
       && existing.disposition === 'act'
       && existing.resolution === 'open'
       && attemptedIds.has(existing.id)
@@ -261,7 +271,7 @@ function reconcileState(
     // the approved plan. Without this lane the only transitions off an applied
     // action are refutation or another action, and a legitimate follow-up
     // halted the feature as an illegal transition.
-    const admitsDeferral = caseRow.disposition === 'defer'
+    const admitsDeferral = !admitsCarry && caseRow.disposition === 'defer'
       && existing.disposition === 'act'
       && existing.effect.kind === 'action'
       && existing.effect.status === 'applied';
@@ -269,13 +279,12 @@ function reconcileState(
     // kickback budget), so no lap can apply it and the open case halted every
     // lap. Re-raising its finding as action reserves a fresh effect, which is
     // charged like any new action, so an exhausted budget still stops the lap.
-    const admitsActionRetry = caseRow.disposition === 'act'
+    const admitsActionRetry = !admitsCarry && caseRow.disposition === 'act'
       && existing.disposition === 'act'
       && existing.resolution === 'open'
       && existing.effect.kind === 'action'
       && existing.effect.status === 'failed';
-    const admitsCarry = carriedCaseRefs.has(caseRow.caseRef);
-    if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
+    if (!admitsCarry && caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
     if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral && !admitsCarry) return { ok: false, reason: 'illegal-disposition-transition' };
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);
@@ -304,7 +313,7 @@ function reconcileState(
         const eventId = takeId(input.generateId, usedIds);
         if (eventId === 'id-generation-failed' || eventId === 'id-collision') return { ok: false, reason: eventId };
         const origins = existing.operatorAcceptance?.origins ?? [];
-        carryOutbox.push({
+        outbox.push({
           eventId,
           occurredAt: input.recordedAt,
           event: {
@@ -317,7 +326,11 @@ function reconcileState(
       }
       appendedSources.push({ sourceId: source.sourceId, outcome: admitsCarry ? 'carried' : source.outcome, recordedAt: input.recordedAt });
     }
-    if (admitsRefutation) {
+    if (admitsCarry) {
+      if (appendedSources.length !== existing.sources.length) {
+        replacements.set(existingCaseId, { ...existing, sources: appendedSources });
+      }
+    } else if (admitsRefutation) {
       const effectId = caseRow.effect.kind === 'deferral' ? takeId(input.generateId, usedIds) : undefined;
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
       replacements.set(existingCaseId, {
@@ -395,6 +408,13 @@ function reconcileState(
     ) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);
+      if (input.lapId) {
+        const eventId = randomUUID();
+        outbox.push({ eventId, occurredAt: input.recordedAt, event: {
+          type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.lapId,
+          caseId: replacement.id, resolution: 'resolved',
+        } });
+      }
       return { ...replacement, resolution: 'resolved' as const };
     }
     if (
@@ -409,22 +429,34 @@ function reconcileState(
     ) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);
+      if (input.lapId) {
+        const eventId = randomUUID();
+        outbox.push({ eventId, occurredAt: input.recordedAt, event: {
+          type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.lapId,
+          caseId: replacement.id, resolution: 'resolved',
+        } });
+      }
       return { ...replacement, resolution: 'resolved' as const };
     }
     return replacement;
   });
+  for (const record of cases) {
+    const before = existingById.get(record.id);
+    if (!input.lapId || before?.resolution !== 'open' || record.resolution !== 'resolved' || resolvedAbsentCaseIds.includes(record.id)) continue;
+    const eventId = randomUUID();
+    outbox.push({ eventId, occurredAt: input.recordedAt, event: {
+      type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.lapId,
+      caseId: record.id, resolution: 'resolved',
+    } });
+  }
   return {
     ok: true,
-    state: state.version === 'v3'
-      ? { ...state, cases: [...cases, ...additions], outbox: [...state.outbox, ...carryOutbox] }
-      : carryOutbox.length > 0 ? {
-          version: 'v3',
-          feature: state.feature,
-          cases: [...cases, ...additions],
-          prdWideningCases: prdWideningCasesForState(state),
-          suppressions: state.suppressions ?? [],
-          outbox: carryOutbox,
-        } : { ...state, cases: [...cases, ...additions] },
+    state: outbox.length > 0
+      ? (() => {
+          const upgraded = appendRemediationCaseOutbox(state, outbox[0]!);
+          return { ...upgraded, cases: [...cases, ...additions], outbox: [...upgraded.outbox, ...outbox.slice(1)] };
+        })()
+      : { ...state, cases: [...cases, ...additions] },
     changed,
     caseIdsByRef,
     resolvedAbsentCaseIds,

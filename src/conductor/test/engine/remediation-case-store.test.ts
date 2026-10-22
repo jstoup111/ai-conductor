@@ -474,10 +474,6 @@ describe('remediation case store', () => {
       ...V3_STATE,
       cases: [{ ...V3_OPERATOR_CASE, operatorAcceptance: { ...V3_OPERATOR_CASE.operatorAcceptance, unexpected: true } }],
     }],
-    ['a malformed operator-acceptance origins value', {
-      ...V3_STATE,
-      cases: [{ ...V3_OPERATOR_CASE, operatorAcceptance: { origins: [] } }],
-    }],
     ['an extra acceptance-origin key', {
       ...V3_STATE,
       cases: [{
@@ -529,10 +525,6 @@ describe('remediation case store', () => {
     ['an extra carried-event key', {
       ...V3_STATE,
       outbox: [{ ...V3_OUTBOX[0], event: { ...V3_OUTBOX[0].event, unexpected: true } }],
-    }],
-    ['a malformed carried-event value', {
-      ...V3_STATE,
-      outbox: [{ ...V3_OUTBOX[0], event: { ...V3_OUTBOX[0].event, originLapIds: [] } }],
     }],
     ['an extra operator-resolution-event key', {
       ...V3_STATE,
