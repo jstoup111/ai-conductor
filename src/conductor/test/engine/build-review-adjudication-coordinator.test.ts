@@ -382,7 +382,43 @@ describe('coordinateBuildReviewAdjudication', () => {
     })] } });
   });
 
-  // Covers: task:10, task:rem-as-built-R10a
+  // Covers: task:rem-prd-audit-R10c
+  it('treats a blocked consistency verdict over only carried F2 as consistent', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const origin = 'testQuality:accepted-consistency';
+    await seedCases(store, {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-carried-only', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'The earlier decision was accepted.', resolution: 'resolved',
+        sources: [{ sourceId: origin, outcome: 'escalate', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId: origin, lapId: 'lap-old' }] },
+        escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+      }],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'F2' }],
+      cases: [{
+        caseRef: 'F2', existingCaseId: 'case-carried-only', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'The accepted decision remains bound.', escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+      }],
+      consistency: { verdict: 'blocked', sourceIds: [sourceId], caseRefs: ['F2'], rationale: 'Only the carried decision is blocked.' },
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), resolveEffectiveAcceptedSourceIds: async () => new Set([origin]),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      id: 'case-carried-only', resolution: 'resolved',
+    })] } });
+    await expect(access(join(root, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:10, task:rem-as-built-R10a, task:rem-prd-audit-R10c
   it('does not let a carried escalation suppress its independent action sibling', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
@@ -435,6 +471,65 @@ describe('coordinateBuildReviewAdjudication', () => {
       expect.objectContaining({ id: 'case-carried-escalation', sources: expect.arrayContaining([{ sourceId: carriedSourceId, outcome: 'carried', recordedAt: expect.any(String) }]) }),
       expect.objectContaining({ disposition: 'act', effect: expect.objectContaining({ kind: 'action', status: 'applied' }) }),
     ]));
+  });
+
+  // Covers: task:rem-prd-audit-R10c
+  it('persists a mixed carried/live consistency stop for G only and leaves A unreserved', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const origin = 'testQuality:accepted-escalation';
+    const carriedSourceId = buildReviewAdjudicationSourceId(acceptedSource);
+    const liveSourceId = buildReviewAdjudicationSourceId(liveSource);
+    await seedCases(store, {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-carried-escalation', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+        rationale: 'The earlier owner decision was accepted.', resolution: 'resolved',
+        sources: [{ sourceId: origin, outcome: 'escalate', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId: origin, lapId: 'lap-old' }] },
+        escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+      }],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [
+        { sourceId: carriedSourceId, outcome: 'escalate', caseRef: 'F2' },
+        { sourceId: liveSourceId, outcome: 'acted', caseRef: 'A' },
+      ],
+      cases: [
+        {
+          caseRef: 'F2', existingCaseId: 'case-carried-escalation', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'The accepted owner decision remains explicitly bound.', escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+        },
+        {
+          caseRef: 'A', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The independent finding needs a repair.', effect: { kind: 'action', route: 'build', tasks: [{
+            title: 'Repair the independent finding', admittedTaskIds: ['34'], admissionRationale: 'Task 34 owns the independent repair.',
+          }] },
+        },
+      ],
+      consistency: {
+        verdict: 'blocked', sourceIds: [carriedSourceId, liveSourceId], caseRefs: ['F2', 'A'],
+        rationale: 'The live repair contradicts the approved baseline.',
+      },
+    };
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate, generateId: sequentialIds('mixed-consistency'),
+      resolveEffectiveAcceptedSourceIds: async () => new Set([origin]), chargeEffect: charge,
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [], admittedTaskContracts: [{ id: '34', contract: 'Independent repair.' }] }),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [{ id: '34', status: 'in_progress' }] }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(charge).not.toHaveBeenCalled();
+    const settled = await store.read();
+    expect(settled).toMatchObject({ ok: true, state: { cases: expect.arrayContaining([
+      expect.objectContaining({ consistencyStop: expect.objectContaining({ sourceIds: [liveSourceId] }) }),
+    ]) } });
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    expect(settled.state.cases.some((record) => record.disposition === 'act')).toBe(false);
   });
 
   // Covers: task:10, task:rem-as-built-R10b
@@ -1680,7 +1775,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       repo: 'acme/conductor', fileIssue, generateId: sequentialIds('pre-deferral'),
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
     expect(fileIssue).toHaveBeenCalledTimes(1);
     expect(fileIssue).toHaveBeenCalledWith(expect.objectContaining({ title: 'Track the second finding' }));
     const settled = await new RemediationCaseStore(root, feature).read();
@@ -1688,7 +1783,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       ok: true,
       state: { cases: expect.arrayContaining([
         expect.objectContaining({
-          resolution: 'resolved',
+          resolution: 'open',
           sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(acceptedSource) })],
           effect: expect.objectContaining({ kind: 'deferral', status: 'reserved' }),
         }),
@@ -1733,14 +1828,14 @@ describe('coordinateBuildReviewAdjudication', () => {
           effect: expect.objectContaining({ kind: 'deferral', status: 'applied' }),
         }),
         expect.objectContaining({
-          resolution: 'resolved',
+          resolution: 'open',
           sources: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })],
           effect: expect.objectContaining({ kind: 'deferral', status: 'reserved' }),
         }),
       ]) },
     });
-    // The suppressed reservation is retired at the exit as a durable
-    // reserved->failed transition, and that transition emits.
+    // Acceptance suppresses the second intake, but leaves its reserved
+    // deferral as durable unfinished evidence rather than silently PASSing.
     expect(events).not.toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', effectKind: 'deferral' }));
   });
 
@@ -1928,7 +2023,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
   });
 
-  it('settles a deferral-effect failure accepted during its terminal failure delivery', async () => {
+  it('keeps a deferral-effect failure accepted during terminal failure delivery open and blocking', async () => {
     const root = await projectRoot();
     const events: RemediationCaseLifecycleEvent[] = [];
     const fileIssue = vi.fn(async () => { throw new Error('tracker unavailable'); });
@@ -1944,11 +2039,11 @@ describe('coordinateBuildReviewAdjudication', () => {
       },
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
     expect(fileIssue).toHaveBeenCalledTimes(1);
     await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({
       ok: true,
-      state: { cases: [expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }) })] },
+      state: { cases: [expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'failed' }) })] },
     });
     await expect(access(join(root, '.pipeline', 'build-review-work-order.json'))).rejects.toThrow();
     expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);

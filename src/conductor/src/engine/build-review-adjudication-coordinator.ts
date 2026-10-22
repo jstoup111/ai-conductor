@@ -717,14 +717,27 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const carriedSourceIds = new Set(liveProposals
     .filter((proposed) => carriedCaseRefs.has(proposed.case.caseRef))
     .flatMap((proposed) => proposed.sources.map((source) => source.sourceId)));
+  // Carry is a durable operator-owned lane. Derive the one remaining
+  // consistency authority after removing it, then use that exact value for
+  // both action authorization and any persisted stop. A carried-only block is
+  // therefore consistent for this lap rather than a phantom stop.
+  const effectiveConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
+    ? (() => {
+        const sourceIds = judgement.consistency.sourceIds.filter((sourceId) => !carriedSourceIds.has(sourceId));
+        const caseRefs = judgement.consistency.caseRefs.filter((caseRef) => !carriedCaseRefs.has(caseRef));
+        return sourceIds.length === 0
+          ? { ...judgement.consistency, verdict: 'consistent' as const, sourceIds: [], caseRefs: [] }
+          : { ...judgement.consistency, sourceIds, caseRefs };
+      })()
+    : judgement.mode === 'case-v2'
+      ? judgement.consistency
+      : undefined;
   const actionEffectJudgement = judgement.mode === 'case-v2'
     ? {
       ...judgement,
       sourceOutcomes: judgement.sourceOutcomes.filter((source) => !carriedSourceIds.has(source.sourceId)),
       cases: judgement.cases.filter((caseRow) => !carriedCaseRefs.has(caseRow.caseRef)),
-      consistency: judgement.consistency.verdict === 'blocked' && judgement.consistency.sourceIds.every((sourceId) => carriedSourceIds.has(sourceId))
-        ? { ...judgement.consistency, verdict: 'consistent' as const, sourceIds: [], caseRefs: [] }
-        : judgement.consistency,
+      consistency: effectiveConsistency!,
     }
     : {
       ...judgement,
@@ -777,15 +790,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // judgement; use the same projection for the stop writer so a consistency
   // verdict concerning only carried sources cannot manufacture a new owner
   // stop after the action lane correctly proceeds.
-  const blockedConsistency = actionEffectJudgement.mode === 'case-v2' && actionEffectJudgement.consistency.verdict === 'blocked'
+  const blockedConsistency = effectiveConsistency?.verdict === 'blocked'
     ? {
-      sourceIds: actionEffectJudgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
-      rationale: actionEffectJudgement.consistency.rationale,
+      sourceIds: effectiveConsistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
+      rationale: effectiveConsistency.rationale,
     }
     : undefined;
-  if (blockedConsistency && blockedConsistency.sourceIds.length === 0) {
-    return fail('blocked consistency stop has no live sources');
-  }
   // A judgement that explicitly reuses a prior case the classifier halts on
   // must stop BEFORE reconciliation: reconciliation reserves sibling action
   // effects, and a halt between reservation and application strands them as
