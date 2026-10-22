@@ -2,7 +2,7 @@ import type { BuildReviewWorkOrderCase } from './build-review-work-order.js';
 import { hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, isOpenRemediationCase } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import type { ValidateRemediationCaseGraphResult } from './remediation-case-validator.js';
-import type { RemediationCaseRecord } from './remediation-case-store.js';
+import { currentBuildReviewSourceLinks, type RemediationCaseRecord } from './remediation-case-store.js';
 
 /** The only routes a post-join review is allowed to publish. */
 export type BuildReviewAdjudicationRoute = 'pass' | 'build' | 'mechanical-retry' | 'halt';
@@ -51,14 +51,11 @@ function currentSourceCoverageIsConsistent(
 ): boolean {
   const current = new Set(currentSourceIds);
   if (current.size !== currentSourceIds.length) return false;
+  const sourceLinks = currentBuildReviewSourceLinks(cases);
   const outcomes = new Map<string, string>();
-  for (const record of cases) {
-    for (const source of record.sources) {
-      if (!current.has(source.sourceId)) continue;
-      const previous = outcomes.get(source.sourceId);
-      if (previous !== undefined && previous !== source.outcome) return false;
-      outcomes.set(source.sourceId, source.outcome);
-    }
+  for (const sourceId of current) {
+    const source = sourceLinks.get(sourceId);
+    if (source !== undefined) outcomes.set(sourceId, source.link.outcome);
   }
   return currentSourceIds.every((sourceId) => outcomes.has(sourceId));
 }

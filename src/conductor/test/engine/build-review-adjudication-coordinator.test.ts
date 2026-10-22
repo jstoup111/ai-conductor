@@ -314,6 +314,26 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  it('publishes only the open action as the durable BUILD repair for a shared resolved source', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-resolved-r', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was recorded but did not settle this source.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+        effect: { id: 'effect-resolved-r', kind: 'action', status: 'applied', workOrderId: 'order-resolved-r' },
+      }],
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), generateId: sequentialIds('open-n'),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['open-n-1'] } });
+  });
+
   async function expectRefusedDecisionStopTransition(blockedConsistency: boolean) {
     const root = await projectRoot();
     const mixed = customMixedAggregate();

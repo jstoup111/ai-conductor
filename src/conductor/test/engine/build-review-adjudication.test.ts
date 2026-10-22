@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:31, task:rem-prd-audit-8, task:rem-prd-audit-8-2, task:rem-prd-audit-8-3
+// Covers: task:3, task:7, task:8, task:31, task:rem-prd-audit-8, task:rem-prd-audit-8-2, task:rem-prd-audit-8-3
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -228,11 +228,60 @@ describe('reduceBuildReviewAdjudication', () => {
       .toMatchObject({ route, reason });
   });
 
-  it('halts rather than passing when current source coverage is incomplete or contradictory', () => {
+  it('halts rather than passing when current source coverage is incomplete or duplicated', () => {
     expect(reduceBuildReviewAdjudication(reducerInput({ currentSourceIds: ['finding-1', 'finding-2'] })).route).toBe('halt');
     expect(reduceBuildReviewAdjudication(reducerInput({
-      cases: [reject(), { ...reject(), id: 'case-conflict', sources: [{ ...reject().sources[0], outcome: 'merged' }] }],
+      currentSourceIds: ['finding-1', 'finding-1'],
     })).route).toBe('halt');
+  });
+
+  it('reads a shared source through its open escalation rather than contradicting resolved history', () => {
+    const sourceId = 'security:shared';
+    const resolvedR: RemediationCaseRecord = {
+      ...action(), id: 'case-resolved-r', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+    };
+    const openEscalation: RemediationCaseRecord = {
+      ...decisionStop('architecture'), id: 'case-open-escalation',
+      sources: [{ sourceId, outcome: 'escalate', recordedAt: '2026-10-19T00:00:00.000Z' }],
+    };
+
+    expect(reduceBuildReviewAdjudication({ currentSourceIds: [sourceId], cases: [resolvedR, openEscalation], mechanical: 'healthy' }))
+      .toMatchObject({ route: 'halt', reason: 'architecture decision is required for current remediation sources' });
+  });
+
+  it('routes an open action rather than its resolved shared-source history to BUILD', () => {
+    const sourceId = 'security:shared';
+    const resolvedR: RemediationCaseRecord = {
+      ...action(), id: 'case-resolved-r', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+    };
+    const openAction: RemediationCaseRecord = {
+      ...action(), id: 'case-open-n',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-19T00:00:00.000Z' }],
+    };
+
+    expect(reduceBuildReviewAdjudication({ currentSourceIds: [sourceId], cases: [resolvedR, openAction], mechanical: 'healthy' }))
+      .toMatchObject({ route: 'build', reason: 'applied action effect' });
+  });
+
+  it('preserves the former coverage result when sources are not shared', () => {
+    const sourceIds = ['security:a', 'testQuality:b'];
+    const cases: RemediationCaseRecord[] = [
+      { ...reject(), sources: [{ sourceId: sourceIds[0]!, outcome: 'rejected', recordedAt: '2026-10-18T00:00:00.000Z' }] },
+      { ...reject(), id: 'case-b', sources: [{ sourceId: sourceIds[1]!, outcome: 'rejected', recordedAt: '2026-10-19T00:00:00.000Z' }] },
+    ];
+    const formerAnyLinkCoverage = sourceIds.every((sourceId) => cases.some((record) =>
+      record.sources.some((source) => source.sourceId === sourceId)));
+
+    expect(formerAnyLinkCoverage).toBe(true);
+    expect(reduceBuildReviewAdjudication({ currentSourceIds: sourceIds, cases, mechanical: 'healthy' }))
+      .toMatchObject({ route: 'pass' });
+  });
+
+  it('keeps a current source with no link as a coverage halt', () => {
+    expect(reduceBuildReviewAdjudication(reducerInput({ currentSourceIds: ['security:missing'], cases: [] })))
+      .toMatchObject({ route: 'halt', reason: 'current remediation source coverage is incomplete or contradictory' });
   });
 
   it('routes an applied action that BUILD never attempted to BUILD even when it covers no current source', () => {
@@ -352,7 +401,7 @@ describe('reduceBuildReviewAdjudication', () => {
     });
   });
 
-  it('still refuses a conflicting stop that reuses an open case id', async () => {
+  it('converges a rationale-only replay of an open decision stop', async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'build-review-open-conflict-'));
     const feature = { version: 'v1', repository: 'acme/repo', feature: 'open-conflict' } as const;
     const stop = decisionStop('architecture');
@@ -360,6 +409,17 @@ describe('reduceBuildReviewAdjudication', () => {
 
     await expect(persistBuildReviewDecisionStop({
       store: new RemediationCaseStore(projectRoot, feature), record: { ...stop, rationale: 'changed' },
+    })).resolves.toEqual({ ok: true, status: 'already-persisted', caseId: stop.id });
+  });
+
+  it('still refuses a conflicting owner for an open decision-stop case id', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-review-open-owner-conflict-'));
+    const feature = { version: 'v1', repository: 'acme/repo', feature: 'open-owner-conflict' } as const;
+    const stop = decisionStop('architecture');
+    await persistBuildReviewDecisionStop({ store: new RemediationCaseStore(projectRoot, feature), record: stop });
+
+    await expect(persistBuildReviewDecisionStop({
+      store: new RemediationCaseStore(projectRoot, feature), record: { ...stop, escalation: { owner: 'plan' } },
     })).resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
   });
 
