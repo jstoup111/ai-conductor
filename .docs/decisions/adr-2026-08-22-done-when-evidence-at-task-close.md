@@ -91,9 +91,14 @@ discipline produced false blocks.
 > and plans without tags close exactly as before. `Task:` trailers stay telemetry
 > (adr-2026-07-21-demote-task-stamping-to-telemetry) and are never read for provenance.
 >
-> D10. **Task start records its start commit.** `conduct task start` writes the current HEAD as an
-> additive `startHead` field on the task's engine-owned task-status row (adr-2026-07-05 H1/H4). A task
-> closed without a start, or started before this field existed, has no `startHead`.
+> D10. **Task start records its start commit.** Every engine path that marks a task started (the
+> `conduct task start` CLI and the Claude Code session hook's task stamping) writes the current HEAD as
+> an additive `startHead` field on the task's engine-owned task-status row (adr-2026-07-05 H1/H4),
+> without overwriting a `startHead` already recorded. Seeding, reseeding, and repair restaging preserve
+> it. Rebase translation (adr-2026-07-12-rebase-evidence-stamp-translation) maps it like the row's other
+> commit SHAs. `startHead` is a provenance hint, not an evidence citation, so one with no mapping is left
+> as is with no residue entry and fails toward judgement under D12. A task closed
+> without a start, or started before this field existed, has no `startHead`.
 >
 > D11. **A test the task itself wrote closes mechanically.** After D6's checks pass, a `[test]` check is
 > stamped `verified` only when `startHead` is an ancestor of HEAD and the cited title, whitespace-
@@ -112,18 +117,24 @@ discipline produced false blocks.
 > output schema. Its input for each citation is the check text, the task text, the cited path and title,
 > and the bounded content of the cited file at HEAD. It returns, per citation,
 > `{ verdict: 'asserts' | 'does-not-assert', reason }`, and the engine stamps the envelope. A provider
-> failure or schema-invalid output is a failed dispatch, retried once. A failed dispatch is never a
+> failure or schema-invalid output, including output missing a verdict for any pending citation, is a
+> failed dispatch, retried once, and no verdict from it is applied. A failed dispatch is never a
 > refusal and never counts toward D14's bound.
 >
 > D14. **A refusal reopens the task, bounded.** `asserts` stamps source `judged` with the reason.
 > `does-not-assert` reopens the task through a repair obligation
 > (adr-2026-09-06-reopened-task-resolution decision 13), and the BUILD retry hint names the task, the
 > check, the citation, and the judge's reason. That routes the task back to BUILD inside the same BUILD
-> step rather than laps later. The engine persists a refusal count for each check, keyed by task id,
-> check index, and check-text digest. A second refusal of the same check, a refusal when no BUILD
-> attempt remains, or a refused check that BUILD completes without re-closing is demoted instead: the
-> check is recorded `unverified`, with the judge's reason as its reason, and follows D8 unchanged. A
-> refusal never halts the feature.
+> step rather than laps later. The BUILD retry a refusal causes draws on the existing per-step retry
+> budget but, like D8's nudge, never increments `noEvidenceAttempts` or counts toward the no-progress
+> breaker. At the end of the next BUILD session, every refused check is settled: a re-close is judged
+> again from D11, and a check not re-closed is demoted. A refusal therefore costs at most one BUILD
+> attempt per pass. The engine persists a refusal count for each check, keyed by task id, check index,
+> and check-text digest. When a check's text no longer appears in the current plan task, its refusal
+> is dropped and the plan-change reopen governs the task. A second refusal of the same check, a refusal
+> when no BUILD attempt remains, or a refused check not re-closed by the next session end is demoted:
+> the check is recorded `unverified`, with the judge's reason as its reason, and follows D8 unchanged.
+> A refusal never halts the feature.
 >
 > D15. **A judgement that cannot run never blocks.** When no candidate provider declares native output
 > schema support, or the dispatch fails twice, every pending record is demoted to `unverified` with the
@@ -131,8 +142,9 @@ discipline produced false blocks.
 >
 > D16. **The operator can overturn a refusal.** `ai-conductor done-when accept --feature <slug> --task
 > <id> --check <n> --reason <text>` accepts a check whose latest judgement is `does-not-assert`, whether
-> it is reopened or demoted. It records source `operator-accepted` with the reason, resolves that
-> check's citation repair obligation, and emits a `ConductorEvent`. It refuses a check with no recorded
+> it is reopened or demoted. It records source `operator-accepted` with the reason, settles that check
+> in its task's citation repair obligation (which resolves once none of its checks is still open), and
+> emits a `ConductorEvent`. It refuses a check with no recorded
 > refusal. `done-when` is not a session-sanctioned subcommand, so the daemon-session guard refuses it
 > inside every dispatched session; only an operator can run it.
 >
