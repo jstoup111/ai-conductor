@@ -294,6 +294,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 // This is deliberately an exact set rather than a volume count: a newly-persisted
 // non-halt event must update this contract explicitly.
 const PINNED_PERSISTED_EVENT_TYPES = [
+  'decide_artifacts_pruned',
   'otel_spool_drop',
   'otel_spool_backlog',
   'daemon_backlog_snapshot',
@@ -1821,6 +1822,7 @@ describe('event sink subscriptions', () => {
   it('derives the audited set without changing prior routing', () => {
     expect(new Set(auditedEventTypes())).toEqual(new Set([
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
+      'decide_artifacts_pruned',
       'verdict_freshness',
       'halt_marker_write_failed',
       'halt_record_written',

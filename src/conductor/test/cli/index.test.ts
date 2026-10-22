@@ -24,6 +24,7 @@ import { renderCanonicalFullHelp } from '../../src/index.js';
 
 const OPERATOR_FACING_COMMANDS = [
   'shipped-record',
+  'docs-prune',
   'kpi',
   'memory',
   'brain',
@@ -69,6 +70,7 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'intake-loop',
   'brain',
   'shipped-record',
+  'docs-prune',
   'transcripts',
   'shipment-evidence',
   'task',

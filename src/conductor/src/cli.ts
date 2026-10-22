@@ -781,6 +781,9 @@ export function createProgram(): Command {
     .requiredOption('--slug <slug>', 'Feature worktree slug')
     .requiredOption('--pr <url>', 'Implementation pull request URL, or local');
   program
+    .command('docs-prune')
+    .description('Open a reviewed PR that prunes transient DECIDE artifacts for shipped features');
+  program
     .command('transcripts <slug>')
     .description('Inspect retained self-host provider transcripts for a feature')
     .option('--show <capture>', 'Print the final assistant message from one retained capture');
