@@ -157,7 +157,7 @@ self-host candidates — both providers, invoke and interactive paths) carries
 run — printing `ai-conductor may not be invoked from inside a daemon-managed session; the engine owns
 all conductor operations for this run (blocked subcommand: <name>).` and exiting 1 — before any
 subcommand parsing. `<name>` is a bounded identity: a recognized subcommand (`daemon`, `config`,
-`test-suite`, `build-review`, `finish-record`, or a sanctioned one), `unknown` for any other text, or
+`test-suite`, `build-review`, `finish-record`, `docs-prune`, or a sanctioned one), `unknown` for any other text, or
 `<none>`. Unrecognized argv is never echoed. When the engine supplied a managed-session context, the
 refusal also records a [`session_command_refused`](artifacts.md#managed-session-occurrence-events)
 event; without that context the command prints `session refusal telemetry unavailable` and still
@@ -1074,6 +1074,46 @@ so a success line on stderr would make every completed ship read as a failure.
 Every other failure exits **0** with one warning and no record written, so the exit code cannot be
 used to detect success. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
+
+## `ai-conductor docs-prune`
+
+```bash
+ai-conductor docs-prune
+```
+
+Opens one reviewed, docs-only PR that deletes the transient DECIDE artifacts of shipped features from
+`main`. Operator-run only: no daemon sweep, finish step, or CI job runs it, and it refuses inside a
+[daemon-managed session](#daemon-session-refusal). It takes no flags; any argument prints
+`conduct docs-prune` to stderr and exits 1.
+
+1. Runs `git fetch origin main` and reads `.docs` from `origin/main` only. Local branches are ignored.
+2. Selects every stem with a committed `.docs/shipped/<stem>.md` and collects that stem's files in the
+   [prunable families](artifacts.md#retention). Plans without a shipped record are reported as skipped
+   (`no-shipped-record`). A date-stripped match shared by more than one plan stem is excluded rather
+   than guessed.
+3. Reads every open PR's changed files. A stem is deferred whole (`open-pr-modifies`) when any open PR,
+   other than the operator's own `docs-prune/*` PR, changes one of its prunable files.
+4. Commits the deletions in a detached temporary worktree off `origin/main`, refusing any staged
+   change that is not an expected deletion, then removes the worktree.
+5. Pushes `docs-prune/<YYYY-MM-DD>` and opens a PR titled `docs: prune shipped DECIDE artifacts`
+   against `main`, with the report as its body. When the operator already owns an open `docs-prune/*`
+   PR, it replaces that branch (`--force-with-lease` against its fetched tip) and edits the PR body
+   instead.
+
+Every remote write — the push, `pull-request.create`, `pull-request.edit` — needs an exact interactive
+terminal approval; a declined or non-interactive confirmation refuses it. The command never pushes
+`main`, merges, or enables auto-merge. A human reviews and merges the PR.
+
+It exits 1 when another operator owns an open `docs-prune/*` PR, when repository resolution fails, or
+when any approval, push, or PR operation is refused. With nothing removable it publishes nothing.
+
+On success it prints the report (`### Removed` and `### Deferred` lists) to stdout, persists one
+`decide_artifacts_pruned` event (`removed`, `deferred`, `skipped`, `excluded`, optional
+`pullRequestUrl`) to `<repo root>/.pipeline/events.jsonl`, and exits 0.
+
+Pruning never changes `spec_hash`, shipment evidence, or the protected-artifact seal. Shipment repair
+and the shipment audit recover a pruned plan from its deleting commit's parent — see
+[shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#a-plan-was-pruned-after-it-shipped).
 
 ## `ai-conductor transcripts`
 
