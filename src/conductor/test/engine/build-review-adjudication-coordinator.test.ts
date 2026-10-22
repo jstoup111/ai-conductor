@@ -9,11 +9,13 @@ import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review
 import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
-import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
@@ -433,6 +435,46 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     await coordinateBuildReviewAdjudication({
       ...input(root, async () => actionJudgement()), suppressedFindingIds: new Set([findingId]),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]?.operatorAcceptance).toBeUndefined();
+  });
+
+  it('does not record an origin from a disposition stored for another feature', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-foreign-disposition', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The finding needs a focused repair.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' }],
+        effect: { id: 'effect-foreign-disposition', kind: 'action', status: 'applied', workOrderId: 'order-foreign-disposition' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+    const foreignDisposition = await new BuildReviewDispositionStore(root).append({
+      feature: { ...feature, feature: 'another-feature' },
+      finding: canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+        anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: `sha256:${'f'.repeat(64)}`, display: 'example test' } },
+      })!,
+      sourceLapId: 'lap-1' as never, summary: 'Accepted only for another feature.',
+      rationale: 'The other feature owns this accepted risk.', operator: 'operator',
+    });
+    if (!foreignDisposition.ok) throw new Error(foreignDisposition.message);
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      resolveOperatorResolvedFindingIds: async () => {
+        const effective = await resolveEffectiveBuildReviewVerdict(root, aggregate, {
+          resolveMainRoot: async () => '/repo',
+          realpath: async (path) => path === '/repo' ? '/repo' : '/repo/.worktrees/feature',
+        });
+        if (!effective.ok) throw new Error(effective.reason);
+        return new Set(effective.effective.acceptedFindingIds);
+      },
     });
 
     const settled = await store.read();
