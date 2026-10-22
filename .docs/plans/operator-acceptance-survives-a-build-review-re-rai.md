@@ -760,3 +760,60 @@ Task 9, Task 19 ─▶ Task 23, Task 24 (slice 2)
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-R11a: Scope recordHaltingBinding (build-review-adjudication-coordinator.ts) to a link-only reconcile: no absence resolution of unreferenced attempted cases. Example: pass an empty attemptedCaseIds, or use a source-append-only reconciler option. Add a coordinator test that a reuse-halt lap leaves every other open attempted applied action case deep-equal and writes no outbox entry.
+**Gate:** prd-audit
+**Rationale:** Verified 99%. recordHaltingBinding (build-review-adjudication-coordinator.ts:744-757) calls reconcileRemediationCases with a one-case graph and the full attemptedCaseIds. The reconciler's absence branch (remediation-case-reconciler.ts:398-418) therefore resolves every other open, attempted, applied action case, and writes no outbox entry because no lapId is passed. Task 11 Step 3 requires the halting link to change nothing else. This is clear implementation drift inside approved Task 11.
+**Criterion:** S1.5
+**Parent task:** 11
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- The repair for task rem-prd-audit-R11a is committed and its targeted tests pass.
+
+### Task rem-as-built-R10a: In build-review-adjudication-coordinator.ts, call authorizeBuildReviewRemediationActionEffects with a judgement or graph that excludes carriedCaseRefs, so a carried escalation cannot suppress independent sibling act cases. Add a coordinator test in which carried escalation F2 sits beside an unrelated act case A in the same lap, and A is still authorized and reserved.
+**Gate:** as-built
+**Rationale:** Verified 99%. Coordinator :726 passes the unfiltered judgement to authorizeBuildReviewRemediationActionEffects. Any escalation therefore rejects all actions (build-review-adjudication.ts:34), even an escalation already classified as carried. ADR D3 and Task 10 require carry to remove the proposal before the escalation split. This conforming implementation fix fits inside Task 10.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 3
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R10a is committed and its targeted tests pass.
+
+### Task rem-as-built-R10b: Skip carriedCaseRefs in the remediation_case_refuted emission loop in build-review-adjudication-coordinator.ts. Add a test that a refute binding to a carry-eligible case settles as carried and emits no remediation_case_refuted event.
+**Gate:** as-built
+**Rationale:** Verified 99%. The refute loop at coordinator :897-905 iterates every admitted refute proposal without skipping carriedCaseRefs, so it emits remediation_case_refuted for carried bindings. Task 10 requires carry to remove the proposal from the refutation path. This is implementation drift inside Task 10.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 3
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 3 is satisfied by this task.
+- The repair for task rem-as-built-R10b is committed and its targeted tests pass.
+
+### Task rem-as-built-R16a: Make retiresOpenBuildReviewCase the only retirement decision in remediation-case-reconciler.ts absence resolution (:398/:420) and remediation-case-effects.ts (:212), removing the private conditions. Have the coordinator's finalize supply the coverage and mechanically-healthy inputs. Add parity tests across all three sites for failed and reserved fixtures.
+**Gate:** as-built
+**Rationale:** Verified 99%. Reconciler absence resolution (:398) still uses its own condition, excluding reserved/failed effects through hasReservedOrFailedRemediationEffect, instead of retiresOpenBuildReviewCase. The finalize call does not supply the reserved-absence option. conductor.ts:5381-5385 returns the missing-work-order invalid result before the shared retirement predicate runs. Tasks 16 and 17 require one shared predicate at every site. This is conforming implementation work.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R16a is committed and its targeted tests pass.
+
+### Task rem-as-built-R17a: In settleRemediationCasesOnCleanBuildReview (conductor.ts), apply retiresOpenBuildReviewCase before the missing-work-order obligation check, so eligible failed/reserved action cases retire instead of blocking. Add a conductor test for the missing-work-order + accepted-source shape.
+**Gate:** as-built
+**Rationale:** Verified 99%. Reconciler absence resolution (:398) still uses its own condition, excluding reserved/failed effects through hasReservedOrFailedRemediationEffect, instead of retiresOpenBuildReviewCase. The finalize call does not supply the reserved-absence option. conductor.ts:5381-5385 returns the missing-work-order invalid result before the shared retirement predicate runs. Tasks 16 and 17 require one shared predicate at every site. This is conforming implementation work.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R17a is committed and its targeted tests pass.
+
+### Task rem-as-built-R16b: In remediation-case-effects.ts retirement, apply the shared retirement transformation: resolved, with a reserved effect turned to failed and given the retirement diagnostic, and links and earlier effect state kept. Add a test that an accepted reserved action retired there ends with a failed effect and the diagnostic.
+**Gate:** as-built
+**Rationale:** Verified 98%. remediation-case-effects.ts:288 retires cases by changing only resolution, so a reserved action effect stays reserved. Task 16 Step 3 and ADR D5 require a reserved effect to become failed with diagnostic 'retired: every source operator-accepted or no longer raised'. This is a regression inside Task 16.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R16b is committed and its targeted tests pass.
+
+### Task rem-as-built-R17b: Include 'ai-conductor build-review resolve-case --feature <slug> --case <id>' in the clean-PASS missing-work-order halt reason in conductor.ts, plus ' --child <child>' when the store is child-scoped. Add flat and child-scoped conductor tests asserting the text.
+**Gate:** as-built
+**Rationale:** Verified 99%. The missing-work-order halt reason at conductor.ts:5385 lacks the 'ai-conductor build-review resolve-case --feature <slug> --case <id>' command and the '--child <child>' scope that Task 17 Step 3 requires for any surviving action obligation case. This is implementation drift inside Task 17.
+**Governing clause:** adr-2026-10-20-operator-acceptance-is-durable-case-state decision 7
+**Done when:**
+- adr-2026-10-20-operator-acceptance-is-durable-case-state decision 7 is satisfied by this task.
+- The repair for task rem-as-built-R17b is committed and its targeted tests pass.
