@@ -2,13 +2,14 @@ import {
   parseDoneWhenCloseSource,
   parseDoneWhenTestReference,
 } from './done-when-test-reference.js';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import { createRepairObligationStore, type RepairObligation } from './repair-obligations.js';
 import { restageExistingRemediationTaskStatuses } from './repair-restage.js';
 import { countResolvedTasks } from './task-progress.js';
+import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
 
 /** The bounded amount of a cited test supplied to the citation judge. */
 export const DONE_WHEN_CITATION_WINDOW_LINES = 80;
@@ -97,12 +98,7 @@ export function collectPendingCitations(status: unknown): PendingCitation[] {
       const close = record(rawClose);
       if (!close) continue;
       const source = parseDoneWhenCloseSource(close.source);
-      if (!source) {
-        if (typeof close.source === 'string') {
-          throw new Error(`unknown done-when close source: ${close.source}`);
-        }
-        continue;
-      }
+      if (source instanceof Error) throw source;
       if (source !== 'pending-judgement') continue;
       if (typeof close.check !== 'string' || typeof close.evidence !== 'string') continue;
       const reference = parseDoneWhenTestReference(close.evidence);
@@ -217,7 +213,9 @@ export async function applyCitationVerdicts(
       if (!close) continue;
       const key = `${task.id}\u0000${offset + 1}`;
       const verdict = byKey.get(key);
-      if (!pending.has(key) || !verdict || parseDoneWhenCloseSource(close.source) !== 'pending-judgement') continue;
+      const source = parseDoneWhenCloseSource(close.source);
+      if (source instanceof Error) throw source;
+      if (!pending.has(key) || !verdict || source !== 'pending-judgement') continue;
       close.source = 'judged';
       close.reason = verdict.reason;
       close.verdict = verdict.verdict;
@@ -282,8 +280,8 @@ export async function admitCitationRefusals(
   const admissions: CitationRefusalAdmission[] = [];
   for (const [taskId, unsorted] of byTask) {
     const checks = [...unsorted].sort((a, b) => a.checkIndex - b.checkIndex);
-    const finding = checks.map(({ checkIndex, check, path, title }) => ({
-      checkIndex, checkDigest: digest(check), reference: `test:${path}::${title}`,
+    const finding = checks.map(({ checkIndex, check }) => ({
+      checkIndex, checkDigest: digest(check),
     }));
     const findingId = digest({ taskId, checks: finding });
     const admitted = await repairs.admitOrReplay(`done-when-citation:${findingId}`, {
@@ -299,11 +297,24 @@ export async function admitCitationRefusals(
     });
     if (!admitted.ok) throw new Error(`could not admit Done-when citation refusal: ${admitted.message}`);
     if (!admitted.replayed) {
-      const counts = await repairs.recordCitationRefusals(finding.map((check) => digest({ taskId, ...check })));
+      const counts = await repairs.recordCitationRefusals(`done-when-citation:${findingId}`, finding.map((check) => digest({ taskId, ...check })));
       if (!counts.ok) throw new Error(`could not record Done-when citation refusal: ${counts.message}`);
     }
     const restaged = await restageExistingRemediationTaskStatuses(projectRoot, planPath, new Set([taskId]));
     if (restaged.kind === 'failed') throw new Error(restaged.detail);
+    // A later refusal becomes the single live authority for this task.  The
+    // current status still carries every unresolved check, so settlement can
+    // close the replacement only after all of them are resolved.
+    const existing = await repairs.read();
+    if (!existing.ok) throw new Error(`could not read Done-when citation refusals: ${existing.message}`);
+    for (const prior of Object.values(existing.value.records)) {
+      if (prior.id === admitted.obligation.id || prior.source.authority !== 'done-when-citation' || prior.tasks[taskId]?.status !== 'open') continue;
+      const closed = await repairs.close({
+        planPath, taskId, obligationId: prior.id,
+        evidence: { kind: 'superseded-by-citation-refusal', value: admitted.obligation.id },
+      });
+      if (!closed.ok) throw new Error(`could not supersede Done-when citation refusal: ${closed.message}`);
+    }
     admissions.push({ obligation: admitted.obligation, taskId, checks, replayed: admitted.replayed });
   }
   return admissions;
@@ -327,20 +338,27 @@ export async function settleCitationRefusals(
   const read = await repairs.read();
   if (!read.ok) throw new Error(`could not read Done-when citation refusals: ${read.message}`);
   const demoted: Array<{ taskId: string; checkIndex: number }> = [];
+  let planChecks: ReadonlyMap<string, readonly string[]>;
+  try {
+    planChecks = parsePlanTaskDoneWhen(await readFile(planPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`could not read current plan task checks: ${error instanceof Error ? error.message : String(error)}`);
+  }
   let changed = false;
   for (const rawTask of root.tasks) {
     const task = record(rawTask);
     if (!task || typeof task.id !== 'string' || !Array.isArray(task.doneWhen)) continue;
     for (const [offset, rawClose] of task.doneWhen.entries()) {
       const close = record(rawClose);
-      if (!close || parseDoneWhenCloseSource(close.source) !== 'judged' || close.verdict !== 'does-not-assert' ||
+      if (!close) continue;
+      const source = parseDoneWhenCloseSource(close.source);
+      if (source instanceof Error) throw source;
+      if (source !== 'judged' || close.verdict !== 'does-not-assert' ||
         typeof close.check !== 'string' || typeof close.evidence !== 'string' || typeof close.reason !== 'string') continue;
-      const reference = parseDoneWhenTestReference(close.evidence);
-      if (!reference) continue;
-      const key = digest({ taskId: task.id, checkIndex: offset + 1, checkDigest: digest(close.check), reference: `test:${reference.path}::${reference.title}` });
+      if (!(planChecks.get(task.id) ?? []).includes(close.check)) continue;
+      const key = digest({ taskId: task.id, checkIndex: offset + 1, checkDigest: digest(close.check) });
       if (!force && (read.value.citationRefusals[key] ?? 0) < 1) continue;
       close.source = 'unverified';
-      delete close.verdict;
       demoted.push({ taskId: task.id, checkIndex: offset + 1 });
       changed = true;
     }
@@ -358,9 +376,13 @@ export async function settleCitationRefusals(
     for (const taskId of obligation.taskIds) {
       if (obligation.tasks[taskId]?.status !== 'open') continue;
       const task = root.tasks.map(record).find((row) => row?.id === taskId);
+      const listedChecks = new Set(planChecks.get(taskId) ?? []);
       const stillRefused = Array.isArray(task?.doneWhen) && task.doneWhen.some((rawClose) => {
         const close = record(rawClose);
-        return close?.source === 'judged' && close.verdict === 'does-not-assert';
+        if (!close || typeof close.check !== 'string' || !listedChecks.has(close.check)) return false;
+        const source = parseDoneWhenCloseSource(close.source);
+        if (source instanceof Error) throw source;
+        return source === 'pending-judgement' || (source === 'judged' && close.verdict === 'does-not-assert');
       });
       if (!stillRefused) {
         const closed = await repairs.close({ planPath, taskId, obligationId: obligation.id, evidence: { kind: 'citation-settled', value: 'demoted' } });

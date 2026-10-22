@@ -29,7 +29,7 @@ export interface DoneWhenAcceptDeps {
 }
 
 function hasRefusedCitation(record: Record<string, unknown>): boolean {
-  if (record.source !== 'judged') return false;
+  if (record.source !== 'judged' && record.source !== 'unverified') return false;
   if (record.verdict === 'does-not-assert') return true;
   const judgement = record.judgement;
   return !!judgement && typeof judgement === 'object' && !Array.isArray(judgement) && (judgement as Record<string, unknown>).verdict === 'does-not-assert';
@@ -60,8 +60,6 @@ export async function dispatchDoneWhenAccept(command: DoneWhenAcceptCommand, dep
     await writeFileDefault(temporary, data);
     await rename(temporary, path);
   });
-  await write(join(worktree, '.pipeline', 'task-status.json'), `${JSON.stringify(status, null, 2)}\n`);
-
   // An obligation remains open while another refused citation for the task is
   // outstanding.  Settling the last one makes the task eligible for completion.
   const stillRefused = records.some((value) => value && typeof value === 'object' && !Array.isArray(value) && hasRefusedCitation(value as Record<string, unknown>));
@@ -71,13 +69,22 @@ export async function dispatchDoneWhenAccept(command: DoneWhenAcceptCommand, dep
     if (planPath) {
       const repairs = createRepairObligationStore(worktree, join(worktree, '.pipeline', 'engine-state.json'));
       const read = await repairs.read();
-      if (read.ok) for (const obligation of Object.values(read.value.records)) {
+      if (!read.ok) {
+        print(`done-when accept: refused: ${read.message}.`);
+        return 1;
+      }
+      for (const obligation of Object.values(read.value.records)) {
         if (obligation.source.authority === 'done-when-citation' && obligation.tasks[command.taskId]?.status === 'open') {
-          await repairs.close({ planPath, taskId: command.taskId, obligationId: obligation.id, evidence: { kind: 'operator-accepted', value: command.reason.trim() } });
+          const closed = await repairs.close({ planPath, taskId: command.taskId, obligationId: obligation.id, evidence: { kind: 'operator-accepted', value: command.reason.trim() } });
+          if (!closed.ok) {
+            print(`done-when accept: refused: ${closed.message}.`);
+            return 1;
+          }
         }
       }
     }
   }
+  await write(join(worktree, '.pipeline', 'task-status.json'), `${JSON.stringify(status, null, 2)}\n`);
   const event = { type: 'done_when_citation_accepted' as const, taskId: command.taskId, check: command.check, reason: command.reason.trim() };
   if (deps.emit) await deps.emit(worktree, event);
   else {

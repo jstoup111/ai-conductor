@@ -88,7 +88,12 @@ describe('collectUnverifiedDoneWhenChecks', () => {
     for (const source of ['verified', 'reported', 'verify-only', 'unverified', 'pending-judgement', 'judged', 'operator-accepted']) {
       expect(parseDoneWhenCloseSource(source)).toBe(source);
     }
-    expect(parseDoneWhenCloseSource('bogus')).toBeUndefined();
+    expect(parseDoneWhenCloseSource('bogus')).toMatchObject({ message: 'unknown done-when close source: bogus' });
+  });
+  it('reports an unknown close source by name instead of classifying it as unverified', () => {
+    expect(() => collectUnverifiedDoneWhenChecks({ tasks: [{ id: '7', doneWhen: [
+      { check: '[test] malformed', source: 'bogus', reason: 'no' },
+    ] }] })).toThrow('unknown done-when close source: bogus');
   });
   it('returns only explicit unverified close records across current and legacy task-status shapes', () => {
     expect(collectUnverifiedDoneWhenChecks({

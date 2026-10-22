@@ -56,6 +56,8 @@ export interface RepairObligationSection {
   admissionsByPlan: Record<string, Record<string, string>>;
   /** Counted by the citation judge so a replay cannot spend a refusal twice. */
   citationRefusals: Record<string, number>;
+  /** Admission keys already applied to the refusal counter. */
+  citationRefusalAdmissions: Record<string, true>;
 }
 
 export type TaskObligationStanding =
@@ -86,7 +88,7 @@ export interface RepairObligationStore {
     evidence: RepairClosureEvidence;
   }): Promise<RepairClosureResult>;
   read(): Promise<RepairResult<RepairObligationSection>>;
-  recordCitationRefusals(keys: readonly string[]): Promise<RepairResult<Record<string, number>>>;
+  recordCitationRefusals(admissionKey: string, keys: readonly string[]): Promise<RepairResult<Record<string, number>>>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -171,9 +173,11 @@ function validObligation(value: unknown): value is RepairObligation {
 
 function parseSection(state: Readonly<EngineState>): RepairResult<RepairObligationSection> {
   const raw = state.repairObligations;
-  if (raw === undefined) return { ok: true, value: { version: 1, records: {}, currentByPlan: {}, admissionsByPlan: {}, citationRefusals: {} } };
+  if (raw === undefined) return { ok: true, value: { version: 1, records: {}, currentByPlan: {}, admissionsByPlan: {}, citationRefusals: {}, citationRefusalAdmissions: {} } };
   if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.records) || !isRecord(raw.currentByPlan) ||
-    (raw.admissionsByPlan !== undefined && !isRecord(raw.admissionsByPlan))) {
+    (raw.admissionsByPlan !== undefined && !isRecord(raw.admissionsByPlan)) ||
+    (raw.citationRefusals !== undefined && (!isRecord(raw.citationRefusals) || !Object.values(raw.citationRefusals).every((count) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0))) ||
+    (raw.citationRefusalAdmissions !== undefined && (!isRecord(raw.citationRefusalAdmissions) || !Object.values(raw.citationRefusalAdmissions).every((value) => value === true)))) {
     return failure('Engine state repairObligations section is incompatible');
   }
   if (!Object.values(raw.records).every(validObligation) ||
@@ -184,7 +188,7 @@ function parseSection(state: Readonly<EngineState>): RepairResult<RepairObligati
   }
   return {
     ok: true,
-    value: { ...raw, admissionsByPlan: raw.admissionsByPlan ?? {}, citationRefusals: raw.citationRefusals ?? {} } as unknown as RepairObligationSection,
+    value: { ...raw, admissionsByPlan: raw.admissionsByPlan ?? {}, citationRefusals: raw.citationRefusals ?? {}, citationRefusalAdmissions: raw.citationRefusalAdmissions ?? {} } as unknown as RepairObligationSection,
   };
 }
 
@@ -292,7 +296,7 @@ export function createRepairObligationStore(
     read,
     admitOrReplay: (admissionKey, admission) => admit(admission, admissionKey),
 
-    async recordCitationRefusals(keys) {
+    async recordCitationRefusals(admissionKey, keys) {
       let result: RepairResult<Record<string, number>> | undefined;
       const unique = [...new Set(keys.filter((key) => key.trim()))];
       const updated = await store.update((current) => {
@@ -302,7 +306,12 @@ export function createRepairObligationStore(
           return current as EngineState;
         }
         const section = clone(parsed.value);
+        if (section.citationRefusalAdmissions[admissionKey]) {
+          result = { ok: true, value: Object.fromEntries(unique.map((key) => [key, section.citationRefusals[key] ?? 0])) };
+          return current as EngineState;
+        }
         for (const key of unique) section.citationRefusals[key] = (section.citationRefusals[key] ?? 0) + 1;
+        section.citationRefusalAdmissions[admissionKey] = true;
         result = { ok: true, value: Object.fromEntries(unique.map((key) => [key, section.citationRefusals[key]!])) };
         return { ...current, repairObligations: section };
       });

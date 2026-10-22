@@ -81,4 +81,19 @@ describe('done-when accept CLI', () => {
     expect(status.tasks[0].doneWhen[2]).toMatchObject({ source: 'operator-accepted', reason: command.reason });
     expect(emitted).toEqual([expect.objectContaining({ type: 'done_when_citation_accepted', taskId: '24', check: 3, reason: command.reason })]);
   });
+
+  it('accepts a refusal demoted to unverified while retaining its refusal provenance', async () => {
+    const files = refusalFixture();
+    const status = JSON.parse(files.get('/main/.worktrees/done-when-citations/.pipeline/task-status.json')!);
+    status.tasks[0].doneWhen[2] = { check: 'third check', source: 'unverified', verdict: 'does-not-assert', reason: 'bounded refusal' };
+    files.set('/main/.worktrees/done-when-citations/.pipeline/task-status.json', JSON.stringify(status));
+    const code = await dispatchDoneWhenAccept(command, {
+      resolveWorktree: async () => '/main/.worktrees/done-when-citations',
+      readFile: async (path) => files.get(path) ?? Promise.reject(new Error('missing fixture')),
+      writeFile: async (path, data) => { files.set(path, data); }, emit: async () => {}, print: vi.fn(),
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(files.get('/main/.worktrees/done-when-citations/.pipeline/task-status.json')!).tasks[0].doneWhen[2])
+      .toMatchObject({ source: 'operator-accepted', reason: command.reason });
+  });
 });

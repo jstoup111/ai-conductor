@@ -44,7 +44,7 @@ export type DoneWhenCloseSource =
 
 /** Parse persisted close sources at the trust boundary; unknown values never
  * acquire semantics merely because a future writer serialized one. */
-export function parseDoneWhenCloseSource(value: unknown): DoneWhenCloseSource | undefined {
+export function parseDoneWhenCloseSource(value: unknown): DoneWhenCloseSource | Error {
   switch (value) {
     case 'verified': return value;
     case 'reported': return value;
@@ -54,7 +54,7 @@ export function parseDoneWhenCloseSource(value: unknown): DoneWhenCloseSource | 
     case 'judged': return value;
     case 'operator-accepted': return value;
   }
-  return undefined;
+  return new Error(`unknown done-when close source: ${String(value)}`);
 }
 
 /**
@@ -81,8 +81,13 @@ export function collectUnverifiedDoneWhenChecks(status: unknown): UnverifiedDone
     for (const record of row.doneWhen) {
       if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
       const close = record as Record<string, unknown>;
+      // Pre-close legacy evidence had no typed source; it is not a malformed
+      // close record and remains outside the new trust boundary.
+      if (!('source' in close)) continue;
+      const source = parseDoneWhenCloseSource(close.source);
+      if (source instanceof Error) throw source;
       if (
-        parseDoneWhenCloseSource(close.source) === 'unverified'
+        source === 'unverified'
         && typeof close.check === 'string'
         && typeof close.reason === 'string'
       ) {

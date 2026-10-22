@@ -1151,6 +1151,18 @@ describe('task-progress', () => {
       expect(await taskRow()).not.toHaveProperty('doneWhen');
     });
 
+    it('refuses to replace a close record with an unknown source by name', async () => {
+      await prepareTaskClose(`### Task 1: typed close
+
+**Done when:**
+- observable outcome`);
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
+        id: '1', status: 'completed', doneWhen: [{ check: 'observable outcome', source: 'bogus' }],
+      }] }));
+      await expect(completeTaskDoneWhen(dir, '1', [{ index: 1, evidence: 'new evidence' }]))
+        .resolves.toMatchObject({ kind: 'refused', message: expect.stringContaining('unknown done-when close source: bogus') });
+    });
+
     it('closes a verify-only task through prove-closed evidence', async () => {
       await prepareTaskClose(`### Task 1: prove the current behavior is already closed
 

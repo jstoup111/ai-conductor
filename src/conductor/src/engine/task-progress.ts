@@ -31,6 +31,7 @@ import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from '
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { readGitBlobs } from './git-blob-batch.js';
 import {
+  parseDoneWhenCloseSource,
   classifyCitationProvenance,
   parseDoneWhenTestReference,
   verifyDoneWhenTestReference,
@@ -636,6 +637,15 @@ export async function completeTaskDoneWhen(
       message: `[task-cli] task id "${id}" not found in task-status.json`,
     };
   }
+  if (Array.isArray(task.doneWhen)) {
+    for (const rawClose of task.doneWhen) {
+      if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) continue;
+      const source = parseDoneWhenCloseSource((rawClose as Record<string, unknown>).source);
+      if (source instanceof Error) {
+        return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${source.message}` };
+      }
+    }
+  }
 
   // A citation is mechanically verified only when its named title was added
   // in the task's recorded start window.  Any missing boundary or git error
@@ -696,7 +706,9 @@ export async function completeTaskDoneWhen(
       ? task.doneWhen.flatMap((rawClose, index) => {
         if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) return [];
         const close = rawClose as Record<string, unknown>;
-        return close.source === 'judged' && close.verdict === 'does-not-assert' ? [index + 1] : [];
+        const source = parseDoneWhenCloseSource(close.source);
+        if (source instanceof Error) return [];
+        return source === 'judged' && close.verdict === 'does-not-assert' ? [index + 1] : [];
       })
       : [],
   );

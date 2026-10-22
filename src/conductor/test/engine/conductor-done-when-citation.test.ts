@@ -17,7 +17,7 @@ describe('BUILD Done-when citation judgement boundary', () => {
     root = await mkdtemp(join(tmpdir(), 'conductor-done-when-citation-'));
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(root, '.docs', 'plans', 'citation.md'), '### Task 7: First\nTask seven text\n\n### Task 9: Second\nTask nine text\n');
+    await writeFile(join(root, '.docs', 'plans', 'citation.md'), '### Task 7: First\nTask seven text\n\n**Done when:**\n- [test] first\n\n### Task 9: Second\nTask nine text\n\n**Done when:**\n- [test] second\n');
     await writeState(join(root, '.pipeline', 'conduct-state.json'), {
       ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
       build: 'pending', feature_desc: 'citation',

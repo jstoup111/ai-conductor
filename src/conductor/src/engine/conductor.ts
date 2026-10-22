@@ -12066,7 +12066,6 @@ export class Conductor {
               lastVerdictHandshakeFailure = handshake.reason;
             }
             let completion = handshake;
-            let citationUnavailableDemoted = false;
             if (!completion) {
               // Citation provenance is settled exactly once at the BUILD
               // session boundary, before its task-status predicate observes
@@ -12106,23 +12105,35 @@ export class Conductor {
                       }
                     } else {
                       const reason = `citation judgement unavailable: ${judgement.cause}`;
-                      citationUnavailableDemoted = true;
                       await applyCitationVerdicts(this.projectRoot, status, pending.map((citation) => ({ taskId: citation.taskId, checkIndex: citation.checkIndex, verdict: 'does-not-assert' as const, reason })));
                       // Unavailability is not a refusal: demote directly and never admit a repair obligation.
                       const persisted = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')) as { tasks?: Array<{ doneWhen?: Array<Record<string, unknown>> }> };
                       for (const task of persisted.tasks ?? []) for (const close of task.doneWhen ?? []) if (close.source === 'judged' && close.reason === reason) { close.source = 'unverified'; delete close.verdict; }
                       await writeFile(join(this.projectRoot, '.pipeline', 'task-status.json'), JSON.stringify(persisted, null, 2));
                       await emitTracked({ type: 'done_when_citation_judged', citations: pending.map((citation) => ({ taskId: citation.taskId, check: citation.checkIndex, unavailable: judgement.cause })) });
+                      // The demotion is now subject to the same normal
+                      // completion nudge; publish its status transition on
+                      // the existing event spine immediately.
                       await this.events.emit({
                         type: 'build_done_when_unverified',
                         checks: pending.map(({ taskId, check }) => ({ taskId, check })),
                       });
                     }
                   }
-                } catch {
-                  // A judgement boundary must not turn an otherwise normal
-                  // BUILD completion check into a conductor crash. Its
-                  // unavailable/demotion policy is applied by the next task.
+                } catch (error) {
+                  // Never complete BUILD with a citation still awaiting a
+                  // judgement.  Native unavailability is demoted above; a
+                  // persistence or parsing failure is a named boundary error.
+                  throw new Error(`citation judgement unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                }
+              }
+              // A final BUILD attempt cannot consume a future review lap.
+              // Mark its nudge spent before evaluating completion so a forced
+              // demotion remains a successful terminal disposition.
+              if (step.name === 'build' && attempt >= stepMaxRetries) {
+                const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8'));
+                if (collectUnverifiedDoneWhenChecks(status).length > 0) {
+                  await this.recordUnverifiedDoneWhenNudge(state);
                 }
               }
               completion = await checkStepCompletion(
@@ -12130,13 +12141,8 @@ export class Conductor {
                 step.name,
                 {
                   ...(await this.completionCtx(state)),
-                  ...(citationUnavailableDemoted ? { unverifiedDoneWhenNudgeSpent: true } : {}),
                 },
               );
-              if (citationUnavailableDemoted && !completion.done &&
-                completion.reason?.startsWith('unverified Done-when checks require one BUILD review pass:')) {
-                completion = { ...completion, done: true, reason: undefined, missing: undefined };
-              }
               if (citationRefusalReason) completion = { ...completion, done: false, reason: citationRefusalReason };
             }
 
