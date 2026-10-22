@@ -1,0 +1,20 @@
+# Dependency-vulnerability reporting (#3344). Report-only by operator decision:
+# Dependabot alerts and security-update PRs surface known vulnerabilities; nothing
+# here gates merges. open-pull-requests-limit: 0 turns off routine version-update
+# PRs, so only security updates open. test/test_dependabot_npm_coverage.sh fails
+# if a tracked package-lock.json directory is missing below.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directories:
+      - "/src/conductor"
+      - "/plugins/json-stdout-subscriber"
+      - "/plugins/recorder-provider"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
