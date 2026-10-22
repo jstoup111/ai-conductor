@@ -36,6 +36,7 @@ import {
   type PrdWideningClassification,
 } from './prd-widening-classification.js';
 import {
+  prdWideningCasesForState,
   readRemediationCaseStoreFeature,
   RemediationCaseStore,
 } from './remediation-case-store.js';
@@ -4916,7 +4917,7 @@ export async function classifyPrdAuditWideningProjection(
       if (!caseRead.ok) {
         evidenceFault = 'corrupt-case-store';
       } else {
-        cases = caseRead.state.version === 'v2' ? caseRead.state.prdWideningCases : [];
+        cases = prdWideningCasesForState(caseRead.state);
         const decisionStore = new AcceptedWideningDecisionStore(dir, {
           version: 1,
           repository: featureRead.feature.repository,

@@ -9,6 +9,7 @@ import {
 } from './artifacts.js';
 import { AcceptedWideningDecisionStore, type AcceptedWideningDecision } from './accepted-widenings.js';
 import {
+  prdWideningCasesForState,
   readRemediationCaseStoreFeature,
   RemediationCaseStore,
   type RemediationCasePrdWideningRecord,
@@ -432,7 +433,7 @@ async function wideningHistory(projectRoot: string, activeFeature: string): Prom
     if (cases === undefined) return { kind: 'available', history: { kind: 'absent' } };
     const readCases = await cases.read();
     if (!readCases.ok) return wideningCaseHistoryFault(readCases.reason);
-    return { kind: 'available', history: { decisions: [], cases: readCases.state.version === 'v2' ? readCases.state.prdWideningCases : [] } };
+    return { kind: 'available', history: { decisions: [], cases: prdWideningCasesForState(readCases.state) } };
   }
   if (typeof raw.feature?.repository !== 'string') return { kind: 'fault', detail: `widening history at ${source} is corrupt` };
   const read = await new AcceptedWideningDecisionStore(projectRoot, {
@@ -444,7 +445,7 @@ async function wideningHistory(projectRoot: string, activeFeature: string): Prom
     if (cases === undefined) return { kind: 'available', history: { decisions: read.state.decisions, cases: [] } };
     const readCases = await cases.read();
     if (!readCases.ok) return wideningCaseHistoryFault(readCases.reason);
-    return { kind: 'available', history: { decisions: read.state.decisions, cases: readCases.state.version === 'v2' ? readCases.state.prdWideningCases : [] } };
+    return { kind: 'available', history: { decisions: read.state.decisions, cases: prdWideningCasesForState(readCases.state) } };
   }
   if (read.kind === 'foreign-feature') return { kind: 'fault', detail: `widening history at ${source} is foreign to the active feature` };
   if (read.kind === 'unsupported') return { kind: 'fault', detail: `widening history at ${source} has an unsupported version` };

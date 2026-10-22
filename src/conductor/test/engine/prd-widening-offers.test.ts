@@ -45,7 +45,7 @@ describe('PRD widening offers', () => {
     expect(result.ok).toBe(true);
     const stored = await new RemediationCaseStore(projectRoot, FEATURE).read();
     expect(stored.ok).toBe(true);
-    if (!stored.ok || stored.state.version !== 'v2') throw new Error('expected a v2 store');
+    if (!stored.ok || stored.state.version !== 'v3') throw new Error('expected a v3 store');
     expect(stored.state.prdWideningCases[0]?.currentSources[0]?.snapshot).toBe('R'.repeat(8_000));
     expect(stored.state.prdWideningCases[0]?.originalSources[0]?.snapshot)
       .toBe('The sweep counts unparked registered worktrees as parked.');
@@ -69,7 +69,7 @@ describe('PRD widening offers', () => {
     expect(result.ok).toBe(true);
     const stored = await new RemediationCaseStore(projectRoot, FEATURE).read();
     expect(stored.ok).toBe(true);
-    if (!stored.ok || stored.state.version !== 'v2') throw new Error('expected a v2 store');
+    if (!stored.ok || stored.state.version !== 'v3') throw new Error('expected a v3 store');
     const snapshot = stored.state.prdWideningCases[0]?.currentSources[0]?.snapshot ?? '';
     expect(Buffer.byteLength(snapshot, 'utf8')).toBeLessThanOrEqual(8_000);
     expect(snapshot).toBe('\u2014'.repeat(2_666));

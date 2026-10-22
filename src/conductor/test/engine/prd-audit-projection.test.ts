@@ -668,7 +668,7 @@ describe('PRD-audit feature projection', () => {
         detail: 'widening case history at .pipeline/remediation-cases.json is corrupt',
       },
       {
-        bytes: JSON.stringify({ version: 'v3' }),
+        bytes: JSON.stringify({ version: 'v4' }),
         detail: 'widening case history at .pipeline/remediation-cases.json has an unsupported version',
       },
     ] as const;

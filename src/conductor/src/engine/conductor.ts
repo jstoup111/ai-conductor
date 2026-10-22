@@ -49,7 +49,7 @@ import {
   readBuildReviewWorkOrder,
   readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
-import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { prdWideningCasesForState, readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
@@ -3479,7 +3479,7 @@ export class Conductor {
       await this.emitPrdWideningRejections('persistence-failed', visible.map(prdWideningSourceId));
       return renderPrdWideningRecovery('persistence-failed', visible.map((finding) => finding.criterion));
     }
-    let prdCases = storedCases.state.version === 'v2' ? storedCases.state.prdWideningCases : [];
+    let prdCases = prdWideningCasesForState(storedCases.state);
     // Only the first observed source opens an authority offer. Once this
     // feature has history, every unmatched source (including a renumbered NC)
     // enters the semantic coordinator instead of minting report-local authority.
@@ -3504,7 +3504,7 @@ export class Conductor {
         await this.emitPrdWideningRejections('persistence-failed', newFindings.map(prdWideningSourceId));
         return renderPrdWideningRecovery('persistence-failed', newFindings.map((finding) => finding.criterion));
       }
-      prdCases = refreshedCases.state.version === 'v2' ? refreshedCases.state.prdWideningCases : [];
+      prdCases = prdWideningCasesForState(refreshedCases.state);
     }
     const context = buildPrdWideningContext(report, prdCases,
       storedDecisions.kind === 'valid' ? storedDecisions.state.decisions : [], relations);
@@ -3694,7 +3694,7 @@ export class Conductor {
       typed.report,
       typed.relations,
       decisions.kind === 'valid' ? decisions.state.decisions : [],
-      cases.state.version === 'v2' ? cases.state.prdWideningCases : [],
+      prdWideningCasesForState(cases.state),
     );
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the

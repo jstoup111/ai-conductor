@@ -4,6 +4,8 @@ import {
 } from './accepted-widenings.js';
 import {
   RemediationCaseStore,
+  prdWideningCasesForState,
+  withPrdWideningCases,
   type RemediationCasePrdWideningRecord,
   type RemediationCaseStoreMutation,
   type RemediationCaseStoreMutationResult,
@@ -116,13 +118,7 @@ function stateWithOffers(
   state: RemediationCaseStoreState,
   offers: readonly RemediationCasePrdWideningRecord[],
 ): RemediationCaseStoreState {
-  return {
-    version: 'v2',
-    feature: state.feature,
-    cases: state.cases,
-    prdWideningCases: offers,
-    suppressions: state.suppressions ?? [],
-  };
+  return withPrdWideningCases(state, offers);
 }
 
 /**
@@ -145,7 +141,7 @@ export async function persistPrdWideningOffers(
   const newCaseId = options.newCaseId ?? randomUUID;
   const now = options.now ?? (() => new Date().toISOString());
   const result = await store.mutate(async (state) => {
-    const current = state.version === 'v2' ? state.prdWideningCases : [];
+    const current = prdWideningCasesForState(state);
     if (inputs.some((input) => sourceOwnedByAnotherOffer(current, input))) {
       return { value: [] as readonly OverScopePersistedOffer[] };
     }

@@ -186,6 +186,31 @@ export function selectPrdWideningRemediationCases(
   return records.filter((record): record is RemediationCasePrdWideningRecord => record.domain === 'prd_widening');
 }
 
+/** Read PRD-widening history without coupling consumers to the envelope revision. */
+export function prdWideningCasesForState(
+  state: RemediationCaseStoreState,
+): readonly RemediationCasePrdWideningRecord[] {
+  return state.version === OLDEST_STORE_VERSION ? [] : state.prdWideningCases;
+}
+
+/**
+ * Replace PRD-widening state while preserving the current envelope and, in
+ * v3, the independently-owned event outbox.
+ */
+export function withPrdWideningCases(
+  state: RemediationCaseStoreState,
+  prdWideningCases: readonly RemediationCasePrdWideningRecord[],
+): RemediationCaseStoreState {
+  if (state.version === STORE_VERSION) return { ...state, prdWideningCases };
+  return {
+    version: LEGACY_STORE_VERSION,
+    feature: state.feature,
+    cases: state.cases,
+    prdWideningCases,
+    suppressions: state.suppressions ?? [],
+  };
+}
+
 /** Engine-owned history of a sub-floor finding; never operator authority. */
 export interface RemediationCaseSuppressionEntry {
   readonly findingId: string;

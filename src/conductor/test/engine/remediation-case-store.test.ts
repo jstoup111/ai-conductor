@@ -12,6 +12,7 @@ import {
   RemediationCaseStore,
   selectBuildReviewRemediationCases,
   selectPrdWideningRemediationCases,
+  withPrdWideningCases,
 } from '../../src/engine/remediation-case-store.js';
 import type {
   RemediationCaseDomainRecord,
@@ -389,6 +390,24 @@ describe('remediation case store', () => {
       lock: IMMEDIATE_LEASE,
     }).read()).resolves.toEqual({ ok: true, state: V3_STATE });
     expect({ writes: tracked.writes, renames: tracked.renames }).toEqual({ writes: [], renames: [] });
+  });
+
+  it('preserves v3 outbox entries when a PRD-widening writer replaces its cases', async () => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(V3_STATE)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+
+    await expect(store.mutate(async (state) => ({
+      value: 'replaced' as const,
+      nextState: withPrdWideningCases(state, [PRD_WIDENING_CASE]),
+    }))).resolves.toEqual({ ok: true, value: 'replaced' });
+
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true,
+      state: { version: 'v3', prdWideningCases: [PRD_WIDENING_CASE], outbox: V3_OUTBOX },
+    });
   });
 
   it.each([

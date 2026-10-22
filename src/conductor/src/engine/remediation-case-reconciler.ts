@@ -7,6 +7,7 @@ import {
   type RemediationCaseStoreFailureReason,
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
+  prdWideningCasesForState,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 import type { RemediationCaseGraph } from './remediation-case-validator.js';
@@ -420,7 +421,7 @@ function reconcileState(
           version: 'v3',
           feature: state.feature,
           cases: [...cases, ...additions],
-          prdWideningCases: state.version === 'v2' ? state.prdWideningCases : [],
+          prdWideningCases: prdWideningCasesForState(state),
           suppressions: state.suppressions ?? [],
           outbox: carryOutbox,
         } : { ...state, cases: [...cases, ...additions] },
