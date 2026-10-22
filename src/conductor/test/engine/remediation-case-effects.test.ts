@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker, resolveAbsentFailedBuildReviewCases } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker, resolveAbsentFailedBuildReviewCases, settleStrandedBuildReviewActionReservations } from '../../src/engine/remediation-case-effects.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -87,7 +87,7 @@ describe('remediation case effects', () => {
     expect(isBuildReviewSettlementObligationCase(record(effect as RemediationCaseRecord['effect'], overrides as Partial<RemediationCaseRecord>))).toBe(expected);
   });
 
-  // Covers: task:16, task:rem-as-built-R16a, task:rem-as-built-R16b
+  // Covers: task:16, task:rem-as-built-R16a, task:rem-as-built-R16b, task:rem-as-built-R16d
   it.each(['reserved', 'failed'] as const)('retires an accepted %s action with the shared transformation', async (status) => {
     const acceptedSourceId = 'testQuality:accepted-action';
     const original = {
@@ -115,6 +115,30 @@ describe('remediation case effects', () => {
           }
         : { id: 'effect-accepted', kind: 'action', status: 'failed', diagnostic: 'earlier failure' },
     })] } });
+  });
+
+  // Covers: task:rem-as-built-R16d, task:rem-as-built-R16e
+  it('settles an accepted stranded reservation through the shared predicate and records one identified outbox event', async () => {
+    const acceptedSourceId = 'testQuality:accepted-stranded-action';
+    const original = {
+      ...openAppliedActionRecord(),
+      effect: { id: 'effect-stranded', kind: 'action' as const, status: 'reserved' as const },
+      sources: [{ sourceId: acceptedSourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T00:00:00.000Z' }],
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: 'lap-old' }] },
+    };
+    const store = await storeWith({ version: 'v3', feature, cases: [original], prdWideningCases: [], suppressions: [], outbox: [] });
+
+    await expect(settleStrandedBuildReviewActionReservations({
+      store, liveSourceIds: new Set(), effectiveAcceptedSourceIds: new Set([acceptedSourceId]), mechanicallyHealthy: true,
+      lapId: 'lap-current', readPublishedCaseIds: async () => new Set(),
+    })).resolves.toEqual({ ok: true, settled: [{ caseId: 'case-1', effectId: 'effect-stranded' }] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }) })],
+      outbox: [expect.objectContaining({ eventId: expect.any(String), event: expect.objectContaining({
+        type: 'remediation_case_reconciled', eventId: expect.any(String), caseId: 'case-1', resolution: 'resolved',
+      }) })],
+    } });
   });
 
   // Covers: task:6

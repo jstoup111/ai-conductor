@@ -2157,10 +2157,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
     const accepted = settled.state.cases.find((record) => record.id === 'deferral-window-1');
     const live = settled.state.cases.find((record) => record.id === 'deferral-window-3');
-    expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed', diagnostic: 'deferred intake failed: tracker unavailable' } });
+    expect(accepted).toMatchObject({ resolution: 'open', effect: { status: 'failed', diagnostic: 'deferred intake failed: tracker unavailable' } });
     expect(live).toMatchObject({ resolution: 'open', effect: { status: 'failed', diagnostic: 'deferred intake failed: tracker unavailable' } });
-    // The tracker failure is already durable when acceptance lands; retirement
-    // resolves the case without overwriting its real failure diagnostic.
+    // The tracker failure is already durable when acceptance lands; acceptance
+    // preserves that failed deferral rather than resolving it into PASS.
     expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toEqual([
       expect.objectContaining({
         type: 'remediation_effect_failed', caseId: accepted?.id, effectKind: 'deferral',
@@ -2847,6 +2847,11 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === accepted.id && event.resolution === 'resolved')).toEqual([
       expect.objectContaining({ type: 'remediation_case_reconciled', caseId: accepted.id, resolution: 'resolved' }),
     ]);
+    expect(events.filter((event) =>
+      event.type === 'remediation_case_reconciled' && event.caseId === accepted.id && event.resolution === 'resolved',
+    )).toEqual([
+      expect.objectContaining({ eventId: expect.any(String), resolution: 'resolved' }),
+    ]);
     expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted.id)).toEqual([
       expect.objectContaining({
         type: 'remediation_effect_failed', caseId: accepted.id, effectId: accepted.effect.id, effectKind: 'action',
@@ -3479,7 +3484,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       if (!after.ok) throw new Error(`unexpected case-store failure: ${after.reason}`);
       expect(after.state.cases.find((record) => record.id === 'case-stranded')).toMatchObject({
         resolution: 'resolved',
-        effect: { id: 'effect-stranded', kind: 'action', status: 'failed', diagnostic: 'stranded reservation: tasks never published' },
+        effect: { id: 'effect-stranded', kind: 'action', status: 'failed', diagnostic: 'retired: every source operator-accepted or no longer raised' },
       });
       expect(events).toContainEqual(expect.objectContaining({
         type: 'remediation_effect_failed', caseId: 'case-stranded', effectId: 'effect-stranded', effectKind: 'action',

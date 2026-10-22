@@ -256,6 +256,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const strandedSettlement = await settleStrandedBuildReviewActionReservations({
       store,
       liveSourceIds: strandedLiveSourceIds,
+      mechanicallyHealthy: input.mechanical === 'healthy',
+      effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
       lapId: input.aggregate.lapId,
       readPublishedCaseIds: async (actionEffectIds) => {
         const order = await readBuildReviewWorkOrder(input.projectRoot, input.feature, actionEffectIds);

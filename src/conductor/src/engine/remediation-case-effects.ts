@@ -200,6 +200,10 @@ export async function settleStrandedBuildReviewActionReservations(input: {
   readonly store: RemediationCaseStore;
   /** This lap's reported, unsuppressed rubric-namespaced source ids. */
   readonly liveSourceIds: ReadonlySet<string>;
+  /** Absence is authoritative only for a mechanically complete lap. */
+  readonly mechanicallyHealthy: boolean;
+  /** Current durable operator authority; invalidated origins are excluded. */
+  readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
   /**
    * Case ids the published work order carries, read under the store lease
    * that serializes every order writer. `undefined` (an unreadable order)
@@ -211,7 +215,11 @@ export async function settleStrandedBuildReviewActionReservations(input: {
   const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
     const candidates = state.cases.filter((record): record is ActionCase =>
       isActionCase(record) && record.effect.status === 'reserved'
-      && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId)));
+      && retiresOpenBuildReviewCase(record, {
+        liveSourceIds: input.liveSourceIds,
+        effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds,
+        mechanicallyHealthy: input.mechanicallyHealthy,
+      }));
     if (candidates.length === 0) return { value: [] };
     const published = await input.readPublishedCaseIds(
       state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : []));
@@ -233,13 +241,9 @@ export async function settleStrandedBuildReviewActionReservations(input: {
       value: settled,
       nextState: {
         ...upgraded,
-        cases: upgraded.cases.map((record) => stranded.has(record.id) && record.effect.kind === 'action'
-        ? {
-          ...record,
-          resolution: 'resolved',
-          effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic: STRANDED_ACTION_RESERVATION_DIAGNOSTIC },
-        }
-        : record),
+        cases: upgraded.cases.map((record) => stranded.has(record.id)
+          ? retireOpenBuildReviewCase(record)
+          : record),
         outbox: [...upgraded.outbox, ...events.slice(1)],
       },
     };

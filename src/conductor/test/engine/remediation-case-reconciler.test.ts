@@ -9,6 +9,8 @@ import {
   classifyRemediationCaseReuse,
   isCarryEligibleRemediationCase,
   reconcileRemediationCases,
+  retireOpenBuildReviewCase,
+  retiresOpenBuildReviewCase,
 } from '../../src/engine/remediation-case-reconciler.js';
 import type {
   RemediationCasePrdWideningRecord,
@@ -171,6 +173,45 @@ describe('remediation case reconciler', () => {
     ['an open action with an acceptance origin', { ...acceptedOnPriorLap, resolution: 'open' as const }, 'resume'],
   ] as const)('classifies %s bindings before ordinary reuse', (_label, record, expected) => {
     expect(classifyRemediationCaseReuse(record, new Set<string>(), carryInput)).toBe(expected);
+  });
+
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it.each([
+    ['a failed action with an effective origin', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-old' }] },
+    }), new Set(['testQuality:finding-1']), true],
+    ['a reserved action with every source accepted this lap', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }), new Set(['testQuality:finding-1']), true],
+    ['an open failed deferral whose sources are accepted', durableAction({
+      disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'failed', diagnostic: 'intake failed' },
+    }), new Set(['testQuality:finding-1']), false],
+    ['an open reserved deferral whose sources are accepted', durableAction({
+      disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' },
+    }), new Set(['testQuality:finding-1']), false],
+    ['an open decision stop whose sources are accepted', durableAction({
+      disposition: 'escalate', effect: { kind: 'none' }, escalation: { owner: 'plan' },
+    }), new Set(['testQuality:finding-1']), false],
+    ['a failed action whose only origin was withdrawn while its source remains raised', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-old' }] },
+    }), new Set<string>(), false],
+  ] as const)('retires open cases only when %s', (_label, record, effectiveAcceptedSourceIds, expected) => {
+    expect(retiresOpenBuildReviewCase(record, {
+      liveSourceIds: new Set(['testQuality:finding-1']), effectiveAcceptedSourceIds,
+      mechanicallyHealthy: true,
+    })).toBe(expected);
+  });
+
+  // Covers: task:rem-as-built-R16e
+  it.each([
+    ['action', durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } })],
+    ['deferral', durableAction({ disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } })],
+  ] as const)('never resolves a reserved %s effect without failing it', (_label, record) => {
+    expect(retireOpenBuildReviewCase(record)).toMatchObject({
+      resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }),
+    });
   });
 
   it('stamps engine-owned case and effect ids for a new proposed case', async () => {
@@ -596,6 +637,7 @@ describe('remediation case reconciler', () => {
       generateId: () => 'must-not-be-used',
       attemptedCaseIds: ['case-1'],
       mechanicallyHealthy: true,
+      lapId: 'lap-settlement',
     });
 
     expect(result).toMatchObject({ ok: true, state: { cases: [{
@@ -605,6 +647,11 @@ describe('remediation case reconciler', () => {
           : 'charge failed',
       },
     }] }, resolvedAbsentCaseIds: ['case-1'] });
+    expect(result).toMatchObject({ state: { outbox: [expect.objectContaining({
+      eventId: expect.any(String), event: expect.objectContaining({
+        type: 'remediation_case_reconciled', caseId: 'case-1', resolution: 'resolved',
+      }),
+    })] } });
   });
 
   it('keeps an absent open action case open without recorded BUILD attempt evidence', async () => {
@@ -646,6 +693,7 @@ describe('remediation case reconciler', () => {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
+      mechanicallyHealthy: true,
       resolveAbsentOpenNonActionCases: true,
     });
 
@@ -679,6 +727,7 @@ describe('remediation case reconciler', () => {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
+      mechanicallyHealthy: true,
       resolveAbsentOpenNonActionCases: true,
     });
 

@@ -5400,6 +5400,8 @@ export class Conductor {
       const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
         liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: true,
         allowAppliedByAbsence: attemptEvidence.ok,
+        resolveAbsentOpenNonActionCases: true,
+        referenced: false,
       }));
       if (retired.length === 0) return { value: undefined };
       const events = retired.map((record) => {

@@ -109,14 +109,31 @@ export function retiresOpenBuildReviewCase(
     readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
     readonly mechanicallyHealthy: boolean;
     readonly allowAppliedByAbsence?: boolean;
+    /** Allows benign absence to settle a referenced-free non-action row. */
+    readonly resolveAbsentOpenNonActionCases?: boolean;
+    /** The caller knows the current graph still explicitly names this case. */
+    readonly referenced?: boolean;
   },
 ): boolean {
   if (record.resolution !== 'open') return false;
-  const originSourceIds = new Set(record.operatorAcceptance?.origins.map((origin) => origin.sourceId) ?? []);
+  // Owner stops are a durable decision, never a benign-absence case. Other
+  // non-actions have no autonomous effect to retire, so absence may settle
+  // only the caller's explicit, mechanically-healthy non-action lane.
+  if (record.disposition !== 'act' || record.effect.kind !== 'action') {
+    return input.mechanicallyHealthy
+      && input.resolveAbsentOpenNonActionCases === true
+      && input.referenced !== true
+      && record.disposition !== 'escalate'
+      && (record.effect.kind === 'none' || record.effect.status === 'applied');
+  }
+  // Historical origins are attribution, not evergreen authority. An origin
+  // participates only while it remains effective in this lap.
+  const originSourceIds = new Set((record.operatorAcceptance?.origins ?? [])
+    .filter((origin) => input.effectiveAcceptedSourceIds.has(origin.sourceId))
+    .map((origin) => origin.sourceId));
   const covered = record.sources.length > 0 && record.sources.every((source) =>
     input.effectiveAcceptedSourceIds.has(source.sourceId) || originSourceIds.has(source.sourceId) || source.outcome === 'carried');
   if (covered) return true;
-  if (record.disposition !== 'act' || record.effect.kind !== 'action') return false;
   const absent = input.mechanicallyHealthy &&
     (record.effect.status === 'failed' || record.effect.status === 'reserved' ||
       (record.effect.status === 'applied' && input.allowAppliedByAbsence === true)) &&
@@ -126,7 +143,7 @@ export function retiresOpenBuildReviewCase(
 
 /** Apply the one durable representation of a build-review retirement. */
 export function retireOpenBuildReviewCase(record: RemediationCaseRecord): RemediationCaseRecord {
-  if (record.effect.kind === 'action' && record.effect.status === 'reserved') {
+  if (record.effect.kind !== 'none' && record.effect.status === 'reserved') {
     return {
       ...record,
       resolution: 'resolved',
@@ -419,12 +436,16 @@ function reconcileState(
   const resolvedAbsentCaseIds: string[] = [];
   const cases = state.cases.map((record) => {
     const replacement = replacements.get(record.id) ?? record;
-    if (!referencedExisting.has(replacement.id) && attemptedIds.has(replacement.id) && retiresOpenBuildReviewCase(replacement, {
+    const referenced = referencedExisting.has(replacement.id);
+    const retires = !referenced && retiresOpenBuildReviewCase(replacement, {
       liveSourceIds: input.liveSourceIds ?? new Set(input.graph.sourceOutcomes.map((source) => source.sourceId)),
       effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds ?? new Set(),
       mechanicallyHealthy: input.mechanicallyHealthy === true,
       allowAppliedByAbsence: input.allowAppliedByAbsence,
-    })) {
+      resolveAbsentOpenNonActionCases: input.resolveAbsentOpenNonActionCases,
+      referenced,
+    });
+    if (retires && (attemptedIds.has(replacement.id) || replacement.disposition !== 'act')) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);
       if (input.lapId) {
@@ -435,24 +456,6 @@ function reconcileState(
         } });
       }
       return retireOpenBuildReviewCase(replacement);
-    }
-    if (
-      replacement.resolution === 'open'
-      && replacement.disposition !== 'act'
-      && !referencedExisting.has(replacement.id)
-      && input.resolveAbsentOpenNonActionCases
-      && (replacement.effect.kind === 'none' || replacement.effect.status === 'applied')
-    ) {
-      changed = true;
-      resolvedAbsentCaseIds.push(replacement.id);
-      if (input.lapId) {
-        const eventId = randomUUID();
-        outbox.push({ eventId, occurredAt: input.recordedAt, event: {
-          type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.lapId,
-          caseId: replacement.id, resolution: 'resolved',
-        } });
-      }
-      return { ...replacement, resolution: 'resolved' as const };
     }
     return replacement;
   });

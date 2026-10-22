@@ -1143,10 +1143,15 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     } else {
       expect(await run.haltMarker()).toBe('');
       expect((await run.state()).build_review).toBe('done');
-      const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string; effect: { status: string; diagnostic?: string } }> };
+      const settled = await run.readJson('.pipeline/remediation-cases.json') as {
+        cases: Array<{ id: string; resolution: string; effect: { status: string; diagnostic?: string } }>;
+      };
       expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({
         status: 'failed', diagnostic: status === 'reserved' ? 'retired: every source operator-accepted or no longer raised' : 'previous effect failure',
       }) })]);
+      expect(run.lifecycle.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === caseId)).toEqual([
+        expect.objectContaining({ eventId: expect.any(String), resolution: 'resolved' }),
+      ]);
     }
   });
 
@@ -1185,12 +1190,89 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     expect(await run.haltMarker()).toBe('');
     expect((await run.state()).build_review).toBe('done');
-    await expect(run.readJson('.pipeline/remediation-cases.json')).resolves.toMatchObject({ cases: [expect.objectContaining({
+    const settled = await run.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; resolution: string; effect: { status: string; diagnostic?: string } }>;
+    };
+    expect(settled).toMatchObject({ cases: [expect.objectContaining({
       resolution: 'resolved', effect: expect.objectContaining({
         status: 'failed', diagnostic: status === 'reserved'
           ? 'retired: every source operator-accepted or no longer raised'
           : 'previous effect failure',
       }),
+    })] });
+    expect(run.lifecycle.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === 'case-accepted')).toEqual([
+      expect.objectContaining({ eventId: expect.any(String), resolution: 'resolved' }),
+    ]);
+  });
+
+  // Covers: task:rem-prd-audit-R16c
+  it('keeps an accepted failed deferral open on clean PASS', async () => {
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: 'case-accepted-deferral', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+              rationale: 'The accepted deferral filing failed.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'deferred', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: 'effect-accepted-deferral', kind: 'deferral', status: 'failed', diagnostic: 'tracker unavailable' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+        const accepted = await new BuildReviewDispositionStore(root).append({
+          feature,
+          finding: canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v3', concernKind: FINDING.concernKind, anchor: FINDING.anchor })!,
+          sourceLapId: LAP_ID, summary: 'Accepted current finding.', rationale: 'Operator accepts this risk.', operator: 'operator',
+        });
+        if (!accepted.ok) throw new Error(accepted.message);
+      },
+    });
+
+    expect(await run.haltMarker()).toContain('clean PASS cannot settle open deferral case case-accepted-deferral (failed)');
+    const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ id: string; resolution: string; effect: { status: string; diagnostic?: string } }> };
+    expect(settled.cases.find((record) => record.id === 'case-accepted-deferral')).toMatchObject({
+      resolution: 'open', effect: expect.objectContaining({ status: 'failed', diagnostic: 'tracker unavailable' }),
+    });
+  });
+
+  // Covers: task:rem-prd-audit-R16c
+  it('keeps an accepted open decision stop pending on clean PASS', async () => {
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: 'case-accepted-stop', domain: 'build_review', disposition: 'escalate', priority: 'high', confidence: 'high',
+              rationale: 'An approved decision is still required.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'escalate', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+        const accepted = await new BuildReviewDispositionStore(root).append({
+          feature,
+          finding: canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v3', concernKind: FINDING.concernKind, anchor: FINDING.anchor })!,
+          sourceLapId: LAP_ID, summary: 'Accepted current finding.', rationale: 'Operator accepts this risk.', operator: 'operator',
+        });
+        if (!accepted.ok) throw new Error(accepted.message);
+      },
+    });
+
+    expect(await run.haltMarker()).toContain('case reconciliation decision-stop-pending');
+    await expect(run.readJson('.pipeline/remediation-cases.json')).resolves.toMatchObject({ cases: [expect.objectContaining({
+      id: 'case-accepted-stop', resolution: 'open', effect: { kind: 'none' },
     })] });
   });
 
