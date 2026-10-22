@@ -483,3 +483,21 @@ Task 11 + Task 3 ─▶ Task 13
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-6-r1: src/conductor/src/engine/docs-prune-cli.ts + docs-prune.ts: on owned-PR refresh, create the prune commit from origin/main with the full current removable set and push it to the PR head branch with a force-with-lease bound to the fetched FETCH_HEAD SHA via the existing guarded push and exact-request approval; keep create path unchanged
+**Gate:** prd-audit
+**Rationale:** Verified (97%) at docs-prune-cli.ts:93-94 and docs-prune.ts:66: refresh starts commitDocsPruneDeletion from FETCH_HEAD (the owned PR head, which already deletes the prior run's paths) yet passes the full origin/main removable set, so `git rm` fails on already-absent paths and the exact staged-path check would also reject them. Approved architecture (D4 idempotent refresh) is authoritative and clear; this is a conforming implementation+test defect inside task 6's refresh criterion. Fix: build the refresh commit from origin/main (so newly shipped files added after the old branch head are also deleted) and update the owned PR head branch with a lease bound to the fetched head SHA, through the existing guarded push/approval path; replace the mocked-commit refresh test with one that exercises commitDocsPruneDeletion against a real temp repo. Preserves task 6 criteria 1 and 3 (create-path behavior and no main push/merge assertions stay unchanged).
+**Criterion:** S2.3
+**Parent task:** 6
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-6-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-6-r2: src/conductor/test docs-prune-publish.test.ts: add a real-git temp-repo refresh test (prior PR head already deletes run-1 paths, main gains a newly shipped stem) proving the second run succeeds, its commit deletes all current removable paths including the new stem's, issues pull-request.edit and no create, and never pushes to main
+**Gate:** prd-audit
+**Rationale:** Verified (97%) at docs-prune-cli.ts:93-94 and docs-prune.ts:66: refresh starts commitDocsPruneDeletion from FETCH_HEAD (the owned PR head, which already deletes the prior run's paths) yet passes the full origin/main removable set, so `git rm` fails on already-absent paths and the exact staged-path check would also reject them. Approved architecture (D4 idempotent refresh) is authoritative and clear; this is a conforming implementation+test defect inside task 6's refresh criterion. Fix: build the refresh commit from origin/main (so newly shipped files added after the old branch head are also deleted) and update the owned PR head branch with a lease bound to the fetched head SHA, through the existing guarded push/approval path; replace the mocked-commit refresh test with one that exercises commitDocsPruneDeletion against a real temp repo. Preserves task 6 criteria 1 and 3 (create-path behavior and no main push/merge assertions stay unchanged).
+**Criterion:** S2.3
+**Parent task:** 6
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-6-r2 is committed and its targeted tests pass.
