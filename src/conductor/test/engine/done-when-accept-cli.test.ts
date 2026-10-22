@@ -1,9 +1,13 @@
 // Covers: task:15, task:16, task:17
 
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { detectDoneWhenAcceptCommand } from '../../src/cli.js';
 import { dispatchDoneWhenAccept } from '../../src/engine/done-when-accept-cli.js';
+import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 
 const command = {
   kind: 'accept' as const,
@@ -95,5 +99,44 @@ describe('done-when accept CLI', () => {
     expect(code).toBe(0);
     expect(JSON.parse(files.get('/main/.worktrees/done-when-citations/.pipeline/task-status.json')!).tasks[0].doneWhen[2])
       .toMatchObject({ source: 'operator-accepted', reason: command.reason });
+  });
+
+  it('settles a citation obligation only after its last refused check is accepted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'done-when-accept-'));
+    try {
+      await mkdir(join(root, '.pipeline'));
+      await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({
+        plan_ref: 'citation.md',
+        tasks: [{ id: '24', status: 'pending', doneWhen: [
+          { check: 'first check', source: 'judged', verdict: 'asserts' },
+          { check: 'second check', source: 'judged', verdict: 'does-not-assert', reason: 'not enough' },
+          { check: 'third check', source: 'unverified', verdict: 'does-not-assert', reason: 'bounded' },
+        ] }],
+      }));
+      const repairs = createRepairObligationStore(root, join(root, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admitOrReplay('citation-24', {
+        id: 'citation-24', planPath: 'citation.md', taskIds: ['24'],
+        source: { findingId: 'citation-24', authority: 'done-when-citation', instruction: 'repair citations' },
+        baseline: { head: '', tree: '', resolvedTaskIds: [] },
+      });
+      expect(admitted.ok).toBe(true);
+
+      // Keep the real persistence seam while supplying only feature resolution.
+      const first = await dispatchDoneWhenAccept({ ...command, check: 3 }, {
+        resolveWorktree: async () => root, print: vi.fn(), emit: async () => {},
+      });
+      expect(first).toBe(0);
+      let state = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+      expect(state.repairObligations.records['citation-24'].tasks['24'].status).toBe('open');
+
+      const second = await dispatchDoneWhenAccept({ ...command, check: 2 }, {
+        resolveWorktree: async () => root, print: vi.fn(), emit: async () => {},
+      });
+      expect(second).toBe(0);
+      state = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+      expect(state.repairObligations.records['citation-24'].tasks['24'].status).toBe('resolved');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
