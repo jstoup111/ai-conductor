@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:1, task:3, task:6, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -320,14 +320,18 @@ describe('coordinateBuildReviewAdjudication', () => {
     await seedCases(store, {
       version: 'v1', feature,
       cases: [{
-        id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
-        rationale: 'The earlier repair was applied.', resolution: 'resolved',
-        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
-        effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+        id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier repair was applied.', resolution: 'open',
+        sources: [
+          { sourceId, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' },
+          { sourceId: 'testQuality:prior-finding', outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' },
+        ],
+        effect: { id: 'effect-O', kind: 'action', status: 'applied', workOrderId: 'work-order-O' },
       }],
     });
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
     const events: ConductorEvent[] = [];
-    const detail = `case transition rejected: source-linked-by-multiple-cases (cases case-R, case-N; sources ${sourceId})\n` +
+    const detail = `case transition rejected: source-linked-by-multiple-cases (cases case-O, case-N; sources ${sourceId})\n` +
       'persisted case history is valid and unchanged\n' +
       'Inspect with ai-conductor build-review findings --feature feature, then clear with ' +
       'ai-conductor halt clear --feature feature --rationale "<why>" once the proposed transition is admissible ' +
@@ -352,19 +356,20 @@ describe('coordinateBuildReviewAdjudication', () => {
       reason: detail,
       rejectedTransition: {
         invariant: 'source-linked-by-multiple-cases',
-        caseIds: ['case-R', 'case-N'],
+        caseIds: ['case-O', 'case-N'],
         sourceIds: [sourceId],
       },
     }]]);
+    await expect(readFile(remediationCaseStorePath(root), 'utf8')).resolves.toBe(before);
   });
 
   it('reports corrupt flat suppression history through the suppression-store event', async () => {
     const root = await projectRoot();
     const corruptCases = [{
-      id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
-      rationale: 'The earlier repair was applied.', resolution: 'resolved',
+      id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The earlier repair was applied.', resolution: 'open',
       sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
-      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+      effect: { id: 'effect-O', kind: 'action', status: 'applied', workOrderId: 'work-order-O' },
     }, {
       id: 'case-N', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
       rationale: 'The conflicting persisted case is corrupt history.', resolution: 'open',

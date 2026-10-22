@@ -503,7 +503,7 @@ function parseBuildReviewCases(value: unknown):
   // any caller can consume or mutate the state.
   const caseIds = new Set<string>();
   const effectOwners = new Map<string, string>();
-  const sourceOwners = new Map<string, string>();
+  const openSourceOwners = new Map<string, string>();
   const cases: RemediationCaseRecord[] = [];
   for (const caseValue of value) {
     const parsed = parseRemediationCaseDomainRecord(caseValue);
@@ -529,15 +529,16 @@ function parseBuildReviewCases(value: unknown):
       }
       effectOwners.set(record.effect.id, record.id);
     }
+    const sourceIdsInCase = new Set<string>();
     for (const source of record.sources) {
-      // Global, not per-case: a source id repeated across two canonical cases
-      // is ambiguous durable history in exactly the way a repeat within one
-      // case is, and both readers index sources back to a single case.
-      const owner = sourceOwners.get(source.sourceId);
-      if (owner !== undefined) {
-        return owner === record.id
-          ? { ok: false, reason: 'malformed-state' }
-          : {
+      if (sourceIdsInCase.has(source.sourceId)) return { ok: false, reason: 'malformed-state' };
+      sourceIdsInCase.add(source.sourceId);
+      if (record.resolution === 'open') {
+        // Only live build-review cases own a source. Resolved history remains
+        // durable evidence, but a new open case may legitimately re-raise it.
+        const owner = openSourceOwners.get(source.sourceId);
+        if (owner !== undefined) {
+          return {
             ok: false,
             reason: 'malformed-state',
             violation: {
@@ -546,8 +547,9 @@ function parseBuildReviewCases(value: unknown):
               sourceIds: [source.sourceId],
             },
           };
+        }
+        openSourceOwners.set(source.sourceId, record.id);
       }
-      sourceOwners.set(source.sourceId, record.id);
     }
     cases.push(record);
   }

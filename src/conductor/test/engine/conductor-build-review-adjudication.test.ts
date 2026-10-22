@@ -1,4 +1,4 @@
-// Covers: task:4, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
+// Covers: task:1, task:4, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -377,10 +377,13 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
           version: 'v1',
           feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
           cases: [{
-            id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
-            rationale: 'The earlier repair was applied.', resolution: 'resolved',
-            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
-            effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+            id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The earlier repair was applied.', resolution: 'open',
+            sources: [
+              { sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' },
+              { sourceId: 'testQuality:prior-finding', outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' },
+            ],
+            effect: { id: 'effect-O', kind: 'action', status: 'applied', workOrderId: 'work-order-O' },
           }],
         });
         await writeFile(join(root, '.pipeline', 'remediation-cases.json'), persisted, 'utf8');
@@ -401,7 +404,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       haltClass: 'needs-human',
       store: persisted,
       dispatchedBuild: false,
-      rejectedTransition: expect.objectContaining({ caseIds: expect.arrayContaining(['case-R']), sourceIds: [SOURCE_ID] }),
+      rejectedTransition: expect.objectContaining({ caseIds: expect.arrayContaining(['case-O']), sourceIds: [SOURCE_ID] }),
     });
     expect(halt).toContain(rejection.rejectedTransition?.caseIds[1] ?? 'missing-new-case-id');
     expect(halt).toContain('persisted case history is valid and unchanged');
@@ -417,10 +420,10 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
         await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
           version: 'v1', feature,
           cases: [{
-            id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
-            rationale: 'The earlier repair was applied.', resolution: 'resolved',
+            id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The earlier repair was applied.', resolution: 'open',
             sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-10T12:00:00.000Z' }],
-            effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+            effect: { id: 'effect-O', kind: 'action', status: 'applied', workOrderId: 'work-order-O' },
           }, {
             id: 'case-N', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
             rationale: 'The duplicate source is persisted corruption.', resolution: 'open',

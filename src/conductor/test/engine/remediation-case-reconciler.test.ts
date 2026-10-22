@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:5
+// Covers: task:1, task:2, task:3, task:5
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -100,10 +100,12 @@ describe('remediation case reconciler', () => {
       nextState: {
         ...state,
         cases: [durableAction({
-          id: 'case-R',
-          resolution: 'resolved',
-          sources: [{ sourceId: 'source-S', outcome: 'acted', recordedAt: RECORDED_AT }],
-          effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+          id: 'case-O',
+          sources: [
+            { sourceId: 'source-S', outcome: 'acted', recordedAt: RECORDED_AT },
+            { sourceId: 'source-T', outcome: 'acted', recordedAt: RECORDED_AT },
+          ],
+          effect: { id: 'effect-O', kind: 'action', status: 'applied', workOrderId: 'work-order-O' },
         })],
       },
     }));
@@ -123,7 +125,7 @@ describe('remediation case reconciler', () => {
       storeReason: 'rejected-transition',
       violation: {
         invariant: 'source-linked-by-multiple-cases',
-        caseIds: ['case-R', 'case-N'],
+        caseIds: ['case-O', 'case-N'],
         sourceIds: ['source-S'],
       },
     }, before]);
