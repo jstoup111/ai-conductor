@@ -148,6 +148,14 @@ Execution bundles, validated verdicts, and case state are durable evidence under
 > reviewer's unsupported-policy result is a valid structured result under the schema, not a parse
 > failure.
 
+> **Amended 2026-10-19 by #3298:** D7.1's custom-review result contract was the `custom-findings`
+> v1 payload. Custom findings now carry a required `severity` (critical, major, minor, nit), so the
+> fresh custom result contract moves to `v2`. The `custom-v1` finding identity grammar is unchanged
+> and pins its own version, so custom finding ids do not re-key. Persisted `v1` results still parse
+> for reads and are never advisory. `build_review.custom_rubrics.<id>.min_severity` applies the same advisory threshold as
+> built-in rubrics, through one shared threshold helper
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D1-D4).
+
 > **Amended 2026-09-24 by #2735:** D5 required an OS-proven read-only boundary for every member of
 > a custom-policy lap: a Linux bubblewrap mount profile, a two-sided probe that also demanded a
 > nested sandbox, a scratch provider home and an allowlisted environment, and "no prompt-only or

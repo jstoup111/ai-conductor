@@ -86,6 +86,21 @@ current-finding map dropped custom findings.
 Adopt **Option A**. Each numbered decision names the single component that owns its rule. No other
 component may re-implement that rule. Other components consume only its output.
 
+> **Amended 2026-10-23 by #3298:** #3298 adds a case disposition `advisory` and a per-rubric
+> `min_severity` threshold. Each change below stays inside the owner named here.
+>
+> - **Decision 3.** `classifyRemediationCaseReuse` also classifies `advisory` proposals that bind an
+>   `existingCaseId`. A carry-eligible bound case yields `carry` before any advisory reduction.
+> - **Decision 4.** `finalizedBuildReviewSourceIds` also settles a source whose authoritative link
+>   is on an `advisory` case with effect `none`, only while every source rubric's current
+>   `min_severity` stays strictly above the case's adjudicated severity. Resolved thresholds become
+>   a required parameter. The advisory branch is decided before the generic non-`act` branch, after
+>   operator resolution and `carried`.
+> - **Decision 5.** An advisory source is not raised: it is outside the live sources, so on a
+>   mechanically healthy lap it counts as absent for retirement.
+>
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D4, D6, D7.)
+
 1. **Case store v3 carries operator acceptance as state.** `remediation-case-store.ts` gains
    store version `v3`. v2, like v1 today, stays readable and is upgraded on the next write. The
    strict exact-key parser and `mutate()` re-parse remain the only validation and write seam.

@@ -162,7 +162,7 @@ a remediate session every lap it recurs unchanged.
 - Given the case store is unreadable, when the settled-source predicate would run, then the lap fails closed exactly as it does today for an unreadable store.
 
 ### Done When
-- [ ] A finding whose exact id has its authoritative source link on a finalized deferred, rejected, or merged case is removed from the live source set before dispatch.
+- [ ] A finding whose exact id has its authoritative source link on a finalized deferred, rejected, or merged case, or on an advisory case while its rubric threshold still admits it, is removed from the live source set before dispatch.
 - [ ] A lap whose live set is empty after settlement finalizes from durable state without dispatching the judge.
 - [ ] A drifted id, a reserved or failed effect, and an open action case each leave the finding live.
 - [ ] The settled-source predicate performs no write to the case store.

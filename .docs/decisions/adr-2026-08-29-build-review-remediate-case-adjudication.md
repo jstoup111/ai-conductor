@@ -149,6 +149,15 @@ dispatchable work, a deferral has no out-of-scope justification, or any field ex
 Invalid, missing, stale, or contradictory output fails closed and can never publish PASS or consume
 the semantic kickback budget.
 
+> **Amended 2026-10-19 by #3298:** The case disposition vocabulary gains `advisory`, offered only
+> when the lap's context declares a `min_severity` for every source's rubric. An `advisory` case
+> carries an `adjudicatedSeverity` strictly below each source rubric's threshold and not above the
+> reviewer's severity, a non-empty rationale, and effect `none`; anything else is rejected as
+> invalid. It routes no BUILD and charges nothing. Carry takes precedence: an `advisory` proposal
+> bound to a carry-eligible case is classified `carry` like every other disposition
+> (adr-2026-10-20-operator-acceptance-is-durable-case-state D3). Findings below a declared threshold never reach
+> this judgement at all (adr-2026-10-19-build-review-finding-severity-advisory-threshold D4, D6).
+
 > **Amended 2026-10-20 by #3271:** The case-store source outcome vocabulary gains `carried`. It is written only by the reconciler carry lane, never by provider output, and the provider artifact vocabulary is unchanged (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D3).
 
 ### D5 — Durable case state is shared machinery with domain-owned effects
