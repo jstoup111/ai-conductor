@@ -778,6 +778,7 @@ export class Conductor {
   private async writeHaltMarker(
     body: string,
     haltClass: Parameters<typeof writeHaltMarker>[2] | KickbackCapHaltClass | OverScopeHaltClass,
+    haltingStep?: StepName,
   ) {
     // `kickback-cap` is an operator-owned remediation halt. Older readers
     // conservatively treat an unknown class as operator action, so introducing
@@ -787,6 +788,8 @@ export class Conductor {
       body,
       haltClass as Parameters<typeof writeHaltMarker>[2],
       this.events,
+      undefined,
+      haltingStep,
     );
   }
 
@@ -5614,11 +5617,15 @@ export class Conductor {
   }
 
   /** Emit a HALT event with the most recently advanced conductor step. */
-  private async emitLoopHalt(reason: string, prUrl?: string): Promise<void> {
+  private async emitLoopHalt(
+    reason: string,
+    prUrl?: string,
+    haltingStep?: StepName,
+  ): Promise<void> {
     // While the loop is active, the breadcrumb identifies the step that is
     // actually halting. Persisted state can still name the previously settled
     // step, so use it only when no active breadcrumb is available.
-    const candidate = this.dispatchingStep ?? this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
+    const candidate = haltingStep ?? this.dispatchingStep ?? this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
     const step =
       ALL_STEPS.some(({ name }) => name === candidate) ||
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
@@ -9150,10 +9157,14 @@ export class Conductor {
                   `Validation group "${step.name}" halted: remediated as-built findings could not be ` +
                   `projected into the verdict artifact — ${projectionRefusal}`;
                 await this.closeOpenExecutions();
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.writeHaltMarker(
+                  reason + '\n',
+                  'needs-human',
+                  'architecture_review_as_built',
+                );
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await this.emitLoopHalt(reason, prUrl);
+                await this.emitLoopHalt(reason, prUrl, 'architecture_review_as_built');
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -9271,7 +9282,11 @@ export class Conductor {
                   const reason =
                     `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
                     renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
-                  await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    KICKBACK_CAP_HALT_CLASS,
+                    'architecture_review_as_built',
+                  );
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
@@ -9283,7 +9298,7 @@ export class Conductor {
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, 'architecture_review_as_built');
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -9373,7 +9388,11 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    remediationOutcome.haltClass ?? 'needs-human',
+                    'architecture_review_as_built',
+                  );
                   await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
                     state,
@@ -9384,7 +9403,7 @@ export class Conductor {
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, 'architecture_review_as_built');
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -9489,6 +9508,7 @@ export class Conductor {
                 await this.writeHaltMarker(
                   reason + '\n',
                   asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+                  'architecture_review_as_built',
                 );
                 await closeClassifiedPassingMembers();
                 await this.recordGroupRefusal({
@@ -9506,7 +9526,7 @@ export class Conductor {
                   executionContexts: memberExecutionContexts,
                   reason,
                 });
-                await this.emitLoopHalt(reason);
+                await this.emitLoopHalt(reason, undefined, 'architecture_review_as_built');
                 process.off('SIGINT', sigintHandler);
                 if (!this.daemon) process.off('SIGTERM', sigterm);
                 return;
