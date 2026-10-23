@@ -2,6 +2,8 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFile as execFileCallback } from 'node:child_process';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -10,6 +12,10 @@ import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
 import { readLastResolvedCount } from '../../src/engine/task-evidence.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
+import { createProtectedArtifactSeal, PROTECTED_ARTIFACT_SEAL_PATH } from '../../src/engine/protected-artifact-seal.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
+
+const execFile = promisify(execFileCallback);
 
 describe('conductor protected-artifact self-amendment advisory', () => {
   const temporaryDirectories: string[] = [];
@@ -18,6 +24,41 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     vi.restoreAllMocks();
     await Promise.all(temporaryDirectories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
+
+  async function runSealedHalt(paths: Record<string, string>): Promise<{ root: string; worktree: string; halt: string; haltClass: string; dispatched: unknown[][]; seal: string; sealBefore: string; events: boolean }> {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-halt-'));
+    temporaryDirectories.push(root);
+    const worktree = join(root, '.worktrees', 'feat-x');
+    const git = (args: string[]) => execFile('git', args, { cwd: worktree });
+    await mkdir(worktree, { recursive: true });
+    await initTestRepo(worktree);
+    for (const path of Object.keys(paths)) { await mkdir(join(worktree, path, '..'), { recursive: true }); await writeFile(join(worktree, path), 'approved\n'); }
+    await git(['add', '.']); await git(['commit', '-q', '-m', 'approved']);
+    await createProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim() });
+    const sealPath = join(worktree, PROTECTED_ARTIFACT_SEAL_PATH); const seal = await readFile(sealPath, 'utf8');
+    await git(['checkout', '-q', '-b', 'feat-x']);
+    for (const [path, content] of Object.entries(paths)) await writeFile(join(worktree, path), content);
+    await git(['add', '.docs']); await git(['commit', '-q', '-m', 'amend']);
+    await writeFile(join(worktree, 'conduct-state.json'), JSON.stringify({ plan: 'done' }));
+    const run = vi.fn(async () => { throw new Error('unexpected dispatch'); });
+    await new Conductor({ stateFilePath: join(worktree, 'conduct-state.json'), stepRunner: { run }, events: new ConductorEventEmitter(), projectRoot: worktree, config: {} as never, fromStep: 'build', mode: 'default', maxRetries: 2, baseBranch: 'main' }).run();
+    return { root, worktree, halt: await readFile(join(worktree, '.pipeline/HALT'), 'utf8'), haltClass: await readFile(join(worktree, '.pipeline/HALT.class'), 'utf8'), dispatched: run.mock.calls, seal: await readFile(sealPath, 'utf8'), sealBefore: seal, events: await readFile(join(worktree, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false) };
+  }
+
+  it('writes the exact reseal hint for one committed sealed ADR without approval side effects', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-example.md';
+    const result = await runSealedHalt({ [path]: 'corrected\n' });
+    expect({ halt: result.halt, haltClass: result.haltClass, dispatched: result.dispatched, sealUnchanged: result.seal === result.sealBefore, events: result.events }).toEqual({
+      halt: expect.stringContaining(`Protected artifact changed: ${path}\nAttribution: feature-authored`), haltClass: 'protected-artifact', dispatched: [], sealUnchanged: true, events: false,
+    });
+    expect(result.halt).toContain(`  ai-conductor reseal --slug feat-x --path ${path} --reason "«why»" --clear-halt`);
+  }, 30000);
+
+  it('names every changed sealed ADR in the recovery command', async () => {
+    const a = '.docs/decisions/adr-2026-10-17-a.md'; const b = '.docs/decisions/adr-2026-10-17-b.md';
+    const result = await runSealedHalt({ [a]: 'corrected a\n', [b]: 'corrected b\n' });
+    expect(result.halt).toContain(`  ai-conductor reseal --slug feat-x --path ${a} --path ${b} --reason "«why»" --clear-halt`);
+  }, 30000);
 
   it('warns once about every tolerated self-amendment and continues the BUILD dispatch', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-advisory-'));
