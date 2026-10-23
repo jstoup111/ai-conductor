@@ -148,7 +148,7 @@ describe('engine/build-review-contract', () => {
     expect(renderRubricContractShape(descriptor)).toContain('`nested-schema-kind`');
   });
 
-  it('gives a resolved custom member the shared v1 descriptor with schema and identity semantics', () => {
+  it('gives a resolved custom member the shared v2 descriptor with schema and identity semantics', () => {
     const resolved = resolveBuildReviewConfig({
       build_review: {
         custom_rubrics: {
@@ -165,6 +165,7 @@ describe('engine/build-review-contract', () => {
     const customFinding = {
       concernId: 'public-boundary-gap',
       summary: 'The changed public boundary lacks compatibility evidence.',
+      severity: 'minor',
       evidenceLocations: ['src/public-api.ts:8'],
       sourceRegions: [{
         path: 'src/public-api.ts', startLine: 8, endLine: 12,
@@ -172,7 +173,7 @@ describe('engine/build-review-contract', () => {
       }],
     };
     const stamped = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [customFinding],
+      kind: 'custom-findings', version: 'v2', findings: [customFinding],
     }, {
       rubric: custom.id,
       lapId: 'lap-1',
@@ -183,8 +184,8 @@ describe('engine/build-review-contract', () => {
     }, { sourceRegions: customFinding.sourceRegions });
 
     expect(custom.contract).toBe(BUILD_REVIEW_CUSTOM_V1_CONTRACT);
-    expect(custom.contract.output.version).toBe('v1');
-    expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'custom-findings', version: 'v1', findings: [] })).toBe(true);
+    expect(custom.contract.output.version).toBe('v2');
+    expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'custom-findings', version: 'v2', findings: [] })).toBe(true);
     expect(schemaAccepts(custom.contract.output.jsonSchema, { kind: 'unsupported-policy', requirement: 'x' })).toBe(true);
     expect(custom.contract.identity.canonicalize(stamped?.findings[0])?.id).toBe(stamped?.findings[0]?.identity.id);
   });
@@ -428,10 +429,10 @@ describe('engine/build-review-contract', () => {
       }
     });
 
-    it('states the custom-v1 grammar the parser enforces', () => {
+    it('states the custom-v2 grammar the parser enforces', () => {
       const region = { path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: sha, display: 'a' };
-      const valid = { concernId: 'public-boundary-gap', summary: 'A concern.', evidenceLocations: ['src/a.ts:1'], sourceRegions: [region] };
-      const payload = (finding: unknown) => ({ kind: 'custom-findings', version: 'v1', findings: [finding] });
+      const valid = { concernId: 'public-boundary-gap', summary: 'A concern.', severity: 'minor', evidenceLocations: ['src/a.ts:1'], sourceRegions: [region] };
+      const payload = (finding: unknown) => ({ kind: 'custom-findings', version: 'v2', findings: [finding] });
 
       expect(parseBuildReviewCustomReviewerPayload(payload(valid))).toBeDefined();
       expect(schemaAccepts(BUILD_REVIEW_CUSTOM_V1_SCHEMA, payload(valid))).toBe(true);

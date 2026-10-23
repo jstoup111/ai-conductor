@@ -75,9 +75,9 @@ describe('repository-local event-spine build-review rubric', () => {
       reviewedInput: { version: 'v1' as const, contentDigest: HASH },
     };
     const result = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
+      kind: 'custom-findings', version: 'v2', findings: [{
         concernId: 'parallel-event-channel', summary: 'The diff adds a separate reviewer ledger.',
-        evidenceLocations: ['src/conductor/src/engine/reviewer.ts:12'], sourceRegions: [sourceRegion],
+        evidenceLocations: ['src/conductor/src/engine/reviewer.ts:12'], severity: 'major', sourceRegions: [sourceRegion],
       }],
     }, stamp, { sourceRegions: [sourceRegion] });
     if (!result) throw new Error('expected stamped eventSpine finding');

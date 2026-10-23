@@ -611,7 +611,7 @@ describe('build-review dispositions', () => {
         implementationQuality: {
           kind: 'judged', rubric: 'implementationQuality', lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:snapshot',
           contractVersion: 'v3', verdict: 'FAIL', findings: [{
-            concernKind: 'primitive-obsession', summary: 'Reworded recurring report.', evidenceLocations: ['src/state.ts:8'],
+            concernKind: 'primitive-obsession', summary: 'Reworded recurring report.', severity: 'minor', evidenceLocations: ['src/state.ts:8'],
             anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: testContentHash, display: 'changed state model' } },
           }],
         },
@@ -672,8 +672,8 @@ describe('build-review dispositions', () => {
 
   it('persists and matches accepted custom risk only for the exact judged declaration and content', async () => {
     const judged = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
       }],
@@ -690,8 +690,8 @@ describe('build-review dispositions', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
     })!;
     const reReported = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'Reworded report.', confidence: 99,
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'Reworded report.', confidence: 99, severity: 'minor',
         evidenceLocations: ['src/widget.ts:12'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'reworded boundary' }],
       }],
@@ -699,8 +699,8 @@ describe('build-review dispositions', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
     })!;
     const changedContent = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
       }],
@@ -712,8 +712,8 @@ describe('build-review dispositions', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
     })!;
     const changedDeclaration = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: testContentHash, display: 'public boundary' }],
       }],

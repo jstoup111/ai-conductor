@@ -220,7 +220,7 @@ describe('build-review current-lap branch artifacts', () => {
       .toMatchObject({ results: { testQuality: { scopeResolutions: [resolution] } } });
   });
 
-  async function exerciseLiveV3StampBoundary(fs: BuildReviewArtifactFilesystem): Promise<void> {
+  async function exerciseLiveV4StampBoundary(fs: BuildReviewArtifactFilesystem): Promise<void> {
     const projection = {
       rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
       contentDigest: 'sha256:content', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
@@ -232,24 +232,24 @@ describe('build-review current-lap branch artifacts', () => {
     const artifact = await writeBuildReviewBranchArtifact('/feature', {
       rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' },
     }, fs);
-    expect(artifact.result).toMatchObject({ contractVersion: 'v3', lapId, snapshotDigest: 'sha256:snapshot', findings: [] });
+    expect(artifact.result).toMatchObject({ contractVersion: 'v4', lapId, snapshotDigest: 'sha256:snapshot', findings: [] });
   }
 
-  it('stamps a live v3 envelope before parsing a persisted v1 artifact at rest', async () => {
+  it('stamps a live v4 envelope before parsing a persisted v1 artifact at rest', async () => {
     const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
     const fs = filesystem({ [path]: JSON.stringify(persistedV1Artifact) });
 
-    await exerciseLiveV3StampBoundary(filesystem());
+    await exerciseLiveV4StampBoundary(filesystem());
     await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
       result: { contractVersion: 'v1', findings: [{ anchor: { rubric: 'testQuality' } }] },
     });
   });
 
-  it('stamps a live v3 envelope before parsing a persisted v2 artifact at rest', async () => {
+  it('stamps a live v4 envelope before parsing a persisted v2 artifact at rest', async () => {
     const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
     const fs = filesystem({ [path]: JSON.stringify(persistedV2Artifact) });
 
-    await exerciseLiveV3StampBoundary(filesystem());
+    await exerciseLiveV4StampBoundary(filesystem());
     await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
       result: { contractVersion: 'v2', findings: [{ anchor: { rubric: 'testQuality' } }] },
     });

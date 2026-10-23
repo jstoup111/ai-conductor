@@ -47,7 +47,7 @@ const aggregate = joinBuildReviewRubricOutcomes({
     testQuality: {
       kind: 'judged', rubric: 'testQuality', lapId: 'lap-1' as never, snapshotDigest: 'snapshot-1', contractVersion: 'v3', verdict: 'FAIL',
       findings: [{
-        concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', evidenceLocations: ['test/example.test.ts:1'],
+        concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/example.test.ts:1'],
         anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: 'sha256:fixture', display: 'example test' } },
       }],
     },
@@ -86,9 +86,9 @@ function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256
     contentHash: regionHash, display: 'authorization handler',
   };
   const judged = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v1', findings: [{
+    kind: 'custom-findings', version: 'v2', findings: [{
       concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
-      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, severity: 'major', sourceRegions: [sourceRegion],
     }],
   }, {
     rubric: 'security', lapId: 'lap-custom-mixed', declaration,
@@ -128,7 +128,7 @@ const securityAggregate = joinBuildReviewRubricOutcomes({
     security: {
       kind: 'judged', rubric: 'security', lapId: 'lap-security' as never, snapshotDigest: 'snapshot-security', contractVersion: 'v3', verdict: 'FAIL',
       findings: [{
-        concernKind: 'injection', summary: 'A new query interpolates untrusted input.', evidenceLocations: ['src/search.ts:42'],
+        concernKind: 'injection', summary: 'A new query interpolates untrusted input.', severity: 'minor', evidenceLocations: ['src/search.ts:42'],
         anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
       }],
     },
@@ -149,11 +149,11 @@ const mixedAggregate = joinBuildReviewRubricOutcomes({
       kind: 'judged', rubric: 'testQuality', lapId: 'lap-2' as never, snapshotDigest: 'snapshot-2', contractVersion: 'v3', verdict: 'FAIL',
       findings: [
         {
-          concernKind: 'test-insensitive', summary: 'The first changed test is insensitive.', evidenceLocations: ['test/first.test.ts:1'],
+          concernKind: 'test-insensitive', summary: 'The first changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/first.test.ts:1'],
           anchor: { rubric: 'testQuality', locus: { path: 'test/first.test.ts', contentHash: 'sha256:first', display: 'first test' } },
         },
         {
-          concernKind: 'test-insensitive', summary: 'The second changed test is insensitive.', evidenceLocations: ['test/second.test.ts:1'],
+          concernKind: 'test-insensitive', summary: 'The second changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/second.test.ts:1'],
           anchor: { rubric: 'testQuality', locus: { path: 'test/second.test.ts', contentHash: 'sha256:second', display: 'second test' } },
         },
       ],
@@ -1472,11 +1472,11 @@ describe('coordinateBuildReviewAdjudication', () => {
           kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v3', verdict: 'FAIL',
           findings: [
             {
-              concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', evidenceLocations: ['test/example.test.ts:1'],
+              concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/example.test.ts:1'],
               anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: 'sha256:fixture', display: 'example test' } },
             },
             {
-              concernKind: 'test-insensitive', summary: 'An unrelated changed test is insensitive.', evidenceLocations: ['test/unrelated.test.ts:1'],
+              concernKind: 'test-insensitive', summary: 'An unrelated changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/unrelated.test.ts:1'],
               anchor: { rubric: 'testQuality', locus: { path: 'test/unrelated.test.ts', contentHash: 'sha256:unrelated', display: 'unrelated test' } },
             },
           ],

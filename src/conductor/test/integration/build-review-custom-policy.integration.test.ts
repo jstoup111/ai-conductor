@@ -128,7 +128,7 @@ it('records Pi as a skipped reviewPolicyCatalog candidate before invoking Claude
   const root = await fixture();
   const piInvoke = vi.fn();
   const claudeInvoke = vi.fn(async () => {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
   });
   const attempts: unknown[] = [];
@@ -242,7 +242,7 @@ describe('custom build-review policy runner', () => {
     // launcher: a non-self-host custom review must never request bwrap.
     const bwrapSpawns = vi.fn();
     const invoke = vi.fn(async () => {
-      return { success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }), finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] } };
+      return { success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }), finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] } };
     });
     const { run, artifact } = await runOrdinaryCustomMember('claude', invoke);
 
@@ -258,7 +258,7 @@ describe('custom build-review policy runner', () => {
   });
 
   it('keeps the Linux unrestricted custom-member launch identical to a nested-namespaces refusal', async () => {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const nestedNamespacesRefused = successfulInvoke(payload);
     const linuxUnrestricted = successfulInvoke(payload);
     const nested = await runOrdinaryCustomMember('claude', nestedNamespacesRefused);
@@ -279,7 +279,7 @@ describe('custom build-review policy runner', () => {
   });
 
   it('passes read-only custom launches through the ordinary environment and keeps only Codex schema scratch state', async () => {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const claudeInvoke = successfulInvoke(payload);
     const codexInvoke = successfulInvoke(payload);
     const claude = await runOrdinaryCustomMember('claude', claudeInvoke);
@@ -310,7 +310,7 @@ describe('custom build-review policy runner', () => {
     ['codex', 'project'], ['codex', 'global'], ['codex', 'plugin'],
   ] as const)('runs an installed %s %s policy through a prepared candidate', async (providerKey, source) => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
     const preparedEnv = { CODEX_HOME: '/prepared/candidate-home', CANDIDATE_ONLY: providerKey };
     const policyCatalog = vi.fn(async () => [{
@@ -405,7 +405,7 @@ describe('custom build-review policy runner', () => {
 
   it('records the unchanged custom-lap input digests as build-review evidence', async () => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
@@ -431,7 +431,7 @@ describe('custom build-review policy runner', () => {
 
   it('keeps a captured-input verdict when a reviewer writes branch evidence and changes the feature checkout', async () => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
         await writeFile(join(root, 'src', 'a.ts'), 'export const value = 2;\n');
@@ -464,7 +464,7 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const eventLog = join(root, '.pipeline', 'events.jsonl');
     await writeFile(eventLog, '{"type":"step_started","step":"build_review"}\n');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
@@ -505,7 +505,7 @@ describe('custom build-review policy runner', () => {
     await mkdir(packageRoot, { recursive: true });
     await writeFile(join(packageRoot, 'SKILL.md'), '# Original policy\n');
     await writeFile(preExistingEvidence, '{"status":"CURRENT"}\n');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async () => {
       await writeFile(join(materialPath, 'SKILL.md'), '# Mutated during review\n');
       await writeFile(preExistingEvidence, '{"status":"MUTATED"}\n');
@@ -564,7 +564,7 @@ describe('custom build-review policy runner', () => {
         lifecycle: { phase: 'settled', attempt: { logicalStep: 'build_review', id: 'prior-dispatch' }, recoveryCount: 0, outcome: 'failed' },
       })}\n`);
     }
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async (options: InvokeOptions) => {
       await input.duringReview?.(options.selfHost!.env!.CODEX_HOME!);
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
@@ -645,7 +645,7 @@ describe('custom build-review policy runner', () => {
     let setup!: ReturnType<typeof materializedPolicyRunner>;
     setup = materializedPolicyRunner({ root, events, invoke: vi.fn(async () => {
       await writeFile(join(setup.materialized.paths.headPath!, 'frozen.ts'), 'export const frozen = 2;\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
 
@@ -663,7 +663,7 @@ describe('custom build-review policy runner', () => {
     let setup!: ReturnType<typeof materializedPolicyRunner>;
     setup = materializedPolicyRunner({ root, invoke: vi.fn(async () => {
       await writeFile(join(setup.materialized.paths.baselinePath!, 'frozen.ts'), 'export const frozen = -1;\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
 
@@ -720,7 +720,7 @@ describe('custom build-review policy runner', () => {
       const lapRoot = join(root, '.pipeline', 'build-review', `lap-${'a'.repeat(40)}`);
       await mkdir(lapRoot, { recursive: true });
       await writeFile(join(lapRoot, 'new-evidence.json'), '{"new":true}\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
 
@@ -733,7 +733,7 @@ describe('custom build-review policy runner', () => {
       const lapRoot = join(freshRoot, '.pipeline', 'build-review', `lap-${'a'.repeat(40)}`);
       await mkdir(lapRoot, { recursive: true });
       await writeFile(join(lapRoot, 'new-evidence.json'), '{"new":true}\n');
-      const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     }) });
     await expect(unchangedSetup.runner.run('build_review', { complexity_tier: 'M' } as never)).resolves.toMatchObject({ success: true });
@@ -747,7 +747,7 @@ describe('custom build-review policy runner', () => {
     let securityMaterialPath: string | undefined;
     await mkdir(packageRoot, { recursive: true });
     await writeFile(join(packageRoot, 'SKILL.md'), '# Installed policy\n');
-    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const customPayload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
         if (securityMaterialPath === undefined) throw new Error('security policy was not captured before fan-out');
@@ -801,7 +801,7 @@ describe('custom build-review policy runner', () => {
       await mkdir(join(packages, skill), { recursive: true });
       await writeFile(join(packages, skill, 'SKILL.md'), `# ${skill}\n`);
     }
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     let mutated = false;
     const provider: LLMProvider = {
       // The first reviewer to run rewrites the other member's installed
@@ -850,7 +850,7 @@ describe('custom build-review policy runner', () => {
     let securityInvoked!: () => void;
     const securityStarted = new Promise<void>((resolve) => { securityInvoked = resolve; });
     let securityStartedBeforeCustomSettled: boolean | undefined;
-    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const customPayload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
         if (options.prompt.includes('Build Review Security rubric.')) {
@@ -891,7 +891,7 @@ describe('custom build-review policy runner', () => {
     const evidence = join(root, '.pipeline', 'test-suite-evidence.json');
     await writeFile(evidence, '{"status":"CURRENT"}\n');
     let mutateNextCustomReview = true;
-    const customPayload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const customPayload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async (options: InvokeOptions) => {
       if (options.prompt.includes('Build Review Security rubric.')) {
         return { success: true, exitCode: 0, output: '{"findings":[]}', finalStructuredResult: { findings: [] } };
@@ -954,8 +954,8 @@ describe('custom build-review policy runner', () => {
   it('never lets an empty-test-scope built-in PASS replace a custom FAIL', async () => {
     const root = await fixture();
     const frozenLine = 'export const value = 0;\n';
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [{
-      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', confidence: 90,
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', confidence: 90, severity: 'minor',
       evidenceLocations: ['src/a.ts:1'],
       sourceRegions: [{
         path: 'src/a.ts', startLine: 1, endLine: 1, display: 'value',
@@ -982,7 +982,7 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const evidence = join(root, '.pipeline', 'test-suite-evidence.json');
     await writeFile(evidence, '{"status":"CURRENT"}\n');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const runner = emptyTestScopeRunner(root, vi.fn(async () => {
       await writeFile(evidence, '{"status":"MUTATED"}\n');
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
@@ -1001,7 +1001,7 @@ describe('custom build-review policy runner', () => {
       .mockImplementationOnce(async () => undefined)
       .mockImplementationOnce(async () => undefined);
     const materialPath = join(root, '.pipeline', 'build-review', 'policy-material', 'portable');
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
         await writeFile(join(materialPath, 'SKILL.md'), '# Mutated during review\n');
@@ -1039,7 +1039,7 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const skillBody = `# Portable policy\n\n${'Review every changed handler for the portable policy. '.repeat(400)}`;
     const siblingBody = `# Sibling skill\n\n${'Unrelated sibling reviewer instructions. '.repeat(400)}`;
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1088,8 +1088,8 @@ describe('custom build-review policy runner', () => {
     const lapId = parseBuildReviewLapId('lap-head')!;
     const sourceRegion = { path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'b'.repeat(64)}`, display: 'changed value' };
     const stamped = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1',
-      findings: [{ concernId: 'policy-gap', summary: 'The change misses the policy.', evidenceLocations: ['src/a.ts:1'], confidence: 90, sourceRegions: [sourceRegion] }],
+      kind: 'custom-findings', version: 'v2',
+      findings: [{ concernId: 'policy-gap', summary: 'The change misses the policy.', evidenceLocations: ['src/a.ts:1'], confidence: 90, severity: 'major', sourceRegions: [sourceRegion] }],
     }, {
       rubric: 'portable', lapId, declaration: descriptor.declaration, policy: descriptor.effectivePolicy,
       candidate: descriptor.producer, reviewedInput: descriptor.reviewedInput,
@@ -1112,7 +1112,7 @@ describe('custom build-review policy runner', () => {
 
   it('publishes a custom-only outer verdict when effective resolution fails', async () => {
     const root = await fixture();
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload })),
       supportsSessionResume: false,
@@ -1150,7 +1150,7 @@ describe('custom build-review policy runner', () => {
     readonly timeoutSeconds?: number;
     readonly resolver: (projectRoot: string, aggregate: unknown) => Promise<unknown>;
   }): DefaultStepRunner {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: options.findings };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: options.findings };
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
         options.onInvoke?.();
@@ -1273,10 +1273,10 @@ describe('custom build-review policy runner', () => {
         exitCode: 0,
         output: prompt.includes('Build Review Security rubric.')
           ? JSON.stringify({ findings: [] })
-          : JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+          : JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }),
         finalStructuredResult: prompt.includes('Build Review Security rubric.')
           ? { findings: [] }
-          : { kind: 'custom-findings', version: 'v1', findings: [] },
+          : { kind: 'custom-findings', version: 'v2', findings: [] },
       })),
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },

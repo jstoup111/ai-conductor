@@ -190,7 +190,7 @@ describe("build-review semantic cache", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), contractVersion: "v5" as never })).toBeUndefined();
   });
 
-  it("persists the custom descriptor's v1/v1 cache pair without widening the v4 boundary", async () => {
+  it("persists the custom descriptor's v1/v2 cache pair without widening the v4 boundary", async () => {
     const descriptor = {
       version: "v1" as const,
       semanticSkill: "portable-policy",
@@ -204,7 +204,7 @@ describe("build-review semantic cache", () => {
       producer: { provider: "codex", model: "gpt-5.6-sol", effort: "medium" },
     };
     const result = stampBuildReviewCustomJudgedResult(
-      { kind: "custom-findings", version: "v1", findings: [] },
+      { kind: "custom-findings", version: "v2", findings: [] },
       {
         rubric: descriptor.declaration.rubricId, lapId: "lap-a",
         declaration: descriptor.declaration, policy: descriptor.effectivePolicy,

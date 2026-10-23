@@ -126,9 +126,9 @@ function customAggregate() {
     path: 'src/portable.ts', startLine: 4, endLine: 8, contentHash: HASH, display: 'portable boundary',
   };
   const result = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v1', findings: [{
+    kind: 'custom-findings', version: 'v2', findings: [{
       concernId: 'portable-boundary-gap', summary: 'The changed portable boundary lacks its required proof.',
-      evidenceLocations: ['src/portable.ts:4'], sourceRegions: [sourceRegion], confidence: 91,
+      evidenceLocations: ['src/portable.ts:4'], sourceRegions: [sourceRegion], confidence: 91, severity: 'major',
     }],
   }, {
     rubric: 'portable', lapId: LAP_ID, declaration,

@@ -325,9 +325,9 @@ describe('DefaultStepRunner', () => {
     const piInvoke = vi.fn();
     const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
-      output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }),
+      output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }),
       exitCode: 0,
-      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
     }));
     const lifecycleCapability = { synchronousSpawnPermit: true } as const;
     const nativeSchemaCapability = { nativeOutputSchema: true } as const;

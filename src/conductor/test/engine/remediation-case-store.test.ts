@@ -433,7 +433,7 @@ describe('remediation case store', () => {
       suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
     }, {
       ...CASE_STATE,
-      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
+      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, kind: 'confidence', lastSeenLap: 'lap-first' }],
     }],
     ['v2', CASE_STATE, CASE_STATE],
   ] as const)('upgrades a valid %s envelope on its first mutation without inventing optional state', async (_version, legacyState, preservedState) => {

@@ -41,7 +41,7 @@ function judged(findings: readonly unknown[], rest: Record<string, unknown> = {}
 
 function finding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    concernKind: 'test-insensitive', summary: 'The assertion passes against reverted production.',
+    concernKind: 'test-insensitive', severity: 'minor', summary: 'The assertion passes against reverted production.',
     evidenceLocations: ['test/widget.test.ts:8'], anchor: { rubric: 'testQuality', locus }, ...overrides,
   };
 }
@@ -50,12 +50,12 @@ function customPayload(
   findings: readonly unknown[],
   rest: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { kind: 'custom-findings', version: 'v1', findings, ...rest };
+  return { kind: 'custom-findings', version: 'v2', findings, ...rest };
 }
 
 function customFinding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.',
+    concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.', severity: 'minor',
     evidenceLocations: ['src/widget.ts:8'],
     sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
     ...overrides,
@@ -180,14 +180,14 @@ describe('build-review domain', () => {
   });
 
   it('parses the bounded custom finding contract through an effective custom descriptor', () => {
-    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' } as const;
     const payload = customPayload([customFinding({ confidence: 72 })]);
 
-    expect(descriptor).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
+    expect(descriptor).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' });
     expect(parseBuildReviewReviewerPayload(payload, descriptor)).toEqual({
-      kind: 'custom-findings', version: 'v1', findings: [{
+      kind: 'custom-findings', version: 'v2', findings: [{
         concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.',
-        confidence: 72, evidenceLocations: ['src/widget.ts:8'],
+        confidence: 72, severity: 'minor', evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
       }],
     });
@@ -201,7 +201,7 @@ describe('build-review domain', () => {
   });
 
   it('ignores custom reviewer routing claims and rejects other identity claims and invalid bounded finding values', () => {
-    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' } as const;
     const valid = customPayload([customFinding()]);
     for (const field of ['rubric', 'lapId']) {
       expect(parseBuildReviewReviewerPayload({ ...valid, [field]: 'forged' }, descriptor), field).toEqual(valid);
@@ -245,7 +245,7 @@ describe('build-review domain', () => {
   });
 
   it('keeps test-quality specialized and custom unsupported payloads distinct from empty findings', () => {
-    const customDescriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const customDescriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' } as const;
     const builtInDescriptor = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const customEmpty = customPayload([]);
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires a deployment credential' };
@@ -431,7 +431,7 @@ describe('build-review domain', () => {
   it('names each enumerated contract problem in a rejection', () => {
     const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:snapshot' };
     const locus = { path: 'test/widget.test.ts', contentHash: `sha256:${'a'.repeat(64)}`, display: 'widget renders' };
-    const valid = { concernKind: 'test-insensitive', summary: 'Passes against a stub.', evidenceLocations: ['test/widget.test.ts:3'], anchor: { rubric: 'testQuality', locus } };
+    const valid = { concernKind: 'test-insensitive', severity: 'minor', summary: 'Passes against a stub.', evidenceLocations: ['test/widget.test.ts:3'], anchor: { rubric: 'testQuality', locus } };
     const describe = (value: unknown, references?: Parameters<typeof describeBuildReviewJudgedResultRejection>[3]) =>
       describeBuildReviewJudgedResultRejection(value, 'testQuality', expected, references);
 
@@ -447,6 +447,7 @@ describe('build-review domain', () => {
     const envelope = (findings: unknown[]) => ({ kind: 'judged', rubric: 'testQuality', contractVersion: 'v4', findings, ...expected });
     expect(describe(envelope([{ kind: 'test-insensitive', summary: '', evidenceLocations: [], rubric: 'testQuality', locus }]))).toBe([
       'findings[0].concernKind must be a non-empty string (never "kind")',
+      'findings[0].severity must be one of "critical", "major", "minor", "nit"',
       'findings[0].summary must be a non-empty string',
       'findings[0].evidenceLocations must be a non-empty array of "path:line" strings',
       'findings[0].anchor is required: a nested object {"rubric": "testQuality", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"',

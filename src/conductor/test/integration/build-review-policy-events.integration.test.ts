@@ -108,7 +108,7 @@ describe('custom build-review policy event spine', () => {
     for (const type of ['build_review_policy_resolved', 'build_review_policy_failed', 'build_review_cache_hit', 'build_review_rubric_result', 'build_review_outer_verdict'] as const) {
       events.on(type, (event) => renderDaemonEvent(event, (line) => lines.push(line)));
     }
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const provider: LLMProvider = {
       invoke: async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }),
       supportsSessionResume: false,

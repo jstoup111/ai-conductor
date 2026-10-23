@@ -19,7 +19,7 @@ vi.mock('../../src/engine/config.js', async (importOriginal) => ({
 }));
 
 const lapId = parseBuildReviewLapId('lap-current')!;
-const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
+const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', severity: 'minor', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
 const infrastructureAggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {
@@ -954,8 +954,8 @@ describe('build-review accept', () => {
       sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary' }],
     };
     const judged = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
       }],
     }, stamp, references)!;
@@ -1157,8 +1157,8 @@ describe('build-review findings with current custom rubrics', () => {
 
   function customJudgedAggregate(confidence?: number) {
     const judged = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
         evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
         ...(confidence === undefined ? {} : { confidence }),
       }],

@@ -120,7 +120,7 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain('`custom-findings`');
   });
 
-  it('names both custom-v1 payload variants and their fields, which the flat native schema cannot express', () => {
+  it('names both custom-v2 payload variants and their fields, which the flat native schema cannot express', () => {
     const rendered = renderBuildReviewPolicyContract({
       bundle: bundle(),
       question: 'Are boundary changes safe?',
@@ -130,7 +130,7 @@ describe('engine/build-review-policy-contract', () => {
     const variants = rendered.match(/^Payload variants: (.+)$/m)?.[1];
 
     expect(variants).toBeDefined();
-    expect(variants).toContain('{"kind":"custom-findings","version":"v1","findings":[...]}');
+    expect(variants).toContain('{"kind":"custom-findings","version":"v2","findings":[...]}');
     expect(variants).toContain('{"kind":"unsupported-policy","requirement":');
   });
 
@@ -151,9 +151,10 @@ describe('engine/build-review-policy-contract', () => {
       scope: 'Review frozen sources.',
       contract: selectedContract,
     });
-    const empty = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const empty = { kind: 'custom-findings', version: 'v2', findings: [] };
     const finding = {
       concernId: 'public-boundary-gap',
+      severity: 'minor',
       summary: 'The changed public boundary lacks compatibility evidence.',
       evidenceLocations: ['src/public-api.ts:8'],
       sourceRegions: [{
@@ -163,11 +164,11 @@ describe('engine/build-review-policy-contract', () => {
     };
     const withConfidence = { ...finding, confidence: 100 };
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires deployment credentials' };
-    const descriptor = { kind: 'custom', rubric: 'boundaryPolicy', parser: 'custom-findings-v1' } as const;
+    const descriptor = { kind: 'custom', rubric: 'boundaryPolicy', parser: 'custom-findings-v2' } as const;
 
     expect(rendered).toContain('`selected`');
     expect(rendered).toContain('`selected-schema`');
-    expect(rendered).not.toContain("{ kind: 'custom-findings', version: 'v1', findings: [...] }");
+    expect(rendered).not.toContain("{ kind: 'custom-findings', version: 'v2', findings: [...] }");
     expect(parseBuildReviewReviewerPayload(empty, descriptor)).toEqual(empty);
     expect(parseBuildReviewReviewerPayload({ ...empty, findings: [finding, withConfidence] }, descriptor)).toEqual({
       ...empty,

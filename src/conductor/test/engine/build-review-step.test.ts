@@ -1003,7 +1003,7 @@ describe('build_review structured rubric dispatch', () => {
   });
 
   it('carries custom-v1 through the same dispatcher with its policy bundle before skill invocation', async () => {
-    const customInvoke = vi.fn(async (_options: Partial<InvokeOptions>) => ({ success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] } }));
+    const customInvoke = vi.fn(async (_options: Partial<InvokeOptions>) => ({ success: true, output: 'ignored prose', exitCode: 0, finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] } }));
     const custom = await dispatchRubricContract({
       descriptor: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
       invoke: customInvoke,
@@ -1041,7 +1041,7 @@ describe('build_review structured rubric dispatch', () => {
     });
   });
 
-  it('uses only final structured custom-v1 results for engine stamps, refusals, and field-named rejection', async () => {
+  it('uses only final structured custom-v2 results for engine stamps, refusals, and field-named rejection', async () => {
     const source = {
       path: 'src/widget.ts', startLine: 8, endLine: 12,
       contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary',
@@ -1055,10 +1055,10 @@ describe('build_review structured rubric dispatch', () => {
     };
     const finding = {
       concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
-      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: [source],
+      confidence: 72, severity: 'minor', evidenceLocations: ['src/widget.ts:8'], sourceRegions: [source],
     };
     const structuredFinding = {
-      kind: 'custom-findings', version: 'v1', findings: [finding],
+      kind: 'custom-findings', version: 'v2', findings: [finding],
       rubric: 'provider-rubric', lapId: 'provider-lap',
     };
     const invoke = vi.fn(async (_options: Pick<InvokeOptions, 'nativeSchema'>) => ({
@@ -1072,7 +1072,7 @@ describe('build_review structured rubric dispatch', () => {
       options: { prompt: 'review', cwd: '/fixture', interactive: false },
     });
     const golden = stampBuildReviewCustomJudgedResult(
-      { kind: 'custom-findings', version: 'v1', findings: [finding] }, engineStamp, { sourceRegions: [source] },
+      { kind: 'custom-findings', version: 'v2', findings: [finding] }, engineStamp, { sourceRegions: [source] },
     );
     const stamped = dispatched.kind === 'structured'
       ? stampBuildReviewCustomJudgedResult(dispatched.parsed, engineStamp, { sourceRegions: [source] })
@@ -1109,7 +1109,7 @@ describe('build_review structured rubric dispatch', () => {
       success: true,
       output: '{"kind":"unsupported-policy","requirement":"prose B"}',
       exitCode: 0,
-      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
     }));
     const runtimeProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1258,7 +1258,7 @@ describe('build_review structured rubric dispatch', () => {
       success: true,
       output: '{"kind":"custom-findings","version":"v1","findings":[]}',
       exitCode: 0,
-      finalStructuredResult: { kind: 'custom-findings', version: 'v1', findings: [] },
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
     }));
     const externalProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -1390,14 +1390,14 @@ describe('build_review structured rubric dispatch', () => {
     const pipelineDir = join(projectDir, '.custom-pipeline');
     const matchingHash = `sha256:${createHash('sha256').update('alpha\nbeta\n').digest('hex')}`;
     const malformedResponse = {
-      kind: 'custom-findings', version: 'v1', findings: [{
+      kind: 'custom-findings', version: 'v2', findings: [{
         sourceRegions: [
           { path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: matchingHash },
           { path: 'src/a.ts', startLine: 3, endLine: 3, contentHash: `sha256:${'0'.repeat(64)}` },
         ],
       }],
     };
-    const secondMalformedResponse = { kind: 'custom-findings', version: 'v1', findings: 'not-an-array' };
+    const secondMalformedResponse = { kind: 'custom-findings', version: 'v2', findings: 'not-an-array' };
     const invoke = vi.fn()
       .mockResolvedValueOnce({ success: true, output: 'first rejected output', exitCode: 0, finalStructuredResult: malformedResponse })
       .mockResolvedValueOnce({ success: true, output: 'second rejected output', exitCode: 0, finalStructuredResult: secondMalformedResponse });
@@ -1558,7 +1558,7 @@ describe('build_review structured rubric dispatch', () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-root-rejection-retention-'));
     const pipelineDir = join(projectDir, '.custom-pipeline');
     const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
-    const payload = { kind: 'custom-findings', version: 'v1', findings: 'not-an-array' };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: 'not-an-array' };
     const fixture = customRetentionFixture(projectDir, payload);
     try {
       await fixture.dispatch(pipelineDir, lapId);
@@ -1574,7 +1574,7 @@ describe('build_review structured rubric dispatch', () => {
   it('judges custom findings when an adapter omits the optional empty findings field', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-omitted-findings-'));
     const pipelineDir = join(projectDir, '.custom-pipeline');
-    const fixture = customRetentionFixture(projectDir, { kind: 'custom-findings', version: 'v1' });
+    const fixture = customRetentionFixture(projectDir, { 'v2' });
     try {
       const outcome = await fixture.dispatch(pipelineDir, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
 
@@ -1605,8 +1605,8 @@ describe('build_review structured rubric dispatch', () => {
 
   function customFindingsWithMismatchedRegion() {
     return {
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', evidenceLocations: ['src/a.ts:1'],
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', severity: 'minor', evidenceLocations: ['src/a.ts:1'],
         sourceRegions: [{ path: 'src/a.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'0'.repeat(64)}`, display: 'alpha\nbeta' }],
       }],
     };
@@ -1614,8 +1614,8 @@ describe('build_review structured rubric dispatch', () => {
 
   function customFindingsWithMatchingRegion() {
     return {
-      kind: 'custom-findings', version: 'v1', findings: [{
-        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', evidenceLocations: ['src/a.ts:1'],
+      kind: 'custom-findings', version: 'v2', findings: [{
+        concernId: 'custom-policy-gap', summary: 'The custom policy lacks evidence.', severity: 'minor', evidenceLocations: ['src/a.ts:1'],
         sourceRegions: [{
           path: 'src/a.ts', startLine: 1, endLine: 2,
           contentHash: `sha256:${createHash('sha256').update('alpha\nbeta\n').digest('hex')}`, display: 'alpha\nbeta',
