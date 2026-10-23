@@ -130,6 +130,18 @@ export interface CurrentBuildReviewSourceLink {
   readonly link: RemediationCaseSourceLink;
 }
 
+/** Resolved severity policy for one rubric. Absent severity admits no advisory settlement. */
+export interface BuildReviewSeverityThresholdPolicy {
+  readonly min_severity?: BuildReviewSeverity;
+}
+
+/** Projects resolved severity floors into the policy shape case settlement reads. */
+export function buildReviewSeverityThresholdPolicies(
+  thresholds: Readonly<Partial<Record<string, BuildReviewSeverity>>>,
+): Readonly<Partial<Record<string, BuildReviewSeverityThresholdPolicy>>> {
+  return Object.fromEntries(Object.entries(thresholds).map(([rubric, min_severity]) => [rubric, { min_severity }]));
+}
+
 /**
  * Select the single current link for every rubric-namespaced source. Open
  * cases take precedence over resolved history; otherwise the latest recorded
@@ -162,7 +174,7 @@ export function currentBuildReviewSourceLinks(
  */
 export function finalizedBuildReviewSourceIds(
   cases: readonly RemediationCaseRecord[],
-  thresholds: Readonly<Partial<Record<string, BuildReviewSeverity>>> = {},
+  thresholdPolicies: Readonly<Partial<Record<string, BuildReviewSeverityThresholdPolicy>>>,
 ): ReadonlySet<string> {
   return new Set([...currentBuildReviewSourceLinks(cases)].flatMap(([sourceId, { record, link }]) =>
     record.operatorResolution !== undefined
@@ -172,7 +184,7 @@ export function finalizedBuildReviewSourceIds(
       : record.disposition === 'advisory'
         ? record.adjudicatedSeverity !== undefined && sourceId.includes(':') && (() => {
           const rubric = sourceId.slice(0, sourceId.indexOf(':'));
-          const threshold = thresholds[rubric];
+          const threshold = thresholdPolicies[rubric]?.min_severity;
           return threshold !== undefined && isBelowSeverityThreshold(record.adjudicatedSeverity, threshold);
         })()
           ? [sourceId]

@@ -451,7 +451,7 @@ describe('live build-review effective resolver', () => {
       const open = caseRecord(sourceId, 'act', { kind: 'action', status: 'reserved' });
       const cases = [resolved, open];
 
-      expect(finalizedBuildReviewSourceIds(cases as never)).toEqual(new Set());
+      expect(finalizedBuildReviewSourceIds(cases as never, {})).toEqual(new Set());
       await expect(withCases(aggregate(), cases)).resolves.toMatchObject({ ok: true, effective: {
         verdict: 'FAIL', unresolvedFindingIds: [builtinId],
       } });

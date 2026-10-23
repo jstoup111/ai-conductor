@@ -20,7 +20,7 @@ import {
   type BuildReviewReducedCoverageListResult,
 } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION, isBelowSeverityThreshold, type BuildReviewSeverity } from './build-review-domain.js';
-import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { buildReviewSeverityThresholdPolicies, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
@@ -234,7 +234,7 @@ async function readSettledBuildReviewSourceIds(
     const create = deps.createCaseStore ?? ((root: string, caseFeature: BuildReviewFeatureIdentity, child?: ChildId) =>
       new RemediationCaseStore(root, caseFeature, child === undefined ? {} : { child }));
     const read = await create(projectRoot, feature, deps.child).read();
-    if (read.ok) return finalizedBuildReviewSourceIds(read.state.cases, deps.minSeverity ?? {});
+    if (read.ok) return finalizedBuildReviewSourceIds(read.state.cases, buildReviewSeverityThresholdPolicies(deps.minSeverity ?? {}));
     deps.log?.(`remediation case state unavailable (${read.reason}); no finding treated as settled`);
   } catch {
     deps.log?.('remediation case state unavailable; no finding treated as settled');
