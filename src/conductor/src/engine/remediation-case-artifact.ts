@@ -180,8 +180,8 @@ function parseSourceRow(value: unknown, mode: RemediationCaseJudgement['mode']):
     return { ok: false, reason: 'operator-owned-carried-source-outcome' };
   }
   if (!oneOf(value.outcome, mode === 'case-v2'
-    ? ['acted', 'deferred', 'rejected', 'refuted', 'merged', 'escalate'] as const
-    : ['acted', 'deferred', 'rejected', 'refuted', 'merged'] as const)) {
+    ? ['acted', 'deferred', 'rejected', 'refuted', 'advisory', 'merged', 'escalate'] as const
+    : ['acted', 'deferred', 'rejected', 'refuted', 'advisory', 'merged'] as const)) {
     return { ok: false, reason: 'invalid-source-outcome' };
   }
   return { ok: true, value: { sourceId: value.sourceId, outcome: value.outcome, caseRef: value.caseRef } };

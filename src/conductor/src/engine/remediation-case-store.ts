@@ -427,13 +427,13 @@ function sameFeature(left: RemediationCaseFeatureIdentity, right: RemediationCas
 function parseSourceLink(value: unknown): RemediationCaseSourceLink | undefined {
   if (!isRecord(value) || !exactKeys(value, ['sourceId', 'outcome', 'recordedAt']) ||
     !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !validTimestamp(value.recordedAt) ||
-    !oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'refuted', 'merged', 'carried', 'escalate'] as const)) return undefined;
+    !oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'refuted', 'advisory', 'merged', 'carried', 'escalate'] as const)) return undefined;
   return { sourceId: value.sourceId, outcome: value.outcome, recordedAt: value.recordedAt };
 }
 
 function parseEffect(value: unknown, disposition: RemediationCaseDisposition): RemediationCaseEffect | undefined {
   if (!isRecord(value)) return undefined;
-  if (disposition === 'reject' || disposition === 'escalate' || disposition === 'refute' && exactKeys(value, ['kind']) && value.kind === 'none') {
+  if (disposition === 'reject' || disposition === 'advisory' || disposition === 'escalate' || disposition === 'refute' && exactKeys(value, ['kind']) && value.kind === 'none') {
     return exactKeys(value, ['kind']) && value.kind === 'none' ? { kind: 'none' } : undefined;
   }
   const expectedKind = disposition === 'act' ? 'action' : 'deferral';
