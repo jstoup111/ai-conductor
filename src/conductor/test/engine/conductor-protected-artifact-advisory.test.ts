@@ -12,7 +12,11 @@ import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
 import { readLastResolvedCount } from '../../src/engine/task-evidence.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
-import { createProtectedArtifactSeal, PROTECTED_ARTIFACT_SEAL_PATH } from '../../src/engine/protected-artifact-seal.js';
+import {
+  createProtectedArtifactSeal,
+  PROTECTED_ARTIFACT_SEAL_PATH,
+  verifyProtectedArtifactSeal,
+} from '../../src/engine/protected-artifact-seal.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 const execFile = promisify(execFileCallback);
@@ -25,7 +29,7 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     await Promise.all(temporaryDirectories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  async function runSealedHalt(paths: Record<string, string>): Promise<{ root: string; worktree: string; halt: string; haltClass: string; dispatched: unknown[][]; seal: string; sealBefore: string; events: boolean }> {
+  async function runSealedHalt(paths: Record<string, string>, mutate?: (worktree: string) => Promise<void>): Promise<{ root: string; worktree: string; halt: string; haltClass: string; dispatched: unknown[][]; seal: string; sealBefore: string; events: boolean; expectedReason: string }> {
     const root = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-halt-'));
     temporaryDirectories.push(root);
     const worktree = join(root, '.worktrees', 'feat-x');
@@ -39,10 +43,17 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     await git(['checkout', '-q', '-b', 'feat-x']);
     for (const [path, content] of Object.entries(paths)) await writeFile(join(worktree, path), content);
     await git(['add', '.docs']); await git(['commit', '-q', '-m', 'amend']);
+    await mutate?.(worktree);
     await writeFile(join(worktree, 'conduct-state.json'), JSON.stringify({ plan: 'done' }));
+    const verdict = await verifyProtectedArtifactSeal({
+      projectRoot: worktree,
+      featureDesc: 'feat-x',
+      baseBranch: 'main',
+    });
+    if (verdict.ok) throw new Error('fixture must refuse the protected artifact seal');
     const run = vi.fn(async () => { throw new Error('unexpected dispatch'); });
     await new Conductor({ stateFilePath: join(worktree, 'conduct-state.json'), stepRunner: { run }, events: new ConductorEventEmitter(), projectRoot: worktree, config: {} as never, fromStep: 'build', mode: 'default', maxRetries: 2, baseBranch: 'main' }).run();
-    return { root, worktree, halt: await readFile(join(worktree, '.pipeline/HALT'), 'utf8'), haltClass: await readFile(join(worktree, '.pipeline/HALT.class'), 'utf8'), dispatched: run.mock.calls, seal: await readFile(sealPath, 'utf8'), sealBefore: seal, events: await readFile(join(worktree, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false) };
+    return { root, worktree, halt: await readFile(join(worktree, '.pipeline/HALT'), 'utf8'), haltClass: await readFile(join(worktree, '.pipeline/HALT.class'), 'utf8'), dispatched: run.mock.calls, seal: await readFile(sealPath, 'utf8'), sealBefore: seal, events: await readFile(join(worktree, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false), expectedReason: verdict.reason };
   }
 
   it('writes the exact reseal hint for one committed sealed ADR without approval side effects', async () => {
@@ -51,14 +62,87 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     expect({ halt: result.halt, haltClass: result.haltClass, dispatched: result.dispatched, sealUnchanged: result.seal === result.sealBefore, events: result.events }).toEqual({
       halt: expect.stringContaining(`Protected artifact changed: ${path}\nAttribution: feature-authored`), haltClass: 'protected-artifact', dispatched: [], sealUnchanged: true, events: false,
     });
-    expect(result.halt).toContain(`  ai-conductor reseal --slug feat-x --path ${path} --reason "«why»" --clear-halt`);
+    expect(result.halt.trimEnd().split('\n')).toEqual([
+      `Protected artifact changed: ${path}`,
+      expect.stringMatching(/^Attribution: feature-authored \(committed on this branch since merge-base /),
+      'Approve this change as an operator amendment by running, from the repository root that contains .worktrees/feat-x, in an interactive terminal:',
+      `  ai-conductor reseal --slug feat-x --path ${path} --reason "«why»" --clear-halt`,
+    ]);
   }, 30000);
 
   it('names every changed sealed ADR in the recovery command', async () => {
     const a = '.docs/decisions/adr-2026-10-17-a.md'; const b = '.docs/decisions/adr-2026-10-17-b.md';
     const result = await runSealedHalt({ [a]: 'corrected a\n', [b]: 'corrected b\n' });
+    expect(result.halt.split('\n')[0]).toBe(`Protected artifact changed: ${a}`);
     expect(result.halt).toContain(`  ai-conductor reseal --slug feat-x --path ${a} --path ${b} --reason "«why»" --clear-halt`);
   }, 30000);
+
+  it.each(['added', 'uncommitted', 'deleted'] as const)('keeps a refused %s artifact halt byte-for-byte legacy with no hint', async (kind) => {
+    const path = '.docs/decisions/adr-a.md';
+    const result = await runSealedHalt({ [path]: 'corrected\n' }, async (worktree) => {
+      if (kind === 'added') { await writeFile(join(worktree, '.docs/decisions/adr-new.md'), 'new\n'); await execFile('git', ['add', '.docs'], { cwd: worktree }); await execFile('git', ['commit', '-q', '-m', 'add'], { cwd: worktree }); }
+      if (kind === 'uncommitted') await writeFile(join(worktree, path), 'dirty\n');
+      if (kind === 'deleted') { await rm(join(worktree, path)); await execFile('git', ['add', '-A'], { cwd: worktree }); await execFile('git', ['commit', '-q', '-m', 'delete'], { cwd: worktree }); }
+    });
+    expect({
+      halt: result.halt.replace(/\n+$/, ''),
+      hint: result.halt.includes('ai-conductor reseal'),
+      haltClass: result.haltClass,
+      dispatches: result.dispatched,
+    }).toEqual({
+      halt: result.expectedReason,
+      hint: false,
+      haltClass: 'protected-artifact',
+      dispatches: [],
+    });
+  }, 30000);
+
+  it.each([
+    ['outside a worktree', async (root: string) => root],
+    ['with no seal file', async (root: string) => join(root, '.worktrees', 'feat-x')],
+    ['with a seal but no git repository', async (root: string) => {
+      const worktree = join(root, '.worktrees', 'feat-x');
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(worktree, PROTECTED_ARTIFACT_SEAL_PATH),
+        JSON.stringify({ version: 2, baselineCommit: 'approved', protectedArtifacts: [], rebaselines: [] }),
+      );
+      return worktree;
+    }],
+  ] as const)('keeps mocked failed seal verdict byte-for-byte legacy %s', async (_name, resolveProjectRoot) => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-advisory-'));
+    temporaryDirectories.push(root);
+    const projectRoot = await resolveProjectRoot(root);
+    await mkdir(projectRoot, { recursive: true });
+    const statePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(statePath, JSON.stringify({ plan: 'done' }), 'utf8');
+    const reason = 'Protected artifact changed: .docs/plans/feature.md\nAttribution: feature-authored (committed on this branch since merge-base approved)';
+    vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved');
+    vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
+      ok: false,
+      reason,
+      path: '.docs/plans/feature.md',
+    });
+    const run = vi.fn(async () => { throw new Error('unexpected dispatch after protected-artifact seal failure'); });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      config: {} as never,
+      fromStep: 'build',
+      mode: 'default',
+      maxRetries: 2,
+      baseBranch: 'main',
+    }).run();
+
+    expect({
+      halt: (await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).replace(/\n+$/, ''),
+      haltClass: await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8'),
+      dispatches: run.mock.calls,
+    }).toEqual({ halt: reason, haltClass: 'protected-artifact', dispatches: [] });
+  });
 
   it('warns once about every tolerated self-amendment and continues the BUILD dispatch', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-advisory-'));
