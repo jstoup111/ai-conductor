@@ -157,6 +157,20 @@ discipline produced false blocks.
 > `ConductorEvent` listing each citation's task, check, and verdict (or demotion cause). Each
 > `done-when accept` emits one naming the task, check, and reason. Both have `EVENT_SINKS` rows.
 
+> **Amended 2026-10-23 by #3190:** untagged checks still close as `reported`, so a remediation task
+> could close on a cited commit that never made its repair. D1-D18 stand. D13's BUILD boundary now
+> also hosts a second, sibling judgement, as follows.
+>
+> D19. **Remediation tasks are judged at the same boundary, after citations.** At the BUILD session
+> boundary of D13, once the citation judgement and its settlement and admissions are done and before
+> the completion predicate is evaluated, the conductor runs the remediation-closure judgement of
+> `adr-2026-10-21-remediation-closure-judgement` over completed engine-appended `rem-*` tasks. A task
+> with a `pending-judgement` record or an open citation obligation is not judged in that pass. Its
+> reopen withholds completion like a D14 refusal, with its own fixed reason prefix after any citation
+> lines, and like D8's nudge and D14's refusal it never increments `noEvidenceAttempts`. D8's
+> "BUILD completes on task resolution as before" therefore also requires that no remediation-closure
+> reopen is open. Close records, the closed source set of D17 and `prd_audit`'s input are unchanged.
+
 ## Consequences
 
 ### Positive
