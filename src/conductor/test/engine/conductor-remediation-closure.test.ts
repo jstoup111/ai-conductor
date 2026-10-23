@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { runRemediationClosurePass } from '../../src/engine/remediation-closure-judgement.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -186,5 +188,90 @@ describe('BUILD remediation-closure judgement boundary', () => {
       events: new ConductorEventEmitter(), mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
 
     expect(closures).not.toHaveBeenCalled();
+  });
+
+  it('judges only the execution child\'s remediation close in a stacked feature', async () => {
+    const planPath = join(root, '.docs', 'plans', 'closure.md');
+    const planText = await readFile(planPath, 'utf8');
+    await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1, slug: 'closure', runId: 'run', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { '4': 2 }, titles: ['child two'] },
+    }));
+    await writeFile(planPath, planText.replace(
+      'Named repair one.', 'Named repair one.\n\n**Child:** 1',
+    ).replace(
+      'Named repair two.', 'Named repair two.\n\n**Child:** 2',
+    ));
+    const closures = vi.fn(async (input: { candidates: Array<{ taskId: string }> }) => ({
+      kind: 'valid' as const,
+      verdicts: input.candidates.map(({ taskId }) => ({ taskId, verdict: 'resolved' as const, rationale: 'Present.' })),
+    }));
+
+    const status = { tasks: [
+      { id: 'rem-as-built-R5', status: 'completed', doneWhen: [{ check: 'Repair one is committed.', evidence: 'reported', source: 'reported' }] },
+      { id: 'rem-as-built-R11', status: 'completed', doneWhen: [{ check: 'Repair two is committed.', evidence: 'reported', source: 'reported' }] },
+    ] };
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(status));
+    await runRemediationClosurePass({
+      projectRoot: root, planPath, planText: await readFile(planPath, 'utf8'),
+      status,
+      scopeTaskIds: ['rem-as-built-R5', 'rem-as-built-R11'], activeChild: parseChildId(2)!, dispatch: closures,
+    });
+
+    expect(closures).toHaveBeenCalledWith(expect.objectContaining({
+      candidates: [expect.objectContaining({ taskId: 'rem-as-built-R11' })],
+    }));
+  });
+
+  it.each([
+    ['a rebase rewrite', (row: Record<string, unknown>) => ({ ...row, commit: 'new-sha', startHead: 'new-head' })],
+    ['done-when acceptance', (row: Record<string, unknown>) => ({ ...row, doneWhen: [{ ...(row.doneWhen as object[])[0], source: 'operator-accepted' }] })],
+    ['citation settlement', (row: Record<string, unknown>) => ({ ...row, doneWhen: [{ ...(row.doneWhen as object[])[0], source: 'unverified' }] })],
+  ])('does not rejudge an unchanged close after %s', async (_caseName, rewrite) => {
+    const planPath = join(root, '.docs', 'plans', 'closure.md');
+    const planText = await readFile(planPath, 'utf8');
+    const row = { id: 'rem-as-built-R5', status: 'completed', commit: 'old-sha', startHead: 'old-head', doneWhen: [
+      { check: 'Repair one is committed.', evidence: 'reported deadbee', source: 'reported' },
+    ] };
+    const closures = vi.fn(async (input: { candidates: Array<{ taskId: string }> }) => ({
+      kind: 'valid' as const,
+      verdicts: input.candidates.map(({ taskId }) => ({ taskId, verdict: 'resolved' as const, rationale: 'Present.' })),
+    }));
+    const pass = async (status: unknown) => {
+      await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(status));
+      return runRemediationClosurePass({
+        projectRoot: root, planPath, planText, status, scopeTaskIds: ['rem-as-built-R5'], dispatch: closures,
+      });
+    };
+
+    await pass({ tasks: [row] });
+    await pass({ tasks: [rewrite(row)] });
+
+    expect(closures).toHaveBeenCalledOnce();
+  });
+
+  it('does not judge a trailer-restored remediation task until it has fresh Done-when evidence', async () => {
+    const planPath = join(root, '.docs', 'plans', 'closure.md');
+    const planText = await readFile(planPath, 'utf8');
+    const closures = vi.fn(async (input: { candidates: Array<{ taskId: string }> }) => ({
+      kind: 'valid' as const,
+      verdicts: input.candidates.map(({ taskId }) => ({ taskId, verdict: 'resolved' as const, rationale: 'Present.' })),
+    }));
+    const pass = async (status: unknown) => {
+      await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify(status));
+      return runRemediationClosurePass({
+        projectRoot: root, planPath, planText, status, scopeTaskIds: ['rem-as-built-R5'], dispatch: closures,
+      });
+    };
+
+    await pass({ tasks: [{ id: 'rem-as-built-R5', status: 'completed', restored_from: 'task-trailer', doneWhen: [] }] });
+    await pass({ tasks: [{ id: 'rem-as-built-R5', status: 'completed', doneWhen: [
+      { check: 'Repair one is committed.', evidence: 'fresh close', source: 'reported' },
+    ] }] });
+
+    expect(closures).toHaveBeenCalledOnce();
+    expect(closures).toHaveBeenCalledWith(expect.objectContaining({
+      candidates: [expect.objectContaining({ taskId: 'rem-as-built-R5' })],
+    }));
   });
 });
