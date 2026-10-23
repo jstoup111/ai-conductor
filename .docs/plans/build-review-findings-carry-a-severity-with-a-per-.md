@@ -58,7 +58,7 @@ This plan adds the following, in 21 tasks:
 
 ## Prerequisites
 
-- jstoup111/ai-conductor#3271 is built first, recorded at land as a dependency. Its shared acceptance resolver lives in the same reducers and coordinator, so this plan's reducer edits land on top of it.
+- jstoup111/ai-conductor#3271 shipped first (#3367, #3358). Its carry decision (`classifyRemediationCaseReuse`), carry read (`finalizedBuildReviewSourceIds`) and retirement predicate (`retiresOpenBuildReviewCase`) are the seams this plan's coordinator, settlement and reducer edits build on (`adr-2026-10-20-operator-acceptance-is-durable-case-state` decisions 3-5).
 - No change to this repository's `.ai-conductor/config.yml`.
 
 ## Tasks
@@ -415,11 +415,12 @@ This plan adds the following, in 21 tasks:
 **Steps:**
 1. Write failing tests:
    - in `build-review-adjudication-coordinator.test.ts`, a mixed lap of one advisory and one unresolved finding produces live sources containing only the unresolved id, and the judgement validator demands no outcome for the advisory id;
-   - in `conductor-build-review-adjudication.test.ts`, a lap whose every finding is advisory completes build_review as done with no remediate dispatch, no `kickback` event and an unchanged kickback ledger.
+   - in `conductor-build-review-adjudication.test.ts`, a lap whose every finding is advisory completes build_review as done with no remediate dispatch, no `kickback` event and an unchanged kickback ledger;
+   - in `conductor-build-review-adjudication.test.ts`, an open action case with a `failed` effect whose only source is advisory retires by absence on a mechanically healthy lap and stays open on a lap with an uncovered infrastructure failure.
 2. Verify RED.
 3. Implement:
    - pass advisory ids alongside suppressed ids from the conductor raw-FAIL branch into `applyBuildReviewOutcome` and the coordinator;
-   - exclude them in `allOperatorResolved` and the live-source filter.
+   - exclude them in `allOperatorResolved` and the live-source filter, so they are also outside the raised source ids that `retiresOpenBuildReviewCase` reads.
 4. Verify GREEN.
 5. Commit.
 
@@ -427,6 +428,8 @@ This plan adds the following, in 21 tasks:
 - [test] The adjudication coordinator's live-source set for a lap with one advisory and one unresolved finding contains only the unresolved finding, and the source-complete validator accepts a judgement that names no outcome for the advisory finding.
 - [test] Through the conductor's build_review gate, a lap whose every finding is advisory records the step done, dispatches no remediate session, emits no kickback event, and leaves the kickback ledger unchanged.
 - [test] A lap with an advisory and an unresolved finding that routes BUILD charges the kickback ledger once, for the unresolved finding's action case only.
+- [test] Through the conductor's build_review gate on a mechanically healthy lap, an open action case with a `failed` effect whose only source is advisory under threshold major is resolved by absence, and exactly one `remediation_case_reconciled` event is persisted for it.
+- [test] Through the conductor's build_review gate on a lap with an uncovered infrastructure failure, the same open action case stays open and no `remediation_case_reconciled` event is written for it.
 
 **Files likely touched:**
 - src/conductor/src/engine/build-review-adjudication-coordinator.ts
@@ -625,12 +628,12 @@ This plan adds the following, in 21 tasks:
 1. Write failing tests:
    - in `build-review-adjudication.test.ts`, a lap whose only live source is resolved by an advisory case reduces to PASS with no BUILD route;
    - in `conductor-build-review-adjudication.test.ts`, the same lap through the conductor emits no kickback, leaves the ledger unchanged, and leaves the raw aggregate's reviewer severity unchanged;
-   - in `build-review-adjudication-coordinator.test.ts`, a judgement that binds a live finding to a case holding an operator-accepted source while proposing `advisory` resolves it as carried acceptance (#3271), leaves the bound case's disposition unchanged, and lists no advisory finding.
+   - in `build-review-adjudication-coordinator.test.ts`, a judgement that binds a live finding to a carry-eligible case while proposing `advisory` is classified `carry`, links the source as `carried`, leaves the bound case's disposition unchanged, and lists no advisory finding.
 2. Verify RED.
 3. Implement:
    - in `reduceBuildReviewAdjudication`, treat `advisory` as a finalized non-action case with an exhaustive disposition match;
    - in `remediation-case-effects.ts`, make `advisory` produce no effect;
-   - in the coordinator, keep #3271's carry decision ahead of the advisory reduction, so a carried finding is never recorded as advisory (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1).
+   - add `advisory` to the proposals `classifyRemediationCaseReuse` classifies, so its `carry` result is decided before the advisory reduction and a carried finding is never recorded as advisory (`adr-2026-10-20-operator-acceptance-is-durable-case-state` decision 3).
 4. Verify GREEN.
 5. Commit.
 
@@ -638,13 +641,14 @@ This plan adds the following, in 21 tasks:
 - [test] `reduceBuildReviewAdjudication` returns route pass, with no build route, for a lap whose only live source is covered by an advisory case.
 - [test] Through the conductor's build_review gate, a lap whose major finding the judgement downgrades to advisory emits no kickback event, leaves the kickback ledger unchanged, and leaves that finding's reviewer severity in the raw aggregate as major.
 - [test] Through the adjudication coordinator, which supplies each source's rubric and reviewer severity to `validateRemediationCaseGraph`, an advisory case whose adjudicatedSeverity exceeds the source's reviewer severity, or whose source rubric has no threshold, is rejected through the existing invalid-judgement path.
-- [test] Through the adjudication coordinator, under threshold major, a live major finding that the judgement binds by `existingCaseId` to a case holding an operator-accepted source while proposing an otherwise valid `advisory` case resolves as carried acceptance through `resolveBuildReviewAcceptance`, the bound case's disposition is unchanged, and the finding is absent from the lap's advisory findings.
+- [test] Through the adjudication coordinator, under threshold major, a live major finding that the judgement binds by `existingCaseId` to a carry-eligible case (resolved, with an effective acceptance origin from an earlier lap) while proposing an otherwise valid `advisory` case is classified `carry` by `classifyRemediationCaseReuse`, its source is linked as `carried`, the bound case's disposition is unchanged, and the finding is absent from the lap's advisory findings.
 - [test] An admitted advisory case reserves no effect id in the `remediation-case-effects.ts` outbox, and `remediation_adjudication_completed` for that lap lists an empty new effect id list.
 
 **Files likely touched:**
 - src/conductor/src/engine/build-review-adjudication.ts
 - src/conductor/src/engine/remediation-case-effects.ts
 - src/conductor/src/engine/build-review-adjudication-coordinator.ts
+- src/conductor/src/engine/remediation-case-reconciler.ts
 - src/conductor/test/engine/build-review-adjudication.test.ts
 - src/conductor/test/engine/conductor-build-review-adjudication.test.ts
 - src/conductor/test/engine/build-review-adjudication-coordinator.test.ts
@@ -682,19 +686,20 @@ This plan adds the following, in 21 tasks:
 
 **Steps:**
 1. Write failing tests:
-   - in `remediation-case-store.test.ts`, `finalizedBuildReviewSourceIds(cases, thresholds)` includes an advisory case's source at adjudicated severity minor under threshold major, and excludes it at threshold minor or with no threshold;
+   - in `remediation-case-store.test.ts`, `finalizedBuildReviewSourceIds(cases, thresholds)` includes an advisory case's source at adjudicated severity minor under threshold major, and excludes it at threshold minor or with no threshold, although the case's disposition is not `act` and its effect is `none`;
    - in `build-review-adjudication-coordinator.test.ts`, a recurring exact-id source of a settled advisory case is removed from live sources with no remediate dispatch, and `remediation_adjudication_completed` is emitted with that case id and no new effect ids;
    - a drifted id is live;
    - the predicate leaves the store byte-identical.
 2. Verify RED.
 3. Implement:
-   - a resolved-thresholds parameter on `finalizedBuildReviewSourceIds`;
-   - pass the parameter from every caller (`build-review-effective.ts`, `build-review-aggregate.ts`, `build-review-cli.ts`, `build-review-adjudication-coordinator.ts`).
+   - a required resolved-thresholds parameter on `finalizedBuildReviewSourceIds`, read through `currentBuildReviewSourceLinks`;
+   - an explicit `advisory` branch after the operator-resolution and `carried` branches and before the generic non-`act` branch, so an advisory case settles only while its thresholds admit it;
+   - pass the parameter from both callers (`build-review-effective.ts`, `build-review-cli.ts`).
 4. Verify GREEN.
 5. Commit.
 
 **Done when:**
-- [test] `finalizedBuildReviewSourceIds` includes the source of an advisory case at adjudicated severity minor under threshold major and excludes it when the threshold is minor or absent.
+- [test] `finalizedBuildReviewSourceIds` includes the source of an advisory case at adjudicated severity minor under threshold major and excludes it when the threshold is minor or absent, although the generic non-act branch would otherwise finalize it.
 - [test] On a lap where the only live source binds by exact id to a settled advisory case, the coordinator removes it from live sources, dispatches no remediate session, and emits `remediation_adjudication_completed` with that case id and an empty new effect id list.
 - [test] After the threshold is lowered to minor or removed, the same recurring finding is a live source on the next lap, and `resolveEffectiveBuildReviewVerdict` called with the resolved thresholds classifies it unresolved, not settled, so the build_review gate blocks.
 - [test] A recurring finding whose id drifted does not bind the advisory case and is a live source, and running the predicate leaves the remediation case store content byte-identical.
@@ -702,9 +707,7 @@ This plan adds the following, in 21 tasks:
 **Files likely touched:**
 - src/conductor/src/engine/remediation-case-store.ts
 - src/conductor/src/engine/build-review-effective.ts
-- src/conductor/src/engine/build-review-aggregate.ts
 - src/conductor/src/engine/build-review-cli.ts
-- src/conductor/src/engine/build-review-adjudication-coordinator.ts
 - src/conductor/test/engine/remediation-case-store.test.ts
 - src/conductor/test/engine/build-review-adjudication-coordinator.test.ts
 
@@ -771,6 +774,7 @@ This plan adds the following, in 21 tasks:
 | Story 5 happy: Given a lap whose every finding is advisory, when the conductor evaluates the build_review gate, then it records the step done without dispatching remediate, without a kickback event, and without charging the kickback ledger. | 12 | "[test] Through the conductor's build_review gate, a lap whose every finding is advisory records the step done, dispatches no remediate session, emits no kickback event, and leaves the kickback ledger unchanged." | diff-local |
 | Story 5 happy: Given a mixed lap with one advisory and one unresolved finding, when the coordinator builds its live sources, then only the unresolved finding is a live source and the remediate judgement does not demand an outcome for the advisory one. | 12 | "[test] The adjudication coordinator's live-source set for a lap with one advisory and one unresolved finding contains only the unresolved finding, and the source-complete validator accepts a judgement that names no outcome for the advisory finding." | diff-local |
 | Story 5 happy: Given a custom rubric with min_severity major and a minor custom finding, when the custom effective verdict is derived, then the finding is advisory exactly as for a built-in rubric. | 11 | "[test] `resolveEffectiveBuildReviewVerdict` for a custom rubric with min_severity major places a minor custom finding in advisory, leaves the unresolved set empty, and reports an effective PASS." | diff-local |
+| Story 5 happy: Given an open action case with a failed effect whose only source is advisory this lap, when a mechanically healthy lap settles, then the case is resolved by absence, because an advisory source is not raised. | 12 | "[test] Through the conductor's build_review gate on a mechanically healthy lap, an open action case with a `failed` effect whose only source is advisory under threshold major is resolved by absence, and exactly one `remediation_case_reconciled` event is persisted for it." | diff-local |
 | Story 5 negative: Given no min_severity declared and a finding at severity nit, when the effective verdict is derived, then the finding is unresolved and blocks, exactly as today. | 10 | "[test] With no threshold a nit finding is unresolved and the effective verdict is FAIL; at threshold nit a nit finding is unresolved; and a persisted finding with no severity is unresolved under any threshold." | diff-local |
 | Story 5 negative: Given min_severity nit and a finding at severity nit, when the effective verdict is derived, then the finding is unresolved, because nothing is strictly below nit. | 10 | "[test] With no threshold a nit finding is unresolved and the effective verdict is FAIL; at threshold nit a nit finding is unresolved; and a persisted finding with no severity is unresolved under any threshold." | diff-local |
 | Story 5 negative: Given min_confidence 70 and min_severity major and a finding at confidence 40 and severity minor, when the effective verdict is derived, then the finding is suppressed and not advisory, because the confidence floor is checked first. | 10 | "[test] With floor 70 and threshold major, a confidence-40 minor finding is suppressed and not advisory, a confidence-40 critical finding is suppressed, and a confidence-95 critical finding is unresolved." | diff-local |
@@ -779,6 +783,7 @@ This plan adds the following, in 21 tasks:
 | Story 5 negative: Given an operator disposition accepting a finding that is also below min_severity, when the effective verdict is derived, then the finding is recorded as accepted and not advisory, because operator resolution is checked first. | 10 | "[test] A finding with an operator disposition that is also below the threshold is in accepted and absent from advisory, matching the classification order accepted, settled, replication, suppressed, advisory, unresolved." | diff-local |
 | Story 5 negative: Given a persisted v3 finding with no severity re-evaluated under a declared threshold, when the effective verdict is derived, then the finding is never advisory. | 10 | "[test] With no threshold a nit finding is unresolved and the effective verdict is FAIL; at threshold nit a nit finding is unresolved; and a persisted finding with no severity is unresolved under any threshold." | diff-local |
 | Story 5 negative: Given an advisory finding, when operator dispositions are listed, then no accepted-risk disposition exists for it, because advisory is never written as operator accepted risk. | 11 | "[test] After an effective verdict with an advisory finding, `BuildReviewDispositionStore.list` returns no accepted-risk disposition for it, because advisory classification never writes to the operator disposition store." | diff-local |
+| Story 5 negative: Given an open action case with a failed effect whose only source is advisory this lap, when a lap that is not mechanically healthy settles, then the case stays open and is not retired by absence. | 12 | "[test] Through the conductor's build_review gate on a lap with an uncovered infrastructure failure, the same open action case stays open and no `remediation_case_reconciled` event is written for it." | diff-local |
 | Story 6 happy: Given a lap with an advisory finding, when the outer verdict is emitted, then build_review_outer_verdict carries advisoryFindings with the finding id, rubric, severity and threshold. | 14 | "[test] The build_review step runner emits `build_review_outer_verdict` with `advisoryFindings` carrying the advisory finding's id, rubric, severity and threshold." | diff-local |
 | Story 6 happy: Given a lap with an advisory finding, when the effective verdict path runs, then a severity-kind entry with the finding id, rubric, summary, severity, threshold and lap is written to the remediation case store before the pass/fail fork. | 13 | "[test] On a lap with an advisory finding, `persistBuildReviewSuppressions` writes a severity-kind entry carrying finding id, rubric, summary, severity, threshold and lap, called before the pass/fail fork, including on a lap whose every finding is advisory and which completes PASS." | diff-local |
 | Story 6 happy: Given a lap whose every finding is advisory, when it completes as PASS, then the advisory entries are still persisted, because persistence runs on PASS laps too. | 13 | "[test] On a lap with an advisory finding, `persistBuildReviewSuppressions` writes a severity-kind entry carrying finding id, rubric, summary, severity, threshold and lap, called before the pass/fail fork, including on a lap whose every finding is advisory and which completes PASS." | diff-local |
@@ -807,7 +812,7 @@ This plan adds the following, in 21 tasks:
 | Story 8 negative: Given an advisory case with an empty rationale, when the judgement is validated, then it is rejected as invalid. | 18 | "[test] The validator rejects an advisory case whose adjudicatedSeverity equals the threshold, whose rationale is empty, whose effect is an action effect, or whose adjudicatedSeverity is above the source's reviewer severity." | diff-local |
 | Story 8 negative: Given an advisory case carrying an action effect, when the judgement is validated, then it is rejected, because an advisory case's effect must be none. | 18 | "[test] The validator rejects an advisory case whose adjudicatedSeverity equals the threshold, whose rationale is empty, whose effect is an action effect, or whose adjudicatedSeverity is above the source's reviewer severity." | diff-local |
 | Story 8 negative: Given a case whose adjudicated severity is higher than the reviewer's severity, when the judgement is validated, then it is rejected, because the adjudicator cannot raise severity. | 18, 19 | "[test] Through the adjudication coordinator, which supplies each source's rubric and reviewer severity to `validateRemediationCaseGraph`, an advisory case whose adjudicatedSeverity exceeds the source's reviewer severity, or whose source rubric has no threshold, is rejected through the existing invalid-judgement path." | diff-local |
-| Story 8 negative: Given min_severity major and a live major finding that the remediate judgement binds to a case holding an operator-accepted source while proposing an otherwise valid advisory case, when the lap is adjudicated, then the finding resolves as carried operator acceptance, the bound case's disposition is unchanged, and the finding is not listed among advisory findings. | 19 | "[test] Through the adjudication coordinator, under threshold major, a live major finding that the judgement binds by `existingCaseId` to a case holding an operator-accepted source while proposing an otherwise valid `advisory` case resolves as carried acceptance through `resolveBuildReviewAcceptance`, the bound case's disposition is unchanged, and the finding is absent from the lap's advisory findings." | diff-local |
+| Story 8 negative: Given min_severity major and a live major finding that the remediate judgement binds to a case holding an operator-accepted source while proposing an otherwise valid advisory case, when the lap is adjudicated, then the finding resolves as carried operator acceptance, the bound case's disposition is unchanged, and the finding is not listed among advisory findings. | 19 | "[test] Through the adjudication coordinator, under threshold major, a live major finding that the judgement binds by `existingCaseId` to a carry-eligible case (resolved, with an effective acceptance origin from an earlier lap) while proposing an otherwise valid `advisory` case is classified `carry` by `classifyRemediationCaseReuse`, its source is linked as `carried`, the bound case's disposition is unchanged, and the finding is absent from the lap's advisory findings." | diff-local |
 | Story 9 happy: Given a finalized advisory case for a finding at adjudicated severity minor under min_severity major, when the same finding recurs by exact id on the next lap, then it is removed from the live sources without dispatching remediate. | 21 | "[test] On a lap where the only live source binds by exact id to a settled advisory case, the coordinator removes it from live sources, dispatches no remediate session, and emits `remediation_adjudication_completed` with that case id and an empty new effect id list." | diff-local |
 | Story 9 happy: Given a lap emptied of live sources by a settled advisory case, when it finalizes, then remediation_adjudication_completed is emitted with the settled case id and no new effect ids. | 21 | "[test] On a lap where the only live source binds by exact id to a settled advisory case, the coordinator removes it from live sources, dispatches no remediate session, and emits `remediation_adjudication_completed` with that case id and an empty new effect id list." | diff-local |
 | Story 9 negative: Given a finalized advisory case at adjudicated severity minor, when the operator lowers implementationQuality min_severity to minor and the same finding recurs, then the case does not settle and the finding is a live source again. | 21 | "[test] After the threshold is lowered to minor or removed, the same recurring finding is a live source on the next lap, and `resolveEffectiveBuildReviewVerdict` called with the resolved thresholds classifies it unresolved, not settled, so the build_review gate blocks." | diff-local |
@@ -850,7 +855,7 @@ This plan adds the following, in 21 tasks:
 | adr-2026-08-13-stable-build-review-finding-dispositions#D5 | no-change | none | `build-review accept` and its external-process closeout events are unchanged; a re-keyed finding is re-accepted through that existing path. |
 | adr-2026-08-13-stable-build-review-finding-dispositions#D6 | task | task-17 | is published with only the engine-rendered region, because `ENGINE_OWNED_PR_BODY_TEXTS` includes the heading |
 | adr-2026-08-29-build-review-remediate-case-adjudication#D1 | no-change | none | Independent rubric fan-out and the mechanical raw join are unchanged; severity is one more field on each rubric's own finding. |
-| adr-2026-08-29-build-review-remediate-case-adjudication#D2 | task | task-19 | resolves as carried acceptance through `resolveBuildReviewAcceptance`, the bound case's disposition is unchanged |
+| adr-2026-08-29-build-review-remediate-case-adjudication#D2 | task | task-19 | is classified `carry` by `classifyRemediationCaseReuse`, its source is linked as `carried`, the bound case's disposition is unchanged |
 | adr-2026-08-29-build-review-remediate-case-adjudication#D3 | task | task-12 | The adjudication coordinator's live-source set for a lap with one advisory and one unresolved finding contains only the unresolved finding |
 | adr-2026-08-29-build-review-remediate-case-adjudication#D4 | task | task-18 | Under threshold major, an advisory case with adjudicatedSeverity minor, a non-empty rationale and effect none passes `remediation-case-artifact` parsing |
 | adr-2026-08-29-build-review-remediate-case-adjudication#D5 | task | task-13 | `RemediationCaseStore.read` returns a kind-less legacy entry as kind confidence with its confidence and floor unchanged |
@@ -859,6 +864,15 @@ This plan adds the following, in 21 tasks:
 | adr-2026-08-29-build-review-remediate-case-adjudication#D8 | task | task-10 | places a lone minor finding at confidence 96 in advisory with an empty unresolved set and an effective verdict of PASS |
 | adr-2026-08-29-build-review-remediate-case-adjudication#D9 | task | task-14 | emits `build_review_outer_verdict` with `advisoryFindings` carrying the advisory finding's id, rubric, severity and threshold |
 | adr-2026-08-29-build-review-remediate-case-adjudication#D10 | no-change | none | The adjudication rollout gate is unchanged; threshold classification runs before adjudication, and the advisory disposition exists only where adjudication runs. |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D1 | no-change | none | Case store v3's acceptance fields are unchanged; this spec adds only the `advisory` disposition and severity-kind suppression entries under remediate-case D4 and D5. |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D2 | no-change | none | `finalize` remains the only writer of acceptance origins; advisory classification never writes an origin or an operator disposition. |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D3 | task | task-19 | is classified `carry` by `classifyRemediationCaseReuse`, its source is linked as `carried`, the bound case's disposition is unchanged |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D4 | task | task-21 | `finalizedBuildReviewSourceIds` includes the source of an advisory case at adjudicated severity minor under threshold major and excludes it when the threshold is minor or absent |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D5 | task | task-12 | an open action case with a `failed` effect whose only source is advisory under threshold major is resolved by absence |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D6 | no-change | none | Advisory adds no new case-store occurrence; retirement of an advisory-sourced case reuses the existing `remediation_case_reconciled` outbox entry. |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D7 | no-change | none | `build-review resolve-case` is unchanged; an advisory case has effect `none` and never needs operator resolution. |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D8 | task | task-16 | `build-review findings --json` lists an advisory finding with id, rubric, severity, threshold and origin threshold |
+| adr-2026-10-20-operator-acceptance-is-durable-case-state#D9 | no-change | none | Carry stays feature- and child-scoped; thresholds are per rubric and add no cross-feature path. |
 
 ## Verification
 

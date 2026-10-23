@@ -128,6 +128,7 @@ As an operator, I want findings below my threshold recorded as advisory instead 
 - Given a lap whose every finding is advisory, when the conductor evaluates the build_review gate, then it records the step done without dispatching remediate, without a kickback event, and without charging the kickback ledger.
 - Given a mixed lap with one advisory and one unresolved finding, when the coordinator builds its live sources, then only the unresolved finding is a live source and the remediate judgement does not demand an outcome for the advisory one.
 - Given a custom rubric with min_severity major and a minor custom finding, when the custom effective verdict is derived, then the finding is advisory exactly as for a built-in rubric.
+- Given an open action case with a failed effect whose only source is advisory this lap, when a mechanically healthy lap settles, then the case is resolved by absence, because an advisory source is not raised.
 
 #### Negative Paths
 - Given no min_severity declared and a finding at severity nit, when the effective verdict is derived, then the finding is unresolved and blocks, exactly as today.
@@ -138,6 +139,7 @@ As an operator, I want findings below my threshold recorded as advisory instead 
 - Given an operator disposition accepting a finding that is also below min_severity, when the effective verdict is derived, then the finding is recorded as accepted and not advisory, because operator resolution is checked first.
 - Given a persisted v3 finding with no severity re-evaluated under a declared threshold, when the effective verdict is derived, then the finding is never advisory.
 - Given an advisory finding, when operator dispositions are listed, then no accepted-risk disposition exists for it, because advisory is never written as operator accepted risk.
+- Given an open action case with a failed effect whose only source is advisory this lap, when a lap that is not mechanically healthy settles, then the case stays open and is not retired by absence.
 
 ### Done When
 - [ ] Both effective reducers classify in the order accepted, settled, declared replication, suppressed, advisory, unresolved, with advisory as its own bucket.

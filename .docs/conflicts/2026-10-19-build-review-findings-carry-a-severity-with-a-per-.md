@@ -13,8 +13,8 @@
   - `min_confidence`, kickback charging, or the PR body.
 
   Each pair was checked in both directions.
-- **#3271.** Its spec landed on main in #3308 after this check first ran. Its stories and its
-  amendments to four ADRs were re-compared as landed. Its build worktree was not touched.
+- **#3271.** Its first spec (#3308) was reverted (#3319) and re-specced (#3332), and it shipped
+  in #3367 and #3358. Its stories and ADR amendments were re-compared as shipped on 2026-10-23.
 - **Not examined.** Open spec PR #2878's stories are not in this worktree, so they were not
   examined. Its ADR amendment (mixed-laps D3/D5 deferral) was compared and does not conflict.
 - **ADRs examined:**
@@ -133,7 +133,7 @@ acceptance lists it as accepted risk, while an advisory case lists it as advisor
 precedence, a builder could record the same finding both ways.
 
 **Resolution Options:**
-1. Carry takes precedence, as #3271's D2.1 already says for every proposed disposition.
+1. Carry takes precedence: `classifyRemediationCaseReuse` classifies every proposed disposition that binds a case, `advisory` included (adr-2026-10-20-operator-acceptance-is-durable-case-state decision 3).
 2. Advisory takes precedence. This contradicts an approved ADR.
 
 **Recommendation:** Option 1.

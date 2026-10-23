@@ -99,8 +99,8 @@ Option A. Each decision below states how it extends the existing suppression arc
   - stored v3 operator dispositions invalidate through the existing
     `build_review_disposition_version_invalidated` path and never match a v4 finding by exact
     identity. Where adjudication is enabled and remediate binds the re-keyed finding to the case
-    holding the accepted v3 source, #3271's carried acceptance applies it with no re-accept
-    (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1–D2.3). Every other
+    holding the accepted v3 source, #3271's carry lane applies it with no re-accept
+    (`adr-2026-10-20-operator-acceptance-is-durable-case-state` decisions 3 and 4). Every other
     operator-accepted finding on an in-flight feature must be re-accepted with `build-review accept`;
   - an in-flight feature's settled cases stop binding their re-keyed findings, which costs at most
     one fresh remediate judgement per feature.
@@ -132,8 +132,9 @@ Option A. Each decision below states how it extends the existing suppression arc
 ### D4 — A below-threshold finding is advisory at the effective verdict and never reaches remediate
 
 - **Order.** Both effective reducers, built-in and custom, classify each finding in this order:
-  - operator-accepted, by exact disposition or as carried acceptance (#3271);
-  - settled;
+  - operator-accepted, by exact disposition;
+  - settled, including a source whose authoritative link is `carried`
+    (`adr-2026-10-20-operator-acceptance-is-durable-case-state` decision 4);
   - declared replication;
   - `suppressed` (confidence below the floor);
   - `advisory` (severity strictly below the rubric's declared `min_severity`);
@@ -147,6 +148,14 @@ Option A. Each decision below states how it extends the existing suppression arc
   ledger.
 - **Authority.** Advisory, like suppressed, is engine bookkeeping on a reviewer judgement. It is
   never recorded as operator accepted risk.
+- **Absence retirement.** An advisory source is not raised for the absence rule of
+  `adr-2026-10-20-operator-acceptance-is-durable-case-state` decision 5, because it is outside the
+  live sources. On a mechanically healthy lap, an open `failed` or `reserved` action case whose
+  every source is advisory, covered or absent therefore retires by absence. On a lap that is not
+  mechanically healthy it stays open. If the threshold later stops admitting the finding, the
+  finding is live again and is judged as an unbound re-raise
+  (`adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication` D5.6). Operator approved
+  2026-10-23.
 
 ### D5 — Every advisory finding is durable and visible
 
@@ -188,22 +197,34 @@ Option A. Each decision below states how it extends the existing suppression arc
 - **Effects.** An advisory case routes no BUILD and charges nothing.
 - **Older engines.** An older engine that reads a persisted `advisory` disposition fails closed as
   an unknown disposition.
-- **Carried acceptance first.** In a validated judgement, a finding bound to a case holding an
-  operator-accepted source is carried acceptance whatever disposition the judgement proposed,
-  `advisory` included (`adr-2026-08-29-build-review-remediate-case-adjudication` D2.1). The bound
-  case keeps its disposition, and the finding is listed as accepted risk, never as advisory.
-- **What this amends.** Decision 4 of `adr-2026-08-29-build-review-remediate-case-adjudication`: its
-  case disposition vocabulary gains `advisory`, carrying `adjudicatedSeverity`.
+- **Carry first.** An `advisory` proposal that binds an `existingCaseId` is classified by
+  `classifyRemediationCaseReuse` like every other proposed disposition, before any advisory
+  reduction (`adr-2026-10-20-operator-acceptance-is-durable-case-state` decision 3). When the bound
+  case is carry-eligible the result is `carry`: the carry lane links the source as `carried`, the
+  case keeps its disposition, and the finding is shown as carried (decision 8), never as advisory.
+- **What this amends.**
+  - Decision 4 of `adr-2026-08-29-build-review-remediate-case-adjudication`: its case disposition
+    vocabulary gains `advisory`, carrying `adjudicatedSeverity`.
+  - Decision 3 of `adr-2026-10-20-operator-acceptance-is-durable-case-state`: the proposals it
+    classifies include `advisory`.
 
 ### D7 — A finalized advisory case settles recurrence only while its threshold still admits it
 
 - **Settled.** The D5.1 settled-recurrence predicate treats an `advisory` case with effect `none` as
   finalized for exact-id recurrence, but only while each source rubric's current `min_severity`
   remains strictly above the case's adjudicated severity.
+- **Where.** The predicate is `finalizedBuildReviewSourceIds`, read through the D5.5 authoritative
+  link (`currentBuildReviewSourceLinks`). Resolved thresholds become its required parameter, so
+  every caller passes them. The `advisory` branch is decided before the generic "non-`act` with no
+  effect is finalized" branch, so an advisory case never settles unconditionally. Operator
+  resolution and `carried` links keep their earlier branches.
 - **Threshold changes.** If the operator lowers or removes the threshold, the case no longer
   settles and its source is live again on the next lap. The predicate stays read-only and never
   writes, prunes or resolves the case.
-- **What this amends.** The mixed-laps ADR's D5.1 list of finalized dispositions.
+- **What this amends.**
+  - The mixed-laps ADR's D5.1 list of finalized dispositions.
+  - Decision 4 of `adr-2026-10-20-operator-acceptance-is-durable-case-state`: the same function also
+    settles advisory sources, conditioned on the thresholds it now requires.
 
 ## Assumptions
 

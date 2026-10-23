@@ -13,7 +13,7 @@ inputs are:
 | Check | Assessment |
 |---|---|
 | Stack compatibility | Plain TypeScript in the existing engine, with no new dependency. The native result grammar admits a closed string enum (verified, `build-review-domain.ts` native-grammar note). |
-| Prerequisites | jstoup111/ai-conductor#3271 must build first (operator decision 2026-10-19, recorded as a land dependency). Its spec landed on main in #3308 and is in BUILD. No migration, external account or infrastructure is needed. |
+| Prerequisites | jstoup111/ai-conductor#3271 must build first (operator decision 2026-10-19, recorded as a land dependency). It shipped in #3367 and #3358 (re-spec #3332 after #3308 was reverted). No migration, external account or infrastructure is needed. |
 | Integration surface | One module family (`engine/build-review-*`, `remediation-case-*`), plus config, the event union, the PR-body regions and five skills. All the surfaces are in-process. |
 | Data implications | The built-in contract bump re-keys every built-in finding id once (ADR D2, operator-accepted); custom ids are unchanged because the custom identity grammar keeps its own version. The durable suppression entry becomes a discriminated union, and legacy entries read as the `confidence` kind. No data is lost; old aggregates still parse for reads. |
 | Performance risk | None. The classification is a per-finding comparison beside an existing one. |
@@ -49,10 +49,10 @@ adjudicator downgrade (D6/D7). **The operator declined it on 2026-10-19.** The p
 - **Event spine.** One additive optional field on `build_review_outer_verdict`, with no new
   channel. This is consistent with the event-spine skill's schema-not-file test.
 - **Overlapping specs.**
-  - #3271 (spec landed in #3308, now in BUILD) rewires the same reducers, coordinator, context,
-    CLI and PR body. It is sequenced before this spec. Its carried acceptance precedes the advisory
-    bucket and the D6 downgrade (ADR D4, D6), and this spec amends its architecture review's
-    "store schemas unchanged" claim, which this spec's suppression-entry union makes stale.
+  - #3271 (shipped in #3367 and #3358) rewires the same reducers, coordinator, context, CLI and
+    PR body. It is sequenced before this spec. Its carry decision precedes the advisory bucket and
+    the D6 downgrade (ADR D4, D6). This spec amends its ADR's decisions 3, 4 and 5 for the
+    `advisory` disposition, its threshold-conditioned settlement and its absence input.
   - Spec PR #2878 amends mixed-laps D3/D5 *deferral* and does not touch D4 or D5.1's disposition
     list. No contradiction.
   - The overlap scan found only `config.ts` and `resolved-config.ts` on

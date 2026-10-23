@@ -192,8 +192,9 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   exactly as D5.2 prescribes for every other unfinished effect.
 
 > **Amended 2026-10-19 by #3298:** D5.1's finalized cases also include a remediate case with
-> disposition `advisory` and effect `none`. That case settles only while every source rubric's
-> current `min_severity` stays strictly above the case's adjudicated severity. Lowering or removing
+> disposition `advisory` and effect `none`, read through the D5.5 authoritative link. That case
+> settles only while every source rubric's current `min_severity` stays strictly above the case's
+> adjudicated severity. Lowering or removing
 > the threshold makes its sources live again. The predicate remains read-only
 > (adr-2026-10-19-build-review-finding-severity-advisory-threshold D6, D7).
 
