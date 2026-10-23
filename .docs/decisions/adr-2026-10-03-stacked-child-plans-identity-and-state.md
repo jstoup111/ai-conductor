@@ -285,6 +285,14 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
     - Rollups ignore it, so shipped-record Cost and Time stay once per feature.
     - In this ticket `operator_rewind` carries it.
 
+> **Amended 2026-10-22 by #2946:** The `## Cost` and `## Time` blocks still ignore `child` and stay
+> once per feature, byte for byte. A separate additive `## Children` shipped-record block now reads
+> it: one row per child and one feature-wide row for unqualified work, giving cost, dispatches and
+> active time, with the rows summing exactly to the feature totals. The block is appended only when
+> the ledger names a child. `provider_attempt` joins the region events that carry `child`, under the
+> same conditional spread, so that dispatch cost can be attributed to a child
+> (`architecture-review-2026-10-22-stacked-feature-cost-and-time-cannot-be-broken-dow`).
+
 13. **The recovery CLIs take `--child <k>`.**
     - `--child` is accepted only for a valid `ChildId` whose `.pipeline/children/<k>/` already exists.
       A flag-off feature with a sliced plan therefore cannot gain child state.
