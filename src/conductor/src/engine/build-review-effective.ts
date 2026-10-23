@@ -28,12 +28,9 @@ import { projectBuildReviewCustomSuppressionSources } from './build-review-suppr
 import type { ResolvedBuildReviewConfig } from './resolved-config.js';
 import type { ChildId } from './child-context.js';
 
-/** One resolved catalog is the authority for both built-in and custom floors. */
+/** Projects the shared threshold view into confidence floors for effective verdicts. */
 export function buildReviewConfidenceFloors(config: Pick<ResolvedBuildReviewConfig, 'catalog' | 'rubrics'>): Partial<Record<string, number>> {
-  return Object.fromEntries([
-    ...Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence]),
-    ...config.catalog.filter((entry) => entry.kind === 'custom').map((entry) => [entry.id, entry.policy.min_confidence]),
-  ]);
+  return Object.fromEntries(Object.entries(buildReviewThresholds(config)).map(([id, threshold]) => [id, threshold!.minConfidence]));
 }
 
 export interface BuildReviewThreshold { readonly minConfidence: number; readonly minSeverity?: BuildReviewSeverity; }

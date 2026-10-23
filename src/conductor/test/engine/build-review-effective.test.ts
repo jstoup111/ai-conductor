@@ -1,11 +1,14 @@
 // Covers: task:2, task:9, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
-import { deriveComposedBuildReviewEffectiveVerdict, isBuildReviewLapHealthyForAbsenceRetirement, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict, type BuildReviewEffectiveResolverDeps } from '../../src/engine/build-review-effective.js';
+import { buildReviewConfidenceFloors, buildReviewSeverityThresholds, buildReviewThresholds, deriveComposedBuildReviewEffectiveVerdict, isBuildReviewLapHealthyForAbsenceRetirement, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict, type BuildReviewEffectiveResolverDeps } from '../../src/engine/build-review-effective.js';
 import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
 import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import { finalizedBuildReviewSourceIds } from '../../src/engine/remediation-case-store.js';
@@ -140,6 +143,23 @@ const identityDeps = {
 };
 
 describe('live build-review effective resolver', () => {
+  // Covers: task:9, task:rem-as-built-r9-2
+  it('derives custom confidence and severity thresholds from the shared policy view used by gate completion', async () => {
+    const config = resolveBuildReviewConfig({ build_review: { custom_rubrics: {
+      portablePolicy: {
+        skill: 'portable-policy', question: customDeclaration.question, enabled: true,
+        min_confidence: 70, min_severity: 'major',
+      },
+    } } });
+
+    expect(buildReviewThresholds(config).portablePolicy).toEqual({ minConfidence: 70, minSeverity: 'major' });
+    expect(buildReviewConfidenceFloors(config).portablePolicy).toBe(70);
+    expect(buildReviewSeverityThresholds(config).portablePolicy).toBe('major');
+
+    const source = await readFile(join(process.cwd(), 'src/engine/build-review-effective.ts'), 'utf8');
+    expect(source).toContain('Object.entries(buildReviewThresholds(config)).map(([id, threshold]) => [id, threshold!.minConfidence])');
+  });
+
   // Covers: task:rem-prd-audit-rem-prd-audit-R17f, task:rem-as-built-rem-as-built-R17g
   it('shares current-lap absence-retirement health for built-in, custom, scope, and healthy laps', () => {
     const healthy = joinBuildReviewRubricOutcomes({
