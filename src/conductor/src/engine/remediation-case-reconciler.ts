@@ -8,6 +8,7 @@ import {
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
   appendRemediationCaseOutbox,
+  classifyBuildReviewRecurrence,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 import type { RemediationCaseGraph } from './remediation-case-validator.js';
@@ -273,6 +274,9 @@ function reconcileState(
         ? undefined
         : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
+      const recurrence = caseRow.disposition === 'act'
+        ? classifyBuildReviewRecurrence(state.cases, sources.map((source) => source.sourceId), caseRow.distinctFrom ?? [])
+        : undefined;
       claimed.add(caseId);
       caseIdsByRef.set(caseRow.caseRef, caseId);
       additions.push({
@@ -291,6 +295,8 @@ function reconcileState(
         })),
         effect: effectFor(caseRow, effectId),
         ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
+        ...(recurrence === undefined || recurrence.recurrenceOf.length === 0 ? {} : { recurrenceOf: recurrence.recurrenceOf }),
+        ...(recurrence === undefined || recurrence.distinctFrom.length === 0 ? {} : { distinctFrom: recurrence.distinctFrom }),
       });
       continue;
     }
