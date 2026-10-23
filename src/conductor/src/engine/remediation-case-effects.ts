@@ -23,6 +23,7 @@ import {
   type RemediationCaseTransitionViolation,
   RemediationCaseStore,
 } from './remediation-case-store.js';
+import { retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 
 export type RemediationEffectResult =
   | { readonly ok: true; readonly status: 'applied' | 'already-applied'; readonly effectId: string }
@@ -248,8 +249,11 @@ export async function resolveAbsentFailedBuildReviewCases(input: {
 }): Promise<SettleStrandedActionReservationsResult> {
   const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
     const settled = state.cases.flatMap((record) =>
-      isOpenRemediationCase(record) && record.effect.kind !== 'none' && record.effect.status === 'failed'
-        && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId))
+      record.effect.kind === 'action' && retiresOpenBuildReviewCase(record, {
+        liveSourceIds: input.liveSourceIds,
+        effectiveAcceptedSourceIds: new Set(),
+        mechanicallyHealthy: true,
+      })
         ? [{ caseId: record.id, effectId: record.effect.id }]
         : []);
     if (settled.length === 0) return { value: [] };

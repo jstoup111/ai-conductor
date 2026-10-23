@@ -1,11 +1,15 @@
-// Covers: task:1, task:2, task:3, task:5
+// Covers: task:1, task:2, task:3, task:5, task:6, task:7
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
+import {
+  classifyRemediationCaseReuse,
+  isCarryEligibleRemediationCase,
+  reconcileRemediationCases,
+} from '../../src/engine/remediation-case-reconciler.js';
 import type {
   RemediationCasePrdWideningRecord,
   RemediationCaseRecord,
@@ -141,6 +145,34 @@ describe('remediation case reconciler', () => {
     expect(classifyRemediationCaseReuse(record, attempted)).toBe(expected);
   });
 
+  const carryInput = { currentLapId: 'lap-2', effectiveAcceptedSourceIds: new Set(['testQuality:finding-1']) };
+  const acceptedOnPriorLap = durableAction({
+    resolution: 'resolved',
+    operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+  });
+
+  it.each([
+    ['has an effective prior-lap acceptance origin', acceptedOnPriorLap, carryInput, true],
+    ['was resolved by an operator', durableAction({ operatorResolution: { operator: 'operator', rationale: 'The case is resolved.', resolvedAt: RECORDED_AT } }), carryInput, true],
+    ['has no acceptance origin', durableAction({ resolution: 'resolved' }), carryInput, false],
+    ['has an origin from the current lap', { ...acceptedOnPriorLap, operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-2' }] } }, carryInput, false],
+    ['has an origin no longer effectively accepted', acceptedOnPriorLap, { ...carryInput, effectiveAcceptedSourceIds: new Set<string>() }, false],
+  ] as const)('is carry-eligible only when it %s', (_label, record, input, expected) => {
+    expect(isCarryEligibleRemediationCase(record, input)).toBe(expected);
+  });
+
+  it.each([
+    ['act', acceptedOnPriorLap, 'carry'],
+    ['defer', { ...acceptedOnPriorLap, disposition: 'defer' as const, effect: { id: 'effect-1', kind: 'deferral' as const, status: 'applied' as const, issueUrl: 'https://example.test/issues/1' } }, 'carry'],
+    ['reject', { ...acceptedOnPriorLap, disposition: 'reject' as const, effect: { kind: 'none' as const } }, 'carry'],
+    ['refute', { ...acceptedOnPriorLap, disposition: 'refute' as const, effect: { kind: 'none' as const }, refutation: REFUTATION }, 'carry'],
+    ['escalate', { ...acceptedOnPriorLap, disposition: 'escalate' as const, effect: { kind: 'none' as const }, escalation: { owner: 'plan' as const } }, 'carry'],
+    ['a failed action without an acceptance origin', durableAction({ resolution: 'resolved', effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'failed' } }), 'halt-regression'],
+    ['an open action with an acceptance origin', { ...acceptedOnPriorLap, resolution: 'open' as const }, 'resume'],
+  ] as const)('classifies %s bindings before ordinary reuse', (_label, record, expected) => {
+    expect(classifyRemediationCaseReuse(record, new Set<string>(), carryInput)).toBe(expected);
+  });
+
   it('stamps engine-owned case and effect ids for a new proposed case', async () => {
     const projectRoot = await createProjectRoot();
     const result = await reconcileRemediationCases(new RemediationCaseStore(projectRoot, FEATURE), {
@@ -155,9 +187,10 @@ describe('remediation case reconciler', () => {
       // Nothing prior was absent, so no unreferenced case transitioned.
       resolvedAbsentCaseIds: [],
       state: {
-        version: 'v2',
+        version: 'v3',
         feature: FEATURE,
         suppressions: [],
+        outbox: [],
         prdWideningCases: [],
         cases: [{
           id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high',
@@ -228,6 +261,81 @@ describe('remediation case reconciler', () => {
             { sourceId: 'testQuality:finding-2', outcome: 'acted', recordedAt: '2026-08-30T13:00:00.000Z' },
           ],
         }],
+      },
+    });
+  });
+
+  it('carries a newly bound source and atomically queues its acceptance occurrence', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const acceptedCase = durableAction({
+      id: 'case-C',
+      resolution: 'resolved',
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+    });
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [acceptedCase] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'carry-case', existingCaseId: 'case-C' }, [
+        { sourceId: 'testQuality:finding-2', outcome: 'acted', caseRef: 'carry-case' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: generatedIds('carry-event-1'),
+      carry: { caseRefs: ['carry-case'], lapId: 'lap-2' },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      state: {
+        cases: [{
+          id: 'case-C', disposition: 'act', resolution: 'resolved',
+          effect: { id: 'effect-1', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+          operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+          sources: [
+            { sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: RECORDED_AT },
+            { sourceId: 'testQuality:finding-2', outcome: 'carried', recordedAt: '2026-08-30T13:00:00.000Z' },
+          ],
+        }],
+        outbox: [{
+          eventId: 'carry-event-1', occurredAt: '2026-08-30T13:00:00.000Z',
+          event: {
+            type: 'build_review_acceptance_carried', eventId: 'carry-event-1', feature: 'case-reconciler',
+            lapId: 'lap-2', sourceId: 'testQuality:finding-2', caseId: 'case-C',
+            originSourceIds: ['testQuality:finding-1'], originLapIds: ['lap-1'],
+          },
+        }],
+      },
+    });
+  });
+
+  it('does not duplicate a carried link or its outbox occurrence on replay', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: {
+      ...state,
+      cases: [durableAction({
+        id: 'case-C', resolution: 'resolved',
+        operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+      })],
+    } }));
+    const input = {
+      graph: graph({ ...ACTION_CASE, caseRef: 'carry-case', existingCaseId: 'case-C' }, [
+        { sourceId: 'testQuality:finding-2', outcome: 'acted', caseRef: 'carry-case' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z', carry: { caseRefs: ['carry-case'], lapId: 'lap-2' },
+    };
+
+    await reconcileRemediationCases(store, { ...input, generateId: generatedIds('carry-event-1') });
+    const replay = await reconcileRemediationCases(store, { ...input, generateId: () => 'must-not-be-used' });
+
+    expect(replay).toMatchObject({
+      ok: true,
+      state: {
+        cases: [{ sources: [
+          { sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: RECORDED_AT },
+          { sourceId: 'testQuality:finding-2', outcome: 'carried', recordedAt: '2026-08-30T13:00:00.000Z' },
+        ] }],
+        outbox: [{ eventId: 'carry-event-1' }],
       },
     });
   });

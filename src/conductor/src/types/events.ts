@@ -981,8 +981,29 @@ type ConductorEventBody =
       };
     }
   | {
+      /** A new source was carried from a prior operator-accepted remediation case. */
+      type: 'build_review_acceptance_carried';
+      eventId: string;
+      feature: string;
+      lapId: string;
+      sourceId: string;
+      caseId: string;
+      originSourceIds: readonly string[];
+      originLapIds: readonly string[];
+    }
+  | {
+      /** An operator resolved a remediation case outside the adjudication judgement. */
+      type: 'remediation_case_operator_resolved';
+      eventId: string;
+      feature: string;
+      caseId: string;
+      sourceIds: readonly string[];
+    }
+  | {
       /** One canonical remediation case was reconciled against the current lap. */
       type: 'remediation_case_reconciled';
+      /** Makes outbox delivery of a retirement occurrence replay-safe. */
+      eventId?: string;
       domain: 'build_review';
       lapId: string;
       caseId: string;

@@ -118,6 +118,8 @@ export const EVENT_SINKS = {
   remediation_adjudication_started: { render: false, persist: true, audit: false, otel: false },
   remediation_adjudication_completed: { render: true, persist: true, audit: false, otel: false },
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
+  build_review_acceptance_carried: { render: false, persist: true, audit: false, otel: false },
+  remediation_case_operator_resolved: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },
   prd_widening_reconciled: { render: false, persist: true, audit: false, otel: false },

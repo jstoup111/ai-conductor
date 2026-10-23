@@ -21,7 +21,7 @@ import { persistPrdAuditVerdict, readPrdAuditVerdict } from '../../src/engine/pr
 import { capturePrdWideningDecisions } from '../../src/engine/prd-widening-capture.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
 import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
-import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { prdWideningCasesForState, RemediationCaseStore, withPrdWideningCases } from '../../src/engine/remediation-case-store.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 type ScopeRoute =
@@ -175,7 +175,7 @@ describe('typed PRD-audit scope routing', () => {
     const offer = offers.offers[0]!;
     const caseStore = new RemediationCaseStore(projectRoot, feature);
     const related = await caseStore.mutate(async (state) => {
-      const cases = state.version === 'v2' ? state.prdWideningCases : [];
+      const cases = prdWideningCasesForState(state);
       const nextCases = cases.map((record) => record.id !== offer.originalCaseId ? record : {
         ...record,
         reconciliationDigest: 'typed-scope-relation',
@@ -188,7 +188,7 @@ describe('typed PRD-audit scope routing', () => {
       });
       return {
         value: nextCases,
-        nextState: { version: 'v2' as const, feature: state.feature, cases: state.cases, suppressions: state.suppressions ?? [], prdWideningCases: nextCases },
+        nextState: withPrdWideningCases(state, nextCases),
       };
     });
     if (!related.ok) throw new Error('fixture source relation did not persist');

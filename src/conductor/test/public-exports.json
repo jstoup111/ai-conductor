@@ -19,6 +19,7 @@
   "detectBuildReviewAcceptCommand",
   "detectBuildReviewFindingsCommand",
   "detectBuildReviewRecordReducedCoverageCommand",
+  "detectBuildReviewResolveCaseCommand",
   "detectHaltClearCommand",
   "detectKickbackBudgetCommand",
   "detectOverlapScanCommand",

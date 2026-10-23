@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,11 +9,13 @@ import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review
 import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
-import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from '../../src/engine/tracker-client.js';
@@ -339,6 +341,184 @@ function failOnlyDecisionStopMutation(reason: 'lock-timeout' | 'malformed-state'
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  const customAggregate = customMixedAggregate();
+  const customSource = projectBuildReviewAggregateSources(customAggregate)!.find((source) => source.rubric === 'security')!;
+  it('routes an explicitly bound accepted action re-raise through the carry lane', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const origin = 'testQuality:accepted-on-lap-1';
+    await seedCases(store, {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'accepted-case', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The original finding was accepted.', resolution: 'resolved',
+        sources: [{ sourceId: origin, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId: origin, lapId: 'lap-old' }] },
+        effect: { id: 'accepted-effect', kind: 'action', status: 'applied', workOrderId: 'accepted-order' },
+      }],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'carry' }],
+      cases: [{
+        caseRef: 'carry', existingCaseId: 'accepted-case', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The later finding is explicitly bound to the accepted case.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Must not be published' }] },
+      }],
+    };
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement),
+      resolveEffectiveAcceptedSourceIds: async () => new Set([origin]),
+      chargeEffect: charge,
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, route: 'pass' }));
+    expect(charge).not.toHaveBeenCalled();
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      id: 'accepted-case', resolution: 'resolved',
+      sources: expect.arrayContaining([{ sourceId, outcome: 'carried', recordedAt: expect.any(String) }]),
+    })] } });
+  });
+  it.each([
+    ['built-in finding on an open case', aggregate, rawSource, 'open'],
+    ['built-in finding on a resolved case', aggregate, rawSource, 'resolved'],
+    ['custom-rubric finding on an open case', customAggregate, customSource, 'open'],
+    ['custom-rubric finding on a resolved case', customAggregate, customSource, 'resolved'],
+  ] as const)('records an acceptance origin while finalizing a %s', async (_kind, currentAggregate, currentSource, initialResolution) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const currentSourceId = buildReviewAdjudicationSourceId(currentSource);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-open', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The finding needs a focused repair.', resolution: initialResolution,
+        sources: [{ sourceId: currentSourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' }],
+        effect: { id: 'effect-open', kind: 'action', status: 'applied', workOrderId: 'order-open' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), aggregate: currentAggregate,
+      operatorResolvedFindingIds: new Set([currentSource.findingId]),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]).toMatchObject({
+      resolution: 'resolved',
+      operatorAcceptance: { origins: [{ sourceId: currentSourceId, lapId: currentAggregate.lapId }] },
+    });
+  });
+
+  it('records only an exact unsuppressed acceptance once on a partially open case', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const acceptedSourceId = buildReviewAdjudicationSourceId(acceptedSource);
+    const liveSourceId = buildReviewAdjudicationSourceId(liveSource);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-partial', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The second finding still needs a focused repair.', resolution: 'open',
+        sources: [
+          { sourceId: acceptedSourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' },
+          { sourceId: liveSourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' },
+        ],
+        effect: { id: 'effect-partial', kind: 'action', status: 'applied', workOrderId: 'order-partial' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: liveSourceId, outcome: 'acted', caseRef: 'case-partial' }],
+      cases: [{
+        caseRef: 'case-partial', existingCaseId: 'case-partial', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The second finding still needs a focused repair.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the second test' }] },
+      }],
+    };
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate,
+      operatorResolvedFindingIds: new Set([acceptedSource.findingId]),
+    });
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), aggregate: mixedAggregate,
+      operatorResolvedFindingIds: new Set([acceptedSource.findingId]),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]).toMatchObject({
+      resolution: 'open',
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: mixedAggregate.lapId }] },
+    });
+  });
+
+  it('does not record an origin for a confidence-suppressed finding', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-suppressed', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The finding needs a focused repair.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' }],
+        effect: { id: 'effect-suppressed', kind: 'action', status: 'applied', workOrderId: 'order-suppressed' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), suppressedFindingIds: new Set([findingId]),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]?.operatorAcceptance).toBeUndefined();
+  });
+
+  it('does not record an origin from a disposition stored for another feature', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v3', feature,
+      cases: [{
+        id: 'case-foreign-disposition', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The finding needs a focused repair.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-22T00:00:00.000Z' }],
+        effect: { id: 'effect-foreign-disposition', kind: 'action', status: 'applied', workOrderId: 'order-foreign-disposition' },
+      }],
+      prdWideningCases: [], suppressions: [], outbox: [],
+    });
+    const foreignDisposition = await new BuildReviewDispositionStore(root).append({
+      feature: { ...feature, feature: 'another-feature' },
+      finding: canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+        anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: `sha256:${'f'.repeat(64)}`, display: 'example test' } },
+      })!,
+      sourceLapId: 'lap-1' as never, summary: 'Accepted only for another feature.',
+      rationale: 'The other feature owns this accepted risk.', operator: 'operator',
+    });
+    if (!foreignDisposition.ok) throw new Error(foreignDisposition.message);
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      resolveOperatorResolvedFindingIds: async () => {
+        const effective = await resolveEffectiveBuildReviewVerdict(root, aggregate, {
+          resolveMainRoot: async () => '/repo',
+          realpath: async (path) => path === '/repo' ? '/repo' : '/repo/.worktrees/feature',
+        });
+        if (!effective.ok) throw new Error(effective.reason);
+        return new Set(effective.effective.acceptedFindingIds);
+      },
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases[0]?.operatorAcceptance).toBeUndefined();
+  });
+
   it('publishes only the open action as the durable BUILD repair for a shared resolved source', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
@@ -985,6 +1165,40 @@ describe('coordinateBuildReviewAdjudication', () => {
       'remediation_adjudication_started', 'remediation_case_reconciled', 'remediation_effect_reserved',
       'remediation_effect_applied', 'remediation_adjudication_completed',
     ]);
+  });
+
+  it.each([
+    ['operatorAcceptance', (judgement: RemediationCaseJudgement) => ({
+      ...judgement,
+      cases: [{ ...judgement.cases[0]!, operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-1' }] } }],
+    }), 'operator-owned-acceptance'],
+    ['operatorResolution', (judgement: RemediationCaseJudgement) => ({
+      ...judgement,
+      cases: [{ ...judgement.cases[0]!, operatorResolution: { operator: 'operator', rationale: 'Accepted risk.', resolvedAt: '2026-10-21T00:00:00.000Z' } }],
+    }), 'operator-owned-resolution'],
+    ['carried source outcome', (judgement: RemediationCaseJudgement) => ({
+      ...judgement,
+      sourceOutcomes: [{ ...judgement.sourceOutcomes[0]!, outcome: 'carried' }],
+    }), 'operator-owned-carried-source-outcome'],
+  ] as const)('fails closed without mutating case state for provider-owned %s', async (_name, inject, rejection) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'unrelated-resolved-case', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'low',
+        rationale: 'An unrelated prior finding was rejected.', resolution: 'resolved',
+        sources: [{ sourceId: 'testQuality:unrelated', outcome: 'rejected', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        effect: { kind: 'none' },
+      }],
+    });
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => inject(actionJudgement()) as RemediationCaseJudgement),
+    });
+
+    expect(result).toEqual({ ok: false, detail: `invalid remediation judgement ${rejection}` });
+    await expect(readFile(remediationCaseStorePath(root), 'utf8')).resolves.toBe(before);
   });
 
   it('bypasses the provider but still settles case state when every current source is operator-resolved', async () => {

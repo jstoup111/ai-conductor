@@ -155,6 +155,14 @@ export type BuildReviewAcceptDispatch = {
   readonly rationale: string;
 };
 
+export type BuildReviewResolveCaseDispatch = {
+  readonly kind: 'resolve-case';
+  readonly feature: string;
+  readonly caseId: string;
+  readonly rationale: string;
+  readonly child?: string;
+};
+
 export type BuildReviewRecordReducedCoverageDispatch = {
   readonly kind: 'record-reduced-coverage';
   readonly feature: string;
@@ -190,6 +198,24 @@ export function detectBuildReviewAcceptCommand(argv: string[]): BuildReviewAccep
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !findingId || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
   return { kind: 'accept', feature, lapId, findingId, rationale };
+}
+
+/** Detect only the fully bound, operator-only case-resolution grammar. */
+export function detectBuildReviewResolveCaseCommand(argv: string[]): BuildReviewResolveCaseDispatch | null {
+  if (argv[2] !== 'build-review' || argv[3] !== 'resolve-case') return null;
+  const args = argv.slice(4);
+  const read = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const feature = read('--feature');
+  const child = read('--child');
+  const caseId = read('--case');
+  const rationale = read('--rationale');
+  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), '--case', caseId, '--rationale', rationale];
+  if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !caseId || !rationale ||
+    !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
+  return { kind: 'resolve-case', feature, caseId, rationale, ...(child === undefined ? {} : { child }) };
 }
 
 /** Detect only the fully bound, operator-only reduced-coverage grammar. */
@@ -853,6 +879,13 @@ export function createProgram(): Command {
     .requiredOption('--feature <slug>', 'Feature worktree slug')
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--finding <id>', 'Exact canonical finding identifier')
+    .requiredOption('--rationale <text>', 'Non-empty operator rationale');
+  buildReview
+    .command('resolve-case')
+    .description('Resolve one open remediation case from an interactive terminal')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--child <child>', 'Child case-store scope')
+    .requiredOption('--case <id>', 'Open remediation case identifier')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
   buildReview
     .command('record-reduced-coverage')

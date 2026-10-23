@@ -26,6 +26,7 @@ import type { ConductorEvent } from '../types/events.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { projectBuildReviewCustomSuppressionSources } from './build-review-suppression-history.js';
 import type { ResolvedBuildReviewConfig } from './resolved-config.js';
+import type { ChildId } from './child-context.js';
 
 /** One resolved catalog is the authority for both built-in and custom floors. */
 export function buildReviewConfidenceFloors(config: Pick<ResolvedBuildReviewConfig, 'catalog' | 'rubrics'>): Partial<Record<string, number>> {
@@ -45,13 +46,17 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly realpath?: (path: string) => Promise<string>;
   readonly createStore?: (projectRoot: string) => DispositionStore;
   /** Autonomous remediation cases; a finalized case settles its current sources. */
-  readonly createCaseStore?: (projectRoot: string, feature: BuildReviewFeatureIdentity) => { read(): Promise<RemediationCaseStoreReadResult> };
+  readonly createCaseStore?: (projectRoot: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => { read(): Promise<RemediationCaseStoreReadResult> };
   /** Reports durable dispositions that no longer bind the current contract. */
   readonly emit?: (event: Extract<ConductorEvent, { type: 'build_review_disposition_version_invalidated' }>) => void | Promise<void>;
   /** Reports ignored legacy records supplied by a custom disposition store. */
   readonly log?: (message: string) => void;
   /** Resolved operator floors, supplied by the live build-review runner. */
   readonly minConfidence?: Partial<Record<string, number>>;
+  /** The active stacked child; settled links are never read from its sibling. */
+  readonly child?: ChildId;
+  /** Disabled adjudication has no case-store authority. */
+  readonly adjudicationEnabled?: boolean;
 }
 
 export type BuildReviewEffectiveResolution =
@@ -193,8 +198,11 @@ async function readSettledBuildReviewSourceIds(
   feature: BuildReviewFeatureIdentity,
   deps: BuildReviewEffectiveResolverDeps,
 ): Promise<ReadonlySet<string>> {
+  if (deps.adjudicationEnabled === false) return new Set();
   try {
-    const read = await (deps.createCaseStore ?? ((root: string, caseFeature: BuildReviewFeatureIdentity) => new RemediationCaseStore(root, caseFeature)))(projectRoot, feature).read();
+    const create = deps.createCaseStore ?? ((root: string, caseFeature: BuildReviewFeatureIdentity, child?: ChildId) =>
+      new RemediationCaseStore(root, caseFeature, child === undefined ? {} : { child }));
+    const read = await create(projectRoot, feature, deps.child).read();
     if (read.ok) return finalizedBuildReviewSourceIds(read.state.cases);
     deps.log?.(`remediation case state unavailable (${read.reason}); no finding treated as settled`);
   } catch {

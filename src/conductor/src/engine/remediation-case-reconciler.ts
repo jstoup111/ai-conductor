@@ -2,10 +2,12 @@ import type { RemediationCaseRow } from './remediation-case-artifact.js';
 import { hasReservedOrFailedRemediationEffect } from './remediation-case-effects.js';
 import {
   type RemediationCaseEffect,
+  type RemediationCaseOutboxEntry,
   type RemediationCaseRecord,
   type RemediationCaseStoreFailureReason,
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
+  prdWideningCasesForState,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 import type { RemediationCaseGraph } from './remediation-case-validator.js';
@@ -23,6 +25,11 @@ export interface ReconcileRemediationCasesInput {
   readonly resolveAbsentOpenNonActionCases?: boolean;
   /** Case identities known by the caller to belong to another feature/domain. */
   readonly foreignCaseIds?: readonly string[];
+  /** Proposals classified as `carry` by `classifyRemediationCaseReuse`. */
+  readonly carry?: {
+    readonly caseRefs: readonly string[];
+    readonly lapId: string;
+  };
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -59,12 +66,53 @@ export type ReconcileRemediationCasesResult =
   };
 
 /** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
-export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression';
+export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression' | 'carry';
+
+export interface RemediationCaseCarryInput {
+  readonly currentLapId: string;
+  readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+}
+
+/** A durable operator decision carries only after its origin remains effective in a later lap. */
+export function isCarryEligibleRemediationCase(
+  record: RemediationCaseRecord,
+  { currentLapId, effectiveAcceptedSourceIds }: RemediationCaseCarryInput,
+): boolean {
+  if (record.operatorResolution) return true;
+  const origins = record.operatorAcceptance?.origins;
+  return record.resolution === 'resolved'
+    && origins !== undefined
+    && origins.length > 0
+    && origins.every((origin) => effectiveAcceptedSourceIds.has(origin.sourceId) && origin.lapId !== currentLapId);
+}
+
+/**
+ * The sole retirement decision for open build-review action cases.  Acceptance
+ * is authoritative even when an earlier effect failed; absence is evidence
+ * only on a mechanically healthy lap.  Callers own their writes, never a
+ * second interpretation of these conditions.
+ */
+export function retiresOpenBuildReviewCase(
+  record: RemediationCaseRecord,
+  input: {
+    readonly liveSourceIds: ReadonlySet<string>;
+    readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+    readonly mechanicallyHealthy: boolean;
+  },
+): boolean {
+  if (record.resolution !== 'open') return false;
+  const accepted = record.sources.length > 0 && record.sources.every((source) => input.effectiveAcceptedSourceIds.has(source.sourceId));
+  const absentFailed = input.mechanicallyHealthy && record.disposition === 'act' && record.effect.kind === 'action' && record.effect.status === 'failed'
+    && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId));
+  return accepted || absentFailed;
+}
 
 export function classifyRemediationCaseReuse(
   record: RemediationCaseRecord,
   attemptedCaseIds: ReadonlySet<string>,
+  carryInput?: RemediationCaseCarryInput,
 ): RemediationCaseReuseDisposition {
+  if (carryInput && isCarryEligibleRemediationCase(record, carryInput)) return 'carry';
   if (record.disposition !== 'act') return 'reuse';
   if (record.resolution === 'resolved') return 'halt-regression';
   return attemptedCaseIds.has(record.id) ? 'halt-repeat' : 'resume';
@@ -142,6 +190,7 @@ function reconcileState(
 ): Reconciliation {
   const foreignIds = new Set(input.foreignCaseIds ?? []);
   const attemptedIds = new Set(input.attemptedCaseIds ?? []);
+  const carriedCaseRefs = new Set(input.carry?.caseRefs ?? []);
   const existingById = new Map(state.cases.map((record) => [record.id, record]));
   const usedIds = new Set<string>();
   for (const record of state.cases) {
@@ -152,6 +201,7 @@ function reconcileState(
   const referencedExisting = new Set<string>();
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
+  const carryOutbox: RemediationCaseOutboxEntry[] = [];
   const caseIdsByRef = new Map<string, string>();
   const claimed = new Set<string>();
 
@@ -224,8 +274,9 @@ function reconcileState(
       && existing.resolution === 'open'
       && existing.effect.kind === 'action'
       && existing.effect.status === 'failed';
+    const admitsCarry = carriedCaseRefs.has(caseRow.caseRef);
     if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
-    if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
+    if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral && !admitsCarry) return { ok: false, reason: 'illegal-disposition-transition' };
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);
     caseIdsByRef.set(caseRow.caseRef, existingCaseId);
@@ -234,6 +285,7 @@ function reconcileState(
     for (const source of sources) {
       const historical = existing.sources.find((link) => link.sourceId === source.sourceId);
       if (historical) {
+        if (admitsCarry) continue;
         // An applied action may be conclusively refuted on a later attempted
         // lap. Preserve the source identity while changing its durable
         // outcome; adding a second link would violate the store's unique
@@ -248,7 +300,22 @@ function reconcileState(
         if (historical.outcome !== source.outcome) return { ok: false, reason: 'illegal-source-link' };
         continue;
       }
-      appendedSources.push({ sourceId: source.sourceId, outcome: source.outcome, recordedAt: input.recordedAt });
+      if (admitsCarry) {
+        const eventId = takeId(input.generateId, usedIds);
+        if (eventId === 'id-generation-failed' || eventId === 'id-collision') return { ok: false, reason: eventId };
+        const origins = existing.operatorAcceptance?.origins ?? [];
+        carryOutbox.push({
+          eventId,
+          occurredAt: input.recordedAt,
+          event: {
+            type: 'build_review_acceptance_carried', eventId, feature: state.feature.feature,
+            lapId: input.carry!.lapId, sourceId: source.sourceId, caseId: existing.id,
+            originSourceIds: origins.map((origin) => origin.sourceId),
+            originLapIds: origins.map((origin) => origin.lapId),
+          },
+        });
+      }
+      appendedSources.push({ sourceId: source.sourceId, outcome: admitsCarry ? 'carried' : source.outcome, recordedAt: input.recordedAt });
     }
     if (admitsRefutation) {
       const effectId = caseRow.effect.kind === 'deferral' ? takeId(input.generateId, usedIds) : undefined;
@@ -348,7 +415,16 @@ function reconcileState(
   });
   return {
     ok: true,
-    state: { ...state, cases: [...cases, ...additions] },
+    state: state.version === 'v3'
+      ? { ...state, cases: [...cases, ...additions], outbox: [...state.outbox, ...carryOutbox] }
+      : carryOutbox.length > 0 ? {
+          version: 'v3',
+          feature: state.feature,
+          cases: [...cases, ...additions],
+          prdWideningCases: prdWideningCasesForState(state),
+          suppressions: state.suppressions ?? [],
+          outbox: carryOutbox,
+        } : { ...state, cases: [...cases, ...additions] },
     changed,
     caseIdsByRef,
     resolvedAbsentCaseIds,

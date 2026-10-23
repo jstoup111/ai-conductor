@@ -8,7 +8,7 @@ import { diffDetectorSets, undeclaredRegistryCommands } from './support/cli-cata
 import { createProgram } from '../../src/cli.js';
 
 describe('pre-dispatch command registry', () => {
-  // Covers: task:1
+  // Covers: task:1, task:19
   it('covers exactly the detectors invoked by the pre-dispatch chains', async () => {
     const source = await readFile(join(process.cwd(), 'src', 'index.ts'), 'utf8');
 
@@ -54,7 +54,7 @@ describe('pre-dispatch command registry', () => {
     });
   });
 
-  // Covers: task:4
+  // Covers: task:4, task:19
   it('declares every pre-dispatch registry command path in the CLI catalog', () => {
     expect(undeclaredRegistryCommands(PRE_DISPATCH_COMMANDS, createProgram())).toEqual([]);
   });

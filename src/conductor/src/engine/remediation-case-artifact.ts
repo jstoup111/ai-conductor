@@ -18,7 +18,11 @@ const MAX_REFUTATION_EVIDENCE = 8;
  * build-review disposition vocabulary.
  */
 export type RemediationCaseDomain = 'build_review' | 'prd_widening';
-export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'merged' | 'escalate';
+/**
+ * `carried` is persisted case-store history only. Provider judgements retain
+ * their closed source-outcome grammar in `parseSourceRow` below.
+ */
+export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'merged' | 'escalate' | 'carried';
 export type RemediationCaseDisposition = 'act' | 'defer' | 'reject' | 'refute' | 'escalate';
 export type RemediationCasePriority = 'critical' | 'high' | 'medium' | 'low';
 export type RemediationCaseConfidence = 'high' | 'medium' | 'low';
@@ -123,8 +127,11 @@ export type RemediationCaseArtifactRejection =
   | 'unknown-domain'
   | 'invalid-source-keys'
   | 'invalid-source-outcome'
+  | 'operator-owned-carried-source-outcome'
   | 'invalid-consistency'
   | 'invalid-case-keys'
+  | 'operator-owned-acceptance'
+  | 'operator-owned-resolution'
   | 'invalid-case-disposition'
   | 'invalid-case-priority'
   | 'invalid-case-confidence'
@@ -167,6 +174,9 @@ function parseSourceRow(value: unknown, mode: RemediationCaseJudgement['mode']):
   }
   if (!isBoundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH)) {
     return { ok: false, reason: 'invalid-source-keys' };
+  }
+  if (value.outcome === 'carried') {
+    return { ok: false, reason: 'operator-owned-carried-source-outcome' };
   }
   if (!oneOf(value.outcome, mode === 'case-v2'
     ? ['acted', 'deferred', 'rejected', 'refuted', 'merged', 'escalate'] as const
@@ -261,6 +271,8 @@ function parseRefutation(value: unknown): ParseResult<RemediationCaseRefutation>
 
 function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): ParseResult<RemediationCaseRow> {
   if (!isRecord(value)) return { ok: false, reason: 'invalid-case-keys' };
+  if (Object.hasOwn(value, 'operatorAcceptance')) return { ok: false, reason: 'operator-owned-acceptance' };
+  if (Object.hasOwn(value, 'operatorResolution')) return { ok: false, reason: 'operator-owned-resolution' };
   if (!oneOf(value.disposition, mode === 'case-v2'
     ? ['act', 'defer', 'reject', 'refute', 'escalate'] as const
     : ['act', 'defer', 'reject', 'refute'] as const)) {
