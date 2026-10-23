@@ -12105,6 +12105,7 @@ export class Conductor {
               // the later bounded fallback task; this happy-path boundary
               // only applies durable verdicts from a valid native dispatch.
               let citationRefusalReason: string | undefined;
+              let remediationClosureReason: string | undefined;
               if (step.name === 'build' && this.stepRunner.dispatchDoneWhenCitationJudgement) {
                 try {
                   const status = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
@@ -12180,15 +12181,20 @@ export class Conductor {
                     .then((raw) => JSON.parse(raw) as unknown)
                     .catch(() => undefined);
                   if (currentStatus !== undefined) {
-                    await runRemediationClosurePass({
+                    const childBranch = this.activeRegionChild === undefined || !state.feature_desc
+                      ? undefined
+                      : childBranchFor(state.feature_desc, this.activeRegionChild);
+                    const reopened = await runRemediationClosurePass({
                       projectRoot: this.projectRoot,
                       planPath,
                       planText,
                       status: currentStatus,
                       scopeTaskIds: taskIds,
                       ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
+                      ...(childBranch?.ok ? { branch: childBranch.branch } : {}),
                       dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
                     });
+                    if (reopened.length > 0) remediationClosureReason = reopened.map(({ reason }) => reason).join('\n');
                   }
                 }
               }
@@ -12217,7 +12223,8 @@ export class Conductor {
                   ...(await this.completionCtx(state)),
                 },
               );
-              if (citationRefusalReason) completion = { ...completion, done: false, reason: citationRefusalReason };
+              const reopenReason = [citationRefusalReason, remediationClosureReason].filter(Boolean).join('\n');
+              if (reopenReason) completion = { ...completion, done: false, reason: reopenReason };
             }
 
             // Task 2, session-fresh-verdict-artifacts: audit-trail event for

@@ -4,8 +4,10 @@ import { canonicalTaskId, listCommitsWithTrailers } from './autoheal.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import { parsePlanTaskBodies, parsePlanTaskTitles } from './plan-task-parse.js';
 import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
-import { readRemediationClosureState, recordRemediationClosureVerdicts } from './remediation-closure-state.js';
-import { resolveChildTaskScope, resolveTaskIdsWithDiagnostics } from './task-progress.js';
+import { markRemediationClosureApplied, readRemediationClosureState, recordRemediationClosureVerdicts } from './remediation-closure-state.js';
+import { restageExistingRemediationTaskStatuses } from './repair-restage.js';
+import { currentCommitSha, currentTreeHash } from './project-prelude.js';
+import { countResolvedTasks, resolveChildTaskScope, resolveTaskIdsWithDiagnostics } from './task-progress.js';
 import type { ChildId } from './child-context.js';
 
 /** Maximum UTF-8 byte projection of a candidate's cited commit diffs. */
@@ -89,6 +91,69 @@ export interface RemediationClosureVerdictResult {
   readonly taskId: string;
   readonly verdict: RemediationClosureVerdict;
   readonly rationale: string;
+}
+
+export interface RemediationClosureReopen {
+  readonly taskId: string;
+  readonly reason: string;
+}
+
+/**
+ * Applies a completed closure judgement in the order which makes a reopen
+ * crash-recoverable: verdict, obligation, settlement, row restage, then the
+ * applied marker/count.  This is deliberately separate from candidate
+ * selection so the conductor can turn the returned reasons into its retry
+ * hint without re-reading mutable state.
+ */
+export async function applyRemediationClosureVerdicts(input: {
+  readonly projectRoot: string;
+  readonly planPath: string;
+  readonly candidates: readonly RemediationClosureCandidate[];
+  readonly verdicts: readonly RemediationClosureVerdictResult[];
+  /** A routed child obligation must bind its host branch at admission. */
+  readonly branch?: string;
+}): Promise<readonly RemediationClosureReopen[]> {
+  const candidates = new Map(input.candidates.map((candidate) => [candidate.taskId, candidate]));
+  await recordRemediationClosureVerdicts(input.projectRoot, input.planPath, input.verdicts.map((verdict) => {
+    const candidate = candidates.get(verdict.taskId);
+    if (!candidate) throw new Error(`remediation closure verdict has no candidate for ${verdict.taskId}`);
+    return {
+      taskId: verdict.taskId,
+      closeIdentity: candidate.closeIdentity,
+      verdict: verdict.verdict,
+      rationale: verdict.rationale,
+      disposition: verdict.verdict === 'resolved' ? 'left-closed' : 'reopened',
+    };
+  }));
+
+  const [head, tree, resolvedCount] = await Promise.all([
+    currentCommitSha(input.projectRoot), currentTreeHash(input.projectRoot), countResolvedTasks(input.projectRoot),
+  ]);
+  const repairs = createRepairObligationStore(input.projectRoot, `${input.projectRoot}/.pipeline/engine-state.json`);
+  const reopened: RemediationClosureReopen[] = [];
+  for (const verdict of input.verdicts) {
+    if (verdict.verdict === 'resolved') continue;
+    const candidate = candidates.get(verdict.taskId)!;
+    const instruction = `Task ${candidate.taskId} "${candidate.title ?? ''}": ${verdict.rationale}`;
+    const admitted = await repairs.admitOrReplay(`remediation-closure:${candidate.closeIdentity}`, {
+      id: `remediation-closure-${candidate.closeIdentity.slice(0, 16)}`,
+      planPath: input.planPath,
+      taskIds: [candidate.taskId],
+      source: { findingId: candidate.closeIdentity, authority: 'remediation-closure', instruction },
+      baseline: {
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
+        head: head ?? '', tree: tree ?? '', resolvedTaskIds: [], resolvedCount,
+      },
+    });
+    if (!admitted.ok) throw new Error(`could not admit remediation closure reopen: ${admitted.message}`);
+    const settled = await repairs.markSettled({ planPath: input.planPath, obligationId: admitted.obligation.id });
+    if (!settled.ok) throw new Error(`could not settle remediation closure reopen: ${settled.message}`);
+    const restaged = await restageExistingRemediationTaskStatuses(input.projectRoot, input.planPath, new Set([candidate.taskId]));
+    if (restaged.kind === 'failed') throw new Error(restaged.detail);
+    await markRemediationClosureApplied(input.projectRoot, input.planPath, candidate.taskId, candidate.closeIdentity);
+    reopened.push({ taskId: candidate.taskId, reason: `Remediation closure reopened: ${instruction}` });
+  }
+  return reopened;
 }
 
 export type RemediationClosureValidation =
@@ -291,8 +356,8 @@ export function validateRemediationClosureOutput(
 
 /**
  * Runs the BUILD-boundary closure judgement after citation settlement.  This
- * task deliberately records only the initial verdict: reopening and hand-off
- * behavior are applied by their owning follow-up tasks.
+ * task applies the resulting reopen through the durable repair-obligation
+ * path before the completion predicate observes the task rows.
  */
 export async function runRemediationClosurePass(input: {
   projectRoot: string;
@@ -301,17 +366,18 @@ export async function runRemediationClosurePass(input: {
   status: unknown;
   scopeTaskIds: readonly string[];
   activeChild?: ChildId;
+  branch?: string;
   dispatch: (input: RemediationClosureInput) => Promise<
     | { readonly kind: 'valid'; readonly verdicts: readonly RemediationClosureVerdictResult[] }
     | { readonly kind: 'unavailable'; readonly cause: string }
   >;
-}): Promise<void> {
+}): Promise<readonly RemediationClosureReopen[]> {
   let scopeTaskIds = input.scopeTaskIds;
   if (input.activeChild !== undefined) {
     const scope = await resolveChildTaskScope(input.projectRoot, input.activeChild);
     // Child membership is an authority boundary.  In particular, never judge
     // a sibling's close when a recreated worktree cannot establish ownership.
-    if (scope.kind === 'refused') return;
+    if (scope.kind === 'refused') return [];
     scopeTaskIds = scope.taskIds;
   }
   const [closureState, repairs, resolution] = await Promise.all([
@@ -338,24 +404,18 @@ export async function runRemediationClosurePass(input: {
     state,
     openCitationTaskIds,
   });
-  if (candidates.length === 0) return;
+  if (candidates.length === 0) return [];
 
   const titles = parsePlanTaskTitles(input.planText);
+  const titledCandidates = candidates.map((candidate) => ({ ...candidate, title: titles.get(candidate.taskId) ?? candidate.title }));
   const judgementInput = await buildRemediationClosureInput(
     input.projectRoot,
-    candidates.map((candidate) => ({ ...candidate, title: titles.get(candidate.taskId) ?? candidate.title })),
+    titledCandidates,
     parsePlanTaskBodies(input.planText),
   );
   const judgement = await input.dispatch(judgementInput);
-  if (judgement.kind !== 'valid') return;
-  await recordRemediationClosureVerdicts(input.projectRoot, input.planPath, judgement.verdicts.map((verdict) => {
-    const candidate = candidates.find(({ taskId }) => taskId === verdict.taskId)!;
-    return {
-      taskId: verdict.taskId,
-      closeIdentity: candidate.closeIdentity,
-      verdict: verdict.verdict,
-      rationale: verdict.rationale,
-      disposition: 'left-closed',
-    };
-  }));
+  if (judgement.kind !== 'valid') return [];
+  return applyRemediationClosureVerdicts({
+    projectRoot: input.projectRoot, planPath: input.planPath, candidates: titledCandidates, verdicts: judgement.verdicts, branch: input.branch,
+  });
 }
