@@ -8,6 +8,7 @@ import { isBelowSeverityThreshold } from './build-review-domain.js';
 export type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 
 export type RemediationCaseGraphRejection =
+  | 'invalid-case-keys'
   | 'duplicate-current-source'
   | 'unknown-source'
   | 'duplicate-source'
@@ -78,6 +79,18 @@ function hasOwn(value: object, key: string): boolean {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function hasValidDistinctFrom(caseRow: RemediationCaseRow): boolean {
+  if (caseRow.distinctFrom === undefined) return true;
+  return Array.isArray(caseRow.distinctFrom) && caseRow.distinctFrom.length > 0 && caseRow.distinctFrom.length <= 128 &&
+    caseRow.distinctFrom.every((entry) => {
+      const candidate = entry as unknown as Record<string, unknown>;
+      return typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
+        Object.keys(candidate).length === 2 && Object.hasOwn(candidate, 'caseId') && Object.hasOwn(candidate, 'reason') &&
+        typeof candidate.caseId === 'string' && candidate.caseId.length > 0 && candidate.caseId.length <= 256 &&
+        typeof candidate.reason === 'string' && candidate.reason.length > 0 && candidate.reason.length <= 8_000;
+    });
 }
 
 function hasProviderDurableId(caseRow: RemediationCaseRow): boolean {
@@ -216,6 +229,7 @@ export function validateRemediationCaseGraph(
 
   const casesByRef = new Map<string, RemediationCaseRow>();
   for (const caseRow of judgement.cases) {
+    if (!hasValidDistinctFrom(caseRow)) return { ok: false, reason: 'invalid-case-keys' };
     if (hasProviderDurableId(caseRow)) return { ok: false, reason: 'provider-durable-id' };
     const operatorState = providerOperatorOwnedState(caseRow);
     if (operatorState) return { ok: false, reason: operatorState };

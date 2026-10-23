@@ -645,6 +645,27 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it.each([
+    ['an empty list', []],
+    ['an empty reason', [{ caseId: 'R', reason: '' }]],
+    ['an over-bound reason', [{ caseId: 'R', reason: 'r'.repeat(8_001) }]],
+    ['an entry with an extra key', [{ caseId: 'R', reason: 'A separate concern.', extra: true }]],
+  ])('rejects malformed distinctFrom with %s without writing a case or effect', async (_name, distinctFrom) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, { version: 'v1', feature, cases: [] });
+    const before = await readFile(remediationCaseStorePath(root), 'utf8');
+    const judgement = {
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, distinctFrom }],
+    } as RemediationCaseJudgement;
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement),
+    })).resolves.toEqual({ ok: false, detail: 'invalid remediation judgement invalid-case-keys' });
+    await expect(readFile(remediationCaseStorePath(root), 'utf8')).resolves.toBe(before);
+  });
+
   it('records only an exact unsuppressed acceptance once on a partially open case', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
