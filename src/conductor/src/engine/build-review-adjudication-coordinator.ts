@@ -729,6 +729,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     sourceRubrics: Object.fromEntries(dispatchSources.map((source) => [
       buildReviewAdjudicationSourceId(source), source.rubric,
     ])),
+    sourceReviewerSeverities: Object.fromEntries(dispatchSources.flatMap((source) =>
+      source.severity === undefined
+        ? []
+        : [[buildReviewAdjudicationSourceId(source), source.severity] as const],
+    )),
     declaredSeverityThresholds: input.declaredSeverityThresholds,
   });
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });

@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de, task:rem-prd-audit-r18-2
+// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de, task:rem-prd-audit-r18-2, task:rem-prd-audit-r18-4
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -358,6 +358,26 @@ describe('coordinateBuildReviewAdjudication', () => {
     const rejected = await coordinateBuildReviewAdjudication({
       ...input(await projectRoot(), async () => advisoryJudgement()),
       declaredSeverityThresholds: { security: 'major' },
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      detail: 'invalid remediation judgement invalid-advisory-threshold',
+    });
+  });
+
+  it('rejects an advisory judgement whose adjudicated severity exceeds its live reviewer severity', async () => {
+    const rejected = await coordinateBuildReviewAdjudication({
+      ...input(await projectRoot(), async () => ({
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'advisory', caseRef: 'advisory-case' }],
+        cases: [{
+          caseRef: 'advisory-case', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'The reviewer finding is below the configured severity threshold.',
+          effect: { kind: 'none' }, adjudicatedSeverity: 'major',
+        }],
+      })),
+      declaredSeverityThresholds: { testQuality: 'critical' },
     });
 
     expect(rejected).toMatchObject({

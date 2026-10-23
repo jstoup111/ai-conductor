@@ -48,6 +48,8 @@ export interface RemediationCaseValidationReferences {
   readonly admittedTaskIds?: readonly string[];
   /** Rubric identity for each frozen source supplied to the judgement. */
   readonly sourceRubrics?: Readonly<Record<string, string>>;
+  /** Reviewer-owned severity for each frozen source supplied to the judgement. */
+  readonly sourceReviewerSeverities?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
   /** Resolved non-nit thresholds declared by the operator, keyed by rubric. */
   readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
 }
@@ -257,8 +259,11 @@ export function validateRemediationCaseGraph(
     }
     if (caseRow.disposition === 'advisory') {
       const threshold = advisoryThresholdForSource(source.sourceId, references);
+      const reviewerSeverity = references.sourceReviewerSeverities?.[source.sourceId];
       if (threshold === undefined || caseRow.adjudicatedSeverity === undefined ||
-        !isBelowSeverityThreshold(caseRow.adjudicatedSeverity, threshold)) {
+        reviewerSeverity === undefined ||
+        !isBelowSeverityThreshold(caseRow.adjudicatedSeverity, threshold) ||
+        isBelowSeverityThreshold(reviewerSeverity, caseRow.adjudicatedSeverity)) {
         return { ok: false, reason: 'invalid-advisory-threshold' };
       }
     }

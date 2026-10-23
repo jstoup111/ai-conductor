@@ -1,4 +1,4 @@
-// Covers: task:2, task:30, task:rem-prd-audit-r18-1, task:rem-prd-audit-r18-3
+// Covers: task:2, task:30, task:rem-prd-audit-r18-1, task:rem-prd-audit-r18-3, task:rem-prd-audit-r18-4
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -178,6 +178,9 @@ function advisoryJudgement(mode: 'case-v1' | 'case-v2'): RemediationCaseJudgemen
 const SOURCE_RUBRICS = Object.freeze(Object.fromEntries(
   CURRENT_SOURCE_IDS.map((sourceId) => [sourceId, 'testQuality']),
 ));
+const SOURCE_REVIEWER_SEVERITIES = Object.freeze(Object.fromEntries(
+  CURRENT_SOURCE_IDS.map((sourceId) => [sourceId, 'major']),
+));
 
 function advisoryReferences(
   mode: RemediationCaseJudgement['mode'],
@@ -186,6 +189,7 @@ function advisoryReferences(
   return {
     ...(mode === 'case-v2' ? CASE_V2_ADMISSION : {}),
     sourceRubrics: SOURCE_RUBRICS,
+    sourceReviewerSeverities: SOURCE_REVIEWER_SEVERITIES,
     declaredSeverityThresholds,
   };
 }
@@ -221,6 +225,24 @@ describe('remediation case graph validator', () => {
     expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, invalid,
       advisoryReferences(invalid.mode, { testQuality: 'major' }),
     )).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement whose adjudicated severity exceeds any linked reviewer severity', (_mode, judgement) => {
+    const sources = judgement.sourceOutcomes.slice(0, 2).map((source, index) => index === 1
+      ? { ...source, outcome: 'merged' as const }
+      : source);
+    const invalid = { ...judgement, sourceOutcomes: sources } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, invalid, {
+      ...advisoryReferences(invalid.mode, { testQuality: 'critical' }),
+      sourceReviewerSeverities: {
+        ...SOURCE_REVIEWER_SEVERITIES,
+        [CURRENT_SOURCE_IDS[1]]: 'nit',
+      },
+    })).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
   });
 
   it.each([
