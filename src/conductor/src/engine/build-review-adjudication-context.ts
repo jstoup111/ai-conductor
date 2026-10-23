@@ -46,6 +46,8 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly escalation?: RemediationCaseRecord['escalation'];
   /** The blocked consistency verdict a persisted `escalate` stop retains. */
   readonly consistencyStop?: RemediationCaseRecord['consistencyStop'];
+  /** The lower severity recorded by a persisted non-blocking advisory case. */
+  readonly adjudicatedSeverity?: RemediationCaseRecord['adjudicatedSeverity'];
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -312,7 +314,7 @@ function validateCurrent(source: BuildReviewRawSourceProjection): BuildReviewAdj
 
 function validateEffect(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationContextStop | undefined {
   const effect = caseRecord.effect;
-  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'escalate' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
+  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'escalate' || caseRecord.disposition === 'advisory' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
     return effect.kind === 'none' ? undefined : { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'effect' };
   }
   const expectedKind = caseRecord.disposition === 'act' ? 'action' : 'deferral';
@@ -361,6 +363,10 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
     !['critical', 'high', 'medium', 'low'].includes(caseRecord.priority) ||
     !['high', 'medium', 'low'].includes(caseRecord.confidence) || !['open', 'resolved'].includes(caseRecord.resolution)) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'case' };
+  }
+  if (caseRecord.disposition === 'advisory' &&
+    !['critical', 'major', 'minor', 'nit'].includes(caseRecord.adjudicatedSeverity ?? '')) {
+    return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'adjudicatedSeverity' };
   }
   if (!Array.isArray(caseRecord.sources) || caseRecord.sources.length === 0 || caseRecord.sources.length > LIMITS.maxSourcesPerCase) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'sources' };
@@ -431,6 +437,7 @@ function freezePriorCase(
         rationale: caseRecord.consistencyStop.rationale,
       }),
     }),
+    ...(caseRecord.disposition === 'advisory' ? { adjudicatedSeverity: caseRecord.adjudicatedSeverity! } : {}),
   });
 }
 

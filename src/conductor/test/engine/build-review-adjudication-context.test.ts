@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:14, task:28, task:rem-as-built-8
+// Covers: task:3, task:4, task:14, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -162,7 +162,45 @@ function priorDecisionStop(id: string): RemediationCaseRecord {
   };
 }
 
+function priorAdvisoryCase(id: string): RemediationCaseRecord {
+  return {
+    ...priorCase(id),
+    disposition: 'advisory',
+    priority: 'low',
+    rationale: `Case ${id} is a minor concern below the declared severity threshold.`,
+    resolution: 'resolved',
+    sources: [{ sourceId: `testQuality:${id}`, outcome: 'advisory', recordedAt: '2026-10-23T12:00:00.000Z' }],
+    effect: { kind: 'none' },
+    adjudicatedSeverity: 'minor',
+  };
+}
+
 describe('build-review adjudication context', () => {
+  it('admits a prior advisory case with no effect as non-blocking history', () => {
+    const advisory = priorAdvisoryCase('case-advisory');
+
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [advisory],
+      suppressions: [{
+        kind: 'severity', findingId: 'threshold-advisory', rubric: 'testQuality',
+        summary: 'A separate finding is below the severity threshold.', severity: 'minor', threshold: 'major', lastSeenLap: 'lap-prior',
+      }],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      context: expect.objectContaining({
+        priorCases: [expect.objectContaining({
+          id: 'case-advisory', disposition: 'advisory', effect: { kind: 'none' }, adjudicatedSeverity: 'minor',
+        })],
+        suppressionHistory: [expect.objectContaining({
+          kind: 'severity', findingId: 'threshold-advisory', severity: 'minor', threshold: 'major',
+        })],
+      }),
+    });
+  });
+
   it('marks only carry-eligible prior cases with their acceptance origins', () => {
     const accepted = {
       ...priorCase('case-accepted'),
