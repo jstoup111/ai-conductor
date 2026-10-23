@@ -44,7 +44,7 @@ const OUTBOX = [
   },
 ] as const;
 
-async function fixture(outbox = OUTBOX) {
+async function fixture(outbox: readonly (typeof OUTBOX)[number][] = OUTBOX) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'remediation-case-outbox-'));
   temporaryDirectories.push(projectRoot);
   const store = new RemediationCaseStore(projectRoot, FEATURE);

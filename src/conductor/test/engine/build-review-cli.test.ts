@@ -11,6 +11,7 @@ import { remediationCaseStorePath, RemediationCaseStore, type RemediationCaseSto
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from '../../src/engine/build-review-cli.js';
 import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/config.js')>(),
@@ -1175,7 +1176,7 @@ describe('build-review resolve-case', () => {
   const feature = { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' };
 
   async function openCaseStore(root: string, child?: 1) {
-    const caseStore = new RemediationCaseStore(root, feature, { child });
+    const caseStore = new RemediationCaseStore(root, feature, { child: child === undefined ? undefined : parseChildId(child) });
     await caseStore.mutate(async (state) => ({
       value: undefined,
       nextState: {
@@ -1247,7 +1248,7 @@ describe('build-review resolve-case', () => {
 
   it('writes only the requested child case store', async () => {
     const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-child-'));
-    const flat = await openCaseStore(root);
+    await openCaseStore(root);
     const child = await openCaseStore(root, 1);
     const flatBefore = await readFile(remediationCaseStorePath(root), 'utf8');
 
