@@ -19,6 +19,7 @@ const POLICY_DIGEST = `sha256:${'c'.repeat(64)}`;
 function finding(name: string): BuildReviewFinding {
   return {
     concernKind: 'test-insensitive',
+    severity: 'minor',
     summary: `The ${name} assertion passes against reverted production.`,
     evidenceLocations: [`test/${name}.test.ts:8`],
     anchor: {
@@ -35,7 +36,7 @@ function aggregate(...findings: readonly BuildReviewFinding[]) {
     results: {
       security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v4',
         findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL',
       },
     },
@@ -49,9 +50,10 @@ function securityAggregate() {
     results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       security: {
-        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v3', verdict: 'FAIL',
+        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
         findings: [{
           concernKind: 'injection',
+          severity: 'minor',
           summary: 'The new request handler interpolates untrusted input into a query.',
           evidenceLocations: ['src/http/search.ts:42'],
           anchor: { rubric: 'security', locus: { path: 'src/http/search.ts', contentHash: HASH, display: 'new search handler' } },
@@ -67,8 +69,8 @@ function implementationQualityAggregate() {
     results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       implementationQuality: {
-        kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v3', verdict: 'FAIL',
-        findings: [{ concernKind: 'primitive-obsession', summary: 'Raw string state permits invalid values.', evidenceLocations: ['src/state.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' } } }],
+        kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
+        findings: [{ concernKind: 'primitive-obsession', severity: 'minor', summary: 'Raw string state permits invalid values.', evidenceLocations: ['src/state.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' } } }],
       },
     },
   });
@@ -429,7 +431,7 @@ describe('build-review adjudication context', () => {
   it('carries suppression history separately from current findings', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('current')), priorCases: [],
-      suppressions: [{ findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
+      suppressions: [{ kind: 'confidence', findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
     });
     expect(result).toMatchObject({ ok: true, context: {
       currentFindings: [expect.objectContaining({ summary: finding('current').summary })],

@@ -124,14 +124,14 @@ function advisoryAggregate({ infrastructure = false }: { readonly infrastructure
     results: {
       testQuality: {
         kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
-        contractVersion: 'v3', findings: [{ ...FINDING, severity: 'minor' }], verdict: 'FAIL',
+        contractVersion: 'v4', findings: [{ ...FINDING, severity: 'minor' }], verdict: 'FAIL',
       },
       security: infrastructure
         ? { kind: 'infrastructure-failure', rubric: 'security', reason: 'provider-error', detail: 'provider unavailable' }
-        : { kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT, contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        : { kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT, contractVersion: 'v4', findings: [], verdict: 'PASS' },
       implementationQuality: {
         kind: 'judged', rubric: 'implementationQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
-        contractVersion: 'v3', findings: [], verdict: 'PASS',
+        contractVersion: 'v4', findings: [], verdict: 'PASS',
       },
     },
   });

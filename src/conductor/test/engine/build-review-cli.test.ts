@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { joinBuildReviewRubricOutcomes, parseBuildReviewAggregate, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
-import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
+import { parseBuildReviewLapId, type BuildReviewFinding, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { remediationCaseStorePath, RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
@@ -19,7 +19,7 @@ vi.mock('../../src/engine/config.js', async (importOriginal) => ({
 }));
 
 const lapId = parseBuildReviewLapId('lap-current')!;
-const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', severity: 'minor', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
+const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', severity: 'minor', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } } satisfies BuildReviewFinding;
 const infrastructureAggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {
@@ -1359,7 +1359,9 @@ describe('build-review findings with current custom rubrics', () => {
         testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [builtin], verdict: 'FAIL' },
       },
     }));
-    delete persisted.customResults!.portablePolicy!.result.findings[0]!.severity;
+    const customResult = persisted.customResults!.portablePolicy!.result;
+    if (customResult.kind !== 'judged') throw new Error('expected a persisted custom judged result');
+    delete (customResult.findings[0] as { severity?: unknown }).severity;
     const aggregate = parseBuildReviewAggregate(persisted)!;
 
     const output = await jsonFindings(findingsDeps(aggregate));

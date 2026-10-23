@@ -673,7 +673,7 @@ describe('build-review dispositions', () => {
         implementationQuality: {
           kind: 'judged', rubric: 'implementationQuality', lapId: parseBuildReviewLapId('lap-current')!, snapshotDigest: 'sha256:snapshot',
           contractVersion: 'v3', verdict: 'FAIL', findings: [{
-            concernKind: 'primitive-obsession', summary: 'Reworded recurring report.', severity: 'minor', evidenceLocations: ['src/state.ts:8'],
+            concernKind: 'primitive-obsession', summary: 'Reworded recurring report.', evidenceLocations: ['src/state.ts:8'],
             anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: testContentHash, display: 'changed state model' } },
           }],
         },

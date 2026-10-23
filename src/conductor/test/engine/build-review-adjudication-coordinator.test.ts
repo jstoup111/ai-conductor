@@ -45,7 +45,7 @@ const aggregate = joinBuildReviewRubricOutcomes({
   results: {
     security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
     testQuality: {
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1' as never, snapshotDigest: 'snapshot-1', contractVersion: 'v3', verdict: 'FAIL',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1' as never, snapshotDigest: 'snapshot-1', contractVersion: 'v4', verdict: 'FAIL',
       findings: [{
         concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/example.test.ts:1'],
         anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: 'sha256:fixture', display: 'example test' } },
@@ -126,7 +126,7 @@ const securityAggregate = joinBuildReviewRubricOutcomes({
   results: {
     testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
     security: {
-      kind: 'judged', rubric: 'security', lapId: 'lap-security' as never, snapshotDigest: 'snapshot-security', contractVersion: 'v3', verdict: 'FAIL',
+      kind: 'judged', rubric: 'security', lapId: 'lap-security' as never, snapshotDigest: 'snapshot-security', contractVersion: 'v4', verdict: 'FAIL',
       findings: [{
         concernKind: 'injection', summary: 'A new query interpolates untrusted input.', severity: 'minor', evidenceLocations: ['src/search.ts:42'],
         anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
@@ -146,7 +146,7 @@ const mixedAggregate = joinBuildReviewRubricOutcomes({
   results: {
     security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
     testQuality: {
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-2' as never, snapshotDigest: 'snapshot-2', contractVersion: 'v3', verdict: 'FAIL',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-2' as never, snapshotDigest: 'snapshot-2', contractVersion: 'v4', verdict: 'FAIL',
       findings: [
         {
           concernKind: 'test-insensitive', summary: 'The first changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/first.test.ts:1'],
@@ -1088,6 +1088,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     const child = parseChildId(2)!;
     const suppression = {
+      kind: 'confidence' as const,
       findingId: findingId,
       rubric: 'testQuality',
       summary: 'The changed test is insensitive.',
@@ -1515,7 +1516,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       results: {
         security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
         testQuality: {
-          kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v3', verdict: 'FAIL',
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v4', verdict: 'FAIL',
           findings: [
             {
               concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/example.test.ts:1'],

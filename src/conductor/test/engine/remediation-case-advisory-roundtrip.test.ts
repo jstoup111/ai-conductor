@@ -33,9 +33,10 @@ function advisoryJudgement(mode: RemediationCaseJudgement['mode']): RemediationC
     }],
   };
   return mode === 'case-v1'
-    ? base
+    ? { ...base, mode: 'case-v1' }
     : {
         ...base,
+        mode: 'case-v2',
         consistency: {
           verdict: 'consistent',
           sourceIds: [SOURCE_ID],

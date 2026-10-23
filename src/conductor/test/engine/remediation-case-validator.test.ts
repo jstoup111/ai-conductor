@@ -7,6 +7,7 @@ import {
 } from '../../src/engine/remediation-case-validator.js';
 import * as buildReviewAdjudication from '../../src/engine/build-review-adjudication.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import type { BuildReviewSeverity } from '../../src/engine/build-review-domain.js';
 import {
   assembleBuildReviewAdjudicationContext,
   buildReviewAdjudicationSourceId,
@@ -178,13 +179,13 @@ function advisoryJudgement(mode: 'case-v1' | 'case-v2'): RemediationCaseJudgemen
 const SOURCE_RUBRICS = Object.freeze(Object.fromEntries(
   CURRENT_SOURCE_IDS.map((sourceId) => [sourceId, 'testQuality']),
 ));
-const SOURCE_REVIEWER_SEVERITIES = Object.freeze(Object.fromEntries(
-  CURRENT_SOURCE_IDS.map((sourceId) => [sourceId, 'major']),
+const SOURCE_REVIEWER_SEVERITIES: Readonly<Record<string, BuildReviewSeverity>> = Object.freeze(Object.fromEntries(
+  CURRENT_SOURCE_IDS.map((sourceId) => [sourceId, 'major' as const]),
 ));
 
 function advisoryReferences(
   mode: RemediationCaseJudgement['mode'],
-  declaredSeverityThresholds: Readonly<Record<string, 'major'>>,
+  declaredSeverityThresholds: Readonly<Partial<Record<string, BuildReviewSeverity>>>,
 ) {
   return {
     ...(mode === 'case-v2' ? CASE_V2_ADMISSION : {}),

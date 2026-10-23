@@ -21,8 +21,8 @@ const branch = {
 
 const projection: TestQualityProjection = {
   rubric: 'testQuality',
-  contractVersion: 'v3',
-  projectionVersion: 'v3',
+  contractVersion: 'v4',
+  projectionVersion: 'v4',
   lapId: parseBuildReviewLapId('lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8')!,
   snapshotDigest: 'sha256:projection',
   contentDigest: 'sha256:content',
