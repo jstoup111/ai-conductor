@@ -962,6 +962,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     if (record.resolution === 'open') await input.emit?.({
       type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
       caseId, resolution: 'open',
+      ...(record.recurrenceOf === undefined ? {} : { recurrenceOf: record.recurrenceOf }),
+      ...(record.distinctFrom === undefined ? {} : { distinctFrom: record.distinctFrom }),
     });
     const priorEffect = priorCasesById.get(caseId)?.effect;
     const wasReserved = priorEffect?.kind !== 'none' && priorEffect?.status === 'reserved';

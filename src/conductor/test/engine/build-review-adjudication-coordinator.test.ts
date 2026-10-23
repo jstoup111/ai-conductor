@@ -2440,6 +2440,56 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases[0]).toEqual(before);
   });
 
+  it('emits recurrence lineage only for the opened case that retains it', async () => {
+    const eventFor = async (judgement: RemediationCaseJudgement, seedOwner: boolean) => {
+      const root = await projectRoot();
+      const store = new RemediationCaseStore(root, feature);
+      if (seedOwner) await seedCases(store, {
+        version: 'v1', feature,
+        cases: [{
+          id: 'R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The earlier repair was applied.', resolution: 'resolved',
+          sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+          effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+        }],
+      });
+      const events: RemediationCaseLifecycleEvent[] = [];
+      await coordinateBuildReviewAdjudication({
+        ...input(root, async () => judgement), generateId: sequentialIds('N'),
+        emit: async (event) => { events.push(event); },
+      });
+      const event = events.find((candidate) => candidate.type === 'remediation_case_reconciled' && candidate.resolution === 'open');
+      if (event === undefined) return undefined;
+      const record = event as unknown as Record<string, unknown>;
+      return {
+        type: event.type,
+        resolution: event.resolution,
+        ...(Object.hasOwn(record, 'recurrenceOf') ? { recurrenceOf: record.recurrenceOf } : {}),
+        ...(Object.hasOwn(record, 'distinctFrom') ? { distinctFrom: record.distinctFrom } : {}),
+      };
+    };
+    const distinct = await eventFor({
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, distinctFrom: [{ caseId: 'R', reason: 'The implementation boundary differs.' }] }],
+    }, true);
+    const recurrence = await eventFor(actionJudgement(), true);
+    const plain = await eventFor(actionJudgement(), false);
+    const droppedDeclaration = await eventFor({
+      ...actionJudgement(),
+      cases: [{ ...actionJudgement().cases[0]!, distinctFrom: [{ caseId: 'dropped', reason: 'This is not an owner.' }] }],
+    }, false);
+
+    expect([distinct, recurrence, plain, droppedDeclaration]).toEqual([
+      {
+        type: 'remediation_case_reconciled', resolution: 'open',
+        distinctFrom: [{ caseId: 'R', reason: 'The implementation boundary differs.' }],
+      },
+      { type: 'remediation_case_reconciled', resolution: 'open', recurrenceOf: ['R'] },
+      { type: 'remediation_case_reconciled', resolution: 'open' },
+      { type: 'remediation_case_reconciled', resolution: 'open' },
+    ]);
+  });
+
   it.each([
     ['defer', 'deferred'],
     ['reject', 'rejected'],
