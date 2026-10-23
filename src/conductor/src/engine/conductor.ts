@@ -12159,26 +12159,37 @@ export class Conductor {
                       await emitTracked({ type: 'done_when_citation_judged', citations: pending.map((citation) => ({ taskId: citation.taskId, check: citation.checkIndex, unavailable: judgement.cause })) });
                     }
                   }
-                  if (this.stepRunner.dispatchRemediationClosureJudgement) {
-                    const planText = await readFile(planPath, 'utf8');
-                    const taskIds = [...parsePlanTaskBodies(planText).keys()];
-                    const currentStatus = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
-                      .then((raw) => JSON.parse(raw) as unknown);
-                    await runRemediationClosurePass({
-                      projectRoot: this.projectRoot,
-                      planPath,
-                      planText,
-                      status: currentStatus,
-                      scopeTaskIds: taskIds,
-                      dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
-                    });
-                  }
                   }
                 } catch (error) {
                   // Never complete BUILD with a citation still awaiting a
                   // judgement.  Native unavailability is demoted above; a
                   // persistence or parsing failure is a named boundary error.
                   throw new Error(`citation judgement unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                }
+              }
+              // Closure judgement is independent of citation support.  It
+              // must also never judge a mixed worktree, because the provider
+              // would otherwise inspect changes not represented by a close.
+              if (step.name === 'build' && this.stepRunner.dispatchRemediationClosureJudgement &&
+                (await uncommittedPathsOrNull(await this.completionCtx(state))) === null) {
+                const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
+                if (planPath) {
+                  const planText = await readFile(planPath, 'utf8');
+                  const taskIds = [...parsePlanTaskBodies(planText).keys()];
+                  const currentStatus = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
+                    .then((raw) => JSON.parse(raw) as unknown)
+                    .catch(() => undefined);
+                  if (currentStatus !== undefined) {
+                    await runRemediationClosurePass({
+                      projectRoot: this.projectRoot,
+                      planPath,
+                      planText,
+                      status: currentStatus,
+                      scopeTaskIds: taskIds,
+                      ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
+                      dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
+                    });
+                  }
                 }
               }
               // A final BUILD attempt cannot consume a future review lap.

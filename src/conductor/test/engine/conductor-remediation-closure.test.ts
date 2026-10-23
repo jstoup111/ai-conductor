@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:7, task:8
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -124,5 +124,67 @@ describe('BUILD remediation-closure judgement boundary', () => {
     expect(closures).not.toHaveBeenCalled();
     const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
     expect(Object.values(engine.repairObligations.records)).toHaveLength(1);
+  });
+
+  it.each([
+    ['a tracked modification', async () => writeFile(join(root, '.gitignore'), '.pipeline/\nchanged\n')],
+    ['an untracked non-ignored file', async () => writeFile(join(root, 'untracked'), 'present\n')],
+  ])('does not judge a close from a dirty tree (%s)', async (_caseName, makeDirty) => {
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
+      id: 'rem-as-built-R5', status: 'completed',
+      doneWhen: [{ check: 'Repair one is committed.', evidence: 'reported deadbee', source: 'reported' }],
+    }] }));
+    await makeDirty();
+    const closures = vi.fn();
+    const runner: StepRunner = {
+      run: async () => ({ success: true }),
+      dispatchRemediationClosureJudgement: closures,
+    };
+    const git = async (args: string[], options: { cwd: string }) => {
+      const { stdout } = await exec('git', args, { cwd: options.cwd });
+      return { stdout, exitCode: 0 };
+    };
+
+    await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), git, mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
+
+    expect(closures).not.toHaveBeenCalled();
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8'));
+    expect(state.build).not.toBe('done');
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(engine.remediationClosure).toBeUndefined();
+  });
+
+  it('judges an eligible remediation close without the citation port', async () => {
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
+      id: 'rem-as-built-R5', status: 'completed',
+      doneWhen: [{ check: 'Repair one is committed.', evidence: 'reported deadbee', source: 'reported' }],
+    }] }));
+    const closures = vi.fn(async (input: { candidates: Array<{ taskId: string }> }) => ({
+      kind: 'valid' as const, attempts: 1,
+      verdicts: input.candidates.map(({ taskId }) => ({ taskId, verdict: 'resolved' as const, rationale: 'Present.' })),
+    }));
+    const runner: StepRunner = { run: async () => ({ success: true }), dispatchRemediationClosureJudgement: closures };
+
+    await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
+
+    expect(closures).toHaveBeenCalledWith(expect.objectContaining({
+      candidates: [expect.objectContaining({ taskId: 'rem-as-built-R5' })],
+    }));
+  });
+
+  it('does not send an ordinary reported task to the closure judge', async () => {
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
+      id: '4', status: 'completed',
+      doneWhen: [{ check: 'cited check.', evidence: 'reported deadbee', source: 'reported' }],
+    }] }));
+    const closures = vi.fn();
+    const runner: StepRunner = { run: async () => ({ success: true }), dispatchRemediationClosureJudgement: closures };
+
+    await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+      events: new ConductorEventEmitter(), mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
+
+    expect(closures).not.toHaveBeenCalled();
   });
 });

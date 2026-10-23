@@ -5,7 +5,8 @@ import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import { parsePlanTaskBodies, parsePlanTaskTitles } from './plan-task-parse.js';
 import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
 import { readRemediationClosureState, recordRemediationClosureVerdicts } from './remediation-closure-state.js';
-import { resolveTaskIdsWithDiagnostics } from './task-progress.js';
+import { resolveChildTaskScope, resolveTaskIdsWithDiagnostics } from './task-progress.js';
+import type { ChildId } from './child-context.js';
 
 /** Maximum UTF-8 byte projection of a candidate's cited commit diffs. */
 export const REMEDIATION_CLOSURE_DIFF_CAP_BYTES = 48_000;
@@ -299,15 +300,24 @@ export async function runRemediationClosurePass(input: {
   planText: string;
   status: unknown;
   scopeTaskIds: readonly string[];
+  activeChild?: ChildId;
   dispatch: (input: RemediationClosureInput) => Promise<
     | { readonly kind: 'valid'; readonly verdicts: readonly RemediationClosureVerdictResult[] }
     | { readonly kind: 'unavailable'; readonly cause: string }
   >;
 }): Promise<void> {
+  let scopeTaskIds = input.scopeTaskIds;
+  if (input.activeChild !== undefined) {
+    const scope = await resolveChildTaskScope(input.projectRoot, input.activeChild);
+    // Child membership is an authority boundary.  In particular, never judge
+    // a sibling's close when a recreated worktree cannot establish ownership.
+    if (scope.kind === 'refused') return;
+    scopeTaskIds = scope.taskIds;
+  }
   const [closureState, repairs, resolution] = await Promise.all([
     readRemediationClosureState(input.projectRoot),
     createRepairObligationStore(input.projectRoot, `${input.projectRoot}/.pipeline/engine-state.json`).read(),
-    resolveTaskIdsWithDiagnostics(input.projectRoot, [...input.scopeTaskIds]),
+    resolveTaskIdsWithDiagnostics(input.projectRoot, [...scopeTaskIds]),
   ]);
   if (closureState.kind === 'incompatible') throw new Error(closureState.message);
   if (!repairs.ok) throw new Error(`could not read repair obligations: ${repairs.message}`);
@@ -323,7 +333,7 @@ export async function runRemediationClosurePass(input: {
   const state = closureState.state.plans[planIdentity]?.tasks ?? {};
   const candidates = selectRemediationClosureCandidates({
     status: input.status,
-    scopeTaskIds: input.scopeTaskIds,
+    scopeTaskIds,
     resolvedIds: resolution.resolved,
     state,
     openCitationTaskIds,
