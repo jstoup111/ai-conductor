@@ -294,11 +294,13 @@ moves, so that a bad fix is never disguised as a placement problem.
 - Given the worktree sync fails, when the feature resumes, then the round stays `reroute-moved` and no admission or dispatch happens until the sync succeeds.
 - Given a round already rerouted from child 1 to child 2, when child 2's builder makes a verified claim naming the leaf, then the host becomes the leaf, and a later claim from the leaf is refused.
 - Given a routed build returns a malformed structured result, when it is handled, then it counts as a failed attempt on the host region's caps.
+- Given a routed build returns a `blocked-by-prerequisite` claim whose `child` is a string, or an integer outside 1 to `MAX_CHILD_ID`, when it is handled, then the claim is malformed, and the provider schema the dispatch requested rejects the same claim.
 - Given a routed build returns no structured result, when it is handled, then no claim is made and the build is processed as today.
 - Given an N=1 feature or a non-routed build, when the builder is dispatched, then no structured result is requested.
 
 ### Done When
 - [ ] Tests assert verified, unverified, malformed and absent claims, the upward-only rule, and the refusals on unstamped commits, an open journal and a non-pending destination.
+- [ ] A test asserts the claim parser accepts exactly the claims the requested provider schema accepts.
 - [ ] A test injects a concurrent marker or branch write into the reroute transaction and asserts nothing moves.
 - [ ] Tests assert crash recovery from `reroute-moved`, no second charge, and the merged allocation on the destination.
 
