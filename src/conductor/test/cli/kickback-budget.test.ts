@@ -1411,7 +1411,8 @@ describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
-  it('keeps childless unavailable gates in their durable ledger order', async () => {
+  // Covers: task:rem-prd-audit-4a, task:rem-prd-audit-4b
+  it('keeps childless unavailable output in durable ledger order', async () => {
     const fixture = await makeFeature({
       version: 1,
       gates: {
@@ -1425,18 +1426,26 @@ describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
         { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
         { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => humanOutput.push(line) },
       )).toBe(1);
-      expect(humanOutput[0].split('\n\n').filter((line) => line.endsWith('budget unavailable (durable entry failed validation)')))
-        .toEqual([
-          'prd_audit: budget unavailable (durable entry failed validation)',
-          'build_review: budget unavailable (durable entry failed validation)',
-        ]);
+      expect(humanOutput).toEqual([[
+        'Kickback budget (architecture_review_as_built): 0/1 consumed; 1 remaining\nLatest reason: none\nAdjustment history: none\nResume authorization: none\nPlan growth: plan unresolved; 0 added',
+        'prd_audit: budget unavailable (durable entry failed validation)',
+        'build_review: budget unavailable (durable entry failed validation)',
+      ].join('\n\n')]);
 
       const jsonOutput: string[] = [];
       expect(await dispatchKickbackBudgetCommand(
         { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
         { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => jsonOutput.push(line) },
       )).toBe(1);
-      expect(JSON.parse(jsonOutput[0]).unavailableGates).toEqual(['prd_audit', 'build_review']);
+      expect(jsonOutput).toEqual([JSON.stringify({
+        feature: 'feature',
+        gates: [{
+          gate: 'architecture_review_as_built', consumed: 0, limit: 1, remaining: 1,
+          latestReason: '', adjustments: [], laps: 0, lapCap: 1, pendingLaps: 0,
+          planGrowth: { authored: 0, added: 0, byGate: {}, remaining: 0, cap: null, capSource: 'config-derived', authoredSource: 'unresolved' },
+        }],
+        unavailableGates: ['prd_audit', 'build_review'],
+      })]);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
