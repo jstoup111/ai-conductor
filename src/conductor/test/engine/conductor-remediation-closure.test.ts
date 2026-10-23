@@ -1,5 +1,6 @@
 // Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:14
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,7 @@ import { applyRemediationClosureVerdicts, remediationCloseIdentity, replayRemedi
 import { parseChildId } from '../../src/engine/child-context.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { readPlanGrowthBudget } from '../../src/engine/remediation-caps.js';
-import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import { createRepairObligationStore, repairPlanIdentity } from '../../src/engine/repair-obligations.js';
 import { restageExistingRemediationTaskStatuses } from '../../src/engine/repair-restage.js';
 import { recordRemediationClosureVerdicts } from '../../src/engine/remediation-closure-state.js';
 import { writeState } from '../../src/engine/state.js';
@@ -619,6 +620,35 @@ describe('BUILD remediation-closure judgement boundary', () => {
     expect(retryHint).toContain('Named repair absent.');
   });
 
+  it('admits and restages independent remediation-closure obligations for identical closes in separate plans', async () => {
+    const taskId = 'rem-as-built-R5';
+    const closeRecords = [{ check: 'Repair one is committed.', evidence: 'reported', source: 'reported' }];
+    const candidate = { taskId, title: 'First remediation', closeRecords, closeIdentity: remediationCloseIdentity(taskId, 0, closeRecords) };
+    const firstPlan = join(root, '.docs', 'plans', 'closure.md');
+    const secondPlan = join(root, '.docs', 'plans', 'closure-two.md');
+    await writeFile(secondPlan, await readFile(firstPlan, 'utf8'));
+
+    for (const planPath of [firstPlan, secondPlan]) {
+      await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+        { id: taskId, status: 'completed', doneWhen: closeRecords },
+      ] }));
+      await applyRemediationClosureVerdicts({
+        projectRoot: root, planPath, candidates: [candidate],
+        verdicts: [{ taskId, verdict: 'persists', rationale: 'The named repair is absent.' }],
+      });
+      const status = JSON.parse(await readFile(join(root, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].status).toBe('pending');
+    }
+
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    const obligations = Object.values(engine.repairObligations.records) as Array<{ id: string; planIdentity: string; settlement: string }>;
+    expect(obligations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ planIdentity: repairPlanIdentity(root, firstPlan), settlement: 'settled' }),
+      expect.objectContaining({ planIdentity: repairPlanIdentity(root, secondPlan), settlement: 'settled' }),
+    ]));
+    expect(new Set(obligations.map(({ id }) => id))).toHaveLength(2);
+  });
+
   it.each(['verdict', 'admission', 'restage'] as const)(
     'replays a crash after the %s write exactly once',
     async (stopAfter) => {
@@ -633,15 +663,17 @@ describe('BUILD remediation-closure judgement boundary', () => {
         taskId, closeIdentity, verdict: 'persists', rationale: 'The named repair is absent.', disposition: 'reopened',
       }]);
       const repairs = createRepairObligationStore(root, join(root, '.pipeline', 'engine-state.json'));
+      const planIdentity = repairPlanIdentity(root, planPath);
+      const obligationIdentity = createHash('sha256').update(JSON.stringify({ planIdentity, closeIdentity }), 'utf8').digest('hex');
       const admission = {
-        id: `remediation-closure-${closeIdentity.slice(0, 16)}`,
+        id: `remediation-closure-${obligationIdentity.slice(0, 16)}`,
         planPath,
         taskIds: [taskId],
         source: { findingId: closeIdentity, authority: 'remediation-closure', instruction: `Task ${taskId} "First remediation": The named repair is absent.` },
         baseline: { head: '', tree: '', resolvedTaskIds: [], resolvedCount: 1 },
       } as const;
       if (stopAfter !== 'verdict') {
-        const admitted = await repairs.admitOrReplay(`remediation-closure:${closeIdentity}`, admission);
+        const admitted = await repairs.admitOrReplay(`remediation-closure:${planIdentity}:${closeIdentity}`, admission);
         expect(admitted.ok).toBe(true);
         if (admitted.ok) expect((await repairs.markSettled({ planPath, obligationId: admitted.obligation.id })).ok).toBe(true);
       }

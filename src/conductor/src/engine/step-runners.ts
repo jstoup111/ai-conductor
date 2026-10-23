@@ -2937,6 +2937,7 @@ export class DefaultStepRunner implements StepRunner {
           },
           (options) => executeAuxiliaryProviderCandidates({
             step: 'build', memberId: 'remediation-closure-judgement', policy,
+            nativeConfigStep: 'build_review',
             runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch('remediation-closure-judgement:judge'),
             config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
             nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build'),

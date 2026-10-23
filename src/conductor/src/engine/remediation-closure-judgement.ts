@@ -121,8 +121,13 @@ async function applyRemediationClosureReopen(input: {
   ]);
   const repairs = createRepairObligationStore(input.projectRoot, `${input.projectRoot}/.pipeline/engine-state.json`);
   const instruction = `Task ${input.candidate.taskId} "${input.candidate.title ?? ''}": ${input.rationale}`;
-  const admitted = await repairs.admitOrReplay(`remediation-closure:${input.candidate.closeIdentity}`, {
-    id: `remediation-closure-${input.candidate.closeIdentity.slice(0, 16)}`,
+  const planIdentity = repairPlanIdentity(input.projectRoot, input.planPath);
+  const obligationIdentity = createHash('sha256').update(JSON.stringify({
+    planIdentity,
+    closeIdentity: input.candidate.closeIdentity,
+  }), 'utf8').digest('hex');
+  const admitted = await repairs.admitOrReplay(`remediation-closure:${planIdentity}:${input.candidate.closeIdentity}`, {
+    id: `remediation-closure-${obligationIdentity.slice(0, 16)}`,
     planPath: input.planPath,
     taskIds: [input.candidate.taskId],
     source: { findingId: input.candidate.closeIdentity, authority: 'remediation-closure', instruction },

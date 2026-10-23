@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import {
@@ -56,8 +56,8 @@ async function subject(options: {
       key: 'schema-fallback', provider: { name: 'schema-fallback', invoke: codexInvoke } as unknown as LLMProvider,
       lifecycleCapability: { synchronousSpawnPermit: true },
       ...(options.native === false ? {} : { nativeSchemaCapability: { nativeOutputSchema: true as const } }),
-      policy: CLAUDE_MODEL_POLICY, builtIn: false,
-      availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      policy: CODEX_MODEL_POLICY, builtIn: false,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
     },
   ]);
   const projectDir = await mkdtemp(join(tmpdir(), 'remediation-closure-judgement-'));
@@ -91,6 +91,26 @@ describe('DefaultStepRunner.dispatchRemediationClosureJudgement', () => {
     expect(claudeInvoke).toHaveBeenCalledWith(expect.objectContaining({
       prompt: expect.stringContaining(JSON.stringify(input)), model: 'review-model', effort: 'high',
       cwd: projectDir, interactive: false, readOnlyReview: true, nativeSchema: REMEDIATION_CLOSURE_JUDGEMENT_SCHEMA,
+    }));
+    expect(lifecycle).toHaveBeenCalledWith('build', expect.anything());
+  });
+
+  it('resolves the fallback candidate model and effort under build_review while supervised as BUILD', async () => {
+    const { runner, claudeInvoke, codexInvoke, lifecycle } = await subject({
+      claudeResults: [{
+        success: false, output: 'claude unavailable', exitCode: 127,
+        providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'claude unavailable',
+      }],
+    });
+
+    await expect(runner.dispatchRemediationClosureJudgement(input)).resolves.toEqual({
+      kind: 'valid', verdicts: valid.verdicts, attempts: 1,
+    });
+
+    expect(claudeInvoke).toHaveBeenCalledTimes(1);
+    expect(codexInvoke).toHaveBeenCalledWith(expect.objectContaining({
+      model: CODEX_MODEL_POLICY.stepModels.build_review,
+      effort: CODEX_MODEL_POLICY.stepEfforts.build_review,
     }));
     expect(lifecycle).toHaveBeenCalledWith('build', expect.anything());
   });
