@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:9, task:11
+// Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:14
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
