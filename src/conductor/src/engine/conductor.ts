@@ -5348,8 +5348,10 @@ export class Conductor {
    * `open` with an `applied` effect forever, and every subsequent BUILD entry —
    * for any gate — read its stale work order back through
    * `durableBuildReviewRetryContext` and re-injected repaired work. A clean PASS
-   * IS the evidence that its content set is empty, so reconciling against an
-   * empty graph resolves exactly the prior attempted cases absent from it.
+   * IS the evidence that its actionable content set is empty, so reconciling
+   * against an empty graph resolves exactly the prior attempted cases absent
+   * from it. A raw FAIL whose only findings are threshold advisories has the
+   * same effective-PASS evidence.
    *
    * The mechanical verdict is never changed here. This is state settlement
    * before terminal PASS routing: genuinely absent prior state is benign, but
@@ -5378,7 +5380,28 @@ export class Conductor {
       return { kind: 'absent' };
     }
     const aggregate = parseBuildReviewAggregate(verdictRaw);
-    if (!aggregate || aggregate.verdict !== 'PASS') return { kind: 'absent' };
+    if (!aggregate) return { kind: 'absent' };
+    if (aggregate.verdict !== 'PASS') {
+      const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+        this.projectRoot,
+        verdictRaw,
+        {
+          emit: async (event) => { await this.events.emit(event); },
+          minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+          minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
+          child: this.activeRegionChild,
+          adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+        },
+      );
+      const advisoryOnlyEffectivePass = effective.ok &&
+        effective.effective.verdict === 'PASS' &&
+        (effective.effective.advisoryFindingIds?.length ?? 0) > 0 &&
+        effective.effective.unresolvedFindingIds.length === 0 &&
+        effective.effective.acceptedFindingIds.length === 0 &&
+        effective.effective.suppressedFindingIds.length === 0 &&
+        (effective.effective.settledFindingIds?.length ?? 0) === 0;
+      if (!advisoryOnlyEffectivePass) return { kind: 'absent' };
+    }
     const featureRead = await readRemediationCaseStoreFeature(
       this.projectRoot,
       undefined,
@@ -13804,6 +13827,17 @@ export class Conductor {
                     return;
                   }
                   if (outcome.kind === 'settled') {
+                    const settlement = await this.settleRemediationCasesOnCleanBuildReview();
+                    if (settlement.kind === 'invalid') {
+                      await this.haltSerialExecution({
+                        reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
+                        haltClass: 'needs-human',
+                        persistState: async () => {
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
+                        },
+                      });
+                      return;
+                    }
                     await this.saveConductorStepStatus(state, step.name, 'done');
                     this.log?.(outcome.trace);
                     continue;

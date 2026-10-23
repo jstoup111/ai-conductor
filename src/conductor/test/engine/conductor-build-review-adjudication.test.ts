@@ -117,6 +117,26 @@ function passAggregate(): unknown {
   });
 }
 
+/** A built-in-only raw FAIL whose sole finding is below the configured floor. */
+function advisoryAggregate({ infrastructure = false }: { readonly infrastructure?: boolean } = {}): unknown {
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [{ ...FINDING, severity: 'minor' }], verdict: 'FAIL',
+      },
+      security: infrastructure
+        ? { kind: 'infrastructure-failure', rubric: 'security', reason: 'provider-error', detail: 'provider unavailable' }
+        : { kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT, contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      implementationQuality: {
+        kind: 'judged', rubric: 'implementationQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+  });
+}
+
 function customAggregate() {
   const declaration = {
     version: 'v1' as const, rubricId: 'portable', semanticSkill: 'portable-policy',
@@ -287,6 +307,12 @@ interface FixtureOptions {
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** A clean lap. The adjudication coordinator never runs for one. */
   readonly rawVerdict?: 'PASS' | 'FAIL';
+  /** Drives the built-in-only effective-PASS advisory path. */
+  readonly advisory?: boolean;
+  /** Adds an infrastructure failure to the advisory-only aggregate. */
+  readonly advisoryInfrastructure?: boolean;
+  /** Attended mode must share the settlement seam with daemon execution. */
+  readonly attended?: boolean;
   /** Models an operator disposition arriving through the event spine mid-lap. */
   readonly acceptedFindingIds?: () => readonly string[];
   /** Models the effective-verdict projection of sub-floor findings. */
@@ -327,7 +353,7 @@ async function fixture(options: FixtureOptions = {}) {
   const mixed = options.infrastructure && options.infrastructure !== 'none';
   const scopeIncomplete = options.scopeIncomplete !== undefined;
   const clean = options.rawVerdict === 'PASS';
-  const raw = clean ? passAggregate() : options.reRaised ? reRaisedAggregate() : options.customInfrastructure ? customInfrastructureAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
+  const raw = clean ? passAggregate() : options.advisory ? advisoryAggregate({ infrastructure: options.advisoryInfrastructure }) : options.reRaised ? reRaisedAggregate() : options.customInfrastructure ? customInfrastructureAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -353,16 +379,19 @@ async function fixture(options: FixtureOptions = {}) {
 
   const infrastructureRubrics = mixed || options.reportUncoveredInfrastructure
     ? (['testQuality'] as const)
+    : options.advisoryInfrastructure ? (['security'] as const)
     : options.customInfrastructure ? (['portable'] as const) : ([] as const);
   const uncovered = options.infrastructure === 'uncovered' || options.reportUncoveredInfrastructure
     ? (['testQuality'] as const)
+    : options.advisoryInfrastructure ? (['security'] as const)
     : options.customInfrastructure ? (['portable'] as const) : ([] as const);
   const uncoveredScopeIncomplete = options.scopeIncomplete === 'uncovered'
     ? (['testQuality'] as const) : ([] as const);
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
     const acceptedFindingIds = [...(options.acceptedFindingIds?.() ?? [])];
     const suppressedFindingIds = [...(options.suppressedFindingIds ?? [])];
-    const effectivePass = clean || suppressedFindingIds.includes(FINDING_ID);
+    const advisoryFindingIds = options.advisory ? [FINDING_ID] : [];
+    const effectivePass = clean || suppressedFindingIds.includes(FINDING_ID) || options.advisory === true;
     return {
       ok: true as const,
       feature,
@@ -373,6 +402,7 @@ async function fixture(options: FixtureOptions = {}) {
         unresolvedFindingIds: mixed || scopeIncomplete || effectivePass || acceptedFindingIds.includes(FINDING_ID)
           ? [] : options.reRaised ? [FINDING_ID, RE_RAISED_FINDING_ID] : [FINDING_ID],
         suppressedFindingIds,
+        ...(advisoryFindingIds.length === 0 ? {} : { advisoryFindingIds }),
         skippedRubrics: [],
         infrastructureFailureRubrics: [...infrastructureRubrics],
         uncoveredInfrastructureFailureRubrics: [...uncovered],
@@ -427,13 +457,13 @@ async function fixture(options: FixtureOptions = {}) {
     events,
     fromStep: options.startFrom ?? 'build_review',
     verifyArtifacts: true,
-    mode: 'auto',
-    daemon: true,
+    mode: options.attended ? 'default' : 'auto',
+    daemon: !options.attended,
     config: {
       kickback_escalation: { enabled: false },
       build_review: {
         adjudication: { enabled: options.adjudicationEnabled ?? true },
-        rubrics: { testQuality: { enabled: true, min_confidence: 70 } },
+        rubrics: { testQuality: { enabled: true, min_confidence: 70, ...(options.advisory ? { min_severity: 'major' as const } : {}) } },
         ...(options.custom ? { custom_rubrics: {
           portable: { enabled: true, skill: 'portable-policy', question: 'Does this preserve the portable policy boundary?', source: 'project' },
         } } : {}),
@@ -1255,6 +1285,47 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(later.lifecycle).toContainEqual(expect.objectContaining({
       type: 'remediation_case_reconciled', caseId: settled.cases[0]!.id, resolution: 'resolved',
     }));
+  });
+
+  // Covers: task:12, task:rem-as-built-r12-1
+  it.each([
+    ['mechanically healthy', false, 'resolved'],
+    ['an infrastructure-failure lap', true, 'open'],
+  ] as const)('settles an absent prior action on an attended built-in-only advisory PASS only when %s', async (_label, advisoryInfrastructure, expectedResolution) => {
+    const caseId = `case-advisory-${advisoryInfrastructure ? 'infra' : 'healthy'}`;
+    const run = await fixture({
+      attended: true,
+      advisory: true,
+      advisoryInfrastructure,
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: caseId, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The earlier action is absent from this advisory-only lap.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: `effect-${caseId}`, kind: 'action', status: 'failed', diagnostic: 'previous effect failed' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+      },
+    });
+
+    const settled = await run.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; resolution: string; effect: { status: string } }>;
+    };
+    expect(settled.cases.find((record) => record.id === caseId)).toMatchObject({
+      resolution: expectedResolution,
+      effect: { status: 'failed' },
+    });
+    expect(run.lifecycle.filter((event) =>
+      event.type === 'remediation_case_reconciled' && event.caseId === caseId,
+    )).toHaveLength(expectedResolution === 'resolved' ? 1 : 0);
   });
 
   it('keeps a clean PASS terminal when there is no durable case store', async () => {
