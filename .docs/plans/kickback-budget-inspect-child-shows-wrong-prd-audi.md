@@ -263,3 +263,21 @@ Task 1 ──┬── Task 2
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-4a: kickback-budget-cli.ts: build the unavailable list in ledger key order from unreadableKickbackGates over each owning ledger (flat ledger for whole-feature gates, child ledger otherwise), so a childless inspect is byte-identical to the pre-change `unreadableKickbackGates(ledger).filter(g => GATES.has(g))`
+**Gate:** prd-audit
+**Rationale:** Verified (95%) at src/conductor/src/engine/kickback-budget-cli.ts:196. The unavailable-gate list used to follow the ledger's JSON key order. The new code orders it by KICKBACK_BUDGET_GATES instead, so a childless inspect whose ledger has two or more malformed entries in a different key order prints different human and JSON output. That breaks task 4's done-when for byte-identical childless output. The pinned test only covers a healthy ledger, so it does not catch this. No architecture or product decision is involved: this is clear implementation and test drift inside approved task 4, so it routes to BUILD.
+**Criterion:** S1.13
+**Parent task:** 4
+**Done when:**
+- [test] S1.13 is satisfied by this task.
+- The repair for task rem-prd-audit-4a is committed and its targeted tests pass.
+
+### Task rem-prd-audit-4b: kickback-budget-cli test: pin childless inspect human and JSON output (unavailable lines and unavailableGates order) for a ledger with two or more malformed gate entries whose JSON key order differs from KICKBACK_BUDGET_GATES order, e.g. prd_audit before build_review; RED against the current code
+**Gate:** prd-audit
+**Rationale:** Verified (95%) at src/conductor/src/engine/kickback-budget-cli.ts:196. The unavailable-gate list used to follow the ledger's JSON key order. The new code orders it by KICKBACK_BUDGET_GATES instead, so a childless inspect whose ledger has two or more malformed entries in a different key order prints different human and JSON output. That breaks task 4's done-when for byte-identical childless output. The pinned test only covers a healthy ledger, so it does not catch this. No architecture or product decision is involved: this is clear implementation and test drift inside approved task 4, so it routes to BUILD.
+**Criterion:** S1.13
+**Parent task:** 4
+**Done when:**
+- [test] S1.13 is satisfied by this task.
+- The repair for task rem-prd-audit-4b is committed and its targeted tests pass.
