@@ -179,6 +179,10 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     // here would render a budget the ledger does not actually hold.
     const refused = await reconcile(child);
     if (refused !== undefined) return refused;
+    if (child !== undefined) {
+      const refusedFlat = await reconcile(undefined);
+      if (refusedFlat !== undefined) return refusedFlat;
+    }
     const flatLedger = await readKickbackLedger(worktree);
     const childLedger = child === undefined ? flatLedger : await readKickbackLedger(worktree, child);
     if (isUnreadableKickbackLedger(childLedger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
@@ -199,7 +203,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
     const pendingLaps = (gate: string) =>
       gate === 'prd_audit' || gate === 'architecture_review_as_built'
-        ? childLedger.pendingRepair?.charges[gate]?.laps ?? 0
+        ? flatLedger.pendingRepair?.charges[gate]?.laps ?? 0
         : 0;
     const views = readable.map((gate) => kickbackBudgetView(
       ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),

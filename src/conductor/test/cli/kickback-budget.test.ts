@@ -1,6 +1,6 @@
 // Covers: task:rem-prd-audit-R20
 // Covers: task:8, task:11, task:27, task:28, task:31.2, task:33
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -304,6 +304,84 @@ describe('kickback-budget inspect --child', () => {
       const result = await inspect(fixture, '2');
       expect(result.output).toContain('Kickback budget (architecture_review_as_built): 3/4 consumed; 1 remaining');
       expect(result.output).toContain(`Adjustment history: raise ${adjustmentId} (laps)`);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('shows a flat pending prd-audit lap charge in the child view', async () => {
+    const fixture = await makeFeature({
+      version: 1,
+      gates: { prd_audit: { ...baseEntry, laps: 3, effectiveLapCap: 5 } },
+      pendingRepair: { receiptId: 'pending-prd', taskIds: ['repair-1'], charges: { prd_audit: { laps: 1, growth: 0 } } },
+    });
+    try {
+      const childPipeline = join(fixture.worktree, '.pipeline', 'children', '2');
+      await mkdir(childPipeline, { recursive: true });
+      await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
+        version: 1, gates: { prd_audit: { ...baseEntry, laps: 0 } },
+      }));
+      const result = await inspect(fixture, '2');
+      expect(result.code).toBe(0);
+      expect(result.output).toContain('Kickback budget (prd_audit): 3/5 consumed; 1 remaining');
+      expect(result.output).toContain('Pending charge: 1 lap (charged when build dispatches)');
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('reconciles a recorded flat prd-audit adjustment exactly once in the child view', async () => {
+    const pending = {
+      id: 'flat-prd-raise', kind: 'raise' as const, beforeConsumed: 3, afterConsumed: 3, beforeLimit: 3, afterLimit: 4,
+      operator: 'operator', rationale: 'one more review', timestamp: '2026-10-23T00:00:00.000Z', haltGeneration: 'flat-halt', allowance: 'laps' as const,
+    };
+    const fixture = await makeFeature({
+      version: 1,
+      gates: {
+        prd_audit: {
+          ...baseEntry, laps: 3, effectiveLapCap: 3, capEvidence: {
+            gate: 'prd_audit', consumed: 3, limit: 3, latestReason: 'cap', haltGeneration: 'flat-halt', allowance: 'laps',
+          }, pendingAdjustment: pending,
+        },
+      },
+    });
+    try {
+      const childPipeline = join(fixture.worktree, '.pipeline', 'children', '2');
+      await mkdir(childPipeline, { recursive: true });
+      await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
+        version: 1, gates: { prd_audit: { ...baseEntry, laps: 0 } },
+      }));
+      appendCloseoutEvent(fixture.worktree, {
+        type: 'kickback_budget_adjustment_authorized', adjustmentId: pending.id, gate: 'prd_audit', kind: 'raise',
+        feature: 'feature', operator: pending.operator, rationale: pending.rationale,
+        beforeConsumed: pending.beforeConsumed, afterConsumed: pending.afterConsumed,
+        beforeLimit: pending.beforeLimit, afterLimit: pending.afterLimit, ts: pending.timestamp, allowance: 'laps',
+      });
+
+      const first = await inspect(fixture, '2');
+      expect(first.code).toBe(0);
+      expect(first.output).toContain('Kickback budget (prd_audit): 3/4 consumed; 1 remaining');
+      const flatPath = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const reconciled = JSON.parse(await readFile(flatPath, 'utf8')).gates.prd_audit;
+      expect(reconciled.pendingAdjustment).toBeUndefined();
+      expect(reconciled.adjustments).toMatchObject([{ id: pending.id }]);
+      expect(reconciled.adjustments).toHaveLength(1);
+
+      const beforeSecond = await readFile(flatPath);
+      expect((await inspect(fixture, '2')).code).toBe(0);
+      expect(await readFile(flatPath)).toEqual(beforeSecond);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('keeps both ledgers unchanged when child inspect has no pending adjustments', async () => {
+    const fixture = await makeFeature({ version: 1, gates: { prd_audit: { ...baseEntry, laps: 1 } } });
+    try {
+      const childPipeline = join(fixture.worktree, '.pipeline', 'children', '2');
+      await mkdir(childPipeline, { recursive: true });
+      const childPath = join(childPipeline, 'kickback-ledger.json');
+      await writeFile(childPath, JSON.stringify({ version: 1, gates: { build_review: { ...baseEntry, cumulative: 2 } } }));
+      const flatPath = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const flatBefore = await readFile(flatPath);
+      const childBefore = await readFile(childPath);
+      expect((await inspect(fixture, '2')).code).toBe(0);
+      expect(await readFile(flatPath)).toEqual(flatBefore);
+      expect(await readFile(childPath)).toEqual(childBefore);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
