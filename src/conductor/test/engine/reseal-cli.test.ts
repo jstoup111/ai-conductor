@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:8
+// Covers: task:2, task:3, task:5, task:8
 import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -272,6 +272,103 @@ describe('describeResealRecovery', () => {
     const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' }, 'work');
     try {
       await expect(describeResealRecovery(worktree, path)).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  async function noApprovalState(worktree: string, path: string): Promise<{
+    seal: string;
+    events: boolean;
+    hint: string | undefined;
+  }> {
+    const sealPath = join(worktree, PROTECTED_ARTIFACT_SEAL_PATH);
+    const hint = await describeResealRecovery(worktree, path);
+    return {
+      seal: await readFile(sealPath, 'utf8'),
+      events: await readFile(join(worktree, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false),
+      hint,
+    };
+  }
+
+  it('returns no hint or approval for an added unsealed protected artifact', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const added = '.docs/decisions/adr-2026-10-17-new.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await writeFile(join(worktree, added), 'new decision\n');
+      await execFile('git', ['add', '.docs'], { cwd: worktree });
+      await execFile('git', ['commit', '-q', '-m', 'add unsealed decision'], { cwd: worktree });
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns no hint or approval for an uncommitted sealed change', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await writeFile(join(worktree, path), 'uncommitted correction\n');
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns no hint or approval for a feature-branch deletion', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await unlink(join(worktree, path));
+      await execFile('git', ['add', '-A'], { cwd: worktree });
+      await execFile('git', ['commit', '-q', '-m', 'delete protected decision'], { cwd: worktree });
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined without throwing for an unreadable seal or non-Git worktree', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const fixture = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    const nonGitRoot = await mkdtemp(join(tmpdir(), 'reseal-recovery-non-git-'));
+    const nonGitWorktree = join(nonGitRoot, '.worktrees', 'feat-x');
+    try {
+      await writeFile(join(fixture.worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'not json');
+      await mkdir(join(nonGitWorktree, '.pipeline'), { recursive: true });
+      await writeFile(join(nonGitWorktree, PROTECTED_ARTIFACT_SEAL_PATH), JSON.stringify({
+        version: 2, baselineCommit: 'base', protectedArtifacts: [{ path, fingerprint: 'sha256:before' }], rebaselines: [],
+      }));
+
+      await expect(Promise.all([
+        describeResealRecovery(fixture.worktree, path),
+        describeResealRecovery(nonGitWorktree, path),
+      ])).resolves.toEqual([undefined, undefined]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(nonGitRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not approve the successful two-path recovery preview', async () => {
+    const first = '.docs/decisions/adr-2026-10-17-a.md';
+    const second = '.docs/decisions/adr-2026-10-17-b.md';
+    const { root, worktree } = await makeRecoveryFixture({ [first]: 'corrected a\n', [second]: 'corrected b\n' });
+    try {
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, first)).resolves.toEqual({
+        seal: before,
+        events: false,
+        hint: expect.stringContaining('--path .docs/decisions/adr-2026-10-17-b.md'),
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
