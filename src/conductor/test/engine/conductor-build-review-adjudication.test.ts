@@ -105,6 +105,14 @@ function passAggregate(): unknown {
         kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
         contractVersion: 'v3', findings: [], verdict: 'PASS',
       },
+      security: {
+        kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+      implementationQuality: {
+        kind: 'judged', rubric: 'implementationQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
     },
   });
 }
@@ -144,6 +152,32 @@ function customAggregate() {
           reviewedInput: result.reviewedInput, producer: result.candidate,
         },
         result,
+      },
+    },
+    currentCustomRubrics: ['portable'],
+  } as never);
+}
+
+function customInfrastructureAggregate() {
+  const declaration = {
+    version: 'v1' as const, rubricId: 'portable', semanticSkill: 'portable-policy',
+    question: 'Does this preserve the portable policy boundary?', source: 'project' as const, resources: [],
+  };
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+    customResults: {
+      portable: {
+        declaration,
+        result: {
+          kind: 'infrastructure-failure' as const, rubric: 'portable',
+          reason: 'policy-load-failed' as const, detail: 'policy could not be loaded',
+        },
       },
     },
     currentCustomRubrics: ['portable'],
@@ -260,6 +294,8 @@ interface FixtureOptions {
   readonly onLifecycleEvent?: (event: ConductorEvent) => void;
   /** A real custom aggregate must route through the case-v2 production branch. */
   readonly custom?: boolean;
+  /** Models a current custom-rubric infrastructure failure. */
+  readonly customInfrastructure?: boolean;
   /** A feature-owned creation capability is available unless this fake denies it. */
   readonly featureCreationAuthorized?: boolean;
   /** Replays incident 1: an action already failed on S and a judgement re-raises it with new work. */
@@ -291,7 +327,7 @@ async function fixture(options: FixtureOptions = {}) {
   const mixed = options.infrastructure && options.infrastructure !== 'none';
   const scopeIncomplete = options.scopeIncomplete !== undefined;
   const clean = options.rawVerdict === 'PASS';
-  const raw = clean ? passAggregate() : options.reRaised ? reRaisedAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
+  const raw = clean ? passAggregate() : options.reRaised ? reRaisedAggregate() : options.customInfrastructure ? customInfrastructureAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -315,9 +351,12 @@ async function fixture(options: FixtureOptions = {}) {
     },
   };
 
-  const infrastructureRubrics = mixed || options.reportUncoveredInfrastructure ? (['testQuality'] as const) : ([] as const);
+  const infrastructureRubrics = mixed || options.reportUncoveredInfrastructure
+    ? (['testQuality'] as const)
+    : options.customInfrastructure ? (['portable'] as const) : ([] as const);
   const uncovered = options.infrastructure === 'uncovered' || options.reportUncoveredInfrastructure
-    ? (['testQuality'] as const) : ([] as const);
+    ? (['testQuality'] as const)
+    : options.customInfrastructure ? (['portable'] as const) : ([] as const);
   const uncoveredScopeIncomplete = options.scopeIncomplete === 'uncovered'
     ? (['testQuality'] as const) : ([] as const);
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
@@ -1034,6 +1073,82 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       )).toEqual([]);
     },
   );
+
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17f
+  it('retires an absent failed action after an earlier reduced-coverage decision and publishes clean PASS', async () => {
+    const caseId = 'case-earlier-covered';
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: caseId, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'A prior action failed.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: 'effect-earlier-covered', kind: 'action', status: 'failed', diagnostic: 'prior effect failed' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+        const reduced = await new BuildReviewDispositionStore(root).appendReducedCoverageIfCurrent({
+          feature, rubric: 'testQuality', reason: 'provider-error', rationale: 'Prior lap provider outage.', operator: 'operator',
+        }, async () => true);
+        if (!reduced.ok) throw new Error(reduced.message);
+      },
+    });
+
+    expect(await run.haltMarker()).toBe('');
+    expect((await run.state()).build_review).toBe('done');
+    expect(await run.readJson('.pipeline/remediation-cases.json')).toMatchObject({
+      cases: [expect.objectContaining({ id: caseId, resolution: 'resolved' })],
+    });
+    expect(run.lifecycle.filter((event) => event.type === 'remediation_case_reconciled' && event.caseId === caseId)).toEqual([
+      expect.objectContaining({ resolution: 'resolved', eventId: expect.any(String) }),
+    ]);
+  });
+
+  // Covers: task:rem-as-built-rem-as-built-R17g
+  it('keeps absent failed and reserved action cases open for a current custom infrastructure failure', async () => {
+    const run = await fixture({
+      custom: true,
+      customInfrastructure: true,
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: (['failed', 'reserved'] as const).map((status, index) => ({
+              id: `case-custom-${status}`, domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+              rationale: 'The absent action remains open while review infrastructure is faulty.', resolution: 'open' as const,
+              sources: [{ sourceId: index === 0 ? SOURCE_ID : RE_RAISED_SOURCE_ID, outcome: 'acted' as const, recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: status === 'failed'
+                ? { id: `effect-custom-${status}`, kind: 'action' as const, status, diagnostic: 'prior effect failed' }
+                : { id: `effect-custom-${status}`, kind: 'action' as const, status },
+            })),
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+      },
+    });
+
+    const cases = await run.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; resolution: string; effect: { status: string } }>;
+    };
+    expect(cases.cases.find((record) => record.id === 'case-custom-failed')).toMatchObject({
+      resolution: 'open', effect: { status: 'failed' },
+    });
+    expect(cases.cases.find((record) => record.id === 'case-custom-reserved')).toMatchObject({
+      resolution: 'open', effect: { status: 'reserved' },
+    });
+    expect(run.lifecycle.filter((event) => event.type === 'remediation_case_reconciled')).toEqual([]);
+  });
 
   // Covers: task:5
   it('keeps an uncovered infrastructure branch in the mechanical lane without a semantic kickback', async () => {

@@ -29,6 +29,7 @@ import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import {
   buildReviewConfidenceFloors,
+  isBuildReviewLapHealthyForAbsenceRetirement,
   rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
@@ -5389,15 +5390,7 @@ export class Conductor {
     }
     const dispositions = await new BuildReviewDispositionStore(this.projectRoot).list(feature);
     if (!dispositions.ok) return { kind: 'invalid', reason: `build-review disposition state ${dispositions.message}` };
-    const reducedCoverage = await new BuildReviewDispositionStore(this.projectRoot).listReducedCoverage(feature);
-    if (!reducedCoverage.ok) return { kind: 'invalid', reason: `build-review reduced-coverage state ${reducedCoverage.message}` };
-    const absenceRetirementMechanicallyHealthy =
-      !Object.values(aggregate.results).some((result) => result.kind === 'infrastructure-failure') &&
-      !(aggregate.currentCustomRubrics ?? []).some((rubric) =>
-        aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
-      ) &&
-      aggregate.scopeIncomplete.length === 0 &&
-      reducedCoverage.records.length === 0;
+    const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
     const acceptedSourceIds = new Set(dispositions.records
       .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
         record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
@@ -13551,10 +13544,7 @@ export class Conductor {
                   // Covered faults can release retry routing, but they never
                   // prove that a case source was absent. Keep that evidence
                   // boundary distinct from the retry/halt mechanical lane.
-                  const absenceRetirementMechanicallyHealthy =
-                    effective.effective.infrastructureFailureRubrics.length === 0 &&
-                    (effective.effective.scopeIncompleteRubrics?.length ?? 0) === 0 &&
-                    effective.effective.hasRecordedReducedCoverage !== true;
+                  const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,

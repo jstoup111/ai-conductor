@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
-import { deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict, type BuildReviewEffectiveResolverDeps } from '../../src/engine/build-review-effective.js';
+import { deriveComposedBuildReviewEffectiveVerdict, isBuildReviewLapHealthyForAbsenceRetirement, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict, type BuildReviewEffectiveResolverDeps } from '../../src/engine/build-review-effective.js';
 import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
 import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
 import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
@@ -140,6 +140,26 @@ const identityDeps = {
 };
 
 describe('live build-review effective resolver', () => {
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17f, task:rem-as-built-rem-as-built-R17g
+  it('shares current-lap absence-retirement health for built-in, custom, scope, and healthy laps', () => {
+    const healthy = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot',
+          contractVersion: currentContractVersion, findings: [], verdict: 'PASS',
+        },
+        security: securityPass(),
+      },
+    } as never);
+
+    expect([
+      aggregate({ faults: { testQuality: 'provider-error' } }),
+      customFailureAggregate(),
+      scopeAggregate('indeterminate'),
+      healthy,
+    ].map(isBuildReviewLapHealthyForAbsenceRetirement)).toEqual([false, false, false, true]);
+  });
+
   it('keeps an above-floor implementation-quality finding unresolved and suppresses a below-floor one', () => {
     const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
