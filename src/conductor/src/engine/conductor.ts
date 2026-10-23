@@ -5393,14 +5393,15 @@ export class Conductor {
           adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
         },
       );
-      const advisoryOnlyEffectivePass = effective.ok &&
+      // Per-case retirement below decides which open action has no live
+      // source. Other cases may have accepted, suppressed, or settled
+      // sources; those non-blocking peers must not keep this absent advisory
+      // action open.
+      const advisoryEffectivePass = effective.ok &&
         effective.effective.verdict === 'PASS' &&
         (effective.effective.advisoryFindingIds?.length ?? 0) > 0 &&
-        effective.effective.unresolvedFindingIds.length === 0 &&
-        effective.effective.acceptedFindingIds.length === 0 &&
-        effective.effective.suppressedFindingIds.length === 0 &&
-        (effective.effective.settledFindingIds?.length ?? 0) === 0;
-      if (!advisoryOnlyEffectivePass) return { kind: 'absent' };
+        effective.effective.unresolvedFindingIds.length === 0;
+      if (!advisoryEffectivePass) return { kind: 'absent' };
     }
     const featureRead = await readRemediationCaseStoreFeature(
       this.projectRoot,

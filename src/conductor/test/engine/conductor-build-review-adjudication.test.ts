@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:5, task:7, task:8, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
+// Covers: task:1, task:4, task:5, task:7, task:8, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1, task:rem-as-built-rem-as-built-r12-2
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -317,6 +317,8 @@ interface FixtureOptions {
   readonly acceptedFindingIds?: () => readonly string[];
   /** Models the effective-verdict projection of sub-floor findings. */
   readonly suppressedFindingIds?: readonly string[];
+  /** Models sources an earlier remediate case already settled. */
+  readonly settledFindingIds?: readonly string[];
   readonly onLifecycleEvent?: (event: ConductorEvent) => void;
   /** A real custom aggregate must route through the case-v2 production branch. */
   readonly custom?: boolean;
@@ -390,6 +392,7 @@ async function fixture(options: FixtureOptions = {}) {
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
     const acceptedFindingIds = [...(options.acceptedFindingIds?.() ?? [])];
     const suppressedFindingIds = [...(options.suppressedFindingIds ?? [])];
+    const settledFindingIds = [...(options.settledFindingIds ?? [])];
     const advisoryFindingIds = options.advisory ? [FINDING_ID] : [];
     const effectivePass = clean || suppressedFindingIds.includes(FINDING_ID) || options.advisory === true;
     return {
@@ -402,6 +405,7 @@ async function fixture(options: FixtureOptions = {}) {
         unresolvedFindingIds: mixed || scopeIncomplete || effectivePass || acceptedFindingIds.includes(FINDING_ID)
           ? [] : options.reRaised ? [FINDING_ID, RE_RAISED_FINDING_ID] : [FINDING_ID],
         suppressedFindingIds,
+        settledFindingIds,
         ...(advisoryFindingIds.length === 0 ? {} : { advisoryFindingIds }),
         skippedRubrics: [],
         infrastructureFailureRubrics: [...infrastructureRubrics],
@@ -1326,6 +1330,44 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.lifecycle.filter((event) =>
       event.type === 'remediation_case_reconciled' && event.caseId === caseId,
     )).toHaveLength(expectedResolution === 'resolved' ? 1 : 0);
+  });
+
+  // Covers: task:rem-as-built-rem-as-built-r12-2
+  it.each([
+    ['accepted', { acceptedFindingIds: () => ['unrelated-accepted'] }, false, 'resolved'],
+    ['suppressed', { suppressedFindingIds: ['unrelated-suppressed'] }, false, 'resolved'],
+    ['settled', { settledFindingIds: ['unrelated-settled'] }, false, 'resolved'],
+    ['accepted on an infrastructure-failure lap', { acceptedFindingIds: () => ['unrelated-accepted'] }, true, 'open'],
+  ] as const)('retires an absent advisory action despite an unrelated %s peer only when mechanically healthy', async (_peer, peer, advisoryInfrastructure, expectedResolution) => {
+    const caseId = `case-advisory-unrelated-${_peer.replaceAll(' ', '-')}`;
+    const run = await fixture({
+      attended: true,
+      advisory: true,
+      advisoryInfrastructure,
+      ...peer,
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: caseId, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The earlier action is absent from this advisory-only lap.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: `effect-${caseId}`, kind: 'action', status: 'failed', diagnostic: 'previous effect failed' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+      },
+    });
+
+    const cases = await run.readJson('.pipeline/remediation-cases.json') as {
+      cases: Array<{ id: string; resolution: string }>;
+    };
+    expect(cases.cases.find((record) => record.id === caseId)?.resolution).toBe(expectedResolution);
   });
 
   it('keeps a clean PASS terminal when there is no durable case store', async () => {
