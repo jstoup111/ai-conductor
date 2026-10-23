@@ -2707,6 +2707,34 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['still admitted', { testQuality: 'critical' } as const, 'pass', 0],
+    ['at its lowered threshold', { testQuality: 'minor' } as const, 'build', 1],
+    ['without a threshold', undefined, 'build', 1],
+  ] as const)('treats a recurring advisory as live only when it is no longer terminally finalized (%s)', async (_description, declaredSeverityThresholds, route, judgeCalls) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+        rationale: 'The finding was below the previous severity threshold.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'advisory', recordedAt: '2026-10-23T00:00:00.000Z' }], effect: { kind: 'none' },
+        adjudicatedSeverity: 'minor',
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge),
+      ...(declaredSeverityThresholds === undefined ? {} : { declaredSeverityThresholds }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route });
+    expect(judge).toHaveBeenCalledTimes(judgeCalls);
+    if (route === 'pass') expect(result).toMatchObject({ dispatchSkipped: true });
+  });
+
   it('adjudicates the unresolved remainder when the lap opens with a pre-existing acceptance', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async () => {
