@@ -83,4 +83,4 @@ track scope boundary, the approved sequence
 
 ## Plan size estimate
 
-About 8–10 tasks; well under the 20-task split threshold. No split proposed.
+14 tasks in the authored plan; under the 20-task split threshold. No split proposed.
