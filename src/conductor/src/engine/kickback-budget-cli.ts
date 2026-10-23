@@ -193,7 +193,12 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const planGrowth = await planGrowthViewFor(worktree, flatLedger);
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
-    const unavailable = [...GATES].filter((gate) => unreadableKickbackGates(ledgerFor(gate)).includes(gate));
+    const unavailable = child === undefined
+      ? unreadableKickbackGates(flatLedger).filter((gate) => GATES.has(gate))
+      : [
+          ...unreadableKickbackGates(flatLedger).filter((gate) => GATES.has(gate) && WHOLE_FEATURE_GATES.has(gate)),
+          ...unreadableKickbackGates(childLedger).filter((gate) => GATES.has(gate) && !WHOLE_FEATURE_GATES.has(gate)),
+        ];
     // `restack` is a per-originating-child pseudo-gate backed by the cascade
     // ref.  A feature without a durable child state has no such budget, and
     // must retain the established N=1 inspect rendering.

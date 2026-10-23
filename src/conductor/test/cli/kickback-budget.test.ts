@@ -1411,6 +1411,35 @@ describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
+  it('keeps childless unavailable gates in their durable ledger order', async () => {
+    const fixture = await makeFeature({
+      version: 1,
+      gates: {
+        prd_audit: { count: 'not-a-number' },
+        build_review: { count: 'also-not-a-number' },
+      },
+    });
+    try {
+      const humanOutput: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => humanOutput.push(line) },
+      )).toBe(1);
+      expect(humanOutput[0].split('\n\n').filter((line) => line.endsWith('budget unavailable (durable entry failed validation)')))
+        .toEqual([
+          'prd_audit: budget unavailable (durable entry failed validation)',
+          'build_review: budget unavailable (durable entry failed validation)',
+        ]);
+
+      const jsonOutput: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => jsonOutput.push(line) },
+      )).toBe(1);
+      expect(JSON.parse(jsonOutput[0]).unavailableGates).toEqual(['prd_audit', 'build_review']);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
   it('still authorizes a raise on the healthy gate', async () => {
     const fixture = await makeFeature(mixed);
     try {
