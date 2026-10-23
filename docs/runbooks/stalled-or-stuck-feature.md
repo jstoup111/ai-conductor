@@ -1143,7 +1143,14 @@ ai-conductor reseal \
   --clear-halt
 ```
 
-Repeat `--path` for each amended file. The command only runs from an interactive operator terminal —
+Repeat `--path` for each amended file. When the `build` step halts on a seal violation and reseal's
+own pre-write checks would accept the change, the HALT text ends with a ready-to-run command: an
+`Approve this change as an operator amendment by running, from the repository root that contains
+.worktrees/<slug>, in an interactive terminal:` line followed by `ai-conductor reseal --slug <slug>
+--path <path> ... --reason "«why»" --clear-halt`. It lists every sealed path the reseal needs and
+changes nothing — no seal write, no event. Replace `«why»` with your rationale, and run it only after
+reviewing the diff. No command is printed when reseal would refuse (for example an uncommitted or
+feature-deleted artifact); handle those by the reasons above. The command only runs from an interactive operator terminal —
 it refuses under a step subprocess or any non-TTY invocation — and refuses the whole reseal if any
 protected path outside the given `--path` list has also drifted, so it cannot be used to launder
 unrelated changes into the seal. On success it writes a new baseline at the current commit, appends a
