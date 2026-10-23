@@ -1055,3 +1055,35 @@ This plan adds the following, in 21 tasks:
 **Done when:**
 - adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 4 is satisfied by this task.
 - The repair for task rem-as-built-r12-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r12-2: conductor.ts (:5395 advisoryOnlyEffectivePass guard, reached via :14988 on the built-in-only attended path): replace the lap-wide accepted/suppressed/settled exclusion with the per-case rule. Retire a prior failed/reserved action case by absence when the effective verdict is PASS, the lap is mechanically healthy, and none of that case's own sources are unresolved. Unrelated accepted, suppressed or settled peers must not block it. Keep the mechanical-health (infra-failure) protection. Add conductor tests: built-in-only attended lap with an advisory source plus an unrelated accepted/suppressed peer retires the case; an infra-failure lap still leaves it open
+**Gate:** as-built
+**Rationale:** Verified (98%, read conductor.ts:5395-5402): advisoryOnlyEffectivePass requires zero accepted, suppressed and settled ids lap-wide, so an unrelated nonblocking peer blocks absence retirement of a failed/reserved action case whose own sources are advisory. ADR D4 and plan Task 12 already approve per-case retirement on a mechanically healthy lap, so this is conforming implementation drift and needs no architectural decision.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 4
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r12-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r17-5: finish-publication-production.ts (:223): include source links with outcome 'merged' whose canonical case has disposition advisory and an adjudicatedSeverity in the adjudicated advisory projection (origin adjudicated, no adjudicator rationale). Exclude carried and operator-resolved links. Add a publication test where a merged source targeting an advisory case appears in the '## Advisory build-review findings' region
+**Gate:** as-built
+**Rationale:** Verified (99%, read finish-publication-production.ts:223): the adjudicated projection requires link.outcome === 'advisory', so merged sources whose canonical case is advisory are dropped, even though the validator (remediation-case-validator.ts:155/:260) admits them. ADR D5 and plan Task 17 already require settled downgraded findings in the advisory region, so this is a BUILD repair.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r17-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r16-4: build-review-cli.ts (:195-209): build the adjudicated-advisory map only from source links whose authoritative outcome is advisory or merged-into-an-advisory-case. Exclude carried links, so carried authority wins and the source is never also listed as adjudicated advisory. Add CLI JSON and human-output tests: a carried source attached to an operator-resolved advisory case appears only as carried
+**Gate:** as-built
+**Rationale:** Verified (98%, read build-review-cli.ts:195-209): the adjudicated map is built from every current source link without checking link.outcome, so a carried source on an operator-resolved advisory case is also listed as adjudicated advisory. ADR D6's carry-first presentation is already approved, so this is a conforming CLI fix under Task 16.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r16-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r17-6: build-review-accepted-risk.ts (:143-157, caller :177): remove every forged '## Advisory build-review findings' section outside the engine region. Loop until none remain, recomputing the masked search text and accepted-risk bounds after each removal, while preserving project-owned regions and step markers. Add a test: two forged advisory sections separated by another '## ' heading publish with only the engine-rendered region and the intervening section intact
+**Gate:** as-built
+**Rationale:** Verified (99%, read build-review-accepted-risk.ts:143-177): stripForgedAdvisorySection finds the first forged heading outside the accepted-risk bounds, removes only that one section, and is called once. A second forged section after another level-two heading survives publication. ADR D5 and plan Task 17 (rem-prd-audit-r17-3) already require only the engine-rendered region to publish, so this is a BUILD repair.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r17-6 is committed and its targeted tests pass.
