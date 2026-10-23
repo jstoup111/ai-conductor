@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-10-23T09:23:14.391Z
+Status: halted
 Slug: protected-artifact-halt-prints-no-recovery-command
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-protected-artifact-halt-prints-no-recovery-command
-Head SHA: e0d9ec5206f469dc2835f741a1c355c09e1644ef
-Halted at: 2026-10-23T04:39:26.417Z
+Head SHA: f1962c0ef054defa6bc73d9b5d3967d499f80299
+Halted at: 2026-10-23T09:24:26.185Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
