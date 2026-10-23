@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:9, task:20
+// Covers: task:1, task:2, task:9, task:20, task:rem-prd-audit-r21-1
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -294,6 +294,31 @@ describe('remediation case store', () => {
     };
 
     expect(finalizedBuildReviewSourceIds([operatorResolved])).toEqual(new Set(['testQuality:finding-1']));
+  });
+
+  it('settles an advisory source only while its current threshold strictly admits its adjudicated severity', () => {
+    const sourceId = 'testQuality:advisory-finding';
+    const advisory: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      disposition: 'advisory',
+      rationale: 'The adjudicated impact is below the operator threshold.',
+      resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+      effect: { kind: 'none' },
+      adjudicatedSeverity: 'minor',
+    };
+
+    expect([
+      finalizedBuildReviewSourceIds([advisory], { testQuality: 'critical' }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: 'minor' }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: 'nit' }),
+      finalizedBuildReviewSourceIds([advisory]),
+    ].map((sourceIds) => [...sourceIds])).toEqual([
+      [sourceId],
+      [],
+      [],
+      [],
+    ]);
   });
 
   it('preserves the former any-link settlement result when no source is shared', () => {

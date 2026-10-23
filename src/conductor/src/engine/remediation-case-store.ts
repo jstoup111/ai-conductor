@@ -169,13 +169,14 @@ export function finalizedBuildReviewSourceIds(
       ? [sourceId]
       : link.outcome === 'carried'
       ? [sourceId]
-      : record.disposition === 'advisory' && record.adjudicatedSeverity !== undefined &&
-          sourceId.includes(':') && (() => {
-            const rubric = sourceId.slice(0, sourceId.indexOf(':'));
-            const threshold = thresholds[rubric];
-            return threshold !== undefined && isBelowSeverityThreshold(record.adjudicatedSeverity!, threshold);
-          })()
-        ? [sourceId]
+      : record.disposition === 'advisory'
+        ? record.adjudicatedSeverity !== undefined && sourceId.includes(':') && (() => {
+          const rubric = sourceId.slice(0, sourceId.indexOf(':'));
+          const threshold = thresholds[rubric];
+          return threshold !== undefined && isBelowSeverityThreshold(record.adjudicatedSeverity, threshold);
+        })()
+          ? [sourceId]
+          : []
       : record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
       ? [sourceId]
       : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
