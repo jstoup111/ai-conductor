@@ -801,6 +801,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(charge).toHaveBeenCalledTimes(1);
     expect(run.dispatched).not.toContain('build');
     expect(halt).toContain(`build-review kickback budget exhausted (cumulative): blocked cases ${reRaisedN.id} (effect ${reRaisedN.effect.id})`);
+    expect(halt).not.toContain('recurrence limit');
     expect(halt).not.toMatch(forbidden);
     expect(run.lifecycle).not.toContainEqual(expect.objectContaining({ rejectedTransition: expect.anything() }));
     expect(run.lifecycle.map((event) => JSON.stringify(event)).join('\n')).not.toMatch(forbidden);
