@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,7 @@ import {
   PROTECTED_ARTIFACT_SEAL_PATH,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
+import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 const execFile = promisify(execFileCallback);
@@ -56,6 +57,26 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     return { root, worktree, halt: await readFile(join(worktree, '.pipeline/HALT'), 'utf8'), haltClass: await readFile(join(worktree, '.pipeline/HALT.class'), 'utf8'), dispatched: run.mock.calls, seal: await readFile(sealPath, 'utf8'), sealBefore: seal, events: await readFile(join(worktree, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false), expectedReason: verdict.reason };
   }
 
+  async function printedResealCommand(halt: string) {
+    const command = halt.split('\n').find((line) => line.startsWith('  ai-conductor reseal '));
+    if (!command) throw new Error('fixture must print a reseal command');
+    const { stdout } = await execFile('sh', [
+      '-c',
+      `set --${command.trim().slice('ai-conductor'.length)}; printf '%s\\0' "$@"`,
+    ]);
+    const argv = ['node', 'ai-conductor', ...stdout.split('\0').filter(Boolean)];
+    const parsed = detectResealCommand(argv);
+    if (!parsed) throw new Error('printed reseal command must parse');
+    return parsed;
+  }
+
+  async function runTwoAdrHalt() {
+    return runSealedHalt({
+      '.docs/decisions/adr-2026-10-17-a.md': 'corrected a\n',
+      '.docs/decisions/adr-2026-10-17-b.md': 'corrected b\n',
+    });
+  }
+
   it('writes the exact reseal hint for one committed sealed ADR without approval side effects', async () => {
     const path = '.docs/decisions/adr-2026-10-17-example.md';
     const result = await runSealedHalt({ [path]: 'corrected\n' });
@@ -75,6 +96,68 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     const result = await runSealedHalt({ [a]: 'corrected a\n', [b]: 'corrected b\n' });
     expect(result.halt.split('\n')[0]).toBe(`Protected artifact changed: ${a}`);
     expect(result.halt).toContain(`  ai-conductor reseal --slug feat-x --path ${a} --path ${b} --reason "«why»" --clear-halt`);
+  }, 30000);
+
+  it('runs the printed two-ADR reseal command interactively and clears the protected-artifact halt', async () => {
+    const result = await runTwoAdrHalt();
+    const output: string[] = [];
+    const errors: string[] = [];
+
+    const exitCode = await dispatchResealCommand(await printedResealCommand(result.halt), {
+      cwd: result.root,
+      isInteractive: true,
+      out: (line) => output.push(line),
+      err: (line) => errors.push(line),
+      events: new ConductorEventEmitter(),
+    });
+
+    expect({ exitCode, output, errors }).toEqual({
+      exitCode: 0,
+      output: ['Resealed protected artifacts: .docs/decisions/adr-2026-10-17-a.md, .docs/decisions/adr-2026-10-17-b.md'],
+      errors: [],
+    });
+    await expect(readFile(join(result.worktree, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(result.worktree, '.pipeline/HALT.class'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 30000);
+
+  it('passes the protected artifact seal immediately after interactive printed-command reseal', async () => {
+    const result = await runTwoAdrHalt();
+    await dispatchResealCommand(await printedResealCommand(result.halt), {
+      cwd: result.root,
+      isInteractive: true,
+      events: new ConductorEventEmitter(),
+    });
+
+    await expect(verifyProtectedArtifactSeal({
+      projectRoot: result.worktree,
+      featureDesc: 'feat-x',
+      baseBranch: 'main',
+    })).resolves.toMatchObject({ ok: true });
+  }, 30000);
+
+  it('refuses the printed two-ADR reseal command without an interactive terminal without changing artifacts', async () => {
+    const result = await runTwoAdrHalt();
+    const sealBefore = await readFile(join(result.worktree, PROTECTED_ARTIFACT_SEAL_PATH));
+    const haltBefore = await readFile(join(result.worktree, '.pipeline/HALT'));
+    const haltClassBefore = await readFile(join(result.worktree, '.pipeline/HALT.class'));
+    const errors: string[] = [];
+
+    const exitCode = await dispatchResealCommand(await printedResealCommand(result.halt), {
+      cwd: result.root,
+      isInteractive: false,
+      err: (line) => errors.push(line),
+      events: new ConductorEventEmitter(),
+    });
+
+    expect({ exitCode, errors }).toEqual({
+      exitCode: 1,
+      errors: ['reseal: requires an interactive terminal.'],
+    });
+    await expect(Promise.all([
+      readFile(join(result.worktree, PROTECTED_ARTIFACT_SEAL_PATH)),
+      readFile(join(result.worktree, '.pipeline/HALT')),
+      readFile(join(result.worktree, '.pipeline/HALT.class')),
+    ])).resolves.toEqual([sealBefore, haltBefore, haltClassBefore]);
   }, 30000);
 
   it.each(['added', 'uncommitted', 'deleted'] as const)('keeps a refused %s artifact halt byte-for-byte legacy with no hint', async (kind) => {
