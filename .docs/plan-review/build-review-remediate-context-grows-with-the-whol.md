@@ -1,10 +1,10 @@
 # Plan review
 
-Integrity: sha256:af9cb3cbfc8b1d88f51718d17b2af128fda1e5e62ee5ac75d614daf45acd8304
+Integrity: sha256:e0cdb05c3a888abe814a3267338ee42e04a1a437db1a38becaf2ab0d068a4c41
 
 ```json
 {
-  "round": 1,
+  "round": 2,
   "authoringHost": "claude",
   "reviewerProvider": "codex",
   "independence": "cross-provider",
@@ -14,7 +14,7 @@ Integrity: sha256:af9cb3cbfc8b1d88f51718d17b2af128fda1e5e62ee5ac75d614daf45acd83
     "planTaskDigests": {
       "1": "sha256:5f9869708f764ae0c81b1c6d17f7c5dfda3ee584f51a77dbd9ebde36e4676a7a",
       "2": "sha256:14fd30e32df305c019831d61876819d3df40a0183c559949215d24fe1c704da9",
-      "3": "sha256:784fa913fb841312a0d43309374ee91a89732b623c8d9ba22593a970240331fa",
+      "3": "sha256:7a4c62613286e4a78954a0fe1848a3eca0b1f43aecf1b0f3a50e0c48e0504ac5",
       "4": "sha256:eff85e9eb1e8b862991961cb518530d71044c46ced8656e92911c861a3140339",
       "5": "sha256:27cb6086db29d37bfb9eb1f60d1a1dc3c752a95a5f39446d2c06c4aaa4601cc3",
       "6": "sha256:eabef3267d26dedf80375ffb38669ae15339080caae6ab0b20925dde545cb1a9",
@@ -48,9 +48,9 @@ Integrity: sha256:af9cb3cbfc8b1d88f51718d17b2af128fda1e5e62ee5ac75d614daf45acd83
       "adr-2026-09-10-portable-build-review-policy#D9": "sha256:3721c537965604d5460e128a64c12de43d338602b2378d5d322921d6e9f3b88a"
     },
     "artifactDigests": {
-      ".docs/coherence/build-review-remediate-context-grows-with-the-whol.md": "sha256:e003a6ce6e84132148cf51b62346a74a5b81591b81d8190acc2c34c8a1db7c5d"
+      ".docs/coherence/build-review-remediate-context-grows-with-the-whol.md": "sha256:6e8ad28158d233b00d04fe964743c4f6f1fd58d5bf2ec3c03e1c46c84ef709ea"
     },
-    "digest": "sha256:a9c2cfbc553118b12d35e82592e4e150f03b0c2b5426d3808b67f34494ba1c59"
+    "digest": "sha256:95fec0474bd39b0d5db965fc63a08653a331492488a2e5877ee205976fdedf24"
   }
 }
 ```
