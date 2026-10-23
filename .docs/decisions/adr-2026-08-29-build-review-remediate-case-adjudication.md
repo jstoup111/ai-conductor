@@ -158,6 +158,12 @@ the semantic kickback budget.
 > (adr-2026-10-20-operator-acceptance-is-durable-case-state D3). Findings below a declared threshold never reach
 > this judgement at all (adr-2026-10-19-build-review-finding-severity-advisory-threshold D4, D6).
 
+> **Amended 2026-10-23 by #3124:** An unbound `act` case row may carry an optional `distinctFrom`
+> list of `{ caseId, reason }` entries, which declares the case distinct from a resolved action case
+> that owns one of its sources. Provider output still mints no durable id. An entry that does not
+> name such an owner is dropped, not rejected, and a malformed shape rejects the artifact as before
+> (successor adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication D5.8).
+
 > **Amended 2026-10-20 by #3271:** The case-store source outcome vocabulary gains `carried`. It is written only by the reconciler carry lane, never by provider output, and the provider artifact vocabulary is unchanged (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D3).
 
 ### D5 — Durable case state is shared machinery with domain-owned effects
@@ -175,6 +181,11 @@ Cases are not matched mechanically by summaries. `remediate` may bind a current 
 existing case; the engine validates the reference and appends the current raw source trace. When the
 current lap no longer reports an open case, the engine marks it resolved using current-lap absence
 plus mechanically available action evidence. It never deletes history.
+
+> **Amended 2026-10-23 by #3124:** A build_review case record gains two optional engine-stamped
+> fields, written only on a new `act` case at creation: `recurrenceOf` (resolved action case ids)
+> and `distinctFrom` (declared case ids with reasons). The store version stays v3, and resolved rows
+> are never rewritten by them (successor D5.9).
 
 > **Amended 2026-10-20 by #3271:** The case store moves to v3. It adds case `operatorAcceptance` origins, case `operatorResolution`, the `carried` outcome and an outbox of `ConductorEvent` values, and v2 is upgraded on write (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D6). The store now holds one operator-authored field, `operatorResolution`, written only by `build-review resolve-case`, so the autonomous/operator separation holds per field. Open-case retirement, by absence or by acceptance, is decided by one shared reconciler predicate (adr-2026-10-20-operator-acceptance-is-durable-case-state D5). On a coordinator reuse halt, the halting proposal's live sources are linked to the bound case (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
@@ -217,6 +228,12 @@ of an adjudicated case rather than reopening an unbounded route.
 > `existingCaseId` rebind with disposition `act` of a resolved case. An unbound proposal for a source that only resolved
 > cases own is admitted as a new case, and a new action is charged against the kickback budget, so
 > the cumulative cap is the bound. See the successor's D5.4–D5.7.
+
+> **Amended 2026-10-23 by #3124:** The 2026-10-19 note above admits an unbound re-raise as a new
+> case. That case is now a recorded recurrence of the resolved action case unless the judge declares
+> it distinct with a reason. A recurrence lineage shares a limit of three applied BUILD attempts, and
+> reaching it halts as a recurrence limit. Explicit rebinds keep the regression halt (successor
+> D5.8–D5.11).
 
 > **Amended 2026-09-09 by #2409:** Decision 7's repeat rule assumed the judge either confirms the
 > attempted case or has nothing to say. A re-raised finding whose claim the judge concludes is
