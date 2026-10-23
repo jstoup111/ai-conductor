@@ -122,10 +122,11 @@ build_review:
   # Disabled 2026-10-17 (operator order): operator acceptances are keyed by exact
   # finding identity, so this rubric re-raises an accepted finding under a new id
   # every lap and halts features on substance the operator already decided.
-  # Re-enable once acceptance survives a re-raise (#3271).
+  # Re-enabled 2026-10-23 (operator order): acceptance now survives a re-raise
+  # (#3271 via #3358/#3367) and resolved-case re-raises are admitted (#3292).
   custom_rubrics:
     eventSpine:
-      enabled: false
+      enabled: true
       skill: event-spine
       source: project
       llm_provider: codex
