@@ -349,7 +349,7 @@ describe('remediation case graph validator', () => {
       priorCases: [],
       excludedSourceIds: new Set([buildReviewAdjudicationSourceId(suppressedSource!)]),
       suppressions: [{
-        findingId: suppressedSource!.findingId, rubric: 'testQuality', summary: 'Suppressed finding.',
+        kind: 'confidence', findingId: suppressedSource!.findingId, rubric: 'testQuality', summary: 'Suppressed finding.',
         confidence: 40, floor: 70, lastSeenLap: 'lap-suppressed-source',
       }],
     });
