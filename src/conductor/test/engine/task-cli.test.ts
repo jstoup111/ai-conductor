@@ -1130,7 +1130,7 @@ describe('runTaskDone', () => {
     expect(status.tasks[0].status).toBe('completed');
   });
 
-  it('closes each open live repair across authorities', async () => {
+  it('closes live plan-amendment and remediation-closure repairs with one fresh Done when close', async () => {
     await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
     await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
@@ -1142,23 +1142,24 @@ describe('runTaskDone', () => {
     await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/feature.md' }));
     await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'in_progress' }] }));
     const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
-    const audit = await repairs.admitOrReplay('audit-key', {
-      id: 'audit', planPath: '.docs/plans/feature.md', taskIds: ['2'],
-      source: { findingId: 'audit', authority: 'prd_audit', instruction: 'repair' },
-      baseline: { head: 'audit-boundary', tree: 'audit-tree', resolvedTaskIds: [] },
+    const amendment = await repairs.admitOrReplay('amendment-key', {
+      id: 'amendment', planPath: '.docs/plans/feature.md', taskIds: ['2'],
+      source: { findingId: 'amendment', authority: 'plan_amendment', instruction: 'repair' },
+      baseline: { head: 'amendment-boundary', tree: 'amendment-tree', resolvedTaskIds: [] },
     });
-    const current = await repairs.admitOrReplay('current-key', {
-      id: 'current', planPath: '.docs/plans/feature.md', taskIds: ['2'],
-      source: { findingId: 'current', authority: 'build_review', instruction: 'repair' },
-      baseline: { head: 'current-boundary', tree: 'current-tree', resolvedTaskIds: [] },
+    const closure = await repairs.admitOrReplay('closure-key', {
+      id: 'closure', planPath: '.docs/plans/feature.md', taskIds: ['2'],
+      source: { findingId: 'closure', authority: 'remediation-closure', instruction: 'repair' },
+      baseline: { head: 'closure-boundary', tree: 'closure-tree', resolvedTaskIds: [] },
     });
-    if (!audit.ok || !current.ok) throw new Error('repair admission failed');
+    if (!amendment.ok || !closure.ok) throw new Error('repair admission failed');
 
     await expect(runTaskDone(dir, '2', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(0);
 
     const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'));
-    expect(state.repairObligations.records[audit.obligation.id].tasks['2'].status).toBe('resolved');
-    expect(state.repairObligations.records[current.obligation.id].tasks['2'].status).toBe('resolved');
+    expect(state.repairObligations.records[amendment.obligation.id].tasks['2'].status).toBe('resolved');
+    expect(state.repairObligations.records[closure.obligation.id].tasks['2'].status).toBe('resolved');
+    expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
   });
 
   it.each(['with the current-task stamp', 'without the current-task stamp'])('refuses a current-less repair %s without changing repair or task status', async (stampCase) => {
