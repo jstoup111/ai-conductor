@@ -300,33 +300,41 @@ function reconcileState(
     if (!existing) return { ok: false, reason: 'unknown-case-binding' };
     if (existing.domain !== 'build_review') return { ok: false, reason: 'foreign-case-binding' };
     if (referencedExisting.has(existingCaseId)) return { ok: false, reason: 'duplicate-case-binding' };
+    // Carry is a complete lane, not an exception on every autonomous lane.
+    // Decide it first so a carried refutation never consults its historical
+    // refutation and a carried deferral never reserves a new effect.
     const admitsCarry = carriedCaseRefs.has(caseRow.caseRef);
-    const admitsRefutation = !admitsCarry && caseRow.disposition === 'refute'
-      && existing.disposition === 'act'
-      && existing.resolution === 'open'
-      && attemptedIds.has(existing.id)
-      && existing.effect.kind === 'action'
-      && existing.effect.status === 'applied';
-    // An applied action whose finding comes back may be conclusively deferred:
-    // the repair was tried, and the judge has found the remaining fix outside
-    // the approved plan. Without this lane the only transitions off an applied
-    // action are refutation or another action, and a legitimate follow-up
-    // halted the feature as an illegal transition.
-    const admitsDeferral = !admitsCarry && caseRow.disposition === 'defer'
-      && existing.disposition === 'act'
-      && existing.effect.kind === 'action'
-      && existing.effect.status === 'applied';
-    // A failed action effect is terminal (for example charged past the
-    // kickback budget), so no lap can apply it and the open case halted every
-    // lap. Re-raising its finding as action reserves a fresh effect, which is
-    // charged like any new action, so an exhausted budget still stops the lap.
-    const admitsActionRetry = !admitsCarry && caseRow.disposition === 'act'
-      && existing.disposition === 'act'
-      && existing.resolution === 'open'
-      && existing.effect.kind === 'action'
-      && existing.effect.status === 'failed';
-    if (!admitsCarry && caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
-    if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral && !admitsCarry) return { ok: false, reason: 'illegal-disposition-transition' };
+    let admitsRefutation = false;
+    let admitsDeferral = false;
+    let admitsActionRetry = false;
+    if (!admitsCarry) {
+      admitsRefutation = caseRow.disposition === 'refute'
+        && existing.disposition === 'act'
+        && existing.resolution === 'open'
+        && attemptedIds.has(existing.id)
+        && existing.effect.kind === 'action'
+        && existing.effect.status === 'applied';
+      // An applied action whose finding comes back may be conclusively deferred:
+      // the repair was tried, and the judge has found the remaining fix outside
+      // the approved plan. Without this lane the only transitions off an applied
+      // action are refutation or another action, and a legitimate follow-up
+      // halted the feature as an illegal transition.
+      admitsDeferral = caseRow.disposition === 'defer'
+        && existing.disposition === 'act'
+        && existing.effect.kind === 'action'
+        && existing.effect.status === 'applied';
+      // A failed action effect is terminal (for example charged past the
+      // kickback budget), so no lap can apply it and the open case halted every
+      // lap. Re-raising its finding as action reserves a fresh effect, which is
+      // charged like any new action, so an exhausted budget still stops the lap.
+      admitsActionRetry = caseRow.disposition === 'act'
+        && existing.disposition === 'act'
+        && existing.resolution === 'open'
+        && existing.effect.kind === 'action'
+        && existing.effect.status === 'failed';
+      if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
+      if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
+    }
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);
     caseIdsByRef.set(caseRow.caseRef, existingCaseId);

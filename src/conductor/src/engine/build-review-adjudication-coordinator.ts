@@ -183,7 +183,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   };
   await drainOutbox();
   const sources = projectBuildReviewAggregateSources(input.aggregate);
-  if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
+  if (!sources) {
+    await drainOutbox();
+    return { ok: false, detail: 'invalid raw aggregate source projection' };
+  }
   const operatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> =>
     input.resolveOperatorResolvedFindingIds ? input.resolveOperatorResolvedFindingIds() : input.operatorResolvedFindingIds;
   const effectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> =>
@@ -215,6 +218,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail,
       ...(rejectedTransition === undefined ? {} : { rejectedTransition }),
     });
+    await drainOutbox();
     return { ok: false, detail };
   };
   const failStore = async (
@@ -583,6 +587,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         terminalFailureEmitted: true,
       });
     }
+    await drainOutbox();
     return failed;
   };
   let resolved: ReadonlySet<string>;
@@ -927,23 +932,23 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     });
     if (!persistedStop.ok) return failStore('blocked consistency stop', persistedStop);
   }
+  await drainOutbox();
   const durableState = await store.read();
   if (!durableState.ok) return failStore('case store', durableState);
   const reconciledCasesById = new Map(durableState.state.cases.map((record) => [record.id, record]));
   const priorCasesById = new Map(prior.state.cases.map((record) => [record.id, record]));
-  const emittedCaseIds = new Set<string>();
-  // Every persisted transition gets exactly one occurrence. A prior attempted
-  // case absent from this lap's admitted graph is resolved by reconciliation
-  // and named by no `caseRef`, so iterating the ref map alone changed durable
-  // state with nothing on the event spine.
-  for (const caseId of [...caseIdsByRef.values(), ...reconciled.resolvedAbsentCaseIds]) {
-    if (emittedCaseIds.has(caseId)) continue;
-    emittedCaseIds.add(caseId);
+  // Reconciler retirement entries are appended in its mutation and delivered
+  // by the drain above.  Do not emit a second, non-idempotent lifecycle event
+  // from this read-side projection.
+  for (const caseId of caseIdsByRef.values()) {
     const record = reconciledCasesById.get(caseId);
     if (!record) return fail(`reconciled case ${caseId} is unavailable`);
-    if (record.resolution !== 'resolved') await input.emit?.({
+    // Opening a case is the coordinator's existing lifecycle signal. Resolved
+    // transitions are deliberately omitted here: their event-id'd outbox entry
+    // was committed with the retirement and drained above.
+    if (record.resolution === 'open') await input.emit?.({
       type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
-      caseId, resolution: record.resolution,
+      caseId, resolution: 'open',
     });
     const priorEffect = priorCasesById.get(caseId)?.effect;
     const wasReserved = priorEffect?.kind !== 'none' && priorEffect?.status === 'reserved';

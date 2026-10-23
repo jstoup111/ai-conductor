@@ -5463,6 +5463,7 @@ export class Conductor {
       const actionResolution = survivingObligation.effect.kind === 'action'
         ? `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`
         : '';
+      await drainOutbox();
       return {
         kind: 'invalid',
         reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${actionResolution}`,
