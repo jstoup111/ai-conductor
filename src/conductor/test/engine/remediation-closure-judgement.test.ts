@@ -213,7 +213,7 @@ describe('remediation closure candidates', () => {
 
   it('requires fresh Done-when records and gives a reclosed task a new identity after reopening', () => {
     const status = { tasks: [{
-      id: 'rem-as-built-R5', status: 'completed', restored_from: 'task-trailer', doneWhen: [],
+      id: 'rem-as-built-R5', status: 'completed', restored_from: 'task-trailer', doneWhen: [] as (typeof closeRecords)[number][],
     }] };
     const input = {
       status,

@@ -39,7 +39,7 @@ async function subject(options: {
   readonly reviewModel?: string | null;
   readonly reviewEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   readonly globalDefaultModel?: string;
-  readonly reviewProviders?: readonly string[];
+  readonly reviewProviders?: string[];
 } = {}) {
   const claudeResults = options.claudeResults ?? [{ success: true, output: 'done', exitCode: 0, finalStructuredResult: valid }];
   const codexResults = options.codexResults ?? [{ success: true, output: 'done', exitCode: 0, finalStructuredResult: valid }];
