@@ -80,6 +80,10 @@ export interface RemediationCaseRecord {
   readonly consistencyStop?: { readonly sourceIds: readonly string[]; readonly rationale: string };
   /** Advisory adjudication records the lowered severity, never an effect. */
   readonly adjudicatedSeverity?: import('./build-review-domain.js').BuildReviewSeverity;
+  /** Prior cases that establish this case as a recurrence. */
+  readonly recurrenceOf?: readonly string[];
+  /** Prior cases considered and retained as distinct from this case. */
+  readonly distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
   /** Operator acceptance retained independently from the autonomous disposition. */
   readonly operatorAcceptance?: RemediationCaseOperatorAcceptance;
   /** Operator resolution retained independently from the autonomous disposition. */
@@ -498,6 +502,28 @@ function parseOperatorResolution(value: unknown): RemediationCaseOperatorResolut
   return { operator: value.operator, rationale: value.rationale, resolvedAt: value.resolvedAt };
 }
 
+function parseRecurrenceOf(value: unknown, caseId: string): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SOURCES_PER_CASE ||
+    !value.every((priorCaseId) => boundedString(priorCaseId, MAX_REFERENCE_LENGTH) && priorCaseId !== caseId)) return undefined;
+  return value;
+}
+
+function parseDistinctFrom(
+  value: unknown,
+  caseId: string,
+): readonly { readonly caseId: string; readonly reason: string }[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SOURCES_PER_CASE) return undefined;
+  const distinctions = value.map((distinction) => {
+    if (!isRecord(distinction) || !exactKeys(distinction, ['caseId', 'reason']) ||
+      !boundedString(distinction.caseId, MAX_REFERENCE_LENGTH) || distinction.caseId === caseId ||
+      !boundedString(distinction.reason)) return undefined;
+    return { caseId: distinction.caseId, reason: distinction.reason };
+  });
+  return distinctions.some((distinction) => distinction === undefined)
+    ? undefined
+    : distinctions as { caseId: string; reason: string }[];
+}
+
 function parseCase(value: unknown):
   | { readonly ok: true; readonly record: RemediationCaseRecord }
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
@@ -506,16 +532,20 @@ function parseCase(value: unknown):
     ...(Object.hasOwn(value, 'operatorAcceptance') ? ['operatorAcceptance'] : []),
     ...(Object.hasOwn(value, 'operatorResolution') ? ['operatorResolution'] : []),
   ];
+  const optionalRelationshipKeys = [
+    ...(Object.hasOwn(value, 'recurrenceOf') ? ['recurrenceOf'] : []),
+    ...(Object.hasOwn(value, 'distinctFrom') ? ['distinctFrom'] : []),
+  ];
   const expectedKeys = value.disposition === 'refute'
-    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation', ...optionalOperatorKeys]
+    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation', ...optionalRelationshipKeys, ...optionalOperatorKeys]
     : value.disposition === 'escalate'
       ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
         ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
         ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : []),
-        ...optionalOperatorKeys]
+        ...optionalRelationshipKeys, ...optionalOperatorKeys]
     : value.disposition === 'advisory'
-      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'adjudicatedSeverity', ...optionalOperatorKeys]
-      : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...optionalOperatorKeys];
+      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'adjudicatedSeverity', ...optionalRelationshipKeys, ...optionalOperatorKeys]
+      : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...optionalRelationshipKeys, ...optionalOperatorKeys];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
   if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
@@ -541,6 +571,12 @@ function parseCase(value: unknown):
   const adjudicatedSeverity = value.disposition === 'advisory' &&
     (value.adjudicatedSeverity === 'critical' || value.adjudicatedSeverity === 'major' || value.adjudicatedSeverity === 'minor' || value.adjudicatedSeverity === 'nit')
     ? value.adjudicatedSeverity : undefined;
+  const recurrenceOf = Object.hasOwn(value, 'recurrenceOf')
+    ? parseRecurrenceOf(value.recurrenceOf, value.id)
+    : undefined;
+  const distinctFrom = Object.hasOwn(value, 'distinctFrom')
+    ? parseDistinctFrom(value.distinctFrom, value.id)
+    : undefined;
   const operatorAcceptance = Object.hasOwn(value, 'operatorAcceptance')
     ? parseOperatorAcceptance(value.operatorAcceptance)
     : undefined;
@@ -551,6 +587,8 @@ function parseCase(value: unknown):
     value.disposition === 'refute' && refutation === undefined ||
     value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined ||
     value.disposition === 'advisory' && (adjudicatedSeverity === undefined || effect.kind !== 'none') ||
+    Object.hasOwn(value, 'recurrenceOf') && recurrenceOf === undefined ||
+    Object.hasOwn(value, 'distinctFrom') && distinctFrom === undefined ||
     Object.hasOwn(value, 'operatorAcceptance') && (operatorAcceptance === undefined ||
       (operatorAcceptance.origins.length === 0 && operatorResolution === undefined)) ||
     Object.hasOwn(value, 'operatorResolution') && operatorResolution === undefined) return { ok: false, reason: 'malformed-state' };
@@ -568,6 +606,8 @@ function parseCase(value: unknown):
     ...(escalation === undefined ? {} : { escalation }),
     ...(consistencyStop === undefined ? {} : { consistencyStop }),
     ...(adjudicatedSeverity === undefined ? {} : { adjudicatedSeverity }),
+    ...(recurrenceOf === undefined ? {} : { recurrenceOf }),
+    ...(distinctFrom === undefined ? {} : { distinctFrom }),
     ...(operatorAcceptance === undefined ? {} : { operatorAcceptance }),
     ...(operatorResolution === undefined ? {} : { operatorResolution }),
   } };

@@ -391,6 +391,26 @@ describe('remediation case store', () => {
     });
   });
 
+  it('round-trips recurrence and distinction links on a case', async () => {
+    const projectRoot = await createProjectRoot();
+    const writer = new RemediationCaseStore(projectRoot, FEATURE);
+    const recurrentCase = {
+      ...CASE_STATE.cases[0],
+      recurrenceOf: ['case-r'],
+      distinctFrom: [{ caseId: 'case-r2', reason: 'The finding concerns a different invariant.' }],
+    };
+
+    await expect(writer.mutate(async () => ({
+      value: 'seeded' as const,
+      nextState: { ...CASE_STATE, cases: [recurrentCase] },
+    }))).resolves.toEqual({ ok: true, value: 'seeded' });
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: { ...CURRENT_CASE_STATE, cases: [recurrentCase] },
+    });
+  });
+
   it.each([
     ['a no-effect refutation', REFUTED_CASE_STATE],
     ['a refutation with a durable deferral', {
@@ -430,6 +450,51 @@ describe('remediation case store', () => {
       lock: IMMEDIATE_LEASE,
     }).read()).resolves.toEqual({ ok: true, state: V3_STATE });
     expect({ writes: tracked.writes, renames: tracked.renames }).toEqual({ writes: [], renames: [] });
+  });
+
+  it('preserves omitted v3 lineage fields when adding an unrelated case', async () => {
+    const persistedState = CURRENT_CASE_STATE;
+    const preservedRow = JSON.stringify(persistedState.cases[0]);
+    const unrelatedCase: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'case-2',
+      sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'testQuality:finding-2' }],
+      effect: { id: 'effect-2', kind: 'action', status: 'reserved' },
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(persistedState)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+
+    await expect(store.mutate(async () => ({
+      value: 'added' as const,
+      nextState: { ...persistedState, cases: [...persistedState.cases, unrelatedCase] },
+    }))).resolves.toEqual({ ok: true, value: 'added' });
+
+    const written = JSON.parse(tracked.contents) as RemediationCaseStoreState;
+    expect(JSON.stringify(written.cases[0])).toBe(preservedRow);
+    expect(written.cases[0]).not.toHaveProperty('recurrenceOf');
+    expect(written.cases[0]).not.toHaveProperty('distinctFrom');
+  });
+
+  it.each([
+    ['an empty recurrence list', { recurrenceOf: [] }],
+    ['a recurrence list containing its own id', { recurrenceOf: ['case-1'] }],
+    ['an empty distinction list', { distinctFrom: [] }],
+    ['a distinction with an empty reason', { distinctFrom: [{ caseId: 'case-r', reason: '' }] }],
+    ['a distinction with a reason longer than 8,000 characters', { distinctFrom: [{ caseId: 'case-r', reason: 'x'.repeat(8_001) }] }],
+  ] as const)('rejects a persisted v3 case with %s', async (_description, lineage) => {
+    const malformedState = {
+      ...CURRENT_CASE_STATE,
+      cases: [{ ...CURRENT_CASE_STATE.cases[0], ...lineage }],
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(malformedState)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    }).read()).resolves.toEqual({ ok: false, reason: 'malformed-state' });
   });
 
   it('preserves v3 outbox entries when a PRD-widening writer replaces its cases', async () => {
