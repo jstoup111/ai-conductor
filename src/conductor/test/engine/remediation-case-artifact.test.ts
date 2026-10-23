@@ -135,11 +135,12 @@ describe('remediation case artifact', () => {
   });
 
   it('admits an act row declaring a distinct resolved case and preserves it in the graph', async () => {
+    const distinctFrom = [{ caseId: 'R', reason: 'asserts daemon-liveness staleness' }] as const;
     const judgement = {
       ...CASE_V1,
       cases: [{
         ...CASE_V1.cases[0],
-        distinctFrom: [{ caseId: 'R', reason: 'asserts daemon-liveness staleness' }],
+        distinctFrom,
       }, ...CASE_V1.cases.slice(1)],
     };
 
@@ -151,7 +152,7 @@ describe('remediation case artifact', () => {
       ok: true,
       graph: expect.objectContaining({
         cases: expect.arrayContaining([expect.objectContaining({
-          case: expect.objectContaining({ distinctFrom: judgement.cases[0].distinctFrom }),
+          case: expect.objectContaining({ distinctFrom }),
         })]),
       }),
     }));

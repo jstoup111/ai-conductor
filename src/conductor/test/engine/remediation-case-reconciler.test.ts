@@ -434,13 +434,14 @@ describe('remediation case reconciler', () => {
     const undeclaredRoot = await createProjectRoot();
     const declaredStore = new RemediationCaseStore(declaredRoot, FEATURE);
     const undeclaredStore = new RemediationCaseStore(undeclaredRoot, FEATURE);
-    const priorCases = row.existingCaseId
+    const existingCaseId = 'existingCaseId' in row ? row.existingCaseId : undefined;
+    const priorCases = existingCaseId
       ? [durableAction({ id: 'case-B', sources: [{ sourceId: 'source-S', outcome: 'acted', recordedAt: RECORDED_AT }] })]
       : [resolvedActionOwner('case-R', 'source-S')];
     for (const store of [declaredStore, undeclaredStore]) {
       await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: priorCases } }));
     }
-    const declaration = [{ caseId: row.existingCaseId ?? 'case-R', reason: 'The declaration must not govern this row.' }];
+    const declaration = [{ caseId: existingCaseId ?? 'case-R', reason: 'The declaration must not govern this row.' }];
 
     const [declared, undeclared] = await Promise.all([
       reconcileRemediationCases(declaredStore, {

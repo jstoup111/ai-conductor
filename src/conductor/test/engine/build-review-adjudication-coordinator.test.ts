@@ -2458,7 +2458,9 @@ describe('coordinateBuildReviewAdjudication', () => {
         ...input(root, async () => judgement), generateId: sequentialIds('N'),
         emit: async (event) => { events.push(event); },
       });
-      const event = events.find((candidate) => candidate.type === 'remediation_case_reconciled' && candidate.resolution === 'open');
+      const event = events.find((candidate): candidate is Extract<RemediationCaseLifecycleEvent, { type: 'remediation_case_reconciled' }> =>
+        candidate.type === 'remediation_case_reconciled' && candidate.resolution === 'open',
+      );
       if (event === undefined) return undefined;
       const record = event as unknown as Record<string, unknown>;
       return {
@@ -4026,7 +4028,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const { sources: beforeN2Sources, ...beforeN2Else } = beforeN2;
     const { sources: afterN2Sources, ...afterN2Else } = afterN2;
     expect(afterN2Else).toEqual(beforeN2Else);
-    expect(afterN2Sources).toEqual(expect.arrayContaining(beforeN2Sources));
+    expect(afterN2Sources).toEqual(expect.arrayContaining([...beforeN2Sources]));
 
     const acceptedAtLimit = await coordinateBuildReviewAdjudication({
       ...input(root, async () => boundedJudgement), aggregate: mixedAggregate,
