@@ -167,7 +167,7 @@ discipline produced false blocks.
 > `adr-2026-10-21-remediation-closure-judgement` over completed engine-appended `rem-*` tasks. A task
 > with a `pending-judgement` record or an open citation obligation is not judged in that pass. Its
 > reopen withholds completion like a D14 refusal, with its own fixed reason prefix after any citation
-> lines, and like D8's nudge and D14's refusal it never increments `noEvidenceAttempts`. D8's
+> lines, and like D14's refusal it is never a no-progress stall. D8's
 > "BUILD completes on task resolution as before" therefore also requires that no remediation-closure
 > reopen is open. Close records, the closed source set of D17 and `prd_audit`'s input are unchanged.
 

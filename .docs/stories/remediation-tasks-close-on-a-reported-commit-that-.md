@@ -28,7 +28,6 @@ As the operator, I want BUILD to catch a remediation task that was closed withou
 - Given a reopened remediation task, when a new commit with its `Task:` trailer lands after the reopen or the agent closes it again with fresh Done-when evidence, then the task resolves.
 - Given a BUILD attempt ended with a closure-judgement reopen and the resolved-task count fell and HEAD did not move, when the stall detector evaluates the next attempt, then BUILD is not classified as `no_task_progress`.
 - Given a remediation task is reopened by the judgement, when the kickback ledger and plan-growth allowance are read afterwards, then no gate lap and no plan growth were charged.
-- Given a closure-judgement reopen caused a BUILD retry, when the progress-aware halt accounting runs, then `noEvidenceAttempts` is unchanged by that retry.
 
 ### Done When
 - [ ] A conductor-level test drives BUILD to all-resolved with a stubbed judge returning `persists` and observes the task row `pending`, an open `remediation-closure` obligation, the prefixed completion reason, and no `test_suite` dispatch.
@@ -53,7 +52,10 @@ As the operator, I want a remediation task that really carries its repair to pas
 - Given a stacked feature with a routed repair open on host child k, when child k's BUILD session ends with a completed remediation task recorded to child k, then that task is judged and a `persists` verdict admits its obligation with the boundary `{branch, head}` of child k's branch taken at admission.
 - Given a judged remediation task whose branch was rebased and whose Done-when close records are unchanged, when the next BUILD session ends, then that task is not sent to the judge again.
 - Given an ordinary plan task closed only with `reported` evidence, when the BUILD session ends, then it is never sent to the remediation-closure judge and BUILD completes on task resolution as before.
-- Given every plan task is resolved, the worktree has an uncommitted tracked change, and a completed remediation task has no verdict for its current close, when the BUILD session ends, then no remediation-closure judgement is dispatched, no verdict is recorded, and BUILD is not complete for the dirty tree.
+- Given every plan task is resolved, the worktree has an uncommitted tracked change or an untracked file that is not ignored, and a completed remediation task has no verdict for its current close, when the BUILD session ends, then no remediation-closure judgement is dispatched, no verdict is recorded, and BUILD is not complete for the dirty tree.
+- Given a worktree recreated from its branch so its remediation tasks are restored from `Task:` trailers and no verdict record exists, when the BUILD session ends, then no restored remediation task is sent to the judge and none is reopened.
+- Given a remediation task judged `resolved` whose check source is later rewritten by citation settlement or by `done-when accept`, when the next BUILD session ends with no new close of that task, then it is not sent to the judge again.
+- Given a remediation task reopened by the judgement and later resolved only by a new `Task:` trailer commit past its obligation boundary, when the next BUILD session ends, then that task is sent to the judge for its new close.
 
 ### Done When
 - [ ] A test with three tasks closed by one commit and mixed verdicts shows exactly one task reopened.
@@ -69,7 +71,7 @@ As the operator, I want the judge to grade each task against what its plan block
 
 #### Happy Path
 - Given a completed remediation task with a `Task:` trailer commit and a `reported` Done-when evidence value naming another commit SHA that resolves, when the judgement input is built, then it contains the task's plan block (title, Rationale, Criterion, Governing clause and Done-when checks), each check's close-record source, and the diff of both commits.
-- Given candidates exist, when the judgement is dispatched, then it is one free-form dispatch covering every candidate, it carries the native output schema and the read-only review flag, its working directory is the feature worktree, and its provider, model and effort are those resolved for the `build_review` step.
+- Given candidates exist, when the judgement is dispatched, then it is one free-form dispatch covering every candidate, it carries the native output schema and the read-only review flag, its working directory is the feature worktree, and its provider, model and effort are those resolved from the `build_review` step's configuration while the dispatch is attributed to the running BUILD step.
 
 #### Negative Paths
 - Given the cited commits' combined diff exceeds 48,000 bytes, when the judgement input is built, then the diff is cut to 48,000 bytes and the input states that it was truncated.
@@ -80,7 +82,7 @@ As the operator, I want the judge to grade each task against what its plan block
 
 ### Done When
 - [ ] An input-builder test asserts the plan block, the close-record sources, both cited diffs, and the truncation notice for an oversized diff.
-- [ ] A step-runner test asserts the dispatch uses the `build_review` step with `readOnlyReview` and the native schema, and returns unavailable with no invocation when no provider declares native schema support.
+- [ ] A step-runner test asserts the dispatch resolves its provider from `steps.build_review` while its lifecycle events name the `build` step, passes `readOnlyReview` and the native schema, and returns unavailable with no invocation when no provider declares native schema support.
 
 ## Story 4: A failed judgement retries once, then hands off unjudged
 

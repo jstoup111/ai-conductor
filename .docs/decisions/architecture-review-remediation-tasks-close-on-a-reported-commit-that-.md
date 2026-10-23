@@ -11,7 +11,7 @@ track scope boundary, the approved sequence
 
 | Check | Assessment |
 |---|---|
-| Stack compatibility | No new dependency. Reuses the free-form provider-aware one-shot (`executeProviderAwareOneShot`, which accepts `build_review`), the read-only review capability, native output schema, the repair obligation store, and the engine-state serialized update seam. |
+| Stack compatibility | No new dependency. Reuses the auxiliary provider path (`executeAuxiliaryProviderCandidates` inside `dispatchProviderWithLifecycleSupervision`, with a policy resolved from a step's configuration as `dispatchRebaseRegradeJudgement` does), the read-only review capability, native output schema, the repair obligation store, and the engine-state serialized update seam. |
 | Prerequisites | #3200's citation judgement boundary (merged, #3357). The dispatch port is optional, as `dispatchDoneWhenCitationJudgement` is, so runners without it record candidates unjudged. |
 | Integration surface | Engine-internal: the conductor's BUILD session boundary, a step runner port, the stall detector, retry hints, the event union and sinks. No skill, CLI, hook, settings or persisted task-status format change. |
 | Data implications | Additive versioned engine-state section for verdicts; one new obligation source authority. No migration. |
@@ -24,12 +24,10 @@ track scope boundary, the approved sequence
   selection, input scoping, bounds, persisted verdicts and the reopen, with a closed-schema verdict.
 - **Local pattern basis — BUILD-boundary judgement.** Precedent: the #3200 citation judgement
   (`done-when-citation-judgement.ts`, the `step.name === 'build'` block before `checkStepCompletion`
-  in `conductor.ts`, `StepRunner.dispatchDoneWhenCitationJudgement`). Traits to preserve: an
-  engine-built input projection; one free-form dispatch with `readOnlyReview` and `nativeSchema`;
+  in `conductor.ts`, `StepRunner.dispatchDoneWhenCitationJudgement`). Traits to preserve: an engine-built input projection; one engine-rendered dispatch with `readOnlyReview` and `nativeSchema`;
   retry once inside the port; closed-key validation that rejects missing or extra ids; a reopen
   through a repair obligation that overrides completion with a fixed reason prefix; one spine event
-  per pass. Allowed variation: the provider policy is `build_review`'s rather than BUILD's, so the
-  builder does not grade its own work; the terminal disposition of an exhausted task is to stand
+  per pass. Allowed variation: the provider policy is resolved from `build_review`'s configuration rather than BUILD's, so the builder does not grade its own work, while the dispatch stays supervised and attributed as BUILD activity (the `dispatchRebaseRegradeJudgement` policy pattern); the terminal disposition of an exhausted task is to stand
   closed (`bound-exhausted`) rather than demote to `unverified`, because remediation checks are
   untagged and `prd_audit` already re-grades them.
 - **Local pattern basis — BUILD-internal reopen.** Precedents: `plan_amendment`
@@ -51,8 +49,7 @@ track scope boundary, the approved sequence
   state under exception C. No sidecar, poller or stamped artifact.
 - **Scope check.** A: consumer-facing behavior (the remediation flow runs in every engine build, not
   behind `isSelfBuild()`), but the change itself is engine code with no instruction-file or skill
-  edit. B: no skill. C: provider-agnostic through the provider-aware one-shot, gated on a declared
-  native-schema capability.
+  edit. B: no skill. C: provider-agnostic through the auxiliary provider path, gated on a declared native-schema capability.
 - **State management.** Verdict is a closed enum (`resolved | persists | partial`) plus engine-only
   `unjudged`; outcome is `judged | unjudged`; no boolean-flag state.
 - **Security / DI.** No endpoint or user input. The judge runs under the probed read-only review

@@ -22,11 +22,11 @@ sequenceDiagram
     Agent->>Bound: Step session ends
     Bound->>Cite: Settle, admit and judge pending citations as today
     Cite-->>Bound: Citation refusal lines, if any
-    alt Worktree has uncommitted tracked changes
+        alt Uncommitted-work probe reports a dirty tree
         Bound->>Pred: Skip this pass. Predicate withholds for the dirty tree as today
     else Clean worktree
         Bound->>Store: Read verdicts and reopen counts
-        Bound->>Bound: Candidates are completed rem tasks in the execution child's scope, with no pending citation, no open citation obligation and no verdict for their current close
+        Bound->>Bound: Candidates are resolved rem tasks in the execution child's scope, not trailer-restored, with no pending citation, no open citation obligation and no verdict for their current close
         alt No candidates
             Bound->>Pred: Evaluate completion as today
         else Candidates exist
@@ -56,7 +56,7 @@ sequenceDiagram
 
 ## Legend
 
-A candidate is a task whose id passes `isEngineAppendedRemediationTaskId`, sits in the execution child's BUILD task scope (the whole plan when not stacked), holds no `pending-judgement` record and no open `done-when-citation` obligation, and is resolved without a recorded verdict for its current close identity. The close identity digests the task id, its reopen count and its Done-when close records, and excludes every SHA that rebase translation rewrites, so a rebase alone never triggers re-judgement. Because a judged task is never re-judged until it closes again, one commit may legitimately close several tasks: each task is judged on its own plan block. The plan task block (title, Rationale, Criterion, Governing clause) is the authority for the change the task names; no gate finding is re-persisted. The dispatch is engine-owned and free-form, under the `build_review` step's provider policy so the builder does not grade its own work, with the read-only review capability and the provider's native output schema; no skill ships. The reopen bound is two reopens per task. A reopened task needs a repair obligation because its earlier `Task:` trailer would otherwise resolve it again immediately (adr-2026-09-06-reopened-task-resolution D4).
+A candidate is a task whose id passes `isEngineAppendedRemediationTaskId`, sits in the execution child's BUILD task scope (the whole plan when not stacked), holds no `pending-judgement` record and no open `done-when-citation` obligation, was not restored from trailer evidence, and is resolved under the shared task resolver without a recorded verdict for its current close identity. The close identity digests the task id, its reopen count and its Done-when close records' check text and evidence, and excludes record sources and every SHA that rebase translation rewrites, so neither a source rewrite nor a rebase triggers re-judgement. The judgement is skipped while the uncommitted-work floor's probe reports a dirty tree. Because a judged task is never re-judged until it closes again, one commit may legitimately close several tasks: each task is judged on its own plan block. The plan task block (title, Rationale, Criterion, Governing clause) is the authority for the change the task names; no gate finding is re-persisted. The dispatch is engine-owned, with its provider policy resolved from the `build_review` step's configuration so the builder does not grade its own work, supervised as BUILD activity, with the read-only review capability and the provider's native output schema; no skill ships. The reopen bound is two reopens per task. A reopened task needs a repair obligation because its earlier `Task:` trailer would otherwise resolve it again immediately (adr-2026-09-06-reopened-task-resolution D4).
 
 ## Change Log
 

@@ -120,9 +120,10 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 > and lives in its verdict state; it is not a repair retry counter, so decision 8's "no new retry
 > counter" stands. Under decision 4, pre-reopen trailers and the old close record do not resolve the
 > task. For decision 8 it has no governing review of its own, as for `plan_amendment`: it ends when
-> its task resolves, and the next BUILD-boundary judgement judges the new close. It is not a gate
-> remediation for decision 11, so a plan-text change of its task supersedes it under the existing
-> current-obligation rule.
+> its task resolves, and the next BUILD-boundary judgement judges the new close. A newer
+> `remediation-closure` obligation for the same task supersedes an older open one, as decision 11 does
+> for its own source. A plan-text change of its task admits a `plan_amendment` obligation beside it
+> without superseding it, and one fresh close resolves both.
 
 ## Architectural Alignment
 

@@ -25,11 +25,13 @@ question.
 #3200 has since shipped the local pattern at exactly this point
 (`adr-2026-08-22-done-when-evidence-at-task-close` D13–D18, `adr-2026-09-06-reopened-task-resolution`
 decision 13): at the end of each BUILD session, before the completion predicate, the conductor
-dispatches one engine-owned, native-schema, read-only judgement over pending `[test]` citations, and
+dispatches one engine-owned, native-schema, read-only judgement over pending `[test]` citations under
+BUILD's provider policy, and
 a refusal reopens the task through a repair obligation and withholds completion with a fixed reason
 prefix that the stall detector exempts. It does not cover this defect: it judges only `[test]`
 citations, and remediation tasks close on untagged `reported` checks. This ADR adds a sibling
-judgement at the same boundary, built the same way.
+judgement at the same boundary, built the same way except that it runs under `build_review`'s
+provider policy.
 
 Scope boundary (operator-confirmed track): engine-appended `rem-*` tasks only. Ordinary plan tasks,
 `[test]` Done-when verification and the #3200 citation judgement are unchanged.
@@ -66,24 +68,33 @@ Scope boundary (operator-confirmed track): engine-appended `rem-*` tasks only. O
    a BUILD session ends, the conductor runs the remediation-closure judgement inside the same
    boundary block as `adr-2026-08-22-done-when-evidence-at-task-close` D13, after the citation
    judgement and its settlement and admissions, and before the BUILD completion predicate is
-   evaluated. The predicate stays pure and no judgement runs at `task done`. A reopen under decision
+   evaluated. It runs whether or not the step runner has the citation dispatch port. The predicate
+   stays pure and no judgement runs at `task done`. A reopen under decision
    8 withholds completion with a reason that begins with the fixed prefix
    `Remediation closure reopened:` and names each reopened task by id and title with the judge's
    rationale. When the same pass also refused a citation, the reason carries the citation lines
-   first and the reopen lines after them. When the worktree has uncommitted tracked changes the
-   judgement is skipped for that pass, with no dispatch, no verdict and no event; the predicate
-   withholds completion for the dirty tree as it already does.
-2. **Candidates are completed `rem-*` tasks with no verdict for their current close.** A candidate
+   first and the reopen lines after them. When the uncommitted-work floor's working-tree probe
+   (`adr-2026-08-03-uncommitted-work-floor-under-build-completion`) reports any tracked modification
+   or untracked, non-ignored path, the judgement is skipped for that pass, with no dispatch, no
+   verdict and no event; the predicate withholds completion for the dirty tree as it already does.
+2. **Candidates are resolved `rem-*` tasks with no verdict for their current close.** A candidate
    passes `isEngineAppendedRemediationTaskId`, lies in the BUILD task scope of the execution child
    (`adr-2026-10-12-routed-whole-feature-repair` decision 8; the whole plan when the feature is not
-   stacked), is resolved, has no `pending-judgement` record and no open `done-when-citation`
-   obligation, and has no persisted verdict for its current close identity. The close identity is a
-   digest of the task id, the task's reopen count under decision 9, and its current Done-when close
-   records (check text, evidence and source). It excludes the row's `commit`, its `startHead` and
-   every `Task:` trailer, which rebase translation rewrites, so a rebase alone never triggers a
-   re-judgement, while a reopen always yields a new identity for the next close. A task is never
-   re-judged until it closes again, so a resolved verdict stands and one commit may legitimately
-   close several tasks. No candidates means no dispatch and no event.
+   stacked), is resolved under the shared task resolver (`resolveTaskIdsWithDiagnostics`), whether by
+   its row or by a `Task:` trailer past its obligation boundary, has no `pending-judgement` record and
+   no open `done-when-citation` obligation, and has no persisted verdict for its current close
+   identity. A row restored from trailer evidence (`adr-2026-09-06-reopened-task-resolution`
+   decision 12, or wholesale reconstruction) is never a candidate: it carries no close to judge, and
+   the downstream gates own it, so recreating a worktree never re-opens the reopen bound. The close
+   identity is a digest of the task id, the task's reopen count under decision 9, and its current
+   Done-when close records' check text and evidence. It excludes each record's `source`, which
+   citation settlement and `done-when accept` rewrite without a new close, and the row's `commit`,
+   its `startHead` and every `Task:` trailer, which rebase translation rewrites, so neither a source
+   change nor a rebase triggers a re-judgement. A reopen under decision 8 always yields a new
+   identity for the next close. A task reopened by another source and resolved again with unchanged
+   close records keeps its identity and is not re-judged; that source's own review judges it. A task
+   is never re-judged until it closes again, so a resolved verdict stands and one commit may
+   legitimately close several tasks. No candidates means no dispatch and no event.
 3. **The plan task block is the authority for the named change.** The judge receives, per
    candidate, the task's plan block (title, Rationale, Criterion, Governing clause, Done-when), each
    check's close-record source, and the commits that cite it: any commit SHA in its Done-when
@@ -94,12 +105,14 @@ Scope boundary (operator-confirmed track): engine-appended `rem-*` tasks only. O
    by itself grounds for `persists` or `partial`; the question is whether the named change is
    present. No gate finding text is re-persisted.
 4. **One engine-owned dispatch per pass under the `build_review` provider policy.** The engine makes
-   one free-form one-shot dispatch per pass through the step runner's optional
-   `dispatchRemediationClosureJudgement` port, as `dispatchDoneWhenCitationJudgement` is. The prompt
-   is rendered by the engine and the output is constrained by the provider's native output schema;
-   no skill is shipped. Provider, model and effort are those resolved for the `build_review` step,
-   so the builder does not grade its own work. When no candidate provider declares native output
-   schema support, the dispatch is unavailable.
+   one dispatch per pass through the step runner's optional `dispatchRemediationClosureJudgement`
+   port, beside `dispatchDoneWhenCitationJudgement`. The prompt is rendered by the engine and the
+   output is constrained by the provider's native output schema; no skill is shipped. Provider,
+   model and effort are resolved from the `build_review` step's configuration, as
+   `dispatchRebaseRegradeJudgement` resolves its policy from the `rebase` step, so the builder does
+   not grade its own work. The dispatch is supervised and attributed as BUILD activity, the step
+   that is running, and opens no `build_review` session. When no provider in that policy declares
+   native output schema support, the dispatch is unavailable.
 5. **The judge reads the feature worktree read-only.** The dispatch runs with its working directory
    in the feature worktree under the read-only review capability, as the citation judgement does.
    No BUILD session runs at this boundary, so HEAD does not move; if HEAD nevertheless differs when
@@ -128,8 +141,8 @@ Scope boundary (operator-confirmed track): engine-appended `rem-*` tasks only. O
    is named on the event as `bound-exhausted`, and BUILD proceeds. No halt class is added.
 10. **The reopen retry neither ticks the stall detector nor loses its reason.** The retry a reopen
     causes draws on the existing per-step retry budget but, like the citation refusal of
-    `adr-2026-08-22-done-when-evidence-at-task-close` D14, never increments `noEvidenceAttempts`:
-    `isNoTaskProgressBuildStall` skips a completion reason carrying the fixed prefix. The BUILD retry
+    `adr-2026-08-22-done-when-evidence-at-task-close` D14, is never a no-progress stall:
+    `isNoTaskProgressBuildStall` skips a completion reason that carries either fixed prefix. The BUILD retry
     hint names each reopened task and its rationale, and startup recovery rebuilds it from the open
     obligations.
 11. **Verdicts are durable state; the judgement is an event.** Verdicts, close identities and reopen
@@ -137,7 +150,8 @@ Scope boundary (operator-confirmed track): engine-appended `rem-*` tasks only. O
     through its serialized update seam (event-spine exception C: read by name as the authority for
     whether to re-judge). A present but malformed section blocks BUILD completion with a reason
     naming it, as malformed repair state does (`adr-2026-09-06-reopened-task-resolution` D3), so the
-    reopen bound can never be silently reset. A non-resolved verdict, its reopen count and its
+    reopen bound can never be silently reset; a BUILD that exhausts its retries on it ends in the
+    existing BUILD failure, not a new halt class. An absent section is an empty record. A non-resolved verdict, its reopen count and its
     obligation admission are applied so that a crash never leaves the task completed with that
     verdict and no open obligation, and never counts one close twice. Each dispatched pass emits one
     new `remediation_closure_judged` `ConductorEvent` carrying the outcome (`judged` or `unjudged`),
@@ -153,7 +167,7 @@ Scope boundary (operator-confirmed track): engine-appended `rem-*` tasks only. O
 | A3 | Handing off unjudged after one retry is acceptable on a failed dispatch. | inferred | 80% | yes | A persistent provider fault disables this check silently except for the event. | APPROVED by operator 2026-10-21 |
 | A4 | The citation-judgement block in `conductor.ts` (guarded by `step.name === 'build'`, before `checkStepCompletion`, overriding completion with its refusal reason) is the seam, and the `Done-when citation refused:` prefix exemption in `isNoTaskProgressBuildStall` is the pattern to extend. | verified | 95% | yes | The judgement would need a different hook into BUILD completion. | n/a |
 | A5 | A `Task:` trailer resolves a restaged row again unless an open obligation exists. | verified | 95% | yes | A raw restage would suffice; the obligation would be redundant. | n/a |
-| A6 | `build_review` is an allowed free-form one-shot step (`ProviderAwareFreeFormOneShotStep` in `step-runners.ts`), so the port can dispatch under its provider policy with `readOnlyReview` and `nativeSchema`. | verified | 95% | yes | The port would need a new one-shot step kind or BUILD's provider policy. | n/a |
+| A6 | A step runner can dispatch under another step's provider policy while supervised as the running step: `dispatchRebaseRegradeJudgement` builds its policy from the `rebase` step and calls `executeAuxiliaryProviderCandidates` inside `dispatchProviderWithLifecycleSupervision`, whose options are `InvokeOptions` and so carry `nativeSchema` and `readOnlyReview` (`provider-execution.ts`). | verified | 85% | yes | The judge would run under BUILD's provider policy, as the citation judgement does. | n/a |
 | A7 | Rebase translation (`applyMapToPipelineStore` in `rebase-translate.ts`) rewrites task-row `commit` and `startHead` and evidence-store SHAs, but not Done-when close-record evidence text, so a close identity built from Done-when records survives a rebase. | verified | 90% | yes | A rebase would re-judge every remediation task once. | n/a |
 
 ## Architectural Alignment
