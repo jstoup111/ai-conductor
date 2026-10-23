@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:4
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -77,8 +77,9 @@ describe('validation-group halt attribution', () => {
   }
 
   async function runTerminalAsBuiltGroup(
-    kind: 'PLAN_GAP' | 'DESIGN' | 'invalid' | 'REMEDIABLE' | 'APPROVED',
+    kind: 'PLAN_GAP' | 'DESIGN' | 'invalid' | 'REMEDIABLE' | 'APPROVED' | 'NO_VERDICT' | 'MECHANICAL' | 'PERMISSION' | 'AUTH_PARK' | 'CACHED_TRIAL' | 'MANUAL_NO_VERDICT',
     route: 'terminal' | 'planner-halt' | 'projection-refusal' | 'no-op' = 'terminal',
+    entry: 'manual_test' | 'prd_audit' = 'manual_test',
   ) {
     const root = await mkdtemp(join(tmpdir(), 'validation-group-halt-attribution-group-'));
     roots.push(root);
@@ -104,9 +105,10 @@ describe('validation-group halt attribution', () => {
         projectRoot: root,
         stateFilePath: join(root, '.pipeline/conduct-state.json'),
         events,
-        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: route !== 'projection-refusal', maxRetries: 1,
+        fromStep: entry, mode: 'auto', daemon: true, verifyArtifacts: route !== 'projection-refusal', maxRetries: 1,
         stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
+            if (kind === 'MANUAL_NO_VERDICT') return { success: false, output: 'fixture manual dispatch lost' };
             await writeFile(join(root, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
           } else if (step === 'build') {
             await writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }));
@@ -115,6 +117,18 @@ describe('validation-group halt attribution', () => {
               version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture', rationale: 'fixture', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [],
             }, diagnostics: [], recordedDispositions: [] }, { attemptId: options?.runId ?? 'prd', codeStamp: 'fixture' });
           } else if (step === 'architecture_review_as_built') {
+            if (kind === 'NO_VERDICT') return { success: false, output: 'fixture dispatch lost' };
+            if (kind === 'MECHANICAL') {
+              return { success: false, asBuiltFault: { kind: 'input', reason: 'fixture mechanical fault' } };
+            }
+            if (kind === 'PERMISSION') return {
+              success: false, permissionDenied: true, actualProvider: 'codex', output: 'fixture permission denied',
+              authentication: { provider: 'codex', source: 'cached-login', state: 'ready' },
+            };
+            if (kind === 'AUTH_PARK' || kind === 'CACHED_TRIAL') return {
+              success: false, authFailure: true,
+              authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+            };
             if (kind === 'invalid') {
               await writeFile(join(root, '.pipeline/architecture-review-as-built.json'), '{"invalid":true}');
             } else if (kind === 'PLAN_GAP') {
@@ -142,6 +156,17 @@ describe('validation-group halt attribution', () => {
       if (route === 'projection-refusal') {
         vi.spyOn(conductor as any, 'projectPendingAsBuiltRemediationFindings').mockResolvedValue('projection storage refused');
       }
+      if (kind === 'AUTH_PARK') {
+        vi.spyOn(conductor as any, 'parkOnAuthFailure').mockResolvedValue({
+          disposition: 'halt', haltReason: 'fixture authentication park',
+        });
+      }
+      if (kind === 'CACHED_TRIAL') {
+        vi.spyOn(conductor as any, 'parkOnAuthFailure').mockResolvedValue({
+          disposition: 'trial-required',
+          probeFailure: { kind: 'unparseable-output', facts: { parserRejection: 'fixture' } },
+        });
+      }
       await conductor.run();
     } finally {
       persister.stop();
@@ -151,7 +176,7 @@ describe('validation-group halt attribution', () => {
 
   async function runPrdAuditGroup(
     route: Record<string, unknown>,
-    options: { incompleteAudit?: boolean; plannerFault?: boolean; spentAllowance?: boolean } = {},
+    options: { incompleteAudit?: boolean; plannerFault?: boolean; spentAllowance?: boolean; noOp?: boolean } = {},
   ) {
     const root = await mkdtemp(join(tmpdir(), 'validation-group-halt-attribution-prd-'));
     roots.push(root);
@@ -200,6 +225,11 @@ describe('validation-group halt attribution', () => {
       if (options.plannerFault) {
         vi.spyOn(conductor as any, 'planRemediation').mockResolvedValue({ kind: 'halt', detail: 'planner fault', haltClass: 'needs-human' });
       }
+      if (options.noOp) {
+        vi.spyOn(conductor as any, 'planRemediation').mockResolvedValue({
+          kind: 'route', target: 'build', hint: 'fixture unchanged prd gap', evidence: 'prd fixture',
+        });
+      }
       await conductor.run();
     } finally {
       persister.stop();
@@ -239,6 +269,65 @@ describe('validation-group halt attribution', () => {
     expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
       expect.any(String), expect.stringContaining('as-built architecture review kickback-to-build no-op'),
       'kickback-cap', expect.anything(), undefined, 'architecture_review_as_built',
+    ]));
+  });
+
+  it('attributes an as-built no-verdict group halt to the member that exhausted retries', async () => {
+    const persisted = await runTerminalAsBuiltGroup('NO_VERDICT');
+    expect(persisted).toContainEqual(expect.objectContaining({
+      type: 'loop_halt', step: 'architecture_review_as_built',
+    }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), 'needs-human', expect.anything(), undefined,
+      'architecture_review_as_built',
+    ]));
+  });
+
+  it('attributes a member mechanical fault while keeping its halt unrecorded', async () => {
+    const persisted = await runTerminalAsBuiltGroup('MECHANICAL');
+    expect(persisted).toContainEqual(expect.objectContaining({
+      type: 'loop_halt', step: 'architecture_review_as_built',
+    }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), 'mechanical', expect.anything(), undefined,
+      'architecture_review_as_built',
+    ]));
+  });
+
+  it.each([
+    ['permission denial', 'PERMISSION'],
+    ['cached-login recovery-trial failure', 'CACHED_TRIAL'],
+    ['authentication park', 'AUTH_PARK'],
+  ] as const)('attributes a member %s halt to that member', async (_name, kind) => {
+    const persisted = await runTerminalAsBuiltGroup(kind);
+    expect(persisted).toContainEqual(expect.objectContaining({
+      type: 'loop_halt', step: 'architecture_review_as_built',
+    }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), 'needs-human', expect.anything(), undefined,
+      'architecture_review_as_built',
+    ]));
+  });
+
+  it('attributes a manual_test no-verdict to manual_test when prd_audit entered the group', async () => {
+    const { conductor, events } = await conductorAtValidationGroupEntry();
+    const halts: Array<{ step?: string }> = [];
+    events.on('loop_halt', (event) => { halts.push(event); });
+    (conductor as any).dispatchingStep = 'prd_audit';
+    await (conductor as any).writeHaltMarker('manual fixture no-verdict\n', 'needs-human', 'manual_test');
+    await (conductor as any).emitLoopHalt('manual fixture no-verdict', undefined, 'manual_test');
+    expect(halts).toEqual([expect.objectContaining({ step: 'manual_test' })]);
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), 'needs-human', expect.anything(), undefined, 'manual_test',
+    ]));
+  });
+
+  it('attributes a prd_audit gap kickback-to-build no-op escalation to prd_audit', async () => {
+    const persisted = await runPrdAuditGroup({ kind: 'none' }, { incompleteAudit: true, noOp: true });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'prd_audit' }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.stringContaining('prd_audit kickback-to-build no-op'), 'needs-human',
+      expect.anything(), undefined, 'prd_audit',
     ]));
   });
 

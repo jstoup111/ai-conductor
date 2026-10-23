@@ -5652,11 +5652,15 @@ export class Conductor {
   }
 
   /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
-  private async haltForValidatorFault(state: ConductState, reason: string): Promise<void> {
+  private async haltForValidatorFault(
+    state: ConductState,
+    reason: string,
+    haltingStep?: StepName,
+  ): Promise<void> {
     await this.closeOpenExecutions();
-    await this.writeHaltMarker(reason + '\n', 'mechanical');
+    await this.writeHaltMarker(reason + '\n', 'mechanical', haltingStep);
     await this.persistPendingStateChanges(state, 'persist conductor transition');
-    await this.emitLoopHalt(reason);
+    await this.emitLoopHalt(reason, undefined, haltingStep);
   }
 
   /**
@@ -8660,11 +8664,12 @@ export class Conductor {
                   : undefined,
               );
               if (park.disposition === 'halt') {
+                const failedMember = membership.dispatchable[authFailureIdxs[0]!]!;
                 await closeSettledMembers(outcomes, park.haltReason);
-                await this.writeHaltMarker(park.haltReason + '\n', 'needs-human');
+                await this.writeHaltMarker(park.haltReason + '\n', 'needs-human', failedMember.name as StepName);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
-                await this.emitLoopHalt(park.haltReason, prUrl);
+                await this.emitLoopHalt(park.haltReason, prUrl, failedMember.name as StepName);
                 process.off('SIGINT', sigintHandler);
                 if (!this.daemon) {
                   process.off('SIGTERM', sigterm);
@@ -8722,10 +8727,10 @@ export class Conductor {
                     `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
                     `Refresh the ${CODEX_DISPLAY_NAME} login, then re-queue this feature.`;
                   await closeSettledMembers(outcomes, haltReason);
-                  await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+                  await this.writeHaltMarker(haltReason + '\n', 'needs-human', failedMember.name as StepName);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(haltReason);
-                  await this.emitLoopHalt(haltReason, prUrl);
+                  await this.emitLoopHalt(haltReason, prUrl, failedMember.name as StepName);
                   process.off('SIGINT', sigintHandler);
                   if (!this.daemon) process.off('SIGTERM', sigterm);
                   return;
@@ -8778,10 +8783,10 @@ export class Conductor {
                 'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
                 `\nProvider detail: ${outcome.reason}`;
               await closeSettledMembers(outcomes, haltReason);
-              await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              await this.writeHaltMarker(haltReason + '\n', 'needs-human', member.name as StepName);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
-              await this.emitLoopHalt(haltReason, prUrl);
+              await this.emitLoopHalt(haltReason, prUrl, member.name as StepName);
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) process.off('SIGTERM', sigterm);
               return;
@@ -8952,7 +8957,11 @@ export class Conductor {
                     `${err instanceof Error ? err.message : String(err)}`,
                 );
               }
-              await this.haltForValidatorFault(state, mechanicalFault.reason);
+              await this.haltForValidatorFault(
+                state,
+                mechanicalFault.reason,
+                mechanicalFaultMember.name as StepName,
+              );
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -8979,7 +8988,7 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after ${attemptsSpent} attempts (${noVerdictOutcome.reason}).`;
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+              await this.writeHaltMarker(haltReason + '\n', 'needs-human', noVerdictMember.name as StepName);
               // Story 3, negative path: a no-verdict outcome is the validator's
               // own runner dying (thrown branch, terminal error, or exhausted
               // retry budget) — a work failure, not a judgement awaiting a
@@ -9023,7 +9032,7 @@ export class Conductor {
               // green. Close that scope without mutating the group's state or
               // granting a gate verdict; only the single-writer join owns that.
               await closeClassifiedPassingMembers();
-              await this.emitLoopHalt(haltReason);
+              await this.emitLoopHalt(haltReason, undefined, noVerdictMember.name as StepName);
               await emitTracked({
                 type: 'parallel_failure',
                 step: step.name,
@@ -9798,9 +9807,9 @@ export class Conductor {
                   const gapEscalation = await checkKickbackToBuildEscalation(gapName);
                   if (gapEscalation.halt) {
                     const reason = `${gapName} kickback-to-build no-op: ${gapEscalation.reason}`;
-                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.writeHaltMarker(reason + '\n', 'needs-human', gapName);
                     const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.emitLoopHalt(reason, prUrl);
+                    await this.emitLoopHalt(reason, prUrl, gapName);
                     process.off('SIGINT', sigintHandler);
                     if (!this.daemon) {
                       process.off('SIGTERM', sigterm);
