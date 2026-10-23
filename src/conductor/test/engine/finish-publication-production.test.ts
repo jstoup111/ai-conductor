@@ -2186,6 +2186,96 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  // Covers: task:17, task:rem-prd-audit-r17-2
+  it('publishes threshold and adjudicated advisory findings without adjudicator rationale', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-advisory-findings-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1175';
+      const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
+      const thresholdFinding = {
+        concernKind: 'test-insensitive', summary: 'The threshold advisory is still visible to reviewers.', severity: 'minor' as const,
+        evidenceLocations: ['test/threshold.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/threshold.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'threshold test' } },
+      };
+      const adjudicatedFinding = {
+        concernKind: 'test-insensitive', summary: 'The adjudicated advisory remains visible without its private rationale.', severity: 'major' as const,
+        evidenceLocations: ['test/adjudicated.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/adjudicated.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'adjudicated test' } },
+      };
+      const thresholdId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...thresholdFinding })!.id;
+      const adjudicatedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...adjudicatedFinding })!.id;
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
+        results: {
+          testQuality: {
+            kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
+            contractVersion: 'v4', findings: [thresholdFinding, adjudicatedFinding], verdict: 'FAIL',
+          },
+        },
+      });
+      await writeFile(join(pipeline, 'build-review.json'), JSON.stringify(aggregate));
+      const caseState = {
+        version: 'v3', feature, prdWideningCases: [], outbox: [],
+        suppressions: [{
+          kind: 'severity' as const, findingId: thresholdId, rubric: 'testQuality', summary: thresholdFinding.summary,
+          severity: 'minor' as const, threshold: 'major' as const, lastSeenLap: 'lap-advisories',
+        }],
+        cases: [{
+          id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${adjudicatedId}`, outcome: 'advisory', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+        }],
+      } satisfies RemediationCaseStoreState;
+      let body = 'Reader-facing summary.';
+      const edits: string[][] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') { body = args[args.indexOf('--body') + 1]!; edits.push(args); return commandResult; }
+        throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        operations: guardedOperations(gh),
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => undefined,
+        resolveFeatureIdentity: async () => feature,
+        createDispositionStore: () => ({
+          list: async () => ({ ok: true as const, records: [] }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+        }),
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }),
+      });
+      const state = {
+        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+      const dispatchJudgment = async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }) as never;
+      for (let index = 0; index < 6 && edits.length === 0; index++) {
+        await coordinator.advance({ state, mode: 'auto', daemon: true, dispatchJudgment, emit: async () => {} });
+      }
+
+      expect(edits).toHaveLength(1);
+      const publishedBody = edits[0]![edits[0]!.indexOf('--body') + 1]!;
+      expect(publishedBody).toContain('## Advisory build-review findings');
+      expect(publishedBody).toContain(`- Finding: \`${thresholdId}\` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: ${thresholdFinding.summary}`);
+      expect(publishedBody).toContain(`- Finding: \`${adjudicatedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${adjudicatedFinding.summary}`);
+      expect(publishedBody).not.toContain('ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('strips a stale reduced-coverage section from the retained PR when no records remain', async () => {
     // Plan task rem-adr-5's absent case. The present and unrenderable cases are
     // covered above; this drives the section-removal branch of
