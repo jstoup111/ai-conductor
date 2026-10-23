@@ -177,6 +177,7 @@ import {
   verifyProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineEvent,
 } from './protected-artifact-seal.js';
+import { describeResealRecovery } from './reseal-cli.js';
 import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
@@ -10842,6 +10843,10 @@ export class Conductor {
               });
               if (!sealVerdict.ok) {
                 protectedArtifactIssue = sealVerdict.reason;
+                if (step.name === 'build') {
+                  const recovery = await describeResealRecovery(this.projectRoot, sealVerdict.path);
+                  if (recovery) protectedArtifactIssue += `\n${recovery}`;
+                }
               } else {
                 if (sealVerdict.selfAmendments.length > 0) {
                   console.warn(
