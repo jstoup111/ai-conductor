@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5, task:21, task:37, rem-ab5-1
+// Covers: task:3, task:4, task:5, task:8, task:21, task:37, rem-ab5-1
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
@@ -92,6 +92,19 @@ describe('config consumer registry', () => {
       },
       'test_suite.verification.drift_budget': {
         consumer: 'src/conductor/src/engine/full-suite-verifier.ts',
+      },
+    });
+  });
+
+  it('declares min_severity for built-in and custom build-review rubrics', () => {
+    expect(CONFIG_CONSUMER_KEY_SETS['build_review.rubrics']).toContain('min_severity');
+    expect(CONFIG_CONSUMER_KEY_SETS['build_review.custom_rubrics']).toContain('min_severity');
+    expect(configConsumerRegistry).toMatchObject({
+      'build_review.rubrics.min_severity': {
+        consumer: 'src/conductor/src/engine/resolved-config.ts',
+      },
+      'build_review.custom_rubrics.min_severity': {
+        consumer: 'src/conductor/src/engine/resolved-config.ts',
       },
     });
   });

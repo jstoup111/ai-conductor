@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
-  BUILD_REVIEW_JUDGED_V3_SCHEMAS,
+  BUILD_REVIEW_JUDGED_V4_SCHEMAS,
   parseBuildReviewJudgedResult,
 } from './build-review-domain.js';
 import {
@@ -88,12 +88,12 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
     prerequisite: 'none',
     contract: Object.freeze({
       projection: Object.freeze({
-        version: 'v3',
+        version: 'v4',
         build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).testQuality,
       }),
       output: Object.freeze({
-        version: 'v3',
-        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.testQuality,
+        version: 'v4',
+        jsonSchema: BUILD_REVIEW_JUDGED_V4_SCHEMAS.testQuality,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
@@ -108,12 +108,12 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
     prerequisite: 'none',
     contract: Object.freeze({
       projection: Object.freeze({
-        version: 'v3',
+        version: 'v4',
         build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).security,
       }),
       output: Object.freeze({
-        version: 'v3',
-        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.security,
+        version: 'v4',
+        jsonSchema: BUILD_REVIEW_JUDGED_V4_SCHEMAS.security,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),
@@ -128,12 +128,12 @@ const BUILD_REVIEW_RUBRIC_CATALOG: readonly BuildReviewRubricRegistryCatalogMemb
     prerequisite: 'none',
     contract: Object.freeze({
       projection: Object.freeze({
-        version: 'v3',
+        version: 'v4',
         build: (source: BuildReviewProjectionSource) => deriveBuildReviewRubricProjections(source).implementationQuality,
       }),
       output: Object.freeze({
-        version: 'v3',
-        jsonSchema: BUILD_REVIEW_JUDGED_V3_SCHEMAS.implementationQuality,
+        version: 'v4',
+        jsonSchema: BUILD_REVIEW_JUDGED_V4_SCHEMAS.implementationQuality,
         parse: parseBuildReviewJudgedResult,
       }),
       identity: Object.freeze({ canonicalize: canonicalizeBuildReviewFindingIdentity }),

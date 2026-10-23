@@ -1,5 +1,6 @@
 import type { ComplexityTier, EnforcementLevel, StepName, Phase } from './steps.js';
 import type { BUILD_REVIEW_RUBRIC_IDS } from '../engine/build-review-registry.js';
+import type { BuildReviewSeverity } from '../engine/build-review-domain.js';
 
 /**
  * Claude's native reasoning effort levels — set per invocation via
@@ -860,6 +861,8 @@ export interface BuildReviewRubricConfig {
   max_retries?: number;
   escalate?: boolean;
   min_confidence?: number;
+  /** Lowest finding severity that remains blocking for this rubric. */
+  min_severity?: BuildReviewSeverity;
 }
 
 /** A project-declared build-review rubric, identified by its map key. */

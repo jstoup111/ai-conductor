@@ -29,6 +29,7 @@ import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import {
   buildReviewConfidenceFloors,
+  buildReviewSeverityThresholds,
   isBuildReviewLapHealthyForAbsenceRetirement,
   rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
@@ -36,7 +37,7 @@ import {
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
-import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
+import { projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   applyBuildReviewOutcome,
   BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE,
@@ -5347,8 +5348,10 @@ export class Conductor {
    * `open` with an `applied` effect forever, and every subsequent BUILD entry —
    * for any gate — read its stale work order back through
    * `durableBuildReviewRetryContext` and re-injected repaired work. A clean PASS
-   * IS the evidence that its content set is empty, so reconciling against an
-   * empty graph resolves exactly the prior attempted cases absent from it.
+   * IS the evidence that its actionable content set is empty, so reconciling
+   * against an empty graph resolves exactly the prior attempted cases absent
+   * from it. A raw FAIL whose only findings are threshold advisories has the
+   * same effective-PASS evidence.
    *
    * The mechanical verdict is never changed here. This is state settlement
    * before terminal PASS routing: genuinely absent prior state is benign, but
@@ -5377,7 +5380,29 @@ export class Conductor {
       return { kind: 'absent' };
     }
     const aggregate = parseBuildReviewAggregate(verdictRaw);
-    if (!aggregate || aggregate.verdict !== 'PASS') return { kind: 'absent' };
+    if (!aggregate) return { kind: 'absent' };
+    if (aggregate.verdict !== 'PASS') {
+      const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+        this.projectRoot,
+        verdictRaw,
+        {
+          emit: async (event) => { await this.events.emit(event); },
+          minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+          minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
+          child: this.activeRegionChild,
+          adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+        },
+      );
+      // Per-case retirement below decides which open action has no live
+      // source. Other cases may have accepted, suppressed, or settled
+      // sources; those non-blocking peers must not keep this absent advisory
+      // action open.
+      const advisoryEffectivePass = effective.ok &&
+        effective.effective.verdict === 'PASS' &&
+        (effective.effective.advisoryFindingIds?.length ?? 0) > 0 &&
+        effective.effective.unresolvedFindingIds.length === 0;
+      if (!advisoryEffectivePass) return { kind: 'absent' };
+    }
     const featureRead = await readRemediationCaseStoreFeature(
       this.projectRoot,
       undefined,
@@ -13600,7 +13625,7 @@ export class Conductor {
                     verdictRaw,
                     {
                       emit: async (event) => { await this.events.emit(event); },
-                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)), minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
                       child: this.activeRegionChild,
                       adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     },
@@ -13657,7 +13682,7 @@ export class Conductor {
                       verdictRaw,
                       {
                         emit: async (event) => { await this.events.emit(event); },
-                        minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                        minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)), minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
                         child: this.activeRegionChild,
                         adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                       },
@@ -13701,8 +13726,10 @@ export class Conductor {
                         ? authorizeGithubFeatureIssueCreation({ repository: trackerRepo, mutation })
                         : undefined;
                     })();
-                  const floors = buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config));
+                  const resolvedReviewConfig = resolveBuildReviewConfig(this.config);
+                  const floors = buildReviewConfidenceFloors(resolvedReviewConfig);
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
+                  const advisoryFindingIds = effective.effective.advisoryFindingIds ?? [];
                   // One shared projection with the effective-verdict seam that
                   // already persisted these rows for this lap; the coordinator
                   // re-runs that same idempotent upsert rather than owning a
@@ -13711,6 +13738,11 @@ export class Conductor {
                     aggregate,
                     suppressedFindingIds,
                     floors,
+                  });
+                  const advisories = projectBuildReviewAdvisoryEntries({
+                    aggregate,
+                    advisoryFindingIds,
+                    thresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
                   });
                   // Settlement gate: `verdictRaw` is the aggregate the join
                   // recorded after every branch settled; the shared operation
@@ -13723,7 +13755,9 @@ export class Conductor {
                     ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
                     suppressedFindingIds: new Set(suppressedFindingIds),
-                    suppressions,
+                    advisoryFindingIds: new Set(advisoryFindingIds),
+                    declaredSeverityThresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
+                    suppressions: [...suppressions, ...advisories],
                     resolveOperatorResolvedFindingIds,
                     resolveEffectiveAcceptedSourceIds,
                     mechanical,
@@ -13794,6 +13828,17 @@ export class Conductor {
                     return;
                   }
                   if (outcome.kind === 'settled') {
+                    const settlement = await this.settleRemediationCasesOnCleanBuildReview();
+                    if (settlement.kind === 'invalid') {
+                      await this.haltSerialExecution({
+                        reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
+                        haltClass: 'needs-human',
+                        persistState: async () => {
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
+                        },
+                      });
+                      return;
+                    }
                     await this.saveConductorStepStatus(state, step.name, 'done');
                     this.log?.(outcome.trace);
                     continue;
@@ -13880,7 +13925,7 @@ export class Conductor {
                       this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
-                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)), minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
                       child: this.activeRegionChild,
                       adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     });

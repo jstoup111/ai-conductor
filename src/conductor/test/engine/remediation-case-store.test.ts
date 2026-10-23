@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:9, task:20
+// Covers: task:1, task:2, task:9, task:20, task:rem-prd-audit-r21-1, task:rem-prd-audit-r21-2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -261,9 +261,9 @@ describe('remediation case store', () => {
       sources: [{ ...settled.sources[0]!, recordedAt: '2026-10-21T12:00:00.000Z' }],
     };
 
-    expect(finalizedBuildReviewSourceIds([unsettled, laterSettled])).toEqual(new Set([sourceId]));
-    expect(finalizedBuildReviewSourceIds([settled, unsettled])).toEqual(new Set());
-    expect(finalizedBuildReviewSourceIds([settled, open])).toEqual(new Set());
+    expect(finalizedBuildReviewSourceIds([unsettled, laterSettled], {})).toEqual(new Set([sourceId]));
+    expect(finalizedBuildReviewSourceIds([settled, unsettled], {})).toEqual(new Set());
+    expect(finalizedBuildReviewSourceIds([settled, open], {})).toEqual(new Set());
   });
 
   it('settles carried authoritative links for built-in and custom rubric sources', () => {
@@ -278,7 +278,7 @@ describe('remediation case store', () => {
     expect(finalizedBuildReviewSourceIds([
       carried('built-in-case', 'testQuality:built-in-finding'),
       carried('custom-case', 'portablePolicy:custom-finding'),
-    ])).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
+    ], {})).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
   });
 
   it('settles the current acted link of an operator-resolved action despite its failed effect', () => {
@@ -293,7 +293,32 @@ describe('remediation case store', () => {
       },
     };
 
-    expect(finalizedBuildReviewSourceIds([operatorResolved])).toEqual(new Set(['testQuality:finding-1']));
+    expect(finalizedBuildReviewSourceIds([operatorResolved], {})).toEqual(new Set(['testQuality:finding-1']));
+  });
+
+  it('settles an advisory source only while its resolved per-rubric threshold strictly admits its adjudicated severity', () => {
+    const sourceId = 'testQuality:advisory-finding';
+    const advisory: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      disposition: 'advisory',
+      rationale: 'The adjudicated impact is below the operator threshold.',
+      resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+      effect: { kind: 'none' },
+      adjudicatedSeverity: 'minor',
+    };
+
+    expect([
+      finalizedBuildReviewSourceIds([advisory], { testQuality: { min_severity: 'critical' } }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: { min_severity: 'major' } }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: { min_severity: 'minor' } }),
+      finalizedBuildReviewSourceIds([advisory], { testQuality: {} }),
+    ].map((sourceIds) => [...sourceIds])).toEqual([
+      [sourceId],
+      [sourceId],
+      [],
+      [],
+    ]);
   });
 
   it('preserves the former any-link settlement result when no source is shared', () => {
@@ -314,7 +339,7 @@ describe('remediation case store', () => {
           : [],
     ));
 
-    expect(finalizedBuildReviewSourceIds(records)).toEqual(formerAnyLinkRule);
+    expect(finalizedBuildReviewSourceIds(records, {})).toEqual(formerAnyLinkRule);
   });
 
   it('parses separate domain records and selects only their domain without sharing display ordinals', () => {
@@ -433,7 +458,7 @@ describe('remediation case store', () => {
       suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
     }, {
       ...CASE_STATE,
-      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
+      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, kind: 'confidence', lastSeenLap: 'lap-first' }],
     }],
     ['v2', CASE_STATE, CASE_STATE],
   ] as const)('upgrades a valid %s envelope on its first mutation without inventing optional state', async (_version, legacyState, preservedState) => {
@@ -738,7 +763,8 @@ describe('remediation case store', () => {
     await expect(readFile(dispositionPath, 'utf8')).resolves.toBe('{"operator":"only"}\n');
   });
 
-  it('admits a proposed case that links a source owned only by a resolved case', async () => {
+  it('preserves a resolved row byte-for-byte when a drifted source id gains a proposed owner', async () => {
+    const driftedSourceId = 'testQuality:drifted-finding';
     const resolvedState: RemediationCaseStoreState = {
       ...CASE_STATE,
       cases: [{
@@ -746,7 +772,7 @@ describe('remediation case store', () => {
         id: 'case-R',
         resolution: 'resolved',
         effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
-        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: driftedSourceId }],
       }],
     };
     const proposedState: RemediationCaseStoreState = {
@@ -755,11 +781,13 @@ describe('remediation case store', () => {
         ...CASE_STATE.cases[0],
         id: 'case-N',
         effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
-        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: driftedSourceId }],
       }],
     };
+    // Capture the canonical persisted row bytes before the new owner is
+    // admitted; source-id drift must not rewrite that resolved history.
     const resolvedRow = JSON.stringify(resolvedState.cases[0]);
-    const tracked = createTrackedFilesystem(`${JSON.stringify(resolvedState)}\n`);
+    const tracked = createTrackedFilesystem(`{"version":"v2","feature":${JSON.stringify(FEATURE)},"cases":[${resolvedRow}],"prdWideningCases":[],"suppressions":[]}\n`);
     const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
 
     await expect(store

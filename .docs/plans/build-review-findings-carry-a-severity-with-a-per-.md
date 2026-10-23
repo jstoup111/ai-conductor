@@ -882,3 +882,208 @@ This plan adds the following, in 21 tasks:
 - [x] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [x] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions (plan review sweeps this at Tier L)
+
+### Task rem-prd-audit-r9-1: artifacts.ts build_review gate-completion predicates (:3872, :3982): source every floor and min_severity from buildReviewThresholds for built-in and custom rubrics, delete the local floor maps, and add the Task 9 test asserting no other floor map remains
+**Gate:** prd-audit
+**Rationale:** The audit verifies that artifacts.ts:3872 and :3982 still build built-in-only minConfidence maps and pass no minSeverity (95%, verified). This is an implementation gap inside Task 9's approved scope, and ADR D3 already decides the design. No architectural decision is needed.
+**Criterion:** S4.4
+**Parent task:** 9
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-r9-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-r9-2: build-review-effective.ts: replace the independent confidence-map construction (:32) with buildReviewThresholds so the runner, CLI and gate completion classify identically; add a test that gate completion and the effective verdict agree for a custom rubric with min_severity
+**Gate:** as-built
+**Rationale:** This is the same defect class as S4.4 and conforms to ADR D3, which requires one shared thresholds helper. The extra site, build-review-effective.ts:32, is admitted by Task 9, whose single-helper contract covers every caller.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 3
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 3 is satisfied by this task.
+- The repair for task rem-as-built-r9-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r16-1: build-review-cli.ts JSON output (:451): project each advisory finding with id, rubric, severity, threshold and origin (threshold|adjudicated), including adjudicated advisories currently dropped with the settled ids at :450; add the Task 16 JSON tests, including the v3/custom-v1 no-severity resume case
+**Gate:** prd-audit
+**Rationale:** The CLI JSON output carries advisory ids only, and Task 16 requires per-finding rubric, severity, threshold and origin. This is a clear implementation gap within approved scope.
+**Criterion:** S7.1
+**Parent task:** 16
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-r16-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r16-2: build-review-cli.ts renderHuman (:339): print an advisory section listing id, rubric, severity and summary per finding, plus the adjudicator rationale for downgraded findings; add the Task 16 human-output test
+**Gate:** prd-audit
+**Rationale:** renderHuman prints only the advisory ids. Task 16 requires an advisory section with id, rubric, severity and summary, plus the local adjudicator rationale for a downgraded finding.
+**Criterion:** S7.2
+**Parent task:** 16
+**Done when:**
+- [test] S7.2 is satisfied by this task.
+- The repair for task rem-prd-audit-r16-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-r16-3: Verify the r16-1/r16-2 projection covers settled (adjudicated) advisories removed at build-review-cli.ts:450 and includes the downgrade rationale only in local CLI output
+**Gate:** as-built
+**Rationale:** This is the same gap as S7.1 and S7.2, and plan Task 16 owns it. It conforms to the plan, so the fix goes to BUILD.
+**Parent task:** 16
+**Governing clause:** Task 16
+**Done when:**
+- Task 16 is satisfied by this task.
+- The repair for task rem-as-built-r16-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r17-1: build-review-accepted-risk.ts: add an advisory-region renderer emitting '## Advisory build-review findings' with id, rubric, severity, origin and reviewer summary per finding, never adjudicator rationale; omit the heading when there are no advisory findings, and do not let :128 drop the region when advisories exist
+**Gate:** prd-audit
+**Rationale:** Only the heading constant exists, and no renderer emits the advisory region. ADR D5 and Task 17 specify the region's content, so this is an implementation gap.
+**Criterion:** S7.3
+**Parent task:** 17
+**Done when:**
+- [test] S7.3 is satisfied by this task.
+- The repair for task rem-prd-audit-r17-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r17-2: finish-publication-production.ts (:182): build an advisory projection with origin threshold for effective-verdict advisories and origin adjudicated for settled advisory cases, and pass it to the renderer; add the Task 17 publication tests for both origins and for rationale absence
+**Gate:** prd-audit
+**Rationale:** There is no origin field and no rendered region. The threshold and adjudicated origins come from the effective verdict (threshold) and from settled advisory cases (adjudicated), both admitted by Task 17.
+**Criterion:** S7.4
+**Parent task:** 17
+**Done when:**
+- [test] S7.4 is satisfied by this task.
+- The repair for task rem-prd-audit-r17-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r17-3: Add the Task 17 test: a worker body with a forged '## Advisory build-review findings' section publishes with only the engine-rendered region via ENGINE_OWNED_PR_BODY_TEXTS and pr-body-regions.ts masking
+**Gate:** prd-audit
+**Rationale:** Masking is registered, but no engine region replaces a forged one, and there is no test. Once r17-1 and r17-2 land, this is a Task 17 test plus a wiring gap.
+**Criterion:** S7.6
+**Parent task:** 17
+**Done when:**
+- [test] S7.6 is satisfied by this task.
+- The repair for task rem-prd-audit-r17-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-r17-4: Confirm the accepted/carried/operator-resolved render paths (:71, :77) coexist with the advisory region and that no adjudicator rationale reaches the PR body
+**Gate:** as-built
+**Rationale:** This is the same gap as S7.3, S7.4 and S7.6, and it conforms to ADR D5. Plan Task 17 owns it.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5 is satisfied by this task.
+- The repair for task rem-as-built-r17-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r18-1: remediation-case-validator.ts: accept per-source rubric thresholds and reject advisory cases when no rubric declares a threshold or the source's rubric has none; add the Task 18 rejection tests for case-v1 and case-v2
+**Gate:** prd-audit
+**Rationale:** parseCaseRow admits advisory unconditionally, and the validator has no threshold input. Task 18 explicitly requires threshold-bounded validation through the existing invalid-judgement path.
+**Criterion:** S8.5
+**Parent task:** 18
+**Done when:**
+- [test] S8.5 is satisfied by this task.
+- The repair for task rem-prd-audit-r18-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r18-2: build-review-adjudication-coordinator.ts (:726): pass each live source's rubric id, reviewer severity and resolved buildReviewThresholds into validateRemediationCaseGraph; add the Task 19 coordinator-rejection test
+**Gate:** prd-audit
+**Rationale:** The coordinator passes no source rubric or severity to validateRemediationCaseGraph. Task 18 owns the validator input, and Task 19's done-when explicitly requires the coordinator to supply it.
+**Criterion:** S8.7
+**Parent task:** 18
+**Done when:**
+- [test] S8.7 is satisfied by this task.
+- The repair for task rem-prd-audit-r18-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r18-3: remediation-case-validator.ts: reject an advisory case whose adjudicatedSeverity is not strictly below the source rubric threshold (isBelowSeverityThreshold), whose rationale is empty, or whose effect is an action effect; add the tests
+**Gate:** prd-audit
+**Rationale:** The comparison of adjudicatedSeverity against the threshold is missing, and Task 18 requires it.
+**Criterion:** S8.8
+**Parent task:** 18
+**Done when:**
+- [test] S8.8 is satisfied by this task.
+- The repair for task rem-prd-audit-r18-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r18-4: remediation-case-validator.ts: reject an advisory case whose adjudicatedSeverity is above any linked source's reviewer severity; add the test
+**Gate:** prd-audit
+**Rationale:** There is no check that prevents an adjudicated severity from exceeding the reviewer severity. Task 18 requires it.
+**Criterion:** S8.11
+**Parent task:** 18
+**Done when:**
+- [test] S8.11 is satisfied by this task.
+- The repair for task rem-prd-audit-r18-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-r18-5: Apply the r18-1..r18-4 checks to every source outcome (including merged) that references an advisory case, so prompt-level admittedDispositions is no longer the only constraint
+**Gate:** as-built
+**Rationale:** This is the same gap as S8.5, S8.7, S8.8 and S8.11, and it conforms to ADR D6. It also covers merged source outcomes, which point at an advisory case and must be validated per source.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6 is satisfied by this task.
+- The repair for task rem-as-built-r18-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-r18-6: remediation-case-artifact.ts (:182): admit the 'advisory' source outcome; remediation-case-store.ts (:417, :423): admit advisory outcome/disposition with effect none instead of requiring a deferral; add a Task 18 round-trip test (parse → validate → persist → reload) in case-v1 and case-v2
+**Gate:** as-built
+**Rationale:** Advisory admission is incomplete at four boundaries (artifact :182, store :417 and :423, adjudication-context :315), so a valid advisory case cannot round-trip. Task 18 admits the parser and validator, and Task 15 covers the adjudication context's advisory history. ADR D6 already decides the shape (effect none).
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6 is satisfied by this task.
+- The repair for task rem-as-built-r18-6 is committed and its targeted tests pass.
+
+### Task rem-as-built-r15-1: build-review-adjudication-context.ts (:315): admit prior advisory cases with effect none in the supplied history; add a test
+**Gate:** as-built
+**Rationale:** Advisory admission is incomplete at four boundaries (artifact :182, store :417 and :423, adjudication-context :315), so a valid advisory case cannot round-trip. Task 18 admits the parser and validator, and Task 15 covers the adjudication context's advisory history. ADR D6 already decides the shape (effect none).
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6 is satisfied by this task.
+- The repair for task rem-as-built-r15-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r21-1: remediation-case-store.ts finalizedBuildReviewSourceIds (:172/:181): make the advisory branch terminal, returning [sourceId] only when the threshold admits adjudicatedSeverity and [] otherwise; add the Task 21 include/exclude tests
+**Gate:** prd-audit
+**Rationale:** finalizedBuildReviewSourceIds falls through to the generic non-act/effect-none branch when the advisory threshold check fails. ADR D7 and Task 21 require the advisory branch to be terminal.
+**Criterion:** S9.3
+**Parent task:** 21
+**Done when:**
+- [test] S9.3 is satisfied by this task.
+- The repair for task rem-prd-audit-r21-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-r21-2: remediation-case-store.ts (:165): make the thresholds parameter required and update all callers to pass resolved buildReviewThresholds; add the test that an advisory source with no threshold is not finalized, plus the threshold-lowered and drifted-id byte-identical store tests
+**Gate:** prd-audit
+**Rationale:** This is the same fall-through as S9.3 for the no-threshold case, and the thresholds parameter is optional, contrary to ADR D7. Task 21 owns it.
+**Criterion:** S9.4
+**Parent task:** 21
+**Done when:**
+- [test] S9.4 is satisfied by this task.
+- The repair for task rem-prd-audit-r21-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-r21-3: Verify the coordinator's live-source filter uses the terminal advisory finalization so a lowered or removed threshold makes the recurring finding live and the gate blocks
+**Gate:** as-built
+**Rationale:** This is the same defect as S9.3 and S9.4, and it conforms to ADR D7.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 7
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 7 is satisfied by this task.
+- The repair for task rem-as-built-r21-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-r12-1: conductor.ts (:13534, :14954, :5380): let common settlement retire prior action cases by absence when the effective verdict is PASS with only advisory findings, including built-in-only attended execution; add the Task 12 conductor test for the built-in-only attended path (healthy lap retires, infra-failure lap stays open)
+**Gate:** as-built
+**Rationale:** In the built-in-only attended path, a lap where every finding is advisory stays raw FAIL. The settlement guard at conductor.ts:5380 requires raw PASS, so prior failed or reserved action cases are never retired by absence (95%, inferred from control flow). Task 12 explicitly requires retirement by absence on a mechanically healthy lap whose only source is advisory, so this is a conforming implementation gap.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 4
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 4 is satisfied by this task.
+- The repair for task rem-as-built-r12-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r12-2: conductor.ts (:5395 advisoryOnlyEffectivePass guard, reached via :14988 on the built-in-only attended path): replace the lap-wide accepted/suppressed/settled exclusion with the per-case rule. Retire a prior failed/reserved action case by absence when the effective verdict is PASS, the lap is mechanically healthy, and none of that case's own sources are unresolved. Unrelated accepted, suppressed or settled peers must not block it. Keep the mechanical-health (infra-failure) protection. Add conductor tests: built-in-only attended lap with an advisory source plus an unrelated accepted/suppressed peer retires the case; an infra-failure lap still leaves it open
+**Gate:** as-built
+**Rationale:** Verified (98%, read conductor.ts:5395-5402): advisoryOnlyEffectivePass requires zero accepted, suppressed and settled ids lap-wide, so an unrelated nonblocking peer blocks absence retirement of a failed/reserved action case whose own sources are advisory. ADR D4 and plan Task 12 already approve per-case retirement on a mechanically healthy lap, so this is conforming implementation drift and needs no architectural decision.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 4
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r12-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r17-5: finish-publication-production.ts (:223): include source links with outcome 'merged' whose canonical case has disposition advisory and an adjudicatedSeverity in the adjudicated advisory projection (origin adjudicated, no adjudicator rationale). Exclude carried and operator-resolved links. Add a publication test where a merged source targeting an advisory case appears in the '## Advisory build-review findings' region
+**Gate:** as-built
+**Rationale:** Verified (99%, read finish-publication-production.ts:223): the adjudicated projection requires link.outcome === 'advisory', so merged sources whose canonical case is advisory are dropped, even though the validator (remediation-case-validator.ts:155/:260) admits them. ADR D5 and plan Task 17 already require settled downgraded findings in the advisory region, so this is a BUILD repair.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r17-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r16-4: build-review-cli.ts (:195-209): build the adjudicated-advisory map only from source links whose authoritative outcome is advisory or merged-into-an-advisory-case. Exclude carried links, so carried authority wins and the source is never also listed as adjudicated advisory. Add CLI JSON and human-output tests: a carried source attached to an operator-resolved advisory case appears only as carried
+**Gate:** as-built
+**Rationale:** Verified (98%, read build-review-cli.ts:195-209): the adjudicated map is built from every current source link without checking link.outcome, so a carried source on an operator-resolved advisory case is also listed as adjudicated advisory. ADR D6's carry-first presentation is already approved, so this is a conforming CLI fix under Task 16.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r16-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-r17-6: build-review-accepted-risk.ts (:143-157, caller :177): remove every forged '## Advisory build-review findings' section outside the engine region. Loop until none remain, recomputing the masked search text and accepted-risk bounds after each removal, while preserving project-owned regions and step markers. Add a test: two forged advisory sections separated by another '## ' heading publish with only the engine-rendered region and the intervening section intact
+**Gate:** as-built
+**Rationale:** Verified (99%, read build-review-accepted-risk.ts:143-177): stripForgedAdvisorySection finds the first forged heading outside the accepted-risk bounds, removes only that one section, and is called once. A second forged section after another level-two heading survives publication. ADR D5 and plan Task 17 (rem-prd-audit-r17-3) already require only the engine-rendered region to publish, so this is a BUILD repair.
+**Governing clause:** adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5
+**Done when:**
+- adr-2026-10-19-build-review-finding-severity-advisory-threshold decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-r17-6 is committed and its targeted tests pass.

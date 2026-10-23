@@ -1742,14 +1742,19 @@ on expiry; an already-running provider may finish, but its late judgment is reje
 and its invocation usage is retained. This is an acceptance deadline, not a process kill timeout.
 
 `testQuality`, `security`, and `implementationQuality` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
-`model_fallback_ladder`, `max_retries`, `escalate`, and `min_confidence`. `max_projection_bytes` is a
+`model_fallback_ladder`, `max_retries`, `escalate`, `min_confidence`, and `min_severity`. `max_projection_bytes` is a
 positive integer UTF-8 byte limit for the rubric's canonical projection; it defaults to `1048576` and the
 limit itself is admitted. An oversized projection is not dispatched: the gate records
 `projection-oversized` with the measured and allowed byte counts, then halts for an operator without
 consuming the shared mechanical-fault allowance. `min_confidence` is an integer from 0 through 100 and
 defaults to `0`; scored findings below it are reported as suppressed rather than failing the gate or
 remaining actionable through `build-review findings` / `build-review accept`. Unscored findings are
-never suppressed. `testQuality` and `security` are off by default and default to `effort: high`; `implementationQuality` is
+never suppressed. `min_severity` is one of `critical`, `major`, `minor`, or `nit` (order
+`critical > major > minor > nit`) and has no default. Each finding carries a reviewer-assigned severity;
+a finding ranked strictly below the rubric's `min_severity` is advisory: it is recorded, listed by
+`build-review findings`, and published in the PR's `## Advisory build-review findings` region, but never
+fails the gate, reaches `remediate`, or charges a kickback. Without `min_severity`, every finding stays
+blocking; `nit` admits nothing as advisory. `testQuality` and `security` are off by default and default to `effort: high`; `implementationQuality` is
 on by default with `effort: medium` — opt out with `build_review.rubrics.implementationQuality.enabled: false`. When enabled, `testQuality` derives a frozen,
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
@@ -1775,8 +1780,8 @@ Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an ASCII letter (upper- or
 lowercase), followed by letters, digits, `_`, or `-`. A built-in rubric id (`testQuality`, `security`,
 `implementationQuality`) is reserved and rejected as a custom id. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
-it may set `source` (`project`, `global`, or `plugin`), `resources`, and the normal provider/model/retry
-fields. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
+it may set `source` (`project`, `global`, or `plugin`), `resources`, the normal provider/model/retry
+fields, and the same `min_confidence` and `min_severity` thresholds as a built-in rubric. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
 `build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.
 
 The selected skill must be installed for the actual provider candidate. Omitting `source` is accepted

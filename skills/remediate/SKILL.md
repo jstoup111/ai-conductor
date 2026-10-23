@@ -122,7 +122,7 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
 
 - `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
   the engine in `priorCases`, may bind that existing case only.
-- `disposition` is closed: `act` | `defer` | `reject` | `refute`.
+- `disposition` is closed: `act` | `defer` | `reject` | `refute` | `advisory` when the context declares severity thresholds.
 - `priority` is closed: `critical` | `high` | `medium` | `low`.
 - `rationale` is bounded, evidence-grounded prose explaining the judgement, and `confidence` is
   closed: `high` | `medium` | `low`.
@@ -133,6 +133,9 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   the work.
 - A `reject` effect is exactly `{ "kind": "none" }` and its rationale explains why the raw finding
   is non-actionable under the supplied rubric and plan contract.
+- An `advisory` row adds `adjudicatedSeverity`. It is allowed only when its source rubric declares a
+  threshold, its severity is strictly below that threshold and never above the reviewer severity,
+  it has a rationale grounded in the plan or prior cases, and its effect is exactly `{ "kind": "none" }`.
 - A `refute` row MUST bind an `existingCaseId` for an already attempted `act` case, use confidence
   `high`, and use either `{ "kind": "none" }` or a complete deferral effect. Its `refutation` is
   exactly `{ "claim": "...", "assertions": [...] }`; every assertion has `assertion`, a `refuted` or

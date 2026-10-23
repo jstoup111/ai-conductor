@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de, task:rem-prd-audit-r18-2, task:rem-prd-audit-r18-4
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,9 +45,9 @@ const aggregate = joinBuildReviewRubricOutcomes({
   results: {
     security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
     testQuality: {
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1' as never, snapshotDigest: 'snapshot-1', contractVersion: 'v3', verdict: 'FAIL',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1' as never, snapshotDigest: 'snapshot-1', contractVersion: 'v4', verdict: 'FAIL',
       findings: [{
-        concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', evidenceLocations: ['test/example.test.ts:1'],
+        concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/example.test.ts:1'],
         anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: 'sha256:fixture', display: 'example test' } },
       }],
     },
@@ -86,9 +86,9 @@ function customMixedAggregate(criteria?: readonly string[], regionHash = `sha256
     contentHash: regionHash, display: 'authorization handler',
   };
   const judged = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v1', findings: [{
+    kind: 'custom-findings', version: 'v2', findings: [{
       concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
-      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, severity: 'major', sourceRegions: [sourceRegion],
     }],
   }, {
     rubric: 'security', lapId: 'lap-custom-mixed', declaration,
@@ -126,9 +126,9 @@ const securityAggregate = joinBuildReviewRubricOutcomes({
   results: {
     testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
     security: {
-      kind: 'judged', rubric: 'security', lapId: 'lap-security' as never, snapshotDigest: 'snapshot-security', contractVersion: 'v3', verdict: 'FAIL',
+      kind: 'judged', rubric: 'security', lapId: 'lap-security' as never, snapshotDigest: 'snapshot-security', contractVersion: 'v4', verdict: 'FAIL',
       findings: [{
-        concernKind: 'injection', summary: 'A new query interpolates untrusted input.', evidenceLocations: ['src/search.ts:42'],
+        concernKind: 'injection', summary: 'A new query interpolates untrusted input.', severity: 'minor', evidenceLocations: ['src/search.ts:42'],
         anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
       }],
     },
@@ -146,14 +146,14 @@ const mixedAggregate = joinBuildReviewRubricOutcomes({
   results: {
     security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
     testQuality: {
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-2' as never, snapshotDigest: 'snapshot-2', contractVersion: 'v3', verdict: 'FAIL',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-2' as never, snapshotDigest: 'snapshot-2', contractVersion: 'v4', verdict: 'FAIL',
       findings: [
         {
-          concernKind: 'test-insensitive', summary: 'The first changed test is insensitive.', evidenceLocations: ['test/first.test.ts:1'],
+          concernKind: 'test-insensitive', summary: 'The first changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/first.test.ts:1'],
           anchor: { rubric: 'testQuality', locus: { path: 'test/first.test.ts', contentHash: 'sha256:first', display: 'first test' } },
         },
         {
-          concernKind: 'test-insensitive', summary: 'The second changed test is insensitive.', evidenceLocations: ['test/second.test.ts:1'],
+          concernKind: 'test-insensitive', summary: 'The second changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/second.test.ts:1'],
           anchor: { rubric: 'testQuality', locus: { path: 'test/second.test.ts', contentHash: 'sha256:second', display: 'second test' } },
         },
       ],
@@ -343,6 +343,49 @@ function failOnlyDecisionStopMutation(reason: 'lock-timeout' | 'malformed-state'
 describe('coordinateBuildReviewAdjudication', () => {
   const customAggregate = customMixedAggregate();
   const customSource = projectBuildReviewAggregateSources(customAggregate)!.find((source) => source.rubric === 'security')!;
+
+  it('rejects an advisory judgement when its live source rubric lacks a declared threshold', async () => {
+    const advisoryJudgement = (): RemediationCaseJudgement => ({
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'advisory', caseRef: 'advisory-case' }],
+      cases: [{
+        caseRef: 'advisory-case', disposition: 'advisory', priority: 'low', confidence: 'high',
+        rationale: 'The reviewer finding is below the declared severity threshold.',
+        effect: { kind: 'none' }, adjudicatedSeverity: 'minor',
+      }],
+    });
+
+    const rejected = await coordinateBuildReviewAdjudication({
+      ...input(await projectRoot(), async () => advisoryJudgement()),
+      declaredSeverityThresholds: { security: 'major' },
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      detail: 'invalid remediation judgement invalid-advisory-threshold',
+    });
+  });
+
+  it('rejects an advisory judgement whose adjudicated severity exceeds its live reviewer severity', async () => {
+    const rejected = await coordinateBuildReviewAdjudication({
+      ...input(await projectRoot(), async () => ({
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId, outcome: 'advisory', caseRef: 'advisory-case' }],
+        cases: [{
+          caseRef: 'advisory-case', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'The reviewer finding is below the configured severity threshold.',
+          effect: { kind: 'none' }, adjudicatedSeverity: 'major',
+        }],
+      })),
+      declaredSeverityThresholds: { testQuality: 'critical' },
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      detail: 'invalid remediation judgement invalid-advisory-threshold',
+    });
+  });
+
   it('routes an explicitly bound accepted action re-raise through the carry lane', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
@@ -1045,6 +1088,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     const child = parseChildId(2)!;
     const suppression = {
+      kind: 'confidence' as const,
       findingId: findingId,
       rubric: 'testQuality',
       summary: 'The changed test is insensitive.',
@@ -1433,6 +1477,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     const priorFindingId = 'finding-from-an-earlier-lap';
     const firstLap = {
+      kind: 'confidence',
       findingId,
       rubric: 'testQuality',
       summary: 'Initial low-confidence finding.',
@@ -1441,6 +1486,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       lastSeenLap: 'lap-suppression-first',
     } as const;
     const refreshed = {
+      kind: 'confidence',
       findingId,
       rubric: 'testQuality',
       summary: 'Refreshed low-confidence finding.',
@@ -1449,6 +1495,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       lastSeenLap: 'lap-suppression-second',
     } as const;
     const retained = {
+      kind: 'confidence',
       findingId: priorFindingId,
       rubric: 'testQuality',
       summary: 'A prior suppression absent from this lap.',
@@ -1469,14 +1516,14 @@ describe('coordinateBuildReviewAdjudication', () => {
       results: {
         security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
         testQuality: {
-          kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v3', verdict: 'FAIL',
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v4', verdict: 'FAIL',
           findings: [
             {
-              concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', evidenceLocations: ['test/example.test.ts:1'],
+              concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/example.test.ts:1'],
               anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: 'sha256:fixture', display: 'example test' } },
             },
             {
-              concernKind: 'test-insensitive', summary: 'An unrelated changed test is insensitive.', evidenceLocations: ['test/unrelated.test.ts:1'],
+              concernKind: 'test-insensitive', summary: 'An unrelated changed test is insensitive.', severity: 'minor', evidenceLocations: ['test/unrelated.test.ts:1'],
               anchor: { rubric: 'testQuality', locus: { path: 'test/unrelated.test.ts', contentHash: 'sha256:unrelated', display: 'unrelated test' } },
             },
           ],
@@ -1512,6 +1559,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   it('leaves exactly one row when the coordinator re-runs the seam over a lap the effective-verdict path already persisted', async () => {
     const root = await projectRoot();
     const entry = {
+      kind: 'confidence',
       findingId,
       rubric: 'testQuality',
       summary: 'A sub-floor finding on a mixed lap.',
@@ -1539,6 +1587,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     const child = parseChildId(2)!;
     const earlierLap = {
+      kind: 'confidence',
       findingId: 'finding-suppressed-on-an-earlier-lap',
       rubric: 'testQuality',
       summary: 'A finding suppressed on a fully suppressed lap.',
@@ -2657,6 +2706,34 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true, trace: expect.stringContaining('case-finalized') });
     expect(judge).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['still admitted', { testQuality: 'critical' } as const, 'pass', 0],
+    ['at its lowered threshold', { testQuality: 'minor' } as const, 'build', 1],
+    ['without a threshold', undefined, 'build', 1],
+  ] as const)('treats a recurring advisory as live only when it is no longer terminally finalized (%s)', async (_description, declaredSeverityThresholds, route, judgeCalls) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+        rationale: 'The finding was below the previous severity threshold.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'advisory', recordedAt: '2026-10-23T00:00:00.000Z' }], effect: { kind: 'none' },
+        adjudicatedSeverity: 'minor',
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge),
+      ...(declaredSeverityThresholds === undefined ? {} : { declaredSeverityThresholds }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route });
+    expect(judge).toHaveBeenCalledTimes(judgeCalls);
+    if (route === 'pass') expect(result).toMatchObject({ dispatchSkipped: true });
   });
 
   it('adjudicates the unresolved remainder when the lap opens with a pre-existing acceptance', async () => {

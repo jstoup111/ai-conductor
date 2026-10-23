@@ -276,10 +276,12 @@ import { joinBuildReviewRubricOutcomes, type BuildReviewAggregate } from './buil
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import {
   buildReviewConfidenceFloors,
+  buildReviewSeverityThresholds,
+  buildReviewThresholds,
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
-import { persistBuildReviewSuppressions, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
+import { persistBuildReviewSuppressions, projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   bumpMechanicalFaultsInLedger,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
@@ -3726,7 +3728,7 @@ export class DefaultStepRunner implements StepRunner {
     const aggregatePath = join(effectivePipelineDir, 'build-review.json');
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
-      minConfidence: buildReviewConfidenceFloors(config),
+      minConfidence: buildReviewConfidenceFloors(config), minSeverity: buildReviewSeverityThresholds(config),
       child,
       adjudicationEnabled: config.adjudication.enabled,
     });
@@ -4468,7 +4470,7 @@ export class DefaultStepRunner implements StepRunner {
     // be published without it.
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
-      minConfidence: buildReviewConfidenceFloors(input.config),
+      minConfidence: buildReviewConfidenceFloors(input.config), minSeverity: buildReviewSeverityThresholds(input.config),
       child: input.child,
       adjudicationEnabled: input.config.adjudication.enabled,
     });
@@ -4555,16 +4557,24 @@ export class DefaultStepRunner implements StepRunner {
           floors: buildReviewConfidenceFloors(config),
         })
       : [];
+    const advisoryEntries = effective.ok
+      ? projectBuildReviewAdvisoryEntries({
+          aggregate,
+          advisoryFindingIds: effective.effective.advisoryFindingIds ?? [],
+          thresholds: Object.fromEntries(Object.entries(buildReviewThresholds(config)).flatMap(([id, threshold]) => threshold?.minSeverity === undefined ? [] : [[id, threshold.minSeverity]])),
+        })
+      : [];
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,
       rawVerdict: aggregate.verdict,
       effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
       ...(suppressionEntries.length > 0
-        ? { suppressedFindings: suppressionEntries.map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
+        ? { suppressedFindings: suppressionEntries.filter((entry): entry is Extract<typeof entry, { kind: 'confidence' }> => entry.kind === 'confidence').map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
         : {}),
+      ...(advisoryEntries.length > 0 ? { advisoryFindings: advisoryEntries.filter((entry): entry is Extract<typeof entry, { kind: 'severity' }> => entry.kind === 'severity').map(({ findingId, rubric, severity, threshold }) => ({ findingId, rubric, severity, threshold })) } : {}),
     });
-    return suppressionEntries;
+    return [...suppressionEntries, ...advisoryEntries];
   }
 
   private async dispatchBuildReviewRubric(

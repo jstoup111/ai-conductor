@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:4, task:5, task:6, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:6, task:8, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -3209,6 +3209,49 @@ steps:
   });
 
   describe('build_review config field', () => {
+    it('resolves per-rubric min_severity for built-in and custom rubrics without defaulting it', () => {
+      const resolved = resolveBuildReviewConfig({
+        build_review: {
+          rubrics: {
+            implementationQuality: { min_severity: 'major' },
+          },
+          custom_rubrics: {
+            eventSpine: {
+              skill: 'event-spine',
+              question: 'Does this preserve the event spine?',
+              enabled: true,
+              min_severity: 'minor',
+            },
+          },
+        },
+      });
+
+      expect(resolved.rubrics.implementationQuality.min_severity).toBe('major');
+      expect(resolved.rubrics.security).not.toHaveProperty('min_severity');
+      expect(resolved.catalog.find((entry) => entry.id === 'eventSpine')?.policy.min_severity)
+        .toBe('minor');
+    });
+
+    it.each([
+      [
+        { build_review: { rubrics: { implementationQuality: { min_severity: 'blocker' } } } },
+        'build_review.rubrics.implementationQuality.min_severity must be critical|major|minor|nit',
+      ],
+      [
+        { build_review: { custom_rubrics: { eventSpine: { skill: 'event-spine', question: 'Check event spine.', min_severity: 2 } } } },
+        'build_review.custom_rubrics.eventSpine.min_severity must be critical|major|minor|nit',
+      ],
+      [
+        { build_review: { rubrics: { security: { min_severity: 'Major' } } } },
+        'build_review.rubrics.security.min_severity must be critical|major|minor|nit',
+      ],
+    ])('rejects invalid per-rubric min_severity %#', (config, message) => {
+      expect(validateConfig(config)).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message },
+      });
+    });
+
     it('accepts retired rubric keys as no-ops and warns once per configured key', () => {
       const retiredScope = validateConfig({
         build_review: {

@@ -278,7 +278,7 @@ describe("build-review coordinator: registered dispatch", () => {
     }).testQuality as BuildReviewRubricProjection;
     const finding = testQualityFinding();
     const claudeTerminalEnvelope = { structuredOutput: { findings: [finding] } };
-    const codexTerminalItem = { findings: [{ anchor: finding.anchor, evidenceLocations: finding.evidenceLocations, summary: finding.summary, concernKind: finding.concernKind }] };
+    const codexTerminalItem = { findings: [{ anchor: finding.anchor, evidenceLocations: finding.evidenceLocations, summary: finding.summary, severity: finding.severity, concernKind: finding.concernKind }] };
     const claudeStamped = stampBuildReviewDispatchedCandidate(claudeTerminalEnvelope.structuredOutput, 'testQuality', projection);
     const codexStamped = stampBuildReviewDispatchedCandidate(codexTerminalItem, 'testQuality', projection);
     const claudeResult = validateBuildReviewDispatchedResult(claudeStamped, 'testQuality', projection)!;
@@ -505,6 +505,7 @@ describe("build-review coordinator: registered dispatch", () => {
     const dispatchModel = vi.fn(async () => ({
       findings: [{
         concernKind: "test-insensitive",
+        severity: 'minor',
         summary: "The relocated preservation test is insensitive.",
         evidenceLocations: [`${relocatedTest}:12`],
         anchor: {
@@ -709,6 +710,7 @@ function titledInputs(): BuildReviewFrozenInputs {
 function testQualityFinding(summary = "The changed test passes against the reverted production code.") {
   return {
     concernKind: "test-insensitive",
+    severity: 'minor',
     summary,
     evidenceLocations: [`${IN_SCOPE_TEST}:1`],
     anchor: { rubric: "testQuality", locus: { path: IN_SCOPE_TEST, contentHash: IN_SCOPE_HASH, display: IN_SCOPE_TITLE } },
@@ -755,10 +757,10 @@ describe("build-review coordinator: security envelope", () => {
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
       // Candidate-partitioned (v2) entry: a hit requires the lookup's semantic identity.
       readCache: vi.fn(async (_branch, currentProjection, policyFingerprint, semanticIdentity) => ({
-        version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
+        version: 2, rubric: "security", contractVersion: "v4", projectionVersion: "v4",
         projectionDigest: currentProjection.digest, policyFingerprint, semanticIdentity,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
-        result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
+        result: { kind: "judged", rubric: "security", contractVersion: "v4", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
       }) as never),
       dispatchModel,
       emit,
@@ -785,7 +787,7 @@ describe("build-review coordinator: security envelope", () => {
         version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3", projectionDigest: projection.digest, semanticIdentity,
         policyFingerprint: cachedPolicyFingerprint ?? policyFingerprint,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
-        result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
+        result: { kind: "judged", rubric: "security", contractVersion: "v4", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
       }) as never),
       dispatchModel,
     });
@@ -813,7 +815,7 @@ describe("build-review coordinator: security envelope", () => {
   });
 
   it("defers an unavailable harness-root digest to candidate-local production resolution", async () => {
-    const dispatchModel = vi.fn(async () => ({ kind: "judged", rubric: "security", lapId: "lap-current", snapshotDigest: "sha256:snapshot", contractVersion: "v3", findings: [], verdict: "PASS" }));
+    const dispatchModel = vi.fn(async () => ({ kind: "judged", rubric: "security", lapId: "lap-current", snapshotDigest: "sha256:snapshot", contractVersion: "v4", findings: [], verdict: "PASS" }));
     const input = coordinationInput(false, {
       config: config(false, true), useCandidateCache: true,
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "unavailable", path: "skills/build-review-security/SKILL.md" } } },
@@ -836,6 +838,7 @@ describe("build-review coordinator: security envelope", () => {
         verdict: "PASS", rubric: "testQuality", lapId: "reviewer", snapshotDigest: "reviewer", contractVersion: "invalid", kind: "invalid",
         findings: [{
         concernKind: "injection",
+        severity: 'major',
         summary: "Request input reaches a shell command.",
         evidenceLocations: ["src/a.ts:1"],
         anchor: { rubric: "security", locus: { path: "src/a.ts", contentHash: securityHash, display: "request-derived command" } },
@@ -845,7 +848,7 @@ describe("build-review coordinator: security envelope", () => {
 
     expect(securityBranch(result)).toMatchObject({
       kind: "dispatched", rubric: "security", result: {
-        kind: "judged", rubric: "security", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "FAIL",
+        kind: "judged", rubric: "security", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "FAIL",
       },
     });
   });
@@ -865,7 +868,7 @@ describe("build-review coordinator: security envelope", () => {
     }));
 
     expect(securityBranch(result)).toMatchObject({
-      kind: "dispatched", rubric: "security", result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "PASS" },
+      kind: "dispatched", rubric: "security", result: { kind: "judged", rubric: "security", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "PASS" },
     });
   });
 
@@ -884,7 +887,7 @@ describe("build-review coordinator: security envelope", () => {
       config: config(true, true),
       inputs: { ...frozen, sourceSnapshot: { ...frozen.sourceSnapshot, testQuality: { inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [], excludedMarkerFiles: [] } } },
       engineIdentity: { engineStamp: "engine", skillDigests: { security: { kind: "resolved", digest: "security" } } },
-      dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'injection', summary: 'Untrusted shell input', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: `sha256:${createHash('sha256').update('const command = request.input').digest('hex')}`, display: 'command' } } }] })),
+      dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'injection', severity: 'major', summary: 'Untrusted shell input', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: `sha256:${createHash('sha256').update('const command = request.input').digest('hex')}`, display: 'command' } } }] })),
     });
     const result = await coordinateBuildReviewRubrics(input);
     expect(input.preflight).not.toHaveBeenCalled();
@@ -1047,11 +1050,11 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).toHaveBeenCalledTimes(1);
     expect(input.writeArtifact).toHaveBeenCalledWith({
       rubric: "testQuality", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
-      result: { kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [], verdict: "PASS" },
+      result: { kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [], verdict: "PASS" },
     });
     expect(input.writeCache).toHaveBeenCalledTimes(1);
     expect(input.writeCache).toHaveBeenCalledWith(expect.objectContaining({
-      version: 2, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
+      version: 2, rubric: "testQuality", contractVersion: "v4", projectionVersion: expect.any(String),
       projectionDigest: expect.stringMatching(/^sha256:/), policyFingerprint: expect.any(String),
       semanticIdentity: expect.objectContaining({
         semanticInputDigest: expect.stringMatching(/^sha256:/),
@@ -1319,7 +1322,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     const result = await coordinateBuildReviewRubrics(input);
 
     const expected = {
-      kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+      kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
       findings: [...findings], verdict,
     };
     expect(input.writeArtifact).toHaveBeenCalledWith({
@@ -1344,7 +1347,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     expect(testQualityBranch(result)).toEqual({
       kind: "dispatched", rubric: "testQuality",
       result: {
-        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
         verdict, findings: [...findings],
       },
     });
@@ -1635,7 +1638,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
       obligationReferences: ["criterion:S5.1"], associationReason: "The changed fallback assertion covers the criterion.",
     };
     const finding = {
-      concernKind: "test-insensitive", summary: "The fallback assertion can pass without persistence.", evidenceLocations: ["test/widget.test.ts:1"],
+      concernKind: "test-insensitive", severity: 'minor', summary: "The fallback assertion can pass without persistence.", evidenceLocations: ["test/widget.test.ts:1"],
       anchor: { rubric: "testQuality", locus: { path: scopeRegion.path, contentHash: scopeRegion.contentHash, display: scopeRegion.display } },
     };
     const dispatchModel = vi.fn(async () => ({ findings: [finding], scopeResolutions: [resolution], lapId: "provider-lap" }));
@@ -1646,12 +1649,12 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     expect(dispatchModel).toHaveBeenCalledTimes(1);
     expect(testQualityBranch(result)).toMatchObject({
       kind: "dispatched", result: {
-        contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [finding], scopeResolutions: [resolution], verdict: "FAIL",
+        contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [finding], scopeResolutions: [resolution], verdict: "FAIL",
       },
     });
     expect(input.writeArtifact).toHaveBeenCalledWith(expect.objectContaining({
       rubric: 'testQuality', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
-      result: expect.objectContaining({ contractVersion: 'v3', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', scopeResolutions: [resolution] }),
+      result: expect.objectContaining({ contractVersion: 'v4', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', scopeResolutions: [resolution] }),
     }));
   });
 
@@ -1774,7 +1777,7 @@ describe("build-review coordinator: counterfactual sensitivity is verdict-neutra
     expect(testQualityBranch(result)).toEqual({
       kind: "dispatched", rubric: "testQuality",
       result: {
-        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
         findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
       },
     });
@@ -1794,7 +1797,7 @@ describe("build-review coordinator: counterfactual sensitivity is verdict-neutra
     expect(laps).toEqual(["lap-one", "lap-two"].map((lapId) => ({
       kind: "dispatched", rubric: "testQuality",
       result: {
-        kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId, snapshotDigest: "sha256:snapshot",
+        kind: "judged", rubric: "testQuality", contractVersion: "v4", lapId, snapshotDigest: "sha256:snapshot",
         findings: [finding], counterfactualSensitivity: "indeterminate", verdict: "FAIL",
       },
     })));

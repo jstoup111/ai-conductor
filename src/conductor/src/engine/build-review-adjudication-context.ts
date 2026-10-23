@@ -46,6 +46,8 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly escalation?: RemediationCaseRecord['escalation'];
   /** The blocked consistency verdict a persisted `escalate` stop retains. */
   readonly consistencyStop?: RemediationCaseRecord['consistencyStop'];
+  /** The lower severity recorded by a persisted non-blocking advisory case. */
+  readonly adjudicatedSeverity?: RemediationCaseRecord['adjudicatedSeverity'];
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -117,6 +119,9 @@ export interface BuildReviewAdjudicationContext {
   readonly effectPointers: readonly string[];
   /** Non-blocking suppression history; it is intentionally not a source set. */
   readonly suppressionHistory: readonly RemediationCaseSuppressionEntry[];
+  /** Per-rubric thresholds are engine facts that bound an advisory downgrade. */
+  readonly declaredSeverityThresholds: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  readonly admittedDispositions: readonly RemediationCaseDisposition[];
 }
 
 export interface AssembleBuildReviewAdjudicationContextInput {
@@ -133,6 +138,7 @@ export interface AssembleBuildReviewAdjudicationContextInput {
   /** Durable work-order attempt evidence; renders into `effectPointers`. */
   readonly attemptedCaseIds?: readonly string[];
   readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
+  readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
 }
 
 export type BuildReviewAdjudicationContextStop =
@@ -150,10 +156,10 @@ const LIMITS = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
 // Keyed by the store's own vocabularies: a value the store learns to persist
 // fails to compile here until this boundary represents it too.
 const OUTCOMES: Readonly<Record<RemediationCaseSourceOutcome, true>> = Object.freeze({
-  acted: true, deferred: true, rejected: true, refuted: true, merged: true, escalate: true, carried: true,
+  acted: true, deferred: true, rejected: true, refuted: true, advisory: true, merged: true, escalate: true, carried: true,
 });
 const DISPOSITIONS: Readonly<Record<RemediationCaseDisposition, true>> = Object.freeze({
-  act: true, defer: true, reject: true, refute: true, escalate: true,
+  act: true, defer: true, reject: true, refute: true, advisory: true, escalate: true,
 });
 const ESCALATION_OWNERS: Readonly<Record<RemediationCaseEscalationOwner, true>> = Object.freeze({
   product: true, plan: true, architecture: true,
@@ -308,7 +314,7 @@ function validateCurrent(source: BuildReviewRawSourceProjection): BuildReviewAdj
 
 function validateEffect(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationContextStop | undefined {
   const effect = caseRecord.effect;
-  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'escalate' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
+  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'escalate' || caseRecord.disposition === 'advisory' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
     return effect.kind === 'none' ? undefined : { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'effect' };
   }
   const expectedKind = caseRecord.disposition === 'act' ? 'action' : 'deferral';
@@ -357,6 +363,10 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
     !['critical', 'high', 'medium', 'low'].includes(caseRecord.priority) ||
     !['high', 'medium', 'low'].includes(caseRecord.confidence) || !['open', 'resolved'].includes(caseRecord.resolution)) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'case' };
+  }
+  if (caseRecord.disposition === 'advisory' &&
+    !['critical', 'major', 'minor', 'nit'].includes(caseRecord.adjudicatedSeverity ?? '')) {
+    return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'adjudicatedSeverity' };
   }
   if (!Array.isArray(caseRecord.sources) || caseRecord.sources.length === 0 || caseRecord.sources.length > LIMITS.maxSourcesPerCase) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'sources' };
@@ -427,6 +437,7 @@ function freezePriorCase(
         rationale: caseRecord.consistencyStop.rationale,
       }),
     }),
+    ...(caseRecord.disposition === 'advisory' ? { adjudicatedSeverity: caseRecord.adjudicatedSeverity! } : {}),
   });
 }
 
@@ -542,6 +553,11 @@ export function assembleBuildReviewAdjudicationContext(
     suppressionHistory: Object.freeze([...(input.suppressions ?? [])]
       .sort((left, right) => left.findingId.localeCompare(right.findingId))
       .map((entry) => Object.freeze({ ...entry }))),
+    declaredSeverityThresholds: Object.freeze({ ...(input.declaredSeverityThresholds ?? {}) }),
+    admittedDispositions: Object.freeze<RemediationCaseDisposition[]>([
+      'act', 'defer', 'reject', 'refute', ...(Object.values(input.declaredSeverityThresholds ?? {}).some((threshold) => threshold !== 'nit') ? ['advisory' as const] : []),
+      ...(mode === 'case-v2' ? ['escalate' as const] : []),
+    ]),
   });
   const actual = bytes(JSON.stringify(context));
   if (actual > LIMITS.maxSerializedBytes) {

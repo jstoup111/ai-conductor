@@ -16,8 +16,10 @@ import type {
 import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
 
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
-export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
-export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
+export type BuildReviewSeverity = 'critical' | 'major' | 'minor' | 'nit';
+export const BUILD_REVIEW_SEVERITIES = Object.freeze(['critical', 'major', 'minor', 'nit'] as const);
+export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3' | 'v4';
+export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v4' as const;
 export type BuildReviewSkipReason = 'disabled' | 'test_quality_empty_scope' | 'leaf-only';
 export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result' | 'native-schema-unsupported' | 'review-input-mutated' | 'read-only-review-unavailable';
 export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
@@ -92,19 +94,23 @@ export interface BuildReviewCandidateScopeResolutionOutOfScope { readonly candid
 export interface BuildReviewCandidateScopeResolutionIndeterminate { readonly candidateId: string; readonly status: 'indeterminate'; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; readonly missingEvidenceReason: string; }
 export type BuildReviewCandidateScopeResolution = BuildReviewCandidateScopeResolutionResolved | BuildReviewCandidateScopeResolutionOutOfScope | BuildReviewCandidateScopeResolutionIndeterminate;
 export interface BuildReviewCandidateScopeResolutionContext { readonly candidates: readonly BuildReviewCandidateScopeCandidate[]; }
-export interface BuildReviewFinding { readonly concernKind: string; readonly summary: string; readonly evidenceLocations: readonly string[]; readonly anchor: BuildReviewFindingAnchor; readonly confidence?: number; }
+export interface BuildReviewFinding { readonly concernKind: string; readonly summary: string; readonly evidenceLocations: readonly string[]; readonly anchor: BuildReviewFindingAnchor; readonly confidence?: number; readonly severity?: BuildReviewSeverity; }
 export interface BuildReviewJudgedResult { readonly kind: 'judged'; readonly rubric: BuildReviewRubricId; readonly lapId: BuildReviewLapId; readonly snapshotDigest: string; readonly contractVersion: BuildReviewRubricContractVersion; readonly findings: readonly BuildReviewFinding[]; readonly scopeResolutions?: readonly BuildReviewCandidateScopeResolution[]; readonly counterfactualSensitivity?: CounterfactualSensitivity; readonly verdict: 'PASS' | 'FAIL'; }
 /** Parser identity selected from the effective catalog member, never enabled-map membership. */
 export type BuildReviewEffectiveResultDescriptor =
   | { readonly kind: 'builtin'; readonly rubric: 'testQuality'; readonly parser: 'test-quality-v3' }
   | { readonly kind: 'builtin'; readonly rubric: 'security'; readonly parser: 'security-v3' }
   | { readonly kind: 'builtin'; readonly rubric: 'implementationQuality'; readonly parser: 'implementation-quality-v3' }
-  | { readonly kind: 'custom'; readonly rubric: string; readonly parser: 'custom-findings-v1' };
-export type BuildReviewCustomFindingContractVersion = 'v1';
+  | { readonly kind: 'custom'; readonly rubric: string; readonly parser: 'custom-findings-v2' };
+/** v1 remains readable from persisted evidence; new reviewer payloads use v2. */
+export type BuildReviewCustomFindingContractVersion = 'v1' | 'v2';
+export const CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION = 'v2' as const;
 export interface BuildReviewCustomFinding {
   readonly concernId: string;
   readonly summary: string;
   readonly confidence?: number;
+  /** Required by fresh v2 reviewer payloads; absent on retained v1 evidence. */
+  readonly severity?: BuildReviewSeverity;
   readonly evidenceLocations: readonly string[];
   readonly sourceRegions: readonly BuildReviewCandidateScopeSourceRegion[];
 }
@@ -179,7 +185,7 @@ const NON_BLANK_STRING = Object.freeze({ type: 'string', pattern: NON_BLANK_STRI
 const CONTENT_HASH_STRING = Object.freeze({ type: 'string', pattern: SHA256_CONTENT_HASH_PATTERN });
 const NON_EMPTY_NON_BLANK_STRING_ARRAY = Object.freeze({ type: 'array', minItems: 1, items: NON_BLANK_STRING });
 
-export interface BuildReviewJudgedV3Schema extends RubricOutputJsonSchema {
+export interface BuildReviewJudgedV4Schema extends RubricOutputJsonSchema {
   readonly type: 'object';
   readonly additionalProperties: false;
   readonly required: readonly string[];
@@ -194,7 +200,7 @@ function freezeSchema<Value>(value: Value): Value {
   return value;
 }
 
-function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudgedV3Schema {
+function buildReviewJudgedV4Schema(rubric: BuildReviewRubricId): BuildReviewJudgedV4Schema {
   return freezeSchema({
     type: 'object',
     additionalProperties: false,
@@ -205,12 +211,13 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['concernKind', 'summary', 'evidenceLocations', 'anchor'],
+          required: ['concernKind', 'summary', 'evidenceLocations', 'severity', 'anchor'],
           properties: {
             concernKind: { type: 'string', enum: BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds },
             summary: NON_BLANK_STRING,
             evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
             confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+            severity: { type: 'string', enum: BUILD_REVIEW_SEVERITIES },
             anchor: {
               type: 'object',
               additionalProperties: false,
@@ -240,7 +247,7 @@ function buildReviewJudgedV3Schema(rubric: BuildReviewRubricId): BuildReviewJudg
       // offering them in the security schema invites a result it must refuse.
       ...(rubric === 'testQuality' ? TEST_QUALITY_EVIDENCE_SCHEMA_PROPERTIES : {}),
     },
-  }) as BuildReviewJudgedV3Schema;
+  }) as BuildReviewJudgedV4Schema;
 }
 
 const SCOPE_RESOLUTION_FIELD_SCHEMAS = {
@@ -287,15 +294,20 @@ const TEST_QUALITY_EVIDENCE_SCHEMA_PROPERTIES = {
       },
 } as const;
 
-/** The test-quality judged-v3 schema; every built-in branch uses a rubric-bound variant below. */
-export const BUILD_REVIEW_JUDGED_V3_SCHEMA = buildReviewJudgedV3Schema('testQuality');
+/** The test-quality judged-v4 schema; every built-in branch uses a rubric-bound variant below. */
+export const BUILD_REVIEW_JUDGED_V4_SCHEMA = buildReviewJudgedV4Schema('testQuality');
 
 /** Closed per-rubric variants keep concern-kind vocabulary in the engine-owned schema. */
-export const BUILD_REVIEW_JUDGED_V3_SCHEMAS = Object.freeze({
-  testQuality: BUILD_REVIEW_JUDGED_V3_SCHEMA,
-  security: buildReviewJudgedV3Schema('security'),
-  implementationQuality: buildReviewJudgedV3Schema('implementationQuality'),
+export const BUILD_REVIEW_JUDGED_V4_SCHEMAS = Object.freeze({
+  testQuality: BUILD_REVIEW_JUDGED_V4_SCHEMA,
+  security: buildReviewJudgedV4Schema('security'),
+  implementationQuality: buildReviewJudgedV4Schema('implementationQuality'),
 });
+
+/** @deprecated Use the current v4 schema exports. */
+export const BUILD_REVIEW_JUDGED_V3_SCHEMA = BUILD_REVIEW_JUDGED_V4_SCHEMA;
+/** @deprecated Use the current v4 schema exports. */
+export const BUILD_REVIEW_JUDGED_V3_SCHEMAS = BUILD_REVIEW_JUDGED_V4_SCHEMAS;
 
 export function normalizeBuildReviewFindingVocabularyMember(value: string): string { return value.toLowerCase().replaceAll('_', '-'); }
 export function parseBuildReviewFindingConcernKind(value: unknown, rubric: BuildReviewRubricId): string | undefined {
@@ -333,23 +345,24 @@ export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
  * unsupported-policy) is therefore parser-enforced. Custom findings omitted
  * or represented as null normalize to an empty array before validation.
  */
-export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
+export const BUILD_REVIEW_CUSTOM_V2_SCHEMA = freezeSchema({
   type: 'object',
   additionalProperties: false,
   required: ['kind'],
   properties: {
     kind: { type: 'string', enum: ['custom-findings', 'unsupported-policy'] },
-    version: { type: 'string', enum: ['v1'] },
+    version: { type: 'string', enum: ['v2'] },
     findings: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'],
+        required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'severity'],
         properties: {
           concernId: { type: 'string', pattern: CUSTOM_CONCERN_ID.source },
           summary: NON_BLANK_STRING,
           confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+          severity: { type: 'string', enum: BUILD_REVIEW_SEVERITIES },
           evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
           sourceRegions: {
             type: 'array',
@@ -373,6 +386,8 @@ export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
     requirement: NON_BLANK_STRING,
   },
 }) satisfies RubricOutputJsonSchema;
+/** @deprecated Fresh custom review uses the v2 schema. */
+export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = BUILD_REVIEW_CUSTOM_V2_SCHEMA;
 
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
@@ -382,7 +397,42 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 }
 export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined { return typeof value === 'string' && isCanonicalBuildReviewRepoRelativePath(value) ? value : undefined; }
 export function parseBuildReviewLapId(value: unknown): BuildReviewLapId | undefined { return typeof value === 'string' && LAP.test(value) ? value as BuildReviewLapId : undefined; }
-export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined { return value === 'v1' || value === 'v2' || value === 'v3' ? value : undefined; }
+export function parseBuildReviewSeverity(value: unknown): BuildReviewSeverity | undefined {
+  switch (value) {
+    case 'critical': return value;
+    case 'major': return value;
+    case 'minor': return value;
+    case 'nit': return value;
+  }
+  return undefined;
+}
+export function isBelowSeverityThreshold(severity: BuildReviewSeverity, threshold: BuildReviewSeverity): boolean {
+  switch (severity) {
+    case 'critical': return false;
+    case 'major':
+      switch (threshold) {
+        case 'critical': return true;
+        case 'major': return false;
+        case 'minor': return false;
+        case 'nit': return false;
+      }
+    case 'minor':
+      switch (threshold) {
+        case 'critical': return true;
+        case 'major': return true;
+        case 'minor': return false;
+        case 'nit': return false;
+      }
+    case 'nit':
+      switch (threshold) {
+        case 'critical': return true;
+        case 'major': return true;
+        case 'minor': return true;
+        case 'nit': return false;
+      }
+  }
+}
+export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined { return value === 'v1' || value === 'v2' || value === 'v3' || value === 'v4' ? value : undefined; }
 // `occurrence` is the 0-based ordinal among equal-content regions in one path;
 // 0 is the unique/first region and normalizes away so identities never differ
 // on an explicit-versus-omitted zero.
@@ -666,7 +716,7 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
   const contentLocus = parsedLocus && references ? resolveContentRegion(references.changedContentRegions, parsedLocus) : parsedLocus;
   return contentLocus ? { rubric: contentRubric!, locus: contentLocus } : undefined;
 }
-function finding(value: unknown, rubric: BuildReviewRubricId, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const confidence = source?.confidence; const concernKind = parseBuildReviewFindingConcernKind(source?.concernKind, rubric); if (!source || !anchor || anchor.rubric !== rubric || !concernKind || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100))) return undefined; return { concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(confidence === undefined ? {} : { confidence: confidence as number }) }; }
+function finding(value: unknown, rubric: BuildReviewRubricId, contractVersion: BuildReviewRubricContractVersion, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const confidence = source?.confidence; const severity = contractVersion === 'v4' ? parseBuildReviewSeverity(source?.severity) : undefined; const concernKind = parseBuildReviewFindingConcernKind(source?.concernKind, rubric); if (!source || !anchor || anchor.rubric !== rubric || !concernKind || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) || (contractVersion === 'v4' && !severity)) return undefined; return { concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(confidence === undefined ? {} : { confidence: confidence as number }), ...(severity === undefined ? {} : { severity }) }; }
 const TEST_QUALITY_EVIDENCE_FIELDS = ['scopeResolutions', 'relocationAudit', 'counterfactualSensitivity'] as const;
 function judgedFindingIdentityId(rubric: BuildReviewRubricId, contractVersion: BuildReviewRubricContractVersion, concernKind: string, anchor: BuildReviewFindingAnchor): string {
   const locus = anchor.locus;
@@ -689,23 +739,25 @@ function hasDuplicateJudgedFindingIdentity(findings: readonly BuildReviewFinding
   return false;
 }
 
-export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; const contractVersion = parseBuildReviewRubricContractVersion(source?.contractVersion); if ((rubric === 'security' || rubric === 'implementationQuality') && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security' && rubric !== 'implementationQuality') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !contractVersion || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || hasDuplicateJudgedFindingIdentity(findings as BuildReviewFinding[], contractVersion) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
+export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); const rubric = source?.rubric; const contractVersion = parseBuildReviewRubricContractVersion(source?.contractVersion); if ((rubric === 'security' || rubric === 'implementationQuality') && TEST_QUALITY_EVIDENCE_FIELDS.some((field) => source?.[field] !== undefined)) return undefined; if (!source || source.kind !== 'judged' || (rubric !== 'testQuality' && rubric !== 'security' && rubric !== 'implementationQuality') || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !contractVersion || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, rubric, contractVersion, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || hasDuplicateJudgedFindingIdentity(findings as BuildReviewFinding[], contractVersion) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric, lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && (source.reason === 'disabled' || (source.rubric === 'testQuality' && source.reason === 'test_quality_empty_scope') || (source.rubric === 'security' && source.reason === 'leaf-only')) ? { kind: 'skipped', rubric: source.rubric, reason: source.reason } : undefined; }
 export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: source.rubric, reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
 const CUSTOM_FINDINGS_PAYLOAD_KEYS: readonly string[] = ['kind', 'version', 'findings'];
-const CUSTOM_FINDING_KEYS: readonly string[] = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'confidence'];
-function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
+const CUSTOM_FINDING_KEYS: readonly string[] = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'confidence', 'severity'];
+function customFinding(value: unknown, version: BuildReviewCustomFindingContractVersion): BuildReviewCustomFinding | undefined {
   const source = object(value);
   const requiredKeys = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'];
-  if (!source || (!exactKeys(source, requiredKeys) && !exactKeys(source, [...requiredKeys, 'confidence']))) return undefined;
+  const optional = version === 'v2' ? ['confidence', 'severity'] : ['confidence'];
+  if (!source || !Object.keys(source).every((key) => requiredKeys.includes(key) || optional.includes(key)) || !requiredKeys.every((key) => Object.hasOwn(source, key))) return undefined;
   const confidence = source.confidence;
   const evidenceLocations = source.evidenceLocations;
   const sourceRegions = source.sourceRegions;
+  const severity = version === 'v2' ? parseBuildReviewSeverity(source.severity) : undefined;
   if (!CUSTOM_CONCERN_ID.test(source.concernId as string) || !text(source.summary) || source.summary.length > MAX_CUSTOM_SUMMARY_LENGTH ||
     !Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.length > MAX_CUSTOM_EVIDENCE_LOCATIONS ||
     evidenceLocations.some((location) => !text(location) || location.length > MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH) ||
     !Array.isArray(sourceRegions) || sourceRegions.length === 0 || sourceRegions.length > MAX_CUSTOM_SOURCE_REGIONS ||
-    (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100))) return undefined;
+    (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) || (version === 'v2' && severity === undefined)) return undefined;
   const parsedRegions = sourceRegions.map(customSourceRegion);
   if (parsedRegions.some((region) => !region)) return undefined;
   return Object.freeze({
@@ -714,6 +766,7 @@ function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
     evidenceLocations: Object.freeze([...evidenceLocations] as string[]),
     sourceRegions: Object.freeze(parsedRegions as BuildReviewCandidateScopeSourceRegion[]),
     ...(confidence === undefined ? {} : { confidence: confidence as number }),
+    ...(severity === undefined ? {} : { severity }),
   });
 }
 
@@ -754,11 +807,12 @@ export function parseBuildReviewCustomReviewerPayload(value: unknown): BuildRevi
       ? Object.freeze({ kind: 'unsupported-policy', requirement: source.requirement })
       : undefined;
   }
-  if (source.kind !== 'custom-findings' || source.version !== 'v1' || !exactKeys(source, CUSTOM_FINDINGS_PAYLOAD_KEYS) || !Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) return undefined;
-  const findings = source.findings.map(customFinding);
+  if (source.kind !== 'custom-findings' || (source.version !== 'v1' && source.version !== 'v2') || !exactKeys(source, CUSTOM_FINDINGS_PAYLOAD_KEYS) || !Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) return undefined;
+  const version = source.version as BuildReviewCustomFindingContractVersion;
+  const findings = source.findings.map((entry) => customFinding(entry, version));
   return findings.some((entry) => !entry)
     ? undefined
-    : Object.freeze({ kind: 'custom-findings', version: 'v1', findings: Object.freeze(findings as BuildReviewCustomFinding[]) });
+    : Object.freeze({ kind: 'custom-findings', version, findings: Object.freeze(findings as BuildReviewCustomFinding[]) });
 }
 
 /** Explain custom-v1 payload rejection without trusting its envelope fields. */
@@ -780,7 +834,7 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
     }
   } else {
     if (source.kind !== 'custom-findings') problems.push(rejectionProblem('kind', 'must be "custom-findings" or "unsupported-policy"'));
-    if (source.version !== 'v1') problems.push(rejectionProblem('version', 'must be "v1" for custom-findings'));
+    if (source.version !== CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION) problems.push(rejectionProblem('version', `must be "${CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION}" for fresh custom-findings`));
     for (const field of Object.keys(source)) {
       if (!CUSTOM_FINDINGS_PAYLOAD_KEYS.includes(field)) problems.push(rejectionProblem(field, 'must not be present in a custom-findings payload'));
     }
@@ -822,6 +876,9 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
         )) {
           problems.push(rejectionProblem(`${prefix}.confidence`, 'must be an integer from 0 to 100'));
         }
+        if (parseBuildReviewSeverity(findingSource.severity) === undefined) {
+          problems.push(rejectionProblem(`${prefix}.severity`, `must be one of ${BUILD_REVIEW_SEVERITIES.map((member) => `"${member}"`).join(', ')}`));
+        }
         if (!Array.isArray(findingSource.sourceRegions) || findingSource.sourceRegions.length === 0 || findingSource.sourceRegions.length > MAX_CUSTOM_SOURCE_REGIONS) {
           problems.push(rejectionProblem(`${prefix}.sourceRegions`, `must be a non-empty array of at most ${MAX_CUSTOM_SOURCE_REGIONS} source regions`));
           return;
@@ -839,7 +896,7 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
     }
   }
   if (problems.length === 0 && parseBuildReviewCustomReviewerPayload(value) === undefined) {
-    problems.push(rejectionProblem('$', 'must satisfy the custom-v1 reviewer payload contract'));
+    problems.push(rejectionProblem('$', 'must satisfy the custom-v2 reviewer payload contract'));
   }
   return problems.length === 0
     ? Object.freeze({ kind: 'unexplained', problems: Object.freeze([]) })
@@ -945,6 +1002,7 @@ export function diagnoseBuildReviewJudgedResultRejection(value: unknown, rubric:
       if (!text(item.concernKind)) problems.push(rejectionProblem(`findings[${index}].concernKind`, 'must be a non-empty string (never "kind")'));
       else if (parseBuildReviewFindingConcernKind(item.concernKind, rubric) === undefined) problems.push(rejectionProblem(`findings[${index}].concernKind`, `must be one of ${vocabulary.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(item.concernKind).slice(0, 64)})`));
       if (!text(item.summary)) problems.push(rejectionProblem(`findings[${index}].summary`, 'must be a non-empty string'));
+      if (parseBuildReviewSeverity(item.severity) === undefined) problems.push(rejectionProblem(`findings[${index}].severity`, `must be one of ${BUILD_REVIEW_SEVERITIES.map((member) => `"${member}"`).join(', ')}`));
       if (!Array.isArray(item.evidenceLocations) || item.evidenceLocations.length === 0 || item.evidenceLocations.some((location) => !text(location))) problems.push(rejectionProblem(`findings[${index}].evidenceLocations`, 'must be a non-empty array of "path:line" strings'));
       const anchor = object(item.anchor);
       if (!anchor) { problems.push(rejectionProblem(`findings[${index}].anchor`, `is required: a nested object {"rubric": "${rubric}", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"`)); return; }

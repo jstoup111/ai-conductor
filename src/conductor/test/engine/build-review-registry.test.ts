@@ -46,19 +46,19 @@ describe('engine/build-review-registry', () => {
         skillName: 'build-review-test-quality',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
-        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
+        contract: { projection: { version: 'v4' }, output: { version: 'v4' } },
       },
       security: {
         skillName: 'build-review-security',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
-        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
+        contract: { projection: { version: 'v4' }, output: { version: 'v4' } },
       },
       implementationQuality: {
         skillName: 'build-review-implementation-quality',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
-        contract: { projection: { version: 'v3' }, output: { version: 'v3' } },
+        contract: { projection: { version: 'v4' }, output: { version: 'v4' } },
       },
     });
     for (const descriptor of Object.values(BUILD_REVIEW_RUBRIC_REGISTRY)) {

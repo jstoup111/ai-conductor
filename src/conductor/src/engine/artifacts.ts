@@ -74,6 +74,7 @@ import {
 } from './build-review-aggregate.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import {
+  buildReviewThresholds,
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
@@ -110,6 +111,25 @@ import {
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
+
+/**
+ * Adapts the shared per-rubric policy view to the effective-verdict boundary.
+ * This keeps gate completion aligned with the runner for both built-in and
+ * custom rubrics, including severity advisory thresholds.
+ */
+function buildReviewEffectiveResolverThresholds(config: HarnessConfig | undefined): Pick<BuildReviewEffectiveResolverDeps, 'minConfidence' | 'minSeverity'> {
+  const thresholds = buildReviewThresholds(resolveBuildReviewConfig(config ?? {}));
+  return {
+    minConfidence: Object.fromEntries(
+      Object.entries(thresholds).map(([id, threshold]) => [id, threshold!.minConfidence]),
+    ),
+    minSeverity: Object.fromEntries(
+      Object.entries(thresholds).flatMap(([id, threshold]) =>
+        threshold?.minSeverity === undefined ? [] : [[id, threshold.minSeverity]],
+      ),
+    ),
+  };
+}
 
 export type FeatureArtifactIdentityStrategy =
   | { strategy: 'plan-stem' }
@@ -3869,8 +3889,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               const effectiveResolution = await (
                 ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
               )(dir, aggregate, {
-                minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
-                  .map(([id, policy]) => [id, policy.min_confidence])),
+                ...buildReviewEffectiveResolverThresholds(ctx.config),
                 child: ctx.activeChild,
                 adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
               });
@@ -3979,8 +3998,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       const effectiveResolution = await (
         ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
       )(dir, aggregate, {
-        minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
-          .map(([id, policy]) => [id, policy.min_confidence])),
+        ...buildReviewEffectiveResolverThresholds(ctx.config),
         child: ctx.activeChild,
         adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
       });

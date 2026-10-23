@@ -104,7 +104,7 @@ describe('custom build-review compatibility routing', () => {
       invoke: vi.fn(async (options: { prompt: string; readOnlyReview?: boolean }) => {
         observationOrder.push('invoke');
         invocations.push(options);
-        const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v1', findings: [] };
+        const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v2', findings: [] };
         return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
       }),
       supportsSessionResume: false,
@@ -170,7 +170,7 @@ describe('custom build-review compatibility routing', () => {
     events.on('build_review_rubric_infrastructure_failure', (event) => { failures.push(event); });
     const provider: LLMProvider = {
       invoke: vi.fn(async () => {
-        const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+        const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
         return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
       }),
       supportsSessionResume: false,
@@ -226,7 +226,7 @@ describe('custom build-review compatibility routing', () => {
       const prompt = typeof options.input === 'string' ? options.input : '';
       launches.push({ executable, args: [...args], cwd: options.cwd, prompt });
       const result = prompt.includes('portable-policy')
-        ? { kind: 'custom-findings', version: 'v1', findings: [] }
+        ? { kind: 'custom-findings', version: 'v2', findings: [] }
         : { findings: [] };
       return Promise.resolve({
         stdout: JSON.stringify({ type: 'result', result: JSON.stringify(result), structured_output: result }), stderr: '', exitCode: 0, failed: false,
@@ -286,7 +286,7 @@ describe('custom build-review compatibility routing', () => {
         },
       },
     } as HarnessConfig;
-    const payload = { kind: 'custom-findings', version: 'v1', findings: [] };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: [] };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload }));
     const provider: LLMProvider = {
       invoke, supportsSessionResume: false,
@@ -339,7 +339,7 @@ describe('custom build-review compatibility routing', () => {
       },
     } as HarnessConfig;
     const invoke = vi.fn(async (options: { prompt: string }) => {
-      const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v1', findings: [] };
+      const payload = options.prompt.includes('Build Review Security rubric.') ? { findings: [] } : { kind: 'custom-findings', version: 'v2', findings: [] };
       return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
     });
     const provider: LLMProvider = {

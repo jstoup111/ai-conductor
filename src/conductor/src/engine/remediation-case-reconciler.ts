@@ -183,7 +183,7 @@ function isDurableId(value: string): boolean {
 }
 
 function effectFor(caseRow: RemediationCaseRow, id: string | undefined): RemediationCaseEffect {
-  if (caseRow.disposition === 'reject' || caseRow.disposition === 'escalate') return { kind: 'none' };
+  if (caseRow.disposition === 'reject' || caseRow.disposition === 'advisory' || caseRow.disposition === 'escalate') return { kind: 'none' };
   return caseRow.disposition === 'act'
     ? { id: id!, kind: 'action', status: 'reserved' }
     : { id: id!, kind: 'deferral', status: 'reserved' };
@@ -269,7 +269,7 @@ function reconcileState(
       if (typeof caseId !== 'string' || caseId === 'id-generation-failed' || caseId === 'id-collision') {
         return { ok: false, reason: caseId };
       }
-      const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'escalate'
+      const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'advisory' || caseRow.disposition === 'escalate'
         ? undefined
         : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
@@ -282,6 +282,7 @@ function reconcileState(
         priority: caseRow.priority,
         rationale: caseRow.rationale,
         confidence: caseRow.confidence,
+        ...(caseRow.adjudicatedSeverity === undefined ? {} : { adjudicatedSeverity: caseRow.adjudicatedSeverity }),
         resolution: 'open',
         sources: sources.map((source) => ({
           sourceId: source.sourceId,

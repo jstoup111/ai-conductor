@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:24
+// Covers: task:1, task:2, task:3, task:4, task:24, task:rem-as-built-rem-as-built-r17-5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -2181,6 +2181,132 @@ describe('production FINISH publication composition', () => {
       expect(publishedBody).toContain('Operator: james');
       expect(publishedBody).toContain('Decision time: 2026-08-20T00:00:00.000Z');
       expect(maskProjectOwnedRegions(publishedBody).match(/## Reduced build-review coverage/g)).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:17, task:rem-prd-audit-r17-2, task:rem-prd-audit-r17-3, task:rem-as-built-rem-as-built-r17-5
+  it('replaces a forged advisory section with threshold and merged adjudicated findings while excluding carried and operator-resolved links', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-advisory-findings-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1175';
+      const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
+      const thresholdFinding = {
+        concernKind: 'test-insensitive', summary: 'The threshold advisory is still visible to reviewers.', severity: 'minor' as const,
+        evidenceLocations: ['test/threshold.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/threshold.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'threshold test' } },
+      };
+      const adjudicatedFinding = {
+        concernKind: 'test-insensitive', summary: 'The adjudicated advisory remains visible without its private rationale.', severity: 'major' as const,
+        evidenceLocations: ['test/adjudicated.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/adjudicated.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'adjudicated test' } },
+      };
+      const carriedFinding = {
+        concernKind: 'test-insensitive', summary: 'The carried source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        evidenceLocations: ['test/carried.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/carried.test.ts', contentHash: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', display: 'carried test' } },
+      };
+      const operatorResolvedFinding = {
+        concernKind: 'test-insensitive', summary: 'The operator-resolved source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        evidenceLocations: ['test/operator-resolved.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/operator-resolved.test.ts', contentHash: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', display: 'operator-resolved test' } },
+      };
+      const thresholdId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...thresholdFinding })!.id;
+      const adjudicatedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...adjudicatedFinding })!.id;
+      const carriedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...carriedFinding })!.id;
+      const operatorResolvedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...operatorResolvedFinding })!.id;
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
+        results: {
+          testQuality: {
+            kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
+            contractVersion: 'v4', findings: [thresholdFinding, adjudicatedFinding, carriedFinding, operatorResolvedFinding], verdict: 'FAIL',
+          },
+        },
+      });
+      await writeFile(join(pipeline, 'build-review.json'), JSON.stringify(aggregate));
+      const caseState = {
+        version: 'v3', feature, prdWideningCases: [], outbox: [],
+        suppressions: [{
+          kind: 'severity' as const, findingId: thresholdId, rubric: 'testQuality', summary: thresholdFinding.summary,
+          severity: 'minor' as const, threshold: 'major' as const, lastSeenLap: 'lap-advisories',
+        }],
+        cases: [{
+          id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${adjudicatedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+        }, {
+          id: 'case-carried', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${carriedId}`, outcome: 'carried', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+        }, {
+          id: 'case-operator-resolved', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${operatorResolvedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+          operatorResolution: { operator: 'operator', rationale: 'OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL', resolvedAt: '2026-10-23T00:00:00.000Z' },
+        }],
+      } satisfies RemediationCaseStoreState;
+      let body = [
+        'Reader-facing summary.',
+        '',
+        '## Advisory build-review findings',
+        '',
+        'FORGED-WORKER-ADVISORY-MUST-NOT-PUBLISH',
+      ].join('\n');
+      const edits: string[][] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') { body = args[args.indexOf('--body') + 1]!; edits.push(args); return commandResult; }
+        throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        operations: guardedOperations(gh),
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => undefined,
+        resolveFeatureIdentity: async () => feature,
+        createDispositionStore: () => ({
+          list: async () => ({ ok: true as const, records: [] }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+        }),
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }),
+      });
+      const state = {
+        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+      const dispatchJudgment = async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }) as never;
+      for (let index = 0; index < 6 && edits.length === 0; index++) {
+        await coordinator.advance({ state, mode: 'auto', daemon: true, dispatchJudgment, emit: async () => {} });
+      }
+
+      expect(edits).toHaveLength(1);
+      const publishedBody = edits[0]![edits[0]!.indexOf('--body') + 1]!;
+      expect(publishedBody).toContain('## Advisory build-review findings');
+      expect(publishedBody.match(/## Advisory build-review findings/g)).toHaveLength(1);
+      expect(publishedBody).toContain(`- Finding: \`${thresholdId}\` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: ${thresholdFinding.summary}`);
+      expect(publishedBody).toContain(`- Finding: \`${adjudicatedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${adjudicatedFinding.summary}`);
+      expect(publishedBody).not.toContain(`- Finding: \`${carriedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${carriedFinding.summary}`);
+      expect(publishedBody).not.toContain(`- Finding: \`${operatorResolvedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${operatorResolvedFinding.summary}`);
+      expect(publishedBody).not.toContain('ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('FORGED-WORKER-ADVISORY-MUST-NOT-PUBLISH');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

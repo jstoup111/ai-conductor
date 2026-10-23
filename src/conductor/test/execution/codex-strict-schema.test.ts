@@ -80,7 +80,9 @@ describe('toCodexStrictSchema', () => {
     const properties = item.properties as Json;
     expect(properties.confidence).toEqual({ anyOf: [{ type: 'integer', enum: expect.any(Array) }, { type: 'null' }] });
     expect(properties.summary).not.toHaveProperty('anyOf');
+    expect(properties.severity).not.toHaveProperty('anyOf');
     expect(BUILD_REVIEW_CUSTOM_V1_SCHEMA.properties.findings.items.required).not.toContain('confidence');
+    expect(BUILD_REVIEW_CUSTOM_V1_SCHEMA.properties.findings.items.required).toContain('severity');
   });
 });
 
@@ -88,12 +90,13 @@ describe('fromCodexStrictResult', () => {
   it('drops nulls for originally optional properties at every depth and keeps everything else', () => {
     const strictOutput = {
       kind: 'custom-findings',
-      version: 'v1',
+      version: 'v2',
       requirement: null,
       findings: [{
         concernId: 'float-money',
         summary: 'Average uses float64.',
         confidence: null,
+        severity: 'major',
         evidenceLocations: ['internal/httpapi/average.go:12'],
         sourceRegions: [{ path: 'internal/httpapi/average.go', startLine: 12, endLine: 12, contentHash: 'sha256:abc', display: 'avg' }],
       }],
@@ -101,10 +104,11 @@ describe('fromCodexStrictResult', () => {
 
     expect(fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, strictOutput)).toEqual({
       kind: 'custom-findings',
-      version: 'v1',
+      version: 'v2',
       findings: [{
         concernId: 'float-money',
         summary: 'Average uses float64.',
+        severity: 'major',
         evidenceLocations: ['internal/httpapi/average.go:12'],
         sourceRegions: [{ path: 'internal/httpapi/average.go', startLine: 12, endLine: 12, contentHash: 'sha256:abc', display: 'avg' }],
       }],
@@ -112,21 +116,21 @@ describe('fromCodexStrictResult', () => {
   });
 });
 
-describe('custom-v1 strict result parsing', () => {
+describe('custom-v2 strict result parsing', () => {
   it.each([null, undefined, []])('accepts empty findings represented as %j after Codex normalization', (findings) => {
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
-      kind: 'custom-findings', version: 'v1', findings, requirement: null,
+      kind: 'custom-findings', version: 'v2', findings, requirement: null,
     });
-    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v1', findings: [] });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v2', findings: [] });
   });
 
   it('accepts direct null findings while retaining the closed payload grammar', () => {
-    const payload = { kind: 'custom-findings', version: 'v1', findings: null };
+    const payload = { kind: 'custom-findings', version: 'v2', findings: null };
     expect(parseBuildReviewCustomReviewerPayload(payload)).toEqual({ ...payload, findings: [] });
     expect(parseBuildReviewCustomReviewerPayload({ ...payload, unexpected: true })).toBeUndefined();
   });
 
-  it.each([null, undefined, 'v2'])('still rejects invalid version %j', (version) => {
+  it.each([null, undefined])('still rejects invalid version %j', (version) => {
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
       kind: 'custom-findings', version, findings: null, requirement: null,
     });
@@ -134,20 +138,21 @@ describe('custom-v1 strict result parsing', () => {
   });
 
   it.each([{}, '', [null], Array(65).fill({})])('still rejects malformed or oversized findings %j', (findings) => {
-    expect(parseBuildReviewCustomReviewerPayload({ kind: 'custom-findings', version: 'v1', findings })).toBeUndefined();
+    expect(parseBuildReviewCustomReviewerPayload({ kind: 'custom-findings', version: 'v2', findings })).toBeUndefined();
   });
 
   it('discards a non-null flat-schema requirement beside custom findings', () => {
     // Codex filled the unsupported-policy sibling on a real eventSpine finding.
     const finding = {
       concernId: 'stamped-artifact-field', summary: 'A stamped trailer is read back as coordination.',
+      severity: 'major',
       evidenceLocations: ['src/a.ts:1'],
       sourceRegions: [{ path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'a'.repeat(64)}`, display: 'a' }],
     };
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
-      kind: 'custom-findings', version: 'v1', findings: [{ ...finding, confidence: null }], requirement: 'Event-spine policy contract: v1',
+      kind: 'custom-findings', version: 'v2', findings: [{ ...finding, confidence: null }], requirement: 'Event-spine policy contract: v1',
     });
-    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v1', findings: [finding] });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v2', findings: [finding] });
   });
 
   it('preserves unsupported-policy without inventing findings', () => {

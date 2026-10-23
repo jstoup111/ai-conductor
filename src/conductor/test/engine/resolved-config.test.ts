@@ -558,7 +558,7 @@ describe('engine/resolved-config', () => {
           min_confidence: 0.8,
         },
       });
-      expect(kotlinPolicy?.kind === 'custom' ? kotlinPolicy.contract.output.version : undefined).toBe('v1');
+      expect(kotlinPolicy?.kind === 'custom' ? kotlinPolicy.contract.output.version : undefined).toBe('v2');
       expect(Object.isFrozen(resolved.catalog)).toBe(true);
       expect(Object.isFrozen(testQuality)).toBe(true);
       expect(Object.isFrozen(testQuality?.policy)).toBe(true);

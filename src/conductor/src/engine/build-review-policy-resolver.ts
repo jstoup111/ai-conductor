@@ -6,7 +6,7 @@ import type {
 } from './build-review-policy.js';
 import type { RubricContractDescriptor } from './build-review-contract.js';
 import {
-  BUILD_REVIEW_CUSTOM_V1_SCHEMA,
+  BUILD_REVIEW_CUSTOM_V2_SCHEMA,
   parseBuildReviewCustomReviewerPayload,
   type BuildReviewCustomReviewerPayload,
 } from './build-review-domain.js';
@@ -18,7 +18,7 @@ import type { BuildReviewFrozenInputScope } from './build-review-materialization
 import type { ProviderWith } from '../execution/provider-catalog.js';
 
 /** One engine-owned contract shared by every resolved custom-v1 rubric. */
-export const BUILD_REVIEW_CUSTOM_V1_CONTRACT = Object.freeze({
+export const BUILD_REVIEW_CUSTOM_V2_CONTRACT = Object.freeze({
   projection: Object.freeze({
     version: 'v1',
     // Custom review receives the frozen-input view already built by the
@@ -26,8 +26,8 @@ export const BUILD_REVIEW_CUSTOM_V1_CONTRACT = Object.freeze({
     build: (scope: BuildReviewFrozenInputScope) => scope,
   }),
   output: Object.freeze({
-    version: 'v1',
-    jsonSchema: BUILD_REVIEW_CUSTOM_V1_SCHEMA,
+    version: 'v2',
+    jsonSchema: BUILD_REVIEW_CUSTOM_V2_SCHEMA,
     parse: parseBuildReviewCustomReviewerPayload,
   }),
   identity: Object.freeze({ canonicalize: canonicalizeBuildReviewCustomFindingIdentity }),
@@ -41,9 +41,11 @@ export const BUILD_REVIEW_CUSTOM_V1_CONTRACT = Object.freeze({
 /** Add the common custom contract while preserving a resolved member's fields. */
 export function resolveBuildReviewCustomContract<Member extends { readonly kind: 'custom' }>(
   member: Member,
-): Member & { readonly contract: typeof BUILD_REVIEW_CUSTOM_V1_CONTRACT } {
-  return Object.freeze({ ...member, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT });
+): Member & { readonly contract: typeof BUILD_REVIEW_CUSTOM_V2_CONTRACT } {
+  return Object.freeze({ ...member, contract: BUILD_REVIEW_CUSTOM_V2_CONTRACT });
 }
+/** @deprecated Fresh custom review uses v2. */
+export const BUILD_REVIEW_CUSTOM_V1_CONTRACT = BUILD_REVIEW_CUSTOM_V2_CONTRACT;
 
 export type ReviewPolicyCatalogFailureCode =
   | 'partial'

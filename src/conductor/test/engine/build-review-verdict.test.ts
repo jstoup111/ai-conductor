@@ -263,6 +263,7 @@ describe('engine/build-review verdict wiring contract', () => {
       child: undefined,
       adjudicationEnabled: true,
       minConfidence: { testQuality: 0, security: 0, implementationQuality: 0 },
+      minSeverity: {},
     });
   });
 

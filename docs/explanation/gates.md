@@ -745,6 +745,23 @@ invalidation of an origin disposition stops new carry but leaves existing carrie
 PR and shipped-record accepted-risk section lists carried findings and operator-resolved cases without
 operator names or rationales.
 
+Every built-in (contract `v4`) and custom (`custom-findings` `v2`) finding carries a reviewer-assigned
+`severity`: `critical`, `major`, `minor`, or `nit`. Severity is not part of finding identity. When a
+rubric sets [`min_severity`](../reference/configuration.md#build_review), a finding ranked strictly below
+it is classified advisory after accepted, settled, replication, and suppressed findings, and before
+unresolved ones. Advisory findings never block, never reach the judgement, and charge no kickback; the
+engine records each one in the case store's suppression history, emits it on
+`build_review_outer_verdict` as `advisoryFindings`, and renders it in the daemon log, in
+`build-review findings`, and in the PR's engine-owned `## Advisory build-review findings` region inside
+the accepted-risk section. A forged copy of that heading elsewhere in the PR body is removed.
+
+When the context declares a threshold, the judgement may also settle a source with an `advisory` case:
+an `adjudicatedSeverity` strictly below the source rubric's threshold and no higher than the reviewer's
+severity, a rationale, and effect `none`. Any other shape is rejected as `invalid-advisory-threshold`.
+The case settles its source only while the rubric's current threshold still ranks above the adjudicated
+severity; lowering or removing the threshold reopens the source. The adjudicator rationale stays in
+local CLI output and never reaches `--json` or the PR.
+
 The case store and work order survive a daemon restart. BUILD stamps the work order before it starts,
 so an already attempted case cannot receive another free route. One settlement predicate retires
 open cases. It is used for absence resolution, for acceptance retirement when a lap finishes, and at

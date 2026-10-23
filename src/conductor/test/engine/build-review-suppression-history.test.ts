@@ -76,6 +76,7 @@ describe('projectBuildReviewSuppressionEntries', () => {
       summary: 'The sub-floor finding.',
       confidence: 40,
       floor: 70,
+      kind: 'confidence',
       lastSeenLap: 'lap-1',
     }]);
   });
@@ -97,11 +98,11 @@ describe('persistBuildReviewSuppressions', () => {
     const root = await projectRoot();
     const firstLap = {
       findingId: 'testQuality:finding-recurring', rubric: 'testQuality', summary: 'The sub-floor finding.',
-      confidence: 40, floor: 70, lastSeenLap: 'lap-1',
+      confidence: 40, floor: 70, kind: 'confidence', lastSeenLap: 'lap-1',
     } as const;
     const absentAfterwards = {
       findingId: 'testQuality:finding-gone', rubric: 'testQuality', summary: 'A suppression that stopped recurring.',
-      confidence: 35, floor: 70, lastSeenLap: 'lap-1',
+      confidence: 35, floor: 70, kind: 'confidence', lastSeenLap: 'lap-1',
     } as const;
 
     await expect(persistBuildReviewSuppressions({
@@ -130,7 +131,7 @@ describe('persistBuildReviewSuppressions', () => {
     }));
     const suppression = {
       findingId: 'testQuality:finding-1', rubric: 'testQuality', summary: 'The sub-floor finding.',
-      confidence: 40, floor: 70, lastSeenLap: 'lap-1',
+      confidence: 40, floor: 70, kind: 'confidence', lastSeenLap: 'lap-1',
     } as const;
 
     await expect(persistBuildReviewSuppressions({

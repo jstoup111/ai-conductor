@@ -3,6 +3,7 @@ import type {
   RemediationCaseRow,
   RemediationCaseSourceRow,
 } from './remediation-case-artifact.js';
+import { isBelowSeverityThreshold } from './build-review-domain.js';
 
 export type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 
@@ -38,12 +39,19 @@ export type RemediationCaseGraphRejection =
   | 'missing-admission-task'
   | 'duplicate-admission-task'
   | 'unknown-admission-task'
-  | 'missing-admission-rationale';
+  | 'missing-admission-rationale'
+  | 'invalid-advisory-threshold';
 
 /** Engine-supplied identities; provider output cannot expand either set. */
 export interface RemediationCaseValidationReferences {
   readonly existingCaseIds?: readonly string[];
   readonly admittedTaskIds?: readonly string[];
+  /** Rubric identity for each frozen source supplied to the judgement. */
+  readonly sourceRubrics?: Readonly<Record<string, string>>;
+  /** Reviewer-owned severity for each frozen source supplied to the judgement. */
+  readonly sourceReviewerSeverities?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  /** Resolved non-nit thresholds declared by the operator, keyed by rubric. */
+  readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
 }
 
 export interface ProposedRemediationCase {
@@ -136,6 +144,7 @@ function validateEffect(
       ? undefined
       : effect.kind === 'deferral' ? 'invalid-deferral-effect' : 'invalid-refute-effect';
   }
+  if (caseRow.disposition === 'advisory') return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
   return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
 }
 
@@ -147,7 +156,19 @@ function outcomeMatchesDisposition(
     || (outcome === 'acted' && disposition === 'act')
     || (outcome === 'deferred' && disposition === 'defer')
     || (outcome === 'rejected' && disposition === 'reject')
-    || (outcome === 'refuted' && disposition === 'refute');
+    || (outcome === 'refuted' && disposition === 'refute')
+    || (outcome === 'advisory' && disposition === 'advisory');
+}
+
+function advisoryThresholdForSource(
+  sourceId: string,
+  references: RemediationCaseValidationReferences,
+): import('./build-review-domain.js').BuildReviewSeverity | undefined {
+  const rubric = references.sourceRubrics?.[sourceId];
+  const threshold = rubric === undefined
+    ? undefined
+    : references.declaredSeverityThresholds?.[rubric];
+  return threshold !== 'nit' ? threshold : undefined;
 }
 
 function validateConsistency(
@@ -202,6 +223,9 @@ export function validateRemediationCaseGraph(
       !(references.existingCaseIds ?? []).includes(caseRow.existingCaseId)) {
       return { ok: false, reason: 'unknown-existing-case' };
     }
+    if (caseRow.disposition === 'advisory' && !nonEmptyString(caseRow.rationale)) {
+      return { ok: false, reason: 'invalid-advisory-threshold' };
+    }
     const effectError = validateEffect(caseRow, judgement, references);
     if (effectError) return { ok: false, reason: effectError };
 
@@ -232,6 +256,16 @@ export function validateRemediationCaseGraph(
       }
     } else if (!outcomeMatchesDisposition(source.outcome, caseRow.disposition)) {
       return { ok: false, reason: 'contradictory-source-outcome' };
+    }
+    if (caseRow.disposition === 'advisory') {
+      const threshold = advisoryThresholdForSource(source.sourceId, references);
+      const reviewerSeverity = references.sourceReviewerSeverities?.[source.sourceId];
+      if (threshold === undefined || caseRow.adjudicatedSeverity === undefined ||
+        reviewerSeverity === undefined ||
+        !isBelowSeverityThreshold(caseRow.adjudicatedSeverity, threshold) ||
+        isBelowSeverityThreshold(reviewerSeverity, caseRow.adjudicatedSeverity)) {
+        return { ok: false, reason: 'invalid-advisory-threshold' };
+      }
     }
 
     seenSources.add(source.sourceId);

@@ -71,3 +71,7 @@ introduces the exposure, never to an unchanged sink; cite unchanged sinks only i
 Do not report style concerns, broad architectural preferences, dependency-version changes, or
 vulnerable-component claims: they are outside this vocabulary. Do not report a hypothetical risk
 without concrete changed-hunk evidence that makes it exploitable.
+
+Every reported finding requires `severity`: use `critical` for security exposure, data loss, or
+wrong results; `major` for a real defect or broken invariant; `minor` for a real low-impact quality
+issue; and `nit` only for cosmetic naming or style.

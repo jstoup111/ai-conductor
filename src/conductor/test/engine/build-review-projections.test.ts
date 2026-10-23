@@ -239,7 +239,7 @@ describe('build-review rubric projections', () => {
   it('projects the frozen v3 test scope compactly and keeps runner selectors separate from review targets', () => {
     const projection = deriveBuildReviewRubricProjections(scopedSource()).testQuality as unknown as Record<string, unknown>;
 
-    expect(projection.projectionVersion).toBe('v3');
+    expect(projection.projectionVersion).toBe('v4');
     expect(projection.runnerSelectors).toEqual(['test/a.test.ts', 'test/b.test.ts']);
     expect(projection.testScope).toMatchObject({
       analysisVersion: 'test-scope-v1',
@@ -316,7 +316,7 @@ describe('build-review rubric projections', () => {
       'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'rubric', 'runnerSelectors', 'snapshotDigest', 'testScope', 'testSuiteProof', 'unresolvedMarkers',
     ]);
     expect(projection).toMatchObject({
-      rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
+      rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
       mergeBase: 'base', headSha: 'head',
       changedFiles: [{ path: 'src/a.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 2, newStart: 1, newCount: 3, contentHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) }] }],
       changedTestTitles: [{ selector: 'test/a.test.ts', titleText: 'a > persists', staticExtractionFallback: false }],

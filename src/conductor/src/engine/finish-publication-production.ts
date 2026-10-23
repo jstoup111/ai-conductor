@@ -69,14 +69,14 @@ import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
-import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import { type BuildReviewAdvisoryFinding, upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { maskProjectOwnedRegions, restoreRegion } from './pr-body-regions.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
-import { RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { currentBuildReviewSourceLinks, RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { listExistingChildren, type ChildId } from './child-context.js';
-import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import {
   appendRecordedShipmentFindings,
@@ -177,9 +177,10 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   originalBody?: string;
   records: readonly BuildReviewDispositionRecord[];
   caseRead?: RemediationCaseStoreReadResult;
+  advisoryFindings?: readonly BuildReviewAdvisoryFinding[];
   operations?: GithubOperationRunner;
 }): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
-  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records, input.caseRead);
+  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records, input.caseRead, input.advisoryFindings);
   if (!upserted.ok) return upserted;
   if (upserted.changed || (input.originalBody !== undefined && upserted.body !== input.originalBody)) {
     const mutation = await mutateRetainedPullRequest({
@@ -191,6 +192,45 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
     if (!mutation.ok) return mutation;
   }
   return { ok: true, changed: upserted.changed };
+}
+
+/**
+ * Projects the two durable advisory authorities into the PR-safe renderer.
+ * Severity suppressions are written only by the effective-verdict path, while
+ * settled advisory cases carry the adjudicator's lowered severity. Neither
+ * authority exposes the adjudicator rationale to publication.
+ */
+function projectBuildReviewAdvisoryFindings(
+  aggregate: ReturnType<typeof parseBuildReviewAggregate> | undefined,
+  caseReads: readonly Extract<RemediationCaseStoreReadResult, { ok: true }>[],
+): readonly BuildReviewAdvisoryFinding[] {
+  if (!aggregate) return [];
+  const sources = projectBuildReviewAggregateSources(aggregate);
+  if (!sources) return [];
+  const threshold = new Map<string, BuildReviewAdvisoryFinding>();
+  const adjudicated = new Map<string, BuildReviewAdvisoryFinding>();
+  for (const read of caseReads) {
+    for (const entry of read.state.suppressions ?? []) {
+      if (entry.kind !== 'severity' || entry.lastSeenLap !== aggregate.lapId) continue;
+      const source = sources.find((candidate) => candidate.rubric === entry.rubric && candidate.findingId === entry.findingId);
+      if (!source || source.severity === undefined) continue;
+      threshold.set(`${source.rubric}:${source.findingId}`, {
+        id: source.findingId, rubric: source.rubric, severity: source.severity,
+        origin: 'threshold', reviewerSummary: source.summary,
+      });
+    }
+    for (const [sourceId, { record, link }] of currentBuildReviewSourceLinks(read.state.cases)) {
+      if (record.disposition !== 'advisory' || record.operatorResolution !== undefined || record.adjudicatedSeverity === undefined ||
+        (link.outcome !== 'advisory' && link.outcome !== 'merged')) continue;
+      const source = sources.find((candidate) => `${candidate.rubric}:${candidate.findingId}` === sourceId);
+      if (!source) continue;
+      adjudicated.set(sourceId, {
+        id: source.findingId, rubric: source.rubric, severity: record.adjudicatedSeverity,
+        origin: 'adjudicated', reviewerSummary: source.summary,
+      });
+    }
+  }
+  return [...threshold.values(), ...adjudicated.values()];
 }
 
 type RetainedPullRequestMutation =
@@ -1326,6 +1366,7 @@ export function createProductionFinishPublicationCoordinator(
     const aggregate = await readFile(join(deps.projectRoot, '.pipeline', 'build-review.json'), 'utf8')
       .then((text) => parseBuildReviewAggregate(JSON.parse(text)))
       .catch(() => undefined);
+    const advisoryFindings = projectBuildReviewAdvisoryFindings(aggregate, readableCaseReads);
     if (reducedCoverage.records.length > 0 && !aggregate) {
       throw new Error('accepted-risk projection: reduced build-review coverage has no renderable current-lap evidence');
     }
@@ -1358,6 +1399,7 @@ export function createProductionFinishPublicationCoordinator(
       originalBody: typeof body === 'string' ? body : '',
       records: listed.records,
       caseRead,
+      advisoryFindings,
       operations,
     });
     if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);

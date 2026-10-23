@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:1, task:2, task:3
 // Covers: task:5, task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -20,8 +20,10 @@ import {
   parseBuildReviewLapId,
   parseBuildReviewRubricContractVersion,
   parseBuildReviewRubricResult,
+  parseBuildReviewSeverity,
   parseBuildReviewSkip,
   renderBuildReviewUnresolvedSkillRemedy,
+  isBelowSeverityThreshold,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection, CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
@@ -34,12 +36,12 @@ const HASH = `sha256:${'a'.repeat(64)}`;
 const locus = { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' };
 
 function judged(findings: readonly unknown[], rest: Record<string, unknown> = {}): Record<string, unknown> {
-  return { kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', findings, ...rest };
+  return { kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v4', findings, ...rest };
 }
 
 function finding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    concernKind: 'test-insensitive', summary: 'The assertion passes against reverted production.',
+    concernKind: 'test-insensitive', severity: 'minor', summary: 'The assertion passes against reverted production.',
     evidenceLocations: ['test/widget.test.ts:8'], anchor: { rubric: 'testQuality', locus }, ...overrides,
   };
 }
@@ -48,12 +50,12 @@ function customPayload(
   findings: readonly unknown[],
   rest: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { kind: 'custom-findings', version: 'v1', findings, ...rest };
+  return { kind: 'custom-findings', version: 'v2', findings, ...rest };
 }
 
 function customFinding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.',
+    concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.', severity: 'minor',
     evidenceLocations: ['src/widget.ts:8'],
     sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
     ...overrides,
@@ -178,14 +180,14 @@ describe('build-review domain', () => {
   });
 
   it('parses the bounded custom finding contract through an effective custom descriptor', () => {
-    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' } as const;
     const payload = customPayload([customFinding({ confidence: 72 })]);
 
-    expect(descriptor).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
+    expect(descriptor).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' });
     expect(parseBuildReviewReviewerPayload(payload, descriptor)).toEqual({
-      kind: 'custom-findings', version: 'v1', findings: [{
+      kind: 'custom-findings', version: 'v2', findings: [{
         concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.',
-        confidence: 72, evidenceLocations: ['src/widget.ts:8'],
+        confidence: 72, severity: 'minor', evidenceLocations: ['src/widget.ts:8'],
         sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
       }],
     });
@@ -199,7 +201,7 @@ describe('build-review domain', () => {
   });
 
   it('ignores custom reviewer routing claims and rejects other identity claims and invalid bounded finding values', () => {
-    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const descriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' } as const;
     const valid = customPayload([customFinding()]);
     for (const field of ['rubric', 'lapId']) {
       expect(parseBuildReviewReviewerPayload({ ...valid, [field]: 'forged' }, descriptor), field).toEqual(valid);
@@ -228,7 +230,7 @@ describe('build-review domain', () => {
     const security = { kind: 'builtin', rubric: 'security', parser: 'security-v3' } as const;
     const testQuality = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const securityFinding = {
-      concernKind: 'injection', summary: 'Request input reaches a shell.', evidenceLocations: ['src/auth.ts:8'],
+      concernKind: 'injection', severity: 'major', summary: 'Request input reaches a shell.', evidenceLocations: ['src/auth.ts:8'],
       anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } },
     };
 
@@ -243,7 +245,7 @@ describe('build-review domain', () => {
   });
 
   it('keeps test-quality specialized and custom unsupported payloads distinct from empty findings', () => {
-    const customDescriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' } as const;
+    const customDescriptor = { kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v2' } as const;
     const builtInDescriptor = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const customEmpty = customPayload([]);
     const unsupported = { kind: 'unsupported-policy', requirement: 'requires a deployment credential' };
@@ -265,6 +267,52 @@ describe('build-review domain', () => {
     }
   });
 
+  it('retains each reviewer-assigned severity on a fresh v4 finding', () => {
+    const result = parseBuildReviewJudgedResult(judged(
+      ['critical', 'major', 'minor', 'nit'].map((severity, index) => finding({
+        severity,
+        anchor: {
+          rubric: 'testQuality',
+          locus: { ...locus, path: `test/widget-${index}.test.ts` },
+        },
+      })),
+      { contractVersion: 'v4' },
+    ));
+
+    expect(result?.findings.map((entry) => entry.severity)).toEqual(['critical', 'major', 'minor', 'nit']);
+  });
+
+  it('keeps a v4 finding severity independent from its confidence', () => {
+    const result = parseBuildReviewJudgedResult(judged([finding({ severity: 'major', confidence: 40 })], {
+      contractVersion: 'v4',
+    }));
+
+    expect(result?.findings[0]).toMatchObject({ severity: 'major', confidence: 40 });
+  });
+
+  it('reads persisted v3 findings without adding severity', () => {
+    const result = parseBuildReviewJudgedResult(judged([finding({ severity: undefined })], { contractVersion: 'v3' }));
+
+    expect(result?.findings[0]).not.toHaveProperty('severity');
+  });
+
+  it('parses only the four closed build-review severities', () => {
+    for (const severity of ['critical', 'major', 'minor', 'nit']) {
+      expect(parseBuildReviewSeverity(severity)).toBe(severity);
+    }
+    for (const severity of ['blocker', 'Major', 2, null]) {
+      expect(parseBuildReviewSeverity(severity)).toBeUndefined();
+    }
+  });
+
+  it('compares severity thresholds strictly in reviewer order', () => {
+    expect(isBelowSeverityThreshold('nit', 'major')).toBe(true);
+    expect(isBelowSeverityThreshold('minor', 'major')).toBe(true);
+    expect(isBelowSeverityThreshold('major', 'major')).toBe(false);
+    expect(isBelowSeverityThreshold('critical', 'major')).toBe(false);
+    expect(isBelowSeverityThreshold('nit', 'nit')).toBe(false);
+  });
+
   it('brands lap identities from the closed grammar', () => {
     expect(parseBuildReviewLapId('lap-20260813-01')).toBe('lap-20260813-01');
     expect(parseBuildReviewLapId('lap.x_y-Z9')).toBe('lap.x_y-Z9');
@@ -276,11 +324,11 @@ describe('build-review domain', () => {
     expect(parseBuildReviewLapId(1)).toBeUndefined();
   });
 
-  it('accepts only the three known rubric-contract versions', () => {
+  it('accepts only the four known rubric-contract versions', () => {
     expect(parseBuildReviewRubricContractVersion('v1')).toBe('v1');
     expect(parseBuildReviewRubricContractVersion('v2')).toBe('v2');
     expect(parseBuildReviewRubricContractVersion('v3')).toBe('v3');
-    expect(parseBuildReviewRubricContractVersion('v4')).toBeUndefined();
+    expect(parseBuildReviewRubricContractVersion('v4')).toBe('v4');
     expect(parseBuildReviewRubricContractVersion('V3')).toBeUndefined();
     expect(parseBuildReviewRubricContractVersion(3)).toBeUndefined();
   });
@@ -383,7 +431,7 @@ describe('build-review domain', () => {
   it('names each enumerated contract problem in a rejection', () => {
     const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:snapshot' };
     const locus = { path: 'test/widget.test.ts', contentHash: `sha256:${'a'.repeat(64)}`, display: 'widget renders' };
-    const valid = { concernKind: 'test-insensitive', summary: 'Passes against a stub.', evidenceLocations: ['test/widget.test.ts:3'], anchor: { rubric: 'testQuality', locus } };
+    const valid = { concernKind: 'test-insensitive', severity: 'minor', summary: 'Passes against a stub.', evidenceLocations: ['test/widget.test.ts:3'], anchor: { rubric: 'testQuality', locus } };
     const describe = (value: unknown, references?: Parameters<typeof describeBuildReviewJudgedResultRejection>[3]) =>
       describeBuildReviewJudgedResultRejection(value, 'testQuality', expected, references);
 
@@ -392,14 +440,15 @@ describe('build-review domain', () => {
       'top-level "kind" must be exactly the string "judged" (got "result")',
       '"rubric" must be "testQuality"',
       '"lapId" must echo the projection\'s lapId "lap-1" verbatim',
-      '"contractVersion" must be "v3"',
+      '"contractVersion" must be "v4"',
       '"snapshotDigest" must echo the projection\'s snapshotDigest verbatim',
       '"findings" must be an array (empty when no concern was found)',
     ].join('; '));
-    const envelope = (findings: unknown[]) => ({ kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', findings, ...expected });
+    const envelope = (findings: unknown[]) => ({ kind: 'judged', rubric: 'testQuality', contractVersion: 'v4', findings, ...expected });
     expect(describe(envelope([{ kind: 'test-insensitive', summary: '', evidenceLocations: [], rubric: 'testQuality', locus }]))).toBe([
       'findings[0].concernKind must be a non-empty string (never "kind")',
       'findings[0].summary must be a non-empty string',
+      'findings[0].severity must be one of "critical", "major", "minor", "nit"',
       'findings[0].evidenceLocations must be a non-empty array of "path:line" strings',
       'findings[0].anchor is required: a nested object {"rubric": "testQuality", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"',
     ].join('; '));
@@ -429,22 +478,22 @@ describe('build-review domain', () => {
       value, 'testQuality', expected, references,
     );
 
-    const unlistedHash = diagnose(judged([finding({ anchor: { rubric: 'testQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } })]));
+    const unlistedHash = diagnose(judged([finding({ anchor: { rubric: 'testQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } })], { contractVersion: 'v4' }));
     expect(unlistedHash).toMatchObject({
       kind: 'explained',
       problems: [{ field: 'findings[0].anchor.locus.contentHash', required: 'must equal a contentHash listed by the projected in-scope content regions' }],
     });
 
-    const outOfEnum = diagnose(judged([finding({ concernKind: 'invented-kind' })]));
+    const outOfEnum = diagnose(judged([finding({ concernKind: 'invented-kind' })], { contractVersion: 'v4' }));
     expect(outOfEnum).toMatchObject({
       kind: 'explained',
       problems: [{ field: 'findings[0].concernKind', required: 'must be one of "test-insensitive" (got "invented-kind")' }],
     });
 
-    const duplicate = judged([finding(), finding({ summary: 'Same identity, different wording.' })]);
+    const duplicate = judged([finding(), finding({ summary: 'Same identity, different wording.' })], { contractVersion: 'v4' });
     const duplicateRejection = diagnose(duplicate);
     const duplicateIdentity = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus },
+      rubric: 'testQuality', contractVersion: 'v4', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus },
     })!.id;
     expect(parseBuildReviewJudgedResult(duplicate, references)).toBeUndefined();
     expect(duplicateRejection).toMatchObject({
@@ -458,7 +507,7 @@ describe('build-review domain', () => {
     });
 
     const unexplained = diagnoseBuildReviewJudgedResultRejection(
-      judged([], { lapId: 'invalid lap id' }), 'testQuality',
+      judged([], { lapId: 'invalid lap id', contractVersion: 'v4' }), 'testQuality',
       { lapId: 'invalid lap id', snapshotDigest: 'sha256:abc' }, references,
     );
     expect(unexplained).toEqual({ kind: 'unexplained', problems: [] });
@@ -491,7 +540,7 @@ describe('build-review domain', () => {
     const fail = parseBuildReviewJudgedResult(judged([finding()]));
 
     expect(pass).toEqual({
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', findings: [], verdict: 'PASS',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v4', findings: [], verdict: 'PASS',
     });
     expect(fail).toMatchObject({ verdict: 'FAIL', findings: [finding()] });
     expect(Object.isFrozen(fail?.findings)).toBe(true);
@@ -500,12 +549,12 @@ describe('build-review domain', () => {
   it('accepts an optional normalized counterfactualSensitivity from its closed vocabulary', () => {
     for (const counterfactualSensitivity of ['supports', 'indeterminate', 'not-applicable']) {
       expect(parseBuildReviewJudgedResult(judged([], { counterfactualSensitivity })), counterfactualSensitivity).toMatchObject({
-        contractVersion: 'v3', counterfactualSensitivity,
+        contractVersion: 'v4', counterfactualSensitivity,
       });
     }
 
     expect(parseBuildReviewJudgedResult(judged([]))).toEqual({
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', findings: [], verdict: 'PASS',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v4', findings: [], verdict: 'PASS',
     });
   });
 
@@ -566,7 +615,7 @@ describe('build-review domain', () => {
     expect(parseBuildReviewJudgedResult(judged([], { rubric: 'tautology' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult(judged([], { lapId: 'lap with spaces' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult(judged([], { snapshotDigest: ' ' }))).toBeUndefined();
-    expect(parseBuildReviewJudgedResult(judged([], { contractVersion: 'v4' }))).toBeUndefined();
+    expect(parseBuildReviewJudgedResult(judged([], { contractVersion: 'v5' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult(judged([], { kind: 'skipped' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult({ ...judged([]), findings: 'none' })).toBeUndefined();
   });

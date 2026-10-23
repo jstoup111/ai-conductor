@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:14, task:28, task:rem-as-built-8
+// Covers: task:3, task:4, task:14, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -19,6 +19,7 @@ const POLICY_DIGEST = `sha256:${'c'.repeat(64)}`;
 function finding(name: string): BuildReviewFinding {
   return {
     concernKind: 'test-insensitive',
+    severity: 'minor',
     summary: `The ${name} assertion passes against reverted production.`,
     evidenceLocations: [`test/${name}.test.ts:8`],
     anchor: {
@@ -35,7 +36,7 @@ function aggregate(...findings: readonly BuildReviewFinding[]) {
     results: {
       security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v4',
         findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL',
       },
     },
@@ -49,9 +50,10 @@ function securityAggregate() {
     results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       security: {
-        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v3', verdict: 'FAIL',
+        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
         findings: [{
           concernKind: 'injection',
+          severity: 'minor',
           summary: 'The new request handler interpolates untrusted input into a query.',
           evidenceLocations: ['src/http/search.ts:42'],
           anchor: { rubric: 'security', locus: { path: 'src/http/search.ts', contentHash: HASH, display: 'new search handler' } },
@@ -67,8 +69,8 @@ function implementationQualityAggregate() {
     results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
       implementationQuality: {
-        kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v3', verdict: 'FAIL',
-        findings: [{ concernKind: 'primitive-obsession', summary: 'Raw string state permits invalid values.', evidenceLocations: ['src/state.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' } } }],
+        kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v4', verdict: 'FAIL',
+        findings: [{ concernKind: 'primitive-obsession', severity: 'minor', summary: 'Raw string state permits invalid values.', evidenceLocations: ['src/state.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/state.ts', contentHash: HASH, display: 'changed state model' } } }],
       },
     },
   });
@@ -90,10 +92,10 @@ function customAggregate(criteria?: readonly string[]) {
   };
   const sourceRegion = { path: 'src/handler.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'changed handler' };
   const result = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v1',
+    kind: 'custom-findings', version: 'v2',
     findings: [{
       concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
-      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, severity: 'major', sourceRegions: [sourceRegion],
     }],
   }, {
     rubric: 'security', lapId, declaration, policy: descriptor.effectivePolicy,
@@ -162,7 +164,45 @@ function priorDecisionStop(id: string): RemediationCaseRecord {
   };
 }
 
+function priorAdvisoryCase(id: string): RemediationCaseRecord {
+  return {
+    ...priorCase(id),
+    disposition: 'advisory',
+    priority: 'low',
+    rationale: `Case ${id} is a minor concern below the declared severity threshold.`,
+    resolution: 'resolved',
+    sources: [{ sourceId: `testQuality:${id}`, outcome: 'advisory', recordedAt: '2026-10-23T12:00:00.000Z' }],
+    effect: { kind: 'none' },
+    adjudicatedSeverity: 'minor',
+  };
+}
+
 describe('build-review adjudication context', () => {
+  it('admits a prior advisory case with no effect as non-blocking history', () => {
+    const advisory = priorAdvisoryCase('case-advisory');
+
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [advisory],
+      suppressions: [{
+        kind: 'severity', findingId: 'threshold-advisory', rubric: 'testQuality',
+        summary: 'A separate finding is below the severity threshold.', severity: 'minor', threshold: 'major', lastSeenLap: 'lap-prior',
+      }],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      context: expect.objectContaining({
+        priorCases: [expect.objectContaining({
+          id: 'case-advisory', disposition: 'advisory', effect: { kind: 'none' }, adjudicatedSeverity: 'minor',
+        })],
+        suppressionHistory: [expect.objectContaining({
+          kind: 'severity', findingId: 'threshold-advisory', severity: 'minor', threshold: 'major',
+        })],
+      }),
+    });
+  });
+
   it('marks only carry-eligible prior cases with their acceptance origins', () => {
     const accepted = {
       ...priorCase('case-accepted'),
@@ -391,7 +431,7 @@ describe('build-review adjudication context', () => {
   it('carries suppression history separately from current findings', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('current')), priorCases: [],
-      suppressions: [{ findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
+      suppressions: [{ kind: 'confidence', findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
     });
     expect(result).toMatchObject({ ok: true, context: {
       currentFindings: [expect.objectContaining({ summary: finding('current').summary })],
@@ -529,7 +569,7 @@ describe('build-review adjudication context', () => {
     // names exactly these input fields. A context missing any of them routes a
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
-      'currentFindings', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
+      'admittedDispositions', 'currentFindings', 'declaredSeverityThresholds', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
       'planContract', 'policyContext', 'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
     ]);
     expect(result.context).toMatchObject({
