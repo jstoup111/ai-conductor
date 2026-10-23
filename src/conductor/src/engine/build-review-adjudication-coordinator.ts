@@ -22,7 +22,7 @@ import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
-import { appendRemediationCaseOutbox, buildReviewSeverityThresholdPolicies, currentBuildReviewSourceLinks, drainRemediationCaseOutbox, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
+import { appendRemediationCaseOutbox, BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT, buildReviewRecurrenceLineage, buildReviewSeverityThresholdPolicies, classifyBuildReviewRecurrence, currentBuildReviewSourceLinks, drainRemediationCaseOutbox, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
@@ -829,6 +829,39 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       ? failStore('case store', { reason: linked.storeReason, violation: linked.violation })
       : fail(`case reconciliation ${linked.reason}`);
   };
+  // An unbound action over a resolved action owner is deliberately not an
+  // ordinary regression: it is a fresh concern at that anchor. Its lineage,
+  // however, still owns the finite number of BUILD attempts. Bind the source
+  // back to its authoritative owner before reporting the halt so a later
+  // operator acceptance can address this exact occurrence.
+  for (const proposed of admitted) {
+    if (proposed.case.existingCaseId !== undefined || proposed.case.disposition !== 'act') continue;
+    if (proposed.sources.every((source) => !liveSourceIds.has(source.sourceId))) continue;
+    const recurrence = classifyBuildReviewRecurrence(
+      prior.state.cases,
+      proposed.sources.map((source) => source.sourceId),
+      proposed.case.distinctFrom ?? [],
+    );
+    if (recurrence.recurrenceOf.length === 0) continue;
+    const lineage = buildReviewRecurrenceLineage(prior.state.cases, recurrence.recurrenceOf);
+    if (lineage.appliedAttempts < BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT) continue;
+    const caseId = recurrence.recurrenceOf.at(-1)!;
+    const owner = priorCasesBeforeReconcile.get(caseId)!;
+    const linkFailure = await recordHaltingBinding({
+      ...proposed,
+      case: { ...proposed.case, existingCaseId: caseId },
+    });
+    if (linkFailure) return linkFailure;
+    await input.emit?.({
+      type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
+      caseId, ...(owner.effect.kind === 'none' ? {} : { effectId: owner.effect.id }),
+      reason: 'recurrence-limit', lineageCaseIds: [...lineage.caseIds],
+    });
+    return failUnlessAccepted(
+      `semantic remediation case recurrence limit ${caseId}: lineage ${lineage.caseIds.join(', ')} has ${lineage.appliedAttempts} applied attempts (limit ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT})`,
+      { settleAbsentAttempted: false, caseSourceIds: [new Set(proposed.sources.map((source) => source.sourceId))] },
+    );
+  }
   // Carry removes a case from every autonomous effect and escalation lane.
   // The action authority above already derives consistency from that filtered
   // judgement; use the same projection for the stop writer so a consistency

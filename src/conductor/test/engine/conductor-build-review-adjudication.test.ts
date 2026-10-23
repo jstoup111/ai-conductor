@@ -568,6 +568,39 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     await expectRefusedDecisionStopHalt(true);
   });
 
+  // Covers: task:9
+  it('halts an at-limit undeclared recurrence through the real build_review step before BUILD dispatch', async () => {
+    const run = await fixture({
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1', repository: root, feature: 'adjudicated-feature' };
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature,
+          cases: [
+            {
+              id: 'R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'First repair.', resolution: 'resolved',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-01T00:00:00.000Z' }],
+              effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+            },
+            {
+              id: 'N', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Second repair.', resolution: 'resolved', recurrenceOf: ['R'],
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-02T00:00:00.000Z' }],
+              effect: { id: 'effect-N', kind: 'action', status: 'applied', workOrderId: 'order-N' },
+            },
+            {
+              id: 'N2', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Third repair.', resolution: 'resolved', recurrenceOf: ['N'],
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2030-10-03T00:00:00.000Z' }],
+              effect: { id: 'effect-N2', kind: 'action', status: 'applied', workOrderId: 'order-N2' },
+            },
+          ],
+        }), 'utf8');
+      },
+    });
+    const halt = await run.haltMarker();
+    expect(await readFile(join(run.projectRoot, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');
+    expect(halt).toContain('semantic remediation case recurrence limit N2: lineage R, N, N2 has 3 applied attempts (limit 3)');
+    expect(run.dispatched).not.toContain('build');
+  });
+
   it('writes a decision-stop malformed-state HALT without rejected-transition recovery guidance', async () => {
     const customSource = projectBuildReviewAggregateSources(customAggregate())![0]!;
     const sourceId = buildReviewAdjudicationSourceId(customSource);

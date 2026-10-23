@@ -14,7 +14,7 @@ import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedRes
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
-import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
+import { buildReviewRecurrenceLineage, classifyBuildReviewRecurrence, RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
@@ -3893,5 +3893,69 @@ describe('coordinateBuildReviewAdjudication', () => {
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '4', status: 'completed' }] },
       effectPointers: [],
     });
+  });
+
+  // Covers: task:7, task:8
+  it('bounds an undeclared third recurrence and preserves the #2423-style first recurrence', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    const replay: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'N' }],
+      cases: [{
+        caseRef: 'N', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'Daemon-liveness staleness assertions remain unproven at this anchor.',
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Cover daemon-liveness staleness' }] },
+      }],
+    };
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'Earlier concern.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+      }],
+    });
+    const before = JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases[0];
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const first = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => replay), chargeEffect: charge, generateId: sequentialIds('N'),
+    });
+    expect(first).toMatchObject({ ok: true, route: 'build', durable: { repairCaseIds: ['N-1'] } });
+    expect(charge).toHaveBeenCalledTimes(1);
+    let state = await store.read();
+    if (!state.ok) throw new Error(state.reason);
+    expect(state.state.cases.find((record) => record.id === 'N-1')).toMatchObject({ recurrenceOf: ['R'] });
+    expect(JSON.parse(await readFile(remediationCaseStorePath(root), 'utf8')).cases[0]).toEqual(before);
+
+    await store.mutate(async (current) => ({ value: null, nextState: {
+      ...current,
+      cases: current.cases.map((record) => record.id === 'N-1'
+        ? { ...record, resolution: 'resolved' as const, effect: { ...record.effect, status: 'applied' as const, workOrderId: 'order-N' } as never }
+        : record),
+    } }));
+    state = await store.read();
+    if (!state.ok) throw new Error(state.reason);
+    await store.mutate(async (current) => ({ value: null, nextState: {
+      ...current,
+      cases: [...current.cases, {
+        id: 'N2', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'Second recurrence.', resolution: 'resolved', recurrenceOf: ['N-1'],
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2030-10-21T00:00:00.000Z' }],
+        effect: { id: 'effect-N2', kind: 'action', status: 'applied', workOrderId: 'order-N2' },
+      }],
+    } }));
+    state = await store.read();
+    if (!state.ok) throw new Error(state.reason);
+    expect(classifyBuildReviewRecurrence(state.state.cases, [sourceId], [])).toEqual({ recurrenceOf: ['N2'], distinctFrom: [] });
+    expect(buildReviewRecurrenceLineage(state.state.cases, ['N2'])).toMatchObject({ caseIds: ['R', 'N-1', 'N2'], appliedAttempts: 3 });
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const bounded = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => replay), chargeEffect: charge, emit: async (event) => { events.push(event); },
+    });
+    expect(bounded).toMatchObject({ ok: false, detail: 'semantic remediation case recurrence limit N2: lineage R, N-1, N2 has 3 applied attempts (limit 3)' });
+    expect(charge).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_semantic_repeat_halt', caseId: 'N2', reason: 'recurrence-limit', lineageCaseIds: ['R', 'N-1', 'N2'] }));
   });
 });
