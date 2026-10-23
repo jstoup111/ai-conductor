@@ -192,7 +192,11 @@ child's case store instead of the feature's. `findings` also lists each carried 
 origin source ids, origin laps, and the origin dispositions' operators and rationales), each
 operator-resolved case (operator, rationale, and time), and each case-store outbox entry the engine has
 not yet delivered; `--json` reports them under `carriedSources`, `operatorResolvedCases`, and
-`pendingOutbox`, each omitted when empty. `accept` changes state only from an interactive terminal with
+`pendingOutbox`, each omitted when empty. It also lists each advisory finding — below its rubric's
+`min_severity` threshold, or downgraded by the adjudicator — with its rubric, severity, reviewer summary,
+and any adjudicator rationale; `--json` reports them under `advisoryFindings` as `id`, `rubric`,
+`severity`, `threshold`, and `origin` (`threshold` or `adjudicated`), omitting summaries and rationales,
+and omits the key when empty. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
