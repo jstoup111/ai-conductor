@@ -1186,7 +1186,7 @@ describe('build-review findings with current custom rubrics', () => {
     return {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
       readFile: async () => JSON.stringify(aggregate),
-      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }) }),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
       createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
       readMechanicalFaults: async () => 0,
       ...overrides,
@@ -1237,8 +1237,8 @@ describe('build-review findings with current custom rubrics', () => {
     expect(output).toMatchObject({ verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [identity.id] });
   });
 
-  // Covers: task:16, task:rem-prd-audit-r16-1
-  it('projects threshold and adjudicated advisory findings with their source metadata', async () => {
+  // Covers: task:16, task:rem-prd-audit-r16-1, task:rem-prd-audit-r16-2
+  it('projects threshold and adjudicated advisory findings with their source metadata and renders their local advisory details', async () => {
     const adjudicated = customJudgedAggregate({ severity: 'critical' });
     const thresholdFinding = {
       concernKind: 'test-insensitive', summary: 'The minor finding is below the configured threshold.', severity: 'minor' as const,
@@ -1279,6 +1279,28 @@ describe('build-review findings with current custom rubrics', () => {
         { id: adjudicatedId, rubric: 'portablePolicy', severity: 'nit', threshold: 'minor', origin: 'adjudicated' },
       ],
     });
+    expect(JSON.stringify(output.advisoryFindings)).not.toContain('The reviewer downgraded this finding.');
+
+    const human = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      ...findingsDeps(aggregate, {
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+        loadConfig: async () => ({
+          ok: true as const, warnings: [],
+          config: { build_review: { custom_rubrics: {
+            portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_severity: 'minor' },
+          }, rubrics: { testQuality: { min_severity: 'major' } } } },
+        }),
+      }),
+      print: human,
+    })).resolves.toBe(0);
+
+    expect(human).toHaveBeenCalledWith(expect.stringContaining(
+      `Advisory finding: ${thresholdId}; rubric: testQuality; severity: minor; summary: The minor finding is below the configured threshold.`,
+    ));
+    expect(human).toHaveBeenCalledWith(expect.stringContaining(
+      `Advisory finding: ${adjudicatedId}; rubric: portablePolicy; severity: nit; summary: The changed boundary lacks compatibility evidence.; adjudicator rationale: The reviewer downgraded this finding.`,
+    ));
   });
 
   // Covers: task:16, task:rem-prd-audit-r16-1

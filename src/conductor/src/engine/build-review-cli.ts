@@ -166,6 +166,9 @@ type AdvisoryFindingProjection = {
   readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
   readonly threshold: import('./build-review-domain.js').BuildReviewSeverity;
   readonly origin: 'threshold' | 'adjudicated';
+  readonly summary: string;
+  /** The autonomous adjudicator's reasoning is local CLI evidence, never machine output. */
+  readonly adjudicatorRationale?: string;
 };
 
 /**
@@ -185,21 +188,27 @@ function advisoryFindings(
   if (!sources) return undefined;
   const thresholdAdvisories = new Set(effective.advisoryFindingIds ?? []);
   const settled = new Set(effective.settledFindingIds ?? []);
-  const adjudicated = new Map<string, import('./build-review-domain.js').BuildReviewSeverity>();
+  const adjudicated = new Map<string, {
+    readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
+    readonly rationale: string;
+  }>();
   for (const [sourceId, { record }] of currentBuildReviewSourceLinks(cases)) {
     if (record.disposition !== 'advisory' || record.adjudicatedSeverity === undefined) continue;
-    adjudicated.set(sourceId, record.adjudicatedSeverity);
+    adjudicated.set(sourceId, { severity: record.adjudicatedSeverity, rationale: record.rationale });
   }
   const projected: AdvisoryFindingProjection[] = [];
   for (const source of sources) {
     const threshold = thresholds[source.rubric];
     if (thresholdAdvisories.has(source.findingId) && source.severity !== undefined && threshold !== undefined) {
-      projected.push({ id: source.findingId, rubric: source.rubric, severity: source.severity, threshold, origin: 'threshold' });
+      projected.push({ id: source.findingId, rubric: source.rubric, severity: source.severity, threshold, origin: 'threshold', summary: source.summary });
       continue;
     }
-    const adjudicatedSeverity = adjudicated.get(`${source.rubric}:${source.findingId}`);
-    if (settled.has(source.findingId) && adjudicatedSeverity !== undefined && threshold !== undefined) {
-      projected.push({ id: source.findingId, rubric: source.rubric, severity: adjudicatedSeverity, threshold, origin: 'adjudicated' });
+    const adjudicatedFinding = adjudicated.get(`${source.rubric}:${source.findingId}`);
+    if (settled.has(source.findingId) && adjudicatedFinding !== undefined && threshold !== undefined) {
+      projected.push({
+        id: source.findingId, rubric: source.rubric, severity: adjudicatedFinding.severity, threshold, origin: 'adjudicated',
+        summary: source.summary, adjudicatorRationale: adjudicatedFinding.rationale,
+      });
     }
   }
   return Object.freeze(projected);
@@ -366,7 +375,7 @@ function operatorResolvedCaseFindings(cases: readonly RemediationCaseRecord[]): 
     }]);
 }
 
-function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], cases: readonly RemediationCaseRecord[], carriedSources: readonly CarriedSourceFinding[], operatorResolvedCases: readonly OperatorResolvedCaseFinding[], pendingOutbox: readonly RemediationCaseOutboxEntry[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
+function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], cases: readonly RemediationCaseRecord[], advisories: readonly AdvisoryFindingProjection[], carriedSources: readonly CarriedSourceFinding[], operatorResolvedCases: readonly OperatorResolvedCaseFinding[], pendingOutbox: readonly RemediationCaseOutboxEntry[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
   return [
     `Build review findings: ${feature}`,
     `Lap: ${aggregate.lapId}`,
@@ -381,7 +390,8 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
     ...cases.map(renderCase),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
-    `Advisory build-review findings: ${(effective.advisoryFindingIds ?? []).join(', ') || 'none'}`,
+    `Advisory build-review findings: ${advisories.length === 0 ? 'none' : ''}`,
+    ...advisories.map((advisory) => `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`),
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
     ...(lastMechanicalFault === undefined ? [] : [
@@ -503,11 +513,11 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       ...(carriedSources.length === 0 ? {} : { carriedSources }),
       ...(operatorResolvedCases.length === 0 ? {} : { operatorResolvedCases }),
       ...(pendingOutbox.length === 0 ? {} : { pendingOutbox }),
-      ...(advisories.length === 0 ? {} : { advisoryFindings: advisories }),
+      ...(advisories.length === 0 ? {} : { advisoryFindings: advisories.map(({ summary: _summary, adjudicatorRationale: _adjudicatorRationale, ...advisory }) => advisory) }),
       ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
     };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, carriedSources, operatorResolvedCases, pendingOutbox, faults, gateEntry?.lastMechanicalFault));
+    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, advisories, carriedSources, operatorResolvedCases, pendingOutbox, faults, gateEntry?.lastMechanicalFault));
     return 0;
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('remediation case store is ')) {
