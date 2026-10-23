@@ -36,7 +36,7 @@ const HASH = `sha256:${'a'.repeat(64)}`;
 const locus = { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' };
 
 function judged(findings: readonly unknown[], rest: Record<string, unknown> = {}): Record<string, unknown> {
-  return { kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', findings, ...rest };
+  return { kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v4', findings, ...rest };
 }
 
 function finding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -230,7 +230,7 @@ describe('build-review domain', () => {
     const security = { kind: 'builtin', rubric: 'security', parser: 'security-v3' } as const;
     const testQuality = { kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' } as const;
     const securityFinding = {
-      concernKind: 'injection', summary: 'Request input reaches a shell.', evidenceLocations: ['src/auth.ts:8'],
+      concernKind: 'injection', severity: 'major', summary: 'Request input reaches a shell.', evidenceLocations: ['src/auth.ts:8'],
       anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } },
     };
 
@@ -291,7 +291,7 @@ describe('build-review domain', () => {
   });
 
   it('reads persisted v3 findings without adding severity', () => {
-    const result = parseBuildReviewJudgedResult(judged([finding()]));
+    const result = parseBuildReviewJudgedResult(judged([finding({ severity: undefined })], { contractVersion: 'v3' }));
 
     expect(result?.findings[0]).not.toHaveProperty('severity');
   });
@@ -447,8 +447,8 @@ describe('build-review domain', () => {
     const envelope = (findings: unknown[]) => ({ kind: 'judged', rubric: 'testQuality', contractVersion: 'v4', findings, ...expected });
     expect(describe(envelope([{ kind: 'test-insensitive', summary: '', evidenceLocations: [], rubric: 'testQuality', locus }]))).toBe([
       'findings[0].concernKind must be a non-empty string (never "kind")',
-      'findings[0].severity must be one of "critical", "major", "minor", "nit"',
       'findings[0].summary must be a non-empty string',
+      'findings[0].severity must be one of "critical", "major", "minor", "nit"',
       'findings[0].evidenceLocations must be a non-empty array of "path:line" strings',
       'findings[0].anchor is required: a nested object {"rubric": "testQuality", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"',
     ].join('; '));
@@ -540,7 +540,7 @@ describe('build-review domain', () => {
     const fail = parseBuildReviewJudgedResult(judged([finding()]));
 
     expect(pass).toEqual({
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', findings: [], verdict: 'PASS',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v4', findings: [], verdict: 'PASS',
     });
     expect(fail).toMatchObject({ verdict: 'FAIL', findings: [finding()] });
     expect(Object.isFrozen(fail?.findings)).toBe(true);
@@ -549,12 +549,12 @@ describe('build-review domain', () => {
   it('accepts an optional normalized counterfactualSensitivity from its closed vocabulary', () => {
     for (const counterfactualSensitivity of ['supports', 'indeterminate', 'not-applicable']) {
       expect(parseBuildReviewJudgedResult(judged([], { counterfactualSensitivity })), counterfactualSensitivity).toMatchObject({
-        contractVersion: 'v3', counterfactualSensitivity,
+        contractVersion: 'v4', counterfactualSensitivity,
       });
     }
 
     expect(parseBuildReviewJudgedResult(judged([]))).toEqual({
-      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', findings: [], verdict: 'PASS',
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v4', findings: [], verdict: 'PASS',
     });
   });
 

@@ -757,7 +757,7 @@ describe("build-review coordinator: security envelope", () => {
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
       // Candidate-partitioned (v2) entry: a hit requires the lookup's semantic identity.
       readCache: vi.fn(async (_branch, currentProjection, policyFingerprint, semanticIdentity) => ({
-        version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
+        version: 2, rubric: "security", contractVersion: "v4", projectionVersion: "v4",
         projectionDigest: currentProjection.digest, policyFingerprint, semanticIdentity,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
         result: { kind: "judged", rubric: "security", contractVersion: "v4", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
@@ -1054,7 +1054,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
     expect(input.writeCache).toHaveBeenCalledTimes(1);
     expect(input.writeCache).toHaveBeenCalledWith(expect.objectContaining({
-      version: 2, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
+      version: 2, rubric: "testQuality", contractVersion: "v4", projectionVersion: expect.any(String),
       projectionDigest: expect.stringMatching(/^sha256:/), policyFingerprint: expect.any(String),
       semanticIdentity: expect.objectContaining({
         semanticInputDigest: expect.stringMatching(/^sha256:/),

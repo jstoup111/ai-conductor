@@ -1433,6 +1433,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     const priorFindingId = 'finding-from-an-earlier-lap';
     const firstLap = {
+      kind: 'confidence',
       findingId,
       rubric: 'testQuality',
       summary: 'Initial low-confidence finding.',
@@ -1441,6 +1442,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       lastSeenLap: 'lap-suppression-first',
     } as const;
     const refreshed = {
+      kind: 'confidence',
       findingId,
       rubric: 'testQuality',
       summary: 'Refreshed low-confidence finding.',
@@ -1449,6 +1451,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       lastSeenLap: 'lap-suppression-second',
     } as const;
     const retained = {
+      kind: 'confidence',
       findingId: priorFindingId,
       rubric: 'testQuality',
       summary: 'A prior suppression absent from this lap.',
@@ -1512,6 +1515,7 @@ describe('coordinateBuildReviewAdjudication', () => {
   it('leaves exactly one row when the coordinator re-runs the seam over a lap the effective-verdict path already persisted', async () => {
     const root = await projectRoot();
     const entry = {
+      kind: 'confidence',
       findingId,
       rubric: 'testQuality',
       summary: 'A sub-floor finding on a mixed lap.',
@@ -1539,6 +1543,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const root = await projectRoot();
     const child = parseChildId(2)!;
     const earlierLap = {
+      kind: 'confidence',
       findingId: 'finding-suppressed-on-an-earlier-lap',
       rubric: 'testQuality',
       summary: 'A finding suppressed on a fully suppressed lap.',

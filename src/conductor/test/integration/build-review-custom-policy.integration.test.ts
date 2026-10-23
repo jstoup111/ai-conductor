@@ -1209,7 +1209,7 @@ describe('custom build-review policy runner', () => {
     const runner = customOnlyRunner(root, {
       minConfidence: 70,
       findings: [{
-        concernId: 'portable-policy-gap', summary, confidence: 40,
+        concernId: 'portable-policy-gap', summary, confidence: 40, severity: 'minor',
         evidenceLocations: ['src/a.ts:1'],
         sourceRegions: [{
           path: 'src/a.ts', startLine: 1, endLine: 1, display: 'value',
@@ -1237,7 +1237,7 @@ describe('custom build-review policy runner', () => {
     if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
     expect(suppressedFindingId).toEqual(expect.any(String));
     expect(persisted.state.suppressions).toEqual([{
-      findingId: suppressedFindingId, rubric: 'portable', summary, confidence: 40, floor: 70, lastSeenLap: 'lap-head',
+      kind: 'confidence', findingId: suppressedFindingId, rubric: 'portable', summary, confidence: 40, floor: 70, lastSeenLap: 'lap-head',
     }]);
   });
 

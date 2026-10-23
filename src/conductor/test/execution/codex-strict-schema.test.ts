@@ -130,7 +130,7 @@ describe('custom-v2 strict result parsing', () => {
     expect(parseBuildReviewCustomReviewerPayload({ ...payload, unexpected: true })).toBeUndefined();
   });
 
-  it.each([null, undefined, 'v1'])('still rejects invalid version %j', (version) => {
+  it.each([null, undefined])('still rejects invalid version %j', (version) => {
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
       kind: 'custom-findings', version, findings: null, requirement: null,
     });

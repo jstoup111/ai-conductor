@@ -97,7 +97,7 @@ describe('build_review declared replication suppressions', () => {
   const sourcePath = 'src/source-widget.ts';
   const targetPath = 'src/target-widget.ts';
   const duplication = (path = targetPath, evidence = `${sourcePath}:8`) => ({
-    concernKind: 'duplication' as const, summary: 'The declared copy repeats the source implementation.',
+    concernKind: 'duplication' as const, severity: 'minor' as const, summary: 'The declared copy repeats the source implementation.',
     evidenceLocations: [evidence],
     anchor: { rubric: 'implementationQuality' as const, locus: { path, contentHash: `sha256:${'a'.repeat(64)}`, display: 'declared target copy' } },
   });
@@ -163,7 +163,7 @@ describe('build_review declared replication suppressions', () => {
         }]));
         return {
           kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v3', findings: [finding = makeFinding({ target: loci[targetPath], other: loci[otherPath] })], verdict: 'FAIL',
+          contractVersion: 'v4', findings: [finding = makeFinding({ target: loci[targetPath], other: loci[otherPath] })], verdict: 'FAIL',
         };
       });
 
@@ -171,7 +171,7 @@ describe('build_review declared replication suppressions', () => {
       expect(runResult).toMatchObject({ success: true });
 
       const persisted = JSON.parse(await readFile(join(projectDir, '.pipeline/build-review.json'), 'utf8'));
-      const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding!.concernKind, anchor: finding!.anchor })!;
+      const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding!.concernKind, anchor: finding!.anchor })!;
       return { persisted, effective, identity };
     } finally {
       await rm(projectDir, { recursive: true, force: true });
@@ -4625,9 +4625,9 @@ TIER: M`,
             rubric,
             lapId,
             snapshotDigest,
-            contractVersion: 'v3' as never,
+            contractVersion: 'v4' as never,
             findings: [{
-              concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+              concernKind: 'test-insensitive', severity: 'major', summary: 'The changed test does not observe the behavior it should.',
               evidenceLocations: ['x:1'],
               anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
             }],
@@ -4650,9 +4650,9 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v3',
+        contractVersion: 'v4',
         findings: [{
-          concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+          concernKind: 'test-insensitive', severity: 'major', summary: 'The changed test does not observe the behavior it should.',
           evidenceLocations: ['x:1'],
           anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
         }],
@@ -4699,9 +4699,9 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v3',
+        contractVersion: 'v4',
         findings: [{
-          concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+          concernKind: 'test-insensitive', severity: 'minor', summary: 'The changed test does not observe the behavior it should.',
           evidenceLocations: ['x:1'],
           anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
           confidence: 40,
@@ -4716,6 +4716,7 @@ TIER: M`,
       const persisted = await new RemediationCaseStore(dir, feature).read();
       if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
       expect(persisted.state.suppressions).toEqual([{
+        kind: 'confidence',
         findingId: suppressedFindingId,
         rubric: 'testQuality',
         summary: 'The changed test does not observe the behavior it should.',

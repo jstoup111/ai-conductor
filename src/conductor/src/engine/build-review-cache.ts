@@ -54,7 +54,7 @@ export interface BuildReviewCacheSemanticIdentity {
 export interface BuildReviewCacheEntry {
   version: typeof LEGACY_CACHE_VERSION | typeof CACHE_VERSION;
   rubric: BuildReviewRubricId | string;
-  /** The member descriptor owns these versions (built-ins v4/v4, custom-v1 v1/v1). */
+  /** The member descriptor owns these versions (built-ins v4/v4, custom v2/v1). */
   contractVersion: BuildReviewRubricContractVersion;
   projectionVersion: "v1" | "v2" | "v3" | "v4";
   projectionDigest: string;
@@ -293,7 +293,7 @@ export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntr
   // descriptor identity instead of pretending to be a built-in v4 entry.
   const currentDescriptorPair = entry !== undefined && (
     (entry.contractVersion === "v4" && entry.projectionVersion === "v4") ||
-    (entry.contractVersion === "v1" && entry.projectionVersion === "v1")
+    (entry.contractVersion === "v2" && entry.projectionVersion === "v1")
   );
   return entry?.version === CACHE_VERSION && currentDescriptorPair &&
     entry.engineIdentity !== undefined && entry.semanticIdentity !== undefined

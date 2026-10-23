@@ -107,14 +107,14 @@ function schemaAccepts(schema: unknown, value: unknown): boolean {
 
 describe('engine/build-review-contract', () => {
   it.each(['testQuality', 'security'] as const)(
-    'gives %s an engine-owned v3 descriptor with canonical identity',
+    'gives %s an engine-owned v4 descriptor with canonical identity',
     (id) => {
       const { contract } = BUILD_REVIEW_RUBRIC_REGISTRY[id];
       const finding = fixedFinding(id);
       const expected = canonicalizeBuildReviewFindingIdentity(finding);
 
-      expect(contract.projection.version).toBe('v3');
-      expect(contract.output.version).toBe('v3');
+      expect(contract.projection.version).toBe('v4');
+      expect(contract.output.version).toBe('v4');
       expect(Object.isFrozen(contract.output.jsonSchema)).toBe(true);
       expect(contract.identity.canonicalize(finding)?.id).toBe(expected?.id);
     },

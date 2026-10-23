@@ -1574,7 +1574,7 @@ describe('build_review structured rubric dispatch', () => {
   it('judges custom findings when an adapter omits the optional empty findings field', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-omitted-findings-'));
     const pipelineDir = join(projectDir, '.custom-pipeline');
-    const fixture = customRetentionFixture(projectDir, { 'v2' });
+    const fixture = customRetentionFixture(projectDir, { kind: 'custom-findings', version: 'v2' });
     try {
       const outcome = await fixture.dispatch(pipelineDir, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8');
 

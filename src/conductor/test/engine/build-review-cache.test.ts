@@ -190,7 +190,7 @@ describe("build-review semantic cache", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), contractVersion: "v5" as never })).toBeUndefined();
   });
 
-  it("persists the custom descriptor's v1/v2 cache pair without widening the v4 boundary", async () => {
+  it("persists the custom descriptor's v2/v1 cache pair without widening the v4 boundary", async () => {
     const descriptor = {
       version: "v1" as const,
       semanticSkill: "portable-policy",
@@ -214,15 +214,15 @@ describe("build-review semantic cache", () => {
     )!;
     const customEntry: BuildReviewCacheEntry = {
       ...entry(), rubric: descriptor.declaration.rubricId,
-      contractVersion: "v1", projectionVersion: "v1",
-      semanticIdentity: candidateIdentity({ contractVersion: "v1", projectionVersion: "v1" }),
+      contractVersion: "v2", projectionVersion: "v1",
+      semanticIdentity: candidateIdentity({ contractVersion: "v2", projectionVersion: "v1" }),
       result: { descriptor, result },
     };
     const fs = memoryFilesystem();
 
     await expect(tryWriteBuildReviewCacheEntry("/feature", customEntry, fs)).resolves.toEqual({ ok: true });
     await expect(readBuildReviewCacheEntry("/feature", customEntry.rubric, fs, customEntry.semanticIdentity))
-      .resolves.toMatchObject({ contractVersion: "v1", projectionVersion: "v1" });
+      .resolves.toMatchObject({ contractVersion: "v2", projectionVersion: "v1" });
     expect(parseBuildReviewCacheEntry({ ...customEntry, contractVersion: "v4" })).toBeUndefined();
   });
 
