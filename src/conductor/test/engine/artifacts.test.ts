@@ -5616,7 +5616,7 @@ Task 1 → Task 2
       expect(result.reason).not.toContain('old finding');
     });
 
-    // Covers: task:9
+    // Covers: task:9, task:rem-prd-audit-r9-1
     it('passes shared built-in and custom confidence and severity thresholds to the effective verdict', async () => {
       const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
       await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({
