@@ -12184,17 +12184,24 @@ export class Conductor {
                     const childBranch = this.activeRegionChild === undefined || !state.feature_desc
                       ? undefined
                       : childBranchFor(state.feature_desc, this.activeRegionChild);
-                    const reopened = await runRemediationClosurePass({
-                      projectRoot: this.projectRoot,
-                      planPath,
-                      planText,
-                      status: currentStatus,
-                      scopeTaskIds: taskIds,
-                      ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
-                      ...(childBranch?.ok ? { branch: childBranch.branch } : {}),
-                      dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
-                    });
-                    if (reopened.length > 0) remediationClosureReason = reopened.map(({ reason }) => reason).join('\n');
+                    try {
+                      const reopened = await runRemediationClosurePass({
+                        projectRoot: this.projectRoot,
+                        planPath,
+                        planText,
+                        status: currentStatus,
+                        scopeTaskIds: taskIds,
+                        ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
+                        ...(childBranch?.ok ? { branch: childBranch.branch } : {}),
+                        dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
+                      });
+                      if (reopened.length > 0) remediationClosureReason = reopened.map(({ reason }) => reason).join('\n');
+                    } catch (error) {
+                      // A corrupt durable verdict record is an incomplete BUILD
+                      // boundary, not a provider failure. In particular, do not
+                      // dispatch a new judgement over state we cannot replay.
+                      remediationClosureReason = error instanceof Error ? error.message : String(error);
+                    }
                   }
                 }
               }

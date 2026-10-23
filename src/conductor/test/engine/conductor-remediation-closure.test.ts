@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:9
+// Covers: task:7, task:8, task:9, task:11
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,10 +7,13 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
-import { applyRemediationClosureVerdicts, remediationCloseIdentity, runRemediationClosurePass } from '../../src/engine/remediation-closure-judgement.js';
+import { applyRemediationClosureVerdicts, remediationCloseIdentity, replayRemediationClosureReopens, runRemediationClosurePass } from '../../src/engine/remediation-closure-judgement.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { readPlanGrowthBudget } from '../../src/engine/remediation-caps.js';
+import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import { restageExistingRemediationTaskStatuses } from '../../src/engine/repair-restage.js';
+import { recordRemediationClosureVerdicts } from '../../src/engine/remediation-closure-state.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { resolveTaskIdsWithDiagnostics } from '../../src/engine/task-progress.js';
@@ -365,5 +368,80 @@ describe('BUILD remediation-closure judgement boundary', () => {
     expect(retryHint).toMatch(/Done-when citation refused:.*\nRemediation closure reopened:/s);
     expect(retryHint).toContain('rem-as-built-R5');
     expect(retryHint).toContain('Named repair absent.');
+  });
+
+  it.each(['verdict', 'admission', 'restage'] as const)(
+    'replays a crash after the %s write exactly once',
+    async (stopAfter) => {
+      const planPath = join(root, '.docs', 'plans', 'closure.md');
+      const taskId = 'rem-as-built-R5';
+      const closeRecords = [{ check: 'Repair one is committed.', evidence: 'reported', source: 'reported' }];
+      const closeIdentity = remediationCloseIdentity(taskId, 0, closeRecords);
+      await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+        { id: taskId, status: 'completed', doneWhen: closeRecords },
+      ] }));
+      await recordRemediationClosureVerdicts(root, planPath, [{
+        taskId, closeIdentity, verdict: 'persists', rationale: 'The named repair is absent.', disposition: 'reopened',
+      }]);
+      const repairs = createRepairObligationStore(root, join(root, '.pipeline', 'engine-state.json'));
+      const admission = {
+        id: `remediation-closure-${closeIdentity.slice(0, 16)}`,
+        planPath,
+        taskIds: [taskId],
+        source: { findingId: closeIdentity, authority: 'remediation-closure', instruction: `Task ${taskId} "First remediation": The named repair is absent.` },
+        baseline: { head: '', tree: '', resolvedTaskIds: [], resolvedCount: 1 },
+      } as const;
+      if (stopAfter !== 'verdict') {
+        const admitted = await repairs.admitOrReplay(`remediation-closure:${closeIdentity}`, admission);
+        expect(admitted.ok).toBe(true);
+        if (admitted.ok) expect((await repairs.markSettled({ planPath, obligationId: admitted.obligation.id })).ok).toBe(true);
+      }
+      if (stopAfter === 'restage') {
+        expect(await restageExistingRemediationTaskStatuses(root, planPath, new Set([taskId]))).toEqual({ kind: 'restaged' });
+      }
+
+      await replayRemediationClosureReopens({ projectRoot: root, planPath, planText: await readFile(planPath, 'utf8'), scopeTaskIds: [taskId] });
+
+      const [status, engine] = await Promise.all([
+        readFile(join(root, '.pipeline', 'task-status.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8').then(JSON.parse),
+      ]);
+      expect(status.tasks[0].status).toBe('pending');
+      expect(Object.values(engine.repairObligations.records)).toHaveLength(1);
+      expect(engine.remediationClosure.plans['.docs/plans/closure.md'].tasks[taskId].reopenCount).toBe(1);
+    },
+  );
+
+  it('blocks completion without dispatching when remediation-closure durable state is malformed', async () => {
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+      { id: 'rem-as-built-R5', status: 'completed', doneWhen: [{ check: 'Repair one is committed.', evidence: 'reported', source: 'reported' }] },
+    ] }));
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ remediationClosure: { version: 0, plans: {} } }));
+    const dispatch = vi.fn(async () => ({ kind: 'valid' as const, attempts: 1, verdicts: [] }));
+    const hints: string[] = [];
+    await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: {
+      run: async (_step, _state, options: any) => { hints.push(options?.retryReason ?? ''); return { success: true }; },
+      dispatchRemediationClosureJudgement: dispatch,
+    }, events: new ConductorEventEmitter(), mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 2 } as never).run();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(hints.some((hint) => hint.includes('malformed remediation-closure verdict record'))).toBe(true);
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8'));
+    expect(state.build).not.toBe('done');
+  });
+
+  it('gives a fresh conductor the persisted remediation-closure repair hint', async () => {
+    const planPath = join(root, '.docs', 'plans', 'closure.md');
+    const taskId = 'rem-as-built-R5';
+    const closeRecords = [{ check: 'Repair one is committed.', evidence: 'reported', source: 'reported' }];
+    const candidate = { taskId, title: 'First remediation', closeRecords, closeIdentity: remediationCloseIdentity(taskId, 0, closeRecords) };
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: taskId, status: 'completed', doneWhen: closeRecords }] }));
+    await applyRemediationClosureVerdicts({ projectRoot: root, planPath, candidates: [candidate], verdicts: [{ taskId, verdict: 'persists', rationale: 'The named repair is absent.' }] });
+    const hints: string[] = [];
+    await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: {
+      run: async (_step, _state, options: any) => { hints.push(options?.retryReason ?? ''); return { success: false }; },
+    }, events: new ConductorEventEmitter(), mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
+    expect(hints[0]).toContain(`Task ${taskId} "First remediation": The named repair is absent.`);
+    const engine = JSON.parse(await readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(engine.remediationClosure.plans['.docs/plans/closure.md'].tasks[taskId].reopenCount).toBe(1);
   });
 });

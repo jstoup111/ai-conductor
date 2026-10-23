@@ -98,6 +98,71 @@ export interface RemediationClosureReopen {
   readonly reason: string;
 }
 
+async function applyRemediationClosureReopen(input: {
+  readonly projectRoot: string;
+  readonly planPath: string;
+  readonly candidate: RemediationClosureCandidate;
+  readonly rationale: string;
+  readonly branch?: string;
+}): Promise<RemediationClosureReopen> {
+  const [head, tree, resolvedCount] = await Promise.all([
+    currentCommitSha(input.projectRoot), currentTreeHash(input.projectRoot), countResolvedTasks(input.projectRoot),
+  ]);
+  const repairs = createRepairObligationStore(input.projectRoot, `${input.projectRoot}/.pipeline/engine-state.json`);
+  const instruction = `Task ${input.candidate.taskId} "${input.candidate.title ?? ''}": ${input.rationale}`;
+  const admitted = await repairs.admitOrReplay(`remediation-closure:${input.candidate.closeIdentity}`, {
+    id: `remediation-closure-${input.candidate.closeIdentity.slice(0, 16)}`,
+    planPath: input.planPath,
+    taskIds: [input.candidate.taskId],
+    source: { findingId: input.candidate.closeIdentity, authority: 'remediation-closure', instruction },
+    baseline: {
+      ...(input.branch === undefined ? {} : { branch: input.branch }),
+      head: head ?? '', tree: tree ?? '', resolvedTaskIds: [], resolvedCount,
+    },
+  });
+  if (!admitted.ok) throw new Error(`could not admit remediation closure reopen: ${admitted.message}`);
+  const settled = await repairs.markSettled({ planPath: input.planPath, obligationId: admitted.obligation.id });
+  if (!settled.ok) throw new Error(`could not settle remediation closure reopen: ${settled.message}`);
+  const restaged = await restageExistingRemediationTaskStatuses(input.projectRoot, input.planPath, new Set([input.candidate.taskId]));
+  if (restaged.kind === 'failed') throw new Error(restaged.detail);
+  await markRemediationClosureApplied(input.projectRoot, input.planPath, input.candidate.taskId, input.candidate.closeIdentity);
+  return { taskId: input.candidate.taskId, reason: `Remediation closure reopened: ${instruction}` };
+}
+
+/**
+ * Finish a reopen which was durably recorded before a process stopped. Each
+ * operation is idempotent, so replay can safely resume at any write boundary.
+ */
+export async function replayRemediationClosureReopens(input: {
+  readonly projectRoot: string;
+  readonly planPath: string;
+  readonly planText: string;
+  readonly scopeTaskIds: readonly string[];
+  readonly branch?: string;
+}): Promise<readonly RemediationClosureReopen[]> {
+  const closureState = await readRemediationClosureState(input.projectRoot);
+  if (closureState.kind === 'incompatible') throw new Error(closureState.message);
+  const planIdentity = repairPlanIdentity(input.projectRoot, input.planPath);
+  const tasks = closureState.state.plans[planIdentity]?.tasks ?? {};
+  const titles = parsePlanTaskTitles(input.planText);
+  const scope = new Set(input.scopeTaskIds.map(canonicalTaskId));
+  const reopened: RemediationClosureReopen[] = [];
+  for (const [taskId, task] of Object.entries(tasks).sort(([left], [right]) => left.localeCompare(right))) {
+    if (!scope.has(canonicalTaskId(taskId))) continue;
+    for (const [closeIdentity, verdict] of Object.entries(task.verdicts).sort(([left], [right]) => left.localeCompare(right))) {
+      if (verdict.applied || verdict.disposition !== 'reopened' || verdict.verdict === 'resolved') continue;
+      reopened.push(await applyRemediationClosureReopen({
+        projectRoot: input.projectRoot,
+        planPath: input.planPath,
+        candidate: { taskId, title: titles.get(taskId), closeIdentity, closeRecords: [] },
+        rationale: verdict.rationale,
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
+      }));
+    }
+  }
+  return reopened;
+}
+
 /**
  * Applies a completed closure judgement in the order which makes a reopen
  * crash-recoverable: verdict, obligation, settlement, row restage, then the
@@ -126,32 +191,14 @@ export async function applyRemediationClosureVerdicts(input: {
     };
   }));
 
-  const [head, tree, resolvedCount] = await Promise.all([
-    currentCommitSha(input.projectRoot), currentTreeHash(input.projectRoot), countResolvedTasks(input.projectRoot),
-  ]);
-  const repairs = createRepairObligationStore(input.projectRoot, `${input.projectRoot}/.pipeline/engine-state.json`);
   const reopened: RemediationClosureReopen[] = [];
   for (const verdict of input.verdicts) {
     if (verdict.verdict === 'resolved') continue;
     const candidate = candidates.get(verdict.taskId)!;
-    const instruction = `Task ${candidate.taskId} "${candidate.title ?? ''}": ${verdict.rationale}`;
-    const admitted = await repairs.admitOrReplay(`remediation-closure:${candidate.closeIdentity}`, {
-      id: `remediation-closure-${candidate.closeIdentity.slice(0, 16)}`,
-      planPath: input.planPath,
-      taskIds: [candidate.taskId],
-      source: { findingId: candidate.closeIdentity, authority: 'remediation-closure', instruction },
-      baseline: {
-        ...(input.branch === undefined ? {} : { branch: input.branch }),
-        head: head ?? '', tree: tree ?? '', resolvedTaskIds: [], resolvedCount,
-      },
-    });
-    if (!admitted.ok) throw new Error(`could not admit remediation closure reopen: ${admitted.message}`);
-    const settled = await repairs.markSettled({ planPath: input.planPath, obligationId: admitted.obligation.id });
-    if (!settled.ok) throw new Error(`could not settle remediation closure reopen: ${settled.message}`);
-    const restaged = await restageExistingRemediationTaskStatuses(input.projectRoot, input.planPath, new Set([candidate.taskId]));
-    if (restaged.kind === 'failed') throw new Error(restaged.detail);
-    await markRemediationClosureApplied(input.projectRoot, input.planPath, candidate.taskId, candidate.closeIdentity);
-    reopened.push({ taskId: candidate.taskId, reason: `Remediation closure reopened: ${instruction}` });
+    reopened.push(await applyRemediationClosureReopen({
+      projectRoot: input.projectRoot, planPath: input.planPath, candidate, rationale: verdict.rationale,
+      ...(input.branch === undefined ? {} : { branch: input.branch }),
+    }));
   }
   return reopened;
 }
@@ -380,6 +427,9 @@ export async function runRemediationClosurePass(input: {
     if (scope.kind === 'refused') return [];
     scopeTaskIds = scope.taskIds;
   }
+  // Recovery must complete before selection: an interrupted reopen is still a
+  // closed row until restaging, and must never be sent to the judge again.
+  const replayed = await replayRemediationClosureReopens({ ...input, scopeTaskIds });
   const [closureState, repairs, resolution] = await Promise.all([
     readRemediationClosureState(input.projectRoot),
     createRepairObligationStore(input.projectRoot, `${input.projectRoot}/.pipeline/engine-state.json`).read(),
@@ -404,7 +454,7 @@ export async function runRemediationClosurePass(input: {
     state,
     openCitationTaskIds,
   });
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) return replayed;
 
   const titles = parsePlanTaskTitles(input.planText);
   const titledCandidates = candidates.map((candidate) => ({ ...candidate, title: titles.get(candidate.taskId) ?? candidate.title }));
@@ -414,8 +464,8 @@ export async function runRemediationClosurePass(input: {
     parsePlanTaskBodies(input.planText),
   );
   const judgement = await input.dispatch(judgementInput);
-  if (judgement.kind !== 'valid') return [];
-  return applyRemediationClosureVerdicts({
+  if (judgement.kind !== 'valid') return replayed;
+  return [...replayed, ...await applyRemediationClosureVerdicts({
     projectRoot: input.projectRoot, planPath: input.planPath, candidates: titledCandidates, verdicts: judgement.verdicts, branch: input.branch,
-  });
+  })];
 }
