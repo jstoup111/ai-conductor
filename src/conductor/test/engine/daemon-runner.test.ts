@@ -203,7 +203,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   it.each([
     {
       name: 'complete',
-      configure: (featureDeps: FeatureRunnerDeps) => undefined,
+      configure: (_featureDeps: FeatureRunnerDeps) => undefined,
       outcome: { done: true, halted: false, finishChoice: 'pr' as const, prUrl: 'https://github.com/owner/repo/pull/1' },
     },
     {

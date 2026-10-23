@@ -23,6 +23,7 @@ vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
 });
 
 import { Conductor } from '../test-conductor.js';
+import type { StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
@@ -107,7 +108,7 @@ describe('validation-group halt attribution', () => {
         stateFilePath: join(root, '.pipeline/conduct-state.json'),
         events,
         fromStep: entry, mode: 'auto', daemon: true, verifyArtifacts: route !== 'projection-refusal', maxRetries: 1,
-        stepRunner: { run: vi.fn(async (step: StepName, _state, runOptions) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, runOptions): Promise<StepRunResult> => {
           if (step === 'manual_test') {
             if (kind === 'MANUAL_NO_VERDICT') return { success: false, output: 'fixture manual dispatch lost' };
             await writeFile(join(root, '.pipeline/manual-test-results.md'), options.manualFail
@@ -327,7 +328,9 @@ describe('validation-group halt attribution', () => {
   it('attributes a manual_test no-verdict to manual_test when prd_audit entered the group', async () => {
     const { conductor, events } = await conductorAtValidationGroupEntry();
     const halts: Array<{ step?: string }> = [];
-    events.on('loop_halt', (event) => { halts.push(event); });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event);
+    });
     (conductor as any).dispatchingStep = 'prd_audit';
     await (conductor as any).writeHaltMarker('manual fixture no-verdict\n', 'needs-human', 'manual_test');
     await (conductor as any).emitLoopHalt('manual fixture no-verdict', undefined, 'manual_test');
@@ -429,7 +432,9 @@ describe('validation-group halt attribution', () => {
   it('keeps a non-group BUILD halt attributed to build', async () => {
     const { conductor, events } = await conductorAtValidationGroupEntry();
     const halts: Array<{ step?: string }> = [];
-    events.on('loop_halt', (event) => { halts.push(event); });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event);
+    });
     (conductor as any).dispatchingStep = 'build';
 
     await (conductor as any).writeHaltMarker('BUILD failed\n', 'needs-human');
