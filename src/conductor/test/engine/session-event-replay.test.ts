@@ -71,7 +71,8 @@ describe('session event canonical replay', () => {
     const restartedEvents = new ConductorEventEmitter();
     const repeatedDeliveries: string[] = [];
     restartedEvents.on('session_command_refused', (event) => {
-      if (event.eventId !== undefined) repeatedDeliveries.push(event.eventId);
+      const eventId = (event as { eventId?: unknown }).eventId;
+      if (typeof eventId === 'string') repeatedDeliveries.push(eventId);
     });
     const restartedPersister = new EventPersister(canonical, restartedEvents);
     restartedPersister.start();

@@ -67,7 +67,8 @@ describe('session event daemon rendering', () => {
     const delivered: string[] = [];
     const subscriber = new TerminalSubscriber(events);
     subscriber.start([{ name: 'capture', handle: async (event) => {
-      if (event.eventId !== undefined) delivered.push(event.eventId);
+      const eventId = (event as { eventId?: unknown }).eventId;
+      if (typeof eventId === 'string') delivered.push(eventId);
     }, stop: async () => {} }]);
 
     for (const event of occurrences) await events.emit(event);
