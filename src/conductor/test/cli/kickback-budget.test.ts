@@ -78,8 +78,9 @@ describe('detectKickbackBudgetCommand', () => {
   });
 });
 
-// Covers: task:33 — a named child is the entire recovery-accounting scope;
-// sibling and feature-wide ledgers cannot be adjusted as a side effect.
+// Covers: task:33
+// A named child is the entire recovery-accounting scope; sibling and feature-wide
+// ledgers cannot be adjusted as a side effect.
 describe('kickback-budget raise and reset --child', () => {
   const capEvidence = { gate: 'build_review', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'child-halt' };
 
