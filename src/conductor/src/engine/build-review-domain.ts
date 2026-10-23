@@ -101,12 +101,16 @@ export type BuildReviewEffectiveResultDescriptor =
   | { readonly kind: 'builtin'; readonly rubric: 'testQuality'; readonly parser: 'test-quality-v3' }
   | { readonly kind: 'builtin'; readonly rubric: 'security'; readonly parser: 'security-v3' }
   | { readonly kind: 'builtin'; readonly rubric: 'implementationQuality'; readonly parser: 'implementation-quality-v3' }
-  | { readonly kind: 'custom'; readonly rubric: string; readonly parser: 'custom-findings-v1' };
-export type BuildReviewCustomFindingContractVersion = 'v1';
+  | { readonly kind: 'custom'; readonly rubric: string; readonly parser: 'custom-findings-v2' };
+/** v1 remains readable from persisted evidence; new reviewer payloads use v2. */
+export type BuildReviewCustomFindingContractVersion = 'v1' | 'v2';
+export const CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION = 'v2' as const;
 export interface BuildReviewCustomFinding {
   readonly concernId: string;
   readonly summary: string;
   readonly confidence?: number;
+  /** Required by fresh v2 reviewer payloads; absent on retained v1 evidence. */
+  readonly severity?: BuildReviewSeverity;
   readonly evidenceLocations: readonly string[];
   readonly sourceRegions: readonly BuildReviewCandidateScopeSourceRegion[];
 }
@@ -341,23 +345,24 @@ export const MAX_CUSTOM_UNSUPPORTED_REQUIREMENT_LENGTH = 512;
  * unsupported-policy) is therefore parser-enforced. Custom findings omitted
  * or represented as null normalize to an empty array before validation.
  */
-export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
+export const BUILD_REVIEW_CUSTOM_V2_SCHEMA = freezeSchema({
   type: 'object',
   additionalProperties: false,
   required: ['kind'],
   properties: {
     kind: { type: 'string', enum: ['custom-findings', 'unsupported-policy'] },
-    version: { type: 'string', enum: ['v1'] },
+    version: { type: 'string', enum: ['v2'] },
     findings: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'],
+        required: ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'severity'],
         properties: {
           concernId: { type: 'string', pattern: CUSTOM_CONCERN_ID.source },
           summary: NON_BLANK_STRING,
           confidence: { type: 'integer', enum: BUILD_REVIEW_CONFIDENCE_VALUES },
+          severity: { type: 'string', enum: BUILD_REVIEW_SEVERITIES },
           evidenceLocations: NON_EMPTY_NON_BLANK_STRING_ARRAY,
           sourceRegions: {
             type: 'array',
@@ -381,6 +386,8 @@ export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = freezeSchema({
     requirement: NON_BLANK_STRING,
   },
 }) satisfies RubricOutputJsonSchema;
+/** @deprecated Fresh custom review uses the v2 schema. */
+export const BUILD_REVIEW_CUSTOM_V1_SCHEMA = BUILD_REVIEW_CUSTOM_V2_SCHEMA;
 
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
@@ -736,19 +743,21 @@ export function parseBuildReviewJudgedResult(value: unknown, references?: BuildR
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && (source.reason === 'disabled' || (source.rubric === 'testQuality' && source.reason === 'test_quality_empty_scope') || (source.rubric === 'security' && source.reason === 'leaf-only')) ? { kind: 'skipped', rubric: source.rubric, reason: source.reason } : undefined; }
 export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && (source.rubric === 'testQuality' || source.rubric === 'security' || source.rubric === 'implementationQuality') && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: source.rubric, reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
 const CUSTOM_FINDINGS_PAYLOAD_KEYS: readonly string[] = ['kind', 'version', 'findings'];
-const CUSTOM_FINDING_KEYS: readonly string[] = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'confidence'];
-function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
+const CUSTOM_FINDING_KEYS: readonly string[] = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions', 'confidence', 'severity'];
+function customFinding(value: unknown, version: BuildReviewCustomFindingContractVersion): BuildReviewCustomFinding | undefined {
   const source = object(value);
   const requiredKeys = ['concernId', 'summary', 'evidenceLocations', 'sourceRegions'];
-  if (!source || (!exactKeys(source, requiredKeys) && !exactKeys(source, [...requiredKeys, 'confidence']))) return undefined;
+  const optional = version === 'v2' ? ['confidence', 'severity'] : ['confidence'];
+  if (!source || !Object.keys(source).every((key) => requiredKeys.includes(key) || optional.includes(key)) || !requiredKeys.every((key) => Object.hasOwn(source, key))) return undefined;
   const confidence = source.confidence;
   const evidenceLocations = source.evidenceLocations;
   const sourceRegions = source.sourceRegions;
+  const severity = version === 'v2' ? parseBuildReviewSeverity(source.severity) : undefined;
   if (!CUSTOM_CONCERN_ID.test(source.concernId as string) || !text(source.summary) || source.summary.length > MAX_CUSTOM_SUMMARY_LENGTH ||
     !Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.length > MAX_CUSTOM_EVIDENCE_LOCATIONS ||
     evidenceLocations.some((location) => !text(location) || location.length > MAX_CUSTOM_EVIDENCE_LOCATION_LENGTH) ||
     !Array.isArray(sourceRegions) || sourceRegions.length === 0 || sourceRegions.length > MAX_CUSTOM_SOURCE_REGIONS ||
-    (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100))) return undefined;
+    (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) || (version === 'v2' && severity === undefined)) return undefined;
   const parsedRegions = sourceRegions.map(customSourceRegion);
   if (parsedRegions.some((region) => !region)) return undefined;
   return Object.freeze({
@@ -757,6 +766,7 @@ function customFinding(value: unknown): BuildReviewCustomFinding | undefined {
     evidenceLocations: Object.freeze([...evidenceLocations] as string[]),
     sourceRegions: Object.freeze(parsedRegions as BuildReviewCandidateScopeSourceRegion[]),
     ...(confidence === undefined ? {} : { confidence: confidence as number }),
+    ...(severity === undefined ? {} : { severity }),
   });
 }
 
@@ -797,11 +807,12 @@ export function parseBuildReviewCustomReviewerPayload(value: unknown): BuildRevi
       ? Object.freeze({ kind: 'unsupported-policy', requirement: source.requirement })
       : undefined;
   }
-  if (source.kind !== 'custom-findings' || source.version !== 'v1' || !exactKeys(source, CUSTOM_FINDINGS_PAYLOAD_KEYS) || !Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) return undefined;
-  const findings = source.findings.map(customFinding);
+  if (source.kind !== 'custom-findings' || (source.version !== 'v1' && source.version !== 'v2') || !exactKeys(source, CUSTOM_FINDINGS_PAYLOAD_KEYS) || !Array.isArray(source.findings) || source.findings.length > MAX_CUSTOM_FINDINGS) return undefined;
+  const version = source.version as BuildReviewCustomFindingContractVersion;
+  const findings = source.findings.map((entry) => customFinding(entry, version));
   return findings.some((entry) => !entry)
     ? undefined
-    : Object.freeze({ kind: 'custom-findings', version: 'v1', findings: Object.freeze(findings as BuildReviewCustomFinding[]) });
+    : Object.freeze({ kind: 'custom-findings', version, findings: Object.freeze(findings as BuildReviewCustomFinding[]) });
 }
 
 /** Explain custom-v1 payload rejection without trusting its envelope fields. */
@@ -823,7 +834,7 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
     }
   } else {
     if (source.kind !== 'custom-findings') problems.push(rejectionProblem('kind', 'must be "custom-findings" or "unsupported-policy"'));
-    if (source.version !== 'v1') problems.push(rejectionProblem('version', 'must be "v1" for custom-findings'));
+    if (source.version !== CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION) problems.push(rejectionProblem('version', `must be "${CURRENT_BUILD_REVIEW_CUSTOM_FINDING_CONTRACT_VERSION}" for fresh custom-findings`));
     for (const field of Object.keys(source)) {
       if (!CUSTOM_FINDINGS_PAYLOAD_KEYS.includes(field)) problems.push(rejectionProblem(field, 'must not be present in a custom-findings payload'));
     }
@@ -865,6 +876,9 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
         )) {
           problems.push(rejectionProblem(`${prefix}.confidence`, 'must be an integer from 0 to 100'));
         }
+        if (parseBuildReviewSeverity(findingSource.severity) === undefined) {
+          problems.push(rejectionProblem(`${prefix}.severity`, `must be one of ${BUILD_REVIEW_SEVERITIES.map((member) => `"${member}"`).join(', ')}`));
+        }
         if (!Array.isArray(findingSource.sourceRegions) || findingSource.sourceRegions.length === 0 || findingSource.sourceRegions.length > MAX_CUSTOM_SOURCE_REGIONS) {
           problems.push(rejectionProblem(`${prefix}.sourceRegions`, `must be a non-empty array of at most ${MAX_CUSTOM_SOURCE_REGIONS} source regions`));
           return;
@@ -882,7 +896,7 @@ export function diagnoseBuildReviewCustomReviewerPayloadRejection(
     }
   }
   if (problems.length === 0 && parseBuildReviewCustomReviewerPayload(value) === undefined) {
-    problems.push(rejectionProblem('$', 'must satisfy the custom-v1 reviewer payload contract'));
+    problems.push(rejectionProblem('$', 'must satisfy the custom-v2 reviewer payload contract'));
   }
   return problems.length === 0
     ? Object.freeze({ kind: 'unexplained', problems: Object.freeze([]) })
@@ -988,6 +1002,7 @@ export function diagnoseBuildReviewJudgedResultRejection(value: unknown, rubric:
       if (!text(item.concernKind)) problems.push(rejectionProblem(`findings[${index}].concernKind`, 'must be a non-empty string (never "kind")'));
       else if (parseBuildReviewFindingConcernKind(item.concernKind, rubric) === undefined) problems.push(rejectionProblem(`findings[${index}].concernKind`, `must be one of ${vocabulary.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(item.concernKind).slice(0, 64)})`));
       if (!text(item.summary)) problems.push(rejectionProblem(`findings[${index}].summary`, 'must be a non-empty string'));
+      if (parseBuildReviewSeverity(item.severity) === undefined) problems.push(rejectionProblem(`findings[${index}].severity`, `must be one of ${BUILD_REVIEW_SEVERITIES.map((member) => `"${member}"`).join(', ')}`));
       if (!Array.isArray(item.evidenceLocations) || item.evidenceLocations.length === 0 || item.evidenceLocations.some((location) => !text(location))) problems.push(rejectionProblem(`findings[${index}].evidenceLocations`, 'must be a non-empty array of "path:line" strings'));
       const anchor = object(item.anchor);
       if (!anchor) { problems.push(rejectionProblem(`findings[${index}].anchor`, `is required: a nested object {"rubric": "${rubric}", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"`)); return; }

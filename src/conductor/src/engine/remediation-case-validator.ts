@@ -136,6 +136,7 @@ function validateEffect(
       ? undefined
       : effect.kind === 'deferral' ? 'invalid-deferral-effect' : 'invalid-refute-effect';
   }
+  if (caseRow.disposition === 'advisory') return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
   return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
 }
 
@@ -147,7 +148,8 @@ function outcomeMatchesDisposition(
     || (outcome === 'acted' && disposition === 'act')
     || (outcome === 'deferred' && disposition === 'defer')
     || (outcome === 'rejected' && disposition === 'reject')
-    || (outcome === 'refuted' && disposition === 'refute');
+    || (outcome === 'refuted' && disposition === 'refute')
+    || (outcome === 'advisory' && disposition === 'advisory');
 }
 
 function validateConsistency(

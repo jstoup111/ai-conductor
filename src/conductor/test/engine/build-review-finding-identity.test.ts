@@ -82,9 +82,9 @@ const customReferenceContext = {
 
 function customPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    kind: 'custom-findings', version: 'v1', findings: [{
+    kind: 'custom-findings', version: 'v2', findings: [{
       concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
-      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferenceContext.sourceRegions,
+      confidence: 72, severity: 'minor', evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferenceContext.sourceRegions,
     }],
     ...overrides,
   };

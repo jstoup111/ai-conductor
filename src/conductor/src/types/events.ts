@@ -959,6 +959,8 @@ type ConductorEventBody =
       unresolvedMarkers?: readonly { selector: string; reference: string }[];
       /** Findings below the configured per-rubric confidence floor. */
       suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
+      /** Below-threshold findings are durable advisory history, never a route. */
+      advisoryFindings?: readonly { findingId: string; rubric: string; severity: 'critical' | 'major' | 'minor' | 'nit'; threshold: 'critical' | 'major' | 'minor' | 'nit' }[];
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */

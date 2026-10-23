@@ -6,7 +6,7 @@ import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggr
 import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
-import { buildReviewConfidenceFloors, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { buildReviewConfidenceFloors, buildReviewSeverityThresholds, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
 import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
@@ -336,6 +336,7 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
     ...cases.map(renderCase),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
+    `Advisory build-review findings: ${(effective.advisoryFindingIds ?? []).join(', ') || 'none'}`,
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
     ...(lastMechanicalFault === undefined ? [] : [
@@ -360,6 +361,11 @@ async function resolveCliMinConfidence(
   const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
   if (!loaded.ok) throw new Error(loaded.error.message);
   return buildReviewConfidenceFloors(resolveBuildReviewConfig(loaded.config));
+}
+async function resolveCliMinSeverity(worktree: string, deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>): Promise<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>> {
+  const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
+  if (!loaded.ok) throw new Error(loaded.error.message);
+  return buildReviewSeverityThresholds(resolveBuildReviewConfig(loaded.config));
 }
 
 /** The CLI and live runner must address the same canonical feature state. */
@@ -414,6 +420,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
     if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
     const minConfidence = await resolveCliMinConfidence(worktree, deps);
+    const minSeverity = await resolveCliMinSeverity(worktree, deps);
     const gateEntry = deps.readKickbackGateEntry
       ? await deps.readKickbackGateEntry(worktree)
       : deps.readMechanicalFaults
@@ -426,7 +433,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
           return ledger.gates.build_review;
         })();
     // The same composed reducer the live gate uses, over the full record list.
-    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence, finalizedBuildReviewSourceIds(cases));
+    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence, finalizedBuildReviewSourceIds(cases, minSeverity), minSeverity);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
     const carriedSources = carriedSourceFindings(cases, records);

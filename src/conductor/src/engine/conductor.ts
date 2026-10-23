@@ -29,6 +29,7 @@ import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import {
   buildReviewConfidenceFloors,
+  buildReviewSeverityThresholds,
   isBuildReviewLapHealthyForAbsenceRetirement,
   rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
@@ -36,7 +37,7 @@ import {
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
-import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
+import { projectBuildReviewAdvisoryEntries, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   applyBuildReviewOutcome,
   BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE,
@@ -13600,7 +13601,7 @@ export class Conductor {
                     verdictRaw,
                     {
                       emit: async (event) => { await this.events.emit(event); },
-                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)), minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
                       child: this.activeRegionChild,
                       adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     },
@@ -13657,7 +13658,7 @@ export class Conductor {
                       verdictRaw,
                       {
                         emit: async (event) => { await this.events.emit(event); },
-                        minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                        minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)), minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
                         child: this.activeRegionChild,
                         adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                       },
@@ -13701,8 +13702,10 @@ export class Conductor {
                         ? authorizeGithubFeatureIssueCreation({ repository: trackerRepo, mutation })
                         : undefined;
                     })();
-                  const floors = buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config));
+                  const resolvedReviewConfig = resolveBuildReviewConfig(this.config);
+                  const floors = buildReviewConfidenceFloors(resolvedReviewConfig);
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
+                  const advisoryFindingIds = effective.effective.advisoryFindingIds ?? [];
                   // One shared projection with the effective-verdict seam that
                   // already persisted these rows for this lap; the coordinator
                   // re-runs that same idempotent upsert rather than owning a
@@ -13711,6 +13714,11 @@ export class Conductor {
                     aggregate,
                     suppressedFindingIds,
                     floors,
+                  });
+                  const advisories = projectBuildReviewAdvisoryEntries({
+                    aggregate,
+                    advisoryFindingIds,
+                    thresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
                   });
                   // Settlement gate: `verdictRaw` is the aggregate the join
                   // recorded after every branch settled; the shared operation
@@ -13723,7 +13731,9 @@ export class Conductor {
                     ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
                     suppressedFindingIds: new Set(suppressedFindingIds),
-                    suppressions,
+                    advisoryFindingIds: new Set(advisoryFindingIds),
+                    declaredSeverityThresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
+                    suppressions: [...suppressions, ...advisories],
                     resolveOperatorResolvedFindingIds,
                     resolveEffectiveAcceptedSourceIds,
                     mechanical,
@@ -13880,7 +13890,7 @@ export class Conductor {
                       this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
-                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)), minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
                       child: this.activeRegionChild,
                       adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     });

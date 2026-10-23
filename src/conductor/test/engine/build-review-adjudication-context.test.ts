@@ -90,10 +90,10 @@ function customAggregate(criteria?: readonly string[]) {
   };
   const sourceRegion = { path: 'src/handler.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'changed handler' };
   const result = stampBuildReviewCustomJudgedResult({
-    kind: 'custom-findings', version: 'v1',
+    kind: 'custom-findings', version: 'v2',
     findings: [{
       concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
-      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, severity: 'major', sourceRegions: [sourceRegion],
     }],
   }, {
     rubric: 'security', lapId, declaration, policy: descriptor.effectivePolicy,
@@ -529,7 +529,7 @@ describe('build-review adjudication context', () => {
     // names exactly these input fields. A context missing any of them routes a
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
-      'currentFindings', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
+      'admittedDispositions', 'currentFindings', 'declaredSeverityThresholds', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
       'planContract', 'policyContext', 'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
     ]);
     expect(result.context).toMatchObject({

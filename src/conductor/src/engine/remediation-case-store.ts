@@ -7,6 +7,7 @@ import {
   type ConductStateLease,
   type ConductStateLeaseOptions,
 } from './conduct-state-lease.js';
+import { isBelowSeverityThreshold, type BuildReviewSeverity } from './build-review-domain.js';
 import type {
   RemediationCaseConfidence,
   RemediationCaseDisposition,
@@ -77,6 +78,8 @@ export interface RemediationCaseRecord {
   readonly escalation?: { readonly owner: RemediationCaseEscalationOwner };
   /** A blocked v2 consistency verdict, retained as the authoritative halt evidence. */
   readonly consistencyStop?: { readonly sourceIds: readonly string[]; readonly rationale: string };
+  /** Advisory adjudication records the lowered severity, never an effect. */
+  readonly adjudicatedSeverity?: import('./build-review-domain.js').BuildReviewSeverity;
   /** Operator acceptance retained independently from the autonomous disposition. */
   readonly operatorAcceptance?: RemediationCaseOperatorAcceptance;
   /** Operator resolution retained independently from the autonomous disposition. */
@@ -157,12 +160,22 @@ export function currentBuildReviewSourceLinks(
  * build_review verdict both read settlement through this predicate, so a lap
  * the coordinator settles is never re-selected by the completion check.
  */
-export function finalizedBuildReviewSourceIds(cases: readonly RemediationCaseRecord[]): ReadonlySet<string> {
+export function finalizedBuildReviewSourceIds(
+  cases: readonly RemediationCaseRecord[],
+  thresholds: Readonly<Partial<Record<string, BuildReviewSeverity>>> = {},
+): ReadonlySet<string> {
   return new Set([...currentBuildReviewSourceLinks(cases)].flatMap(([sourceId, { record, link }]) =>
     record.operatorResolution !== undefined
       ? [sourceId]
       : link.outcome === 'carried'
       ? [sourceId]
+      : record.disposition === 'advisory' && record.adjudicatedSeverity !== undefined &&
+          sourceId.includes(':') && (() => {
+            const rubric = sourceId.slice(0, sourceId.indexOf(':'));
+            const threshold = thresholds[rubric];
+            return threshold !== undefined && isBelowSeverityThreshold(record.adjudicatedSeverity!, threshold);
+          })()
+        ? [sourceId]
       : record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
       ? [sourceId]
       : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
@@ -214,14 +227,25 @@ export function withPrdWideningCases(
 }
 
 /** Engine-owned history of a sub-floor finding; never operator authority. */
-export interface RemediationCaseSuppressionEntry {
+export type RemediationCaseSuppressionEntry =
+  | {
+  readonly kind: 'confidence';
   readonly findingId: string;
   readonly rubric: string;
   readonly summary: string;
   readonly confidence: number;
   readonly floor: number;
   readonly lastSeenLap: string;
-}
+  }
+  | {
+  readonly kind: 'severity';
+  readonly findingId: string;
+  readonly rubric: string;
+  readonly summary: string;
+  readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
+  readonly threshold: import('./build-review-domain.js').BuildReviewSeverity;
+  readonly lastSeenLap: string;
+  };
 
 /** Predecessor state accepted at the mutation boundary and upgraded before write. */
 export interface RemediationCaseStoreV1State {
@@ -476,11 +500,13 @@ function parseCase(value: unknown):
         ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
         ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : []),
         ...optionalOperatorKeys]
-    : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...optionalOperatorKeys];
+    : value.disposition === 'advisory'
+      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'adjudicatedSeverity', ...optionalOperatorKeys]
+      : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...optionalOperatorKeys];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
   if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
-    !oneOf(value.disposition, ['act', 'defer', 'reject', 'refute', 'escalate'] as const) ||
+    !oneOf(value.disposition, ['act', 'defer', 'reject', 'refute', 'advisory', 'escalate'] as const) ||
     !oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const) ||
     !boundedString(value.rationale) || !oneOf(value.confidence, ['high', 'medium', 'low'] as const) ||
     !oneOf(value.resolution, ['open', 'resolved'] as const) || !Array.isArray(value.sources) ||
@@ -499,6 +525,9 @@ function parseCase(value: unknown):
     boundedString(value.consistencyStop.rationale)
     ? { sourceIds: value.consistencyStop.sourceIds, rationale: value.consistencyStop.rationale }
     : undefined;
+  const adjudicatedSeverity = value.disposition === 'advisory' &&
+    (value.adjudicatedSeverity === 'critical' || value.adjudicatedSeverity === 'major' || value.adjudicatedSeverity === 'minor' || value.adjudicatedSeverity === 'nit')
+    ? value.adjudicatedSeverity : undefined;
   const operatorAcceptance = Object.hasOwn(value, 'operatorAcceptance')
     ? parseOperatorAcceptance(value.operatorAcceptance)
     : undefined;
@@ -508,6 +537,7 @@ function parseCase(value: unknown):
   if (sources.some((source) => source === undefined) || effect === undefined ||
     value.disposition === 'refute' && refutation === undefined ||
     value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined ||
+    value.disposition === 'advisory' && (adjudicatedSeverity === undefined || effect.kind !== 'none') ||
     Object.hasOwn(value, 'operatorAcceptance') && (operatorAcceptance === undefined ||
       (operatorAcceptance.origins.length === 0 && operatorResolution === undefined)) ||
     Object.hasOwn(value, 'operatorResolution') && operatorResolution === undefined) return { ok: false, reason: 'malformed-state' };
@@ -524,6 +554,7 @@ function parseCase(value: unknown):
     ...(refutation === undefined ? {} : { refutation }),
     ...(escalation === undefined ? {} : { escalation }),
     ...(consistencyStop === undefined ? {} : { consistencyStop }),
+    ...(adjudicatedSeverity === undefined ? {} : { adjudicatedSeverity }),
     ...(operatorAcceptance === undefined ? {} : { operatorAcceptance }),
     ...(operatorResolution === undefined ? {} : { operatorResolution }),
   } };
@@ -621,12 +652,19 @@ export function parseRemediationCaseDomainRecord(value: unknown):
 }
 
 function parseSuppression(value: unknown): RemediationCaseSuppressionEntry | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['findingId', 'rubric', 'summary', 'confidence', 'floor', 'lastSeenLap']) ||
-    !boundedString(value.findingId, MAX_REFERENCE_LENGTH) || !boundedString(value.rubric, MAX_REFERENCE_LENGTH) ||
-    !boundedString(value.summary) || !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
-    typeof value.confidence !== 'number' || !Number.isInteger(value.confidence) || value.confidence < 0 || value.confidence > 100 ||
-    typeof value.floor !== 'number' || !Number.isInteger(value.floor) || value.floor < 0 || value.floor > 100) return undefined;
-  return { findingId: value.findingId, rubric: value.rubric, summary: value.summary, confidence: value.confidence, floor: value.floor, lastSeenLap: value.lastSeenLap };
+  if (!isRecord(value)) return undefined;
+  if (value.kind === undefined || value.kind === 'confidence') {
+    if (!exactKeys(value, [...(value.kind === undefined ? [] : ['kind']), 'findingId', 'rubric', 'summary', 'confidence', 'floor', 'lastSeenLap']) ||
+      !boundedString(value.findingId, MAX_REFERENCE_LENGTH) || !boundedString(value.rubric, MAX_REFERENCE_LENGTH) ||
+      !boundedString(value.summary) || !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
+      typeof value.confidence !== 'number' || !Number.isInteger(value.confidence) || value.confidence < 0 || value.confidence > 100 ||
+      typeof value.floor !== 'number' || !Number.isInteger(value.floor) || value.floor < 0 || value.floor > 100) return undefined;
+    return { kind: 'confidence', findingId: value.findingId, rubric: value.rubric, summary: value.summary, confidence: value.confidence, floor: value.floor, lastSeenLap: value.lastSeenLap };
+  }
+  if (!exactKeys(value, ['kind', 'findingId', 'rubric', 'summary', 'severity', 'threshold', 'lastSeenLap']) || value.kind !== 'severity' ||
+    !boundedString(value.findingId, MAX_REFERENCE_LENGTH) || !boundedString(value.rubric, MAX_REFERENCE_LENGTH) || !boundedString(value.summary) || !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
+    !['critical', 'major', 'minor', 'nit'].includes(value.severity as string) || !['critical', 'major', 'minor', 'nit'].includes(value.threshold as string)) return undefined;
+  return { kind: 'severity', findingId: value.findingId, rubric: value.rubric, summary: value.summary, severity: value.severity as import('./build-review-domain.js').BuildReviewSeverity, threshold: value.threshold as import('./build-review-domain.js').BuildReviewSeverity, lastSeenLap: value.lastSeenLap };
 }
 
 function parseOutboxEvent(value: unknown): RemediationCaseOutboxEvent | undefined {

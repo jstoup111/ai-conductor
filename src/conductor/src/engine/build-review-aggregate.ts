@@ -4,12 +4,14 @@ import type { BuildReviewRubricId } from '../types/config.js';
 import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   deriveBuildReviewScopeIncompleteFault,
+  isBelowSeverityThreshold,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
   type BuildReviewLapId,
   type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
   type BuildReviewScopeIncompleteFault,
+  type BuildReviewSeverity,
 } from './build-review-domain.js';
 import { BUILD_REVIEW_RUBRIC_IDS, isRegisteredRubric } from './build-review-registry.js';
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
@@ -96,6 +98,8 @@ export interface BuildReviewEffectiveVerdict {
   readonly acceptedFindingIds: readonly string[];
   readonly unresolvedFindingIds: readonly string[];
   readonly suppressedFindingIds: readonly string[];
+  /** Findings below a declared severity threshold; visible but non-blocking. */
+  readonly advisoryFindingIds?: readonly string[];
   /**
    * Current findings a finalized autonomous remediation case already settled
    * (`finalizedBuildReviewSourceIds`). Like accepted findings they no longer
@@ -135,6 +139,7 @@ export interface BuildReviewRawSourceProjection {
   readonly summary: string;
   readonly evidenceLocations: readonly string[];
   readonly confidence?: number;
+  readonly severity?: BuildReviewSeverity;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -169,9 +174,11 @@ function customSourceProjection(
     const payload = record(identity?.canonicalPayload);
     const evidenceLocations = finding?.evidenceLocations;
     const confidence = finding?.confidence;
+    const severity = finding?.severity;
     if (!finding || !identity || !payload || typeof finding.summary !== 'string' || finding.summary.length === 0 ||
       !Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.some((location) => typeof location !== 'string' || location.length === 0) ||
       (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) ||
+      (severity !== undefined && severity !== 'critical' && severity !== 'major' && severity !== 'minor' && severity !== 'nit') ||
       typeof identity.id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(identity.id) ||
       typeof identity.canonicalJson !== 'string' || identity.canonicalJson !== canonicalJson(payload) ||
       identity.id !== `sha256:${createHash('sha256').update(identity.canonicalJson).digest('hex')}` ||
@@ -185,6 +192,7 @@ function customSourceProjection(
       concernKind: payload.concernId, summary: finding.summary,
       evidenceLocations: Object.freeze([...evidenceLocations] as string[]),
       ...(confidence === undefined ? {} : { confidence: confidence as number }),
+      ...(severity === undefined ? {} : { severity: severity as BuildReviewSeverity }),
     }));
   }
   return new Set(sources.map((source) => source.findingId)).size === sources.length
@@ -490,6 +498,7 @@ export function projectBuildReviewAggregateSources(value: unknown): readonly Bui
         summary: finding.summary,
         evidenceLocations: Object.freeze([...finding.evidenceLocations]),
         ...(finding.confidence === undefined ? {} : { confidence: finding.confidence }),
+        ...(finding.severity === undefined ? {} : { severity: finding.severity }),
       }));
     }
   }
@@ -514,6 +523,7 @@ export function deriveEffectiveBuildReviewVerdict(
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
+  minSeverity: Partial<Record<BuildReviewRubricId, BuildReviewSeverity>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -521,6 +531,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const settled: string[] = [];
   const unresolved: string[] = [];
   const suppressed: string[] = [];
+  const advisory: string[] = [];
   const declaredReplicationIds = new Set(aggregate.declaredReplicationSuppressions?.map((entry) => entry.findingId) ?? []);
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
@@ -560,6 +571,7 @@ export function deriveEffectiveBuildReviewVerdict(
       else if (settledSourceIds.has(`${rubric}:${identity.id}`)) settled.push(identity.id);
       else if (declaredReplicationIds.has(identity.id)) suppressed.push(identity.id);
       else if (finding.confidence !== undefined && finding.confidence < (minConfidence[rubric] ?? 0)) suppressed.push(identity.id);
+      else if (finding.severity !== undefined && minSeverity[rubric] !== undefined && isBelowSeverityThreshold(finding.severity, minSeverity[rubric]!)) advisory.push(identity.id);
       else unresolved.push(identity.id);
     }
   }
@@ -567,6 +579,7 @@ export function deriveEffectiveBuildReviewVerdict(
     rawVerdict: aggregate.verdict,
     verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved), suppressedFindingIds: Object.freeze(suppressed),
+    ...(advisory.length === 0 ? {} : { advisoryFindingIds: Object.freeze(advisory) }),
     ...(settled.length === 0 ? {} : { settledFindingIds: Object.freeze(settled) }),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
@@ -588,6 +601,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
   minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
+  minSeverity: Partial<Record<BuildReviewRubricId, BuildReviewSeverity>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -624,5 +638,6 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
       matchesBuildReviewReducedCoverageDisposition(feature, decision.identity, [decision])),
     minConfidence,
     settledSourceIds,
+    minSeverity,
   );
 }

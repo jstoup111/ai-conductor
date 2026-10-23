@@ -19,7 +19,7 @@ import {
   type BuildReviewFeatureIdentity,
   type BuildReviewReducedCoverageListResult,
 } from './build-review-dispositions.js';
-import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
+import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION, isBelowSeverityThreshold, type BuildReviewSeverity } from './build-review-domain.js';
 import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -34,6 +34,20 @@ export function buildReviewConfidenceFloors(config: Pick<ResolvedBuildReviewConf
     ...Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence]),
     ...config.catalog.filter((entry) => entry.kind === 'custom').map((entry) => [entry.id, entry.policy.min_confidence]),
   ]);
+}
+
+export interface BuildReviewThreshold { readonly minConfidence: number; readonly minSeverity?: BuildReviewSeverity; }
+/** One resolved policy view shared by the runner, completion gate, and CLI. */
+export function buildReviewThresholds(config: Pick<ResolvedBuildReviewConfig, 'catalog' | 'rubrics'>): Partial<Record<string, BuildReviewThreshold>> {
+  return Object.fromEntries([
+    ...Object.entries(config.rubrics).map(([id, policy]) => [id, { minConfidence: policy.min_confidence, ...(policy.min_severity === undefined || policy.min_severity === 'nit' ? {} : { minSeverity: policy.min_severity }) }]),
+    ...config.catalog.filter((entry) => entry.kind === 'custom').map((entry) => [entry.id, { minConfidence: entry.policy.min_confidence, ...(entry.policy.min_severity === undefined || entry.policy.min_severity === 'nit' ? {} : { minSeverity: entry.policy.min_severity }) }]),
+  ]);
+}
+export function buildReviewSeverityThresholds(config: Pick<ResolvedBuildReviewConfig, 'catalog' | 'rubrics'>): Partial<Record<string, BuildReviewSeverity>> {
+  return Object.fromEntries(Object.entries(buildReviewThresholds(config)).flatMap(([id, threshold]) =>
+    threshold?.minSeverity === undefined ? [] : [[id, threshold.minSeverity]],
+  ));
 }
 
 /**
@@ -66,6 +80,8 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly log?: (message: string) => void;
   /** Resolved operator floors, supplied by the live build-review runner. */
   readonly minConfidence?: Partial<Record<string, number>>;
+  /** Resolved per-rubric advisory thresholds. */
+  readonly minSeverity?: Partial<Record<string, BuildReviewSeverity>>;
   /** The active stacked child; settled links are never read from its sibling. */
   readonly child: ChildId | undefined;
   /** Disabled adjudication has no case-store authority. */
@@ -104,6 +120,7 @@ function applyCurrentCustomEffectiveVerdict(
   dispositions: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[],
   minConfidence: Partial<Record<string, number>>,
   settledSourceIds: ReadonlySet<string>,
+  minSeverity: Partial<Record<string, BuildReviewSeverity>>,
 ): BuildReviewEffectiveVerdict | undefined {
   const customSources = projectBuildReviewCustomSuppressionSources(aggregate);
   if (!customSources) return undefined;
@@ -128,6 +145,7 @@ function applyCurrentCustomEffectiveVerdict(
   ));
   const unresolved = [...effective.unresolvedFindingIds];
   const suppressed = [...effective.suppressedFindingIds];
+  const advisory = [...(effective.advisoryFindingIds ?? [])];
   const settled = [...(effective.settledFindingIds ?? [])];
   const acceptedCustomFindingIds = new Set(Object.values(aggregate.customResults ?? {}).flatMap((member) =>
     member.result.kind !== 'judged' ? [] : member.result.findings.flatMap((finding) => {
@@ -144,6 +162,7 @@ function applyCurrentCustomEffectiveVerdict(
       continue;
     }
     if (source.confidence !== undefined && source.confidence < (minConfidence[source.rubric] ?? 0)) suppressed.push(source.findingId);
+    else if (source.severity !== undefined && minSeverity[source.rubric] !== undefined && isBelowSeverityThreshold(source.severity, minSeverity[source.rubric]!)) advisory.push(source.findingId);
     else unresolved.push(source.findingId);
   }
   const builtinJudged = Object.values(aggregate.results).filter((result) => result.kind === 'judged').length;
@@ -157,6 +176,7 @@ function applyCurrentCustomEffectiveVerdict(
     unresolvedFindingIds: Object.freeze(unresolved),
     acceptedFindingIds: Object.freeze([...new Set([...effective.acceptedFindingIds, ...acceptedCustomFindingIds])]),
     suppressedFindingIds: Object.freeze(suppressed),
+    ...(advisory.length === 0 ? {} : { advisoryFindingIds: Object.freeze(advisory) }),
     ...(settled.length === 0 ? {} : { settledFindingIds: Object.freeze(settled) }),
   });
 }
@@ -175,11 +195,12 @@ export function deriveComposedBuildReviewEffectiveVerdict(
   reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
   minConfidence: Partial<Record<string, number>> = {},
   settledSourceIds: ReadonlySet<string> = new Set(),
+  minSeverity: Partial<Record<string, BuildReviewSeverity>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const builtinDispositions = dispositions.filter((record) => isRegisteredRubric(record.finding.canonicalPayload.rubric) && 'concernKind' in record.finding.canonicalPayload);
-  const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>, settledSourceIds);
+  const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>, settledSourceIds, minSeverity as Partial<Record<import('../types/config.js').BuildReviewRubricId, BuildReviewSeverity>>);
   return builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
-    aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence, settledSourceIds,
+    aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence, settledSourceIds, minSeverity,
   );
 }
 
@@ -216,7 +237,7 @@ async function readSettledBuildReviewSourceIds(
     const create = deps.createCaseStore ?? ((root: string, caseFeature: BuildReviewFeatureIdentity, child?: ChildId) =>
       new RemediationCaseStore(root, caseFeature, child === undefined ? {} : { child }));
     const read = await create(projectRoot, feature, deps.child).read();
-    if (read.ok) return finalizedBuildReviewSourceIds(read.state.cases);
+    if (read.ok) return finalizedBuildReviewSourceIds(read.state.cases, deps.minSeverity ?? {});
     deps.log?.(`remediation case state unavailable (${read.reason}); no finding treated as settled`);
   } catch {
     deps.log?.('remediation case state unavailable; no finding treated as settled');
@@ -279,7 +300,7 @@ export async function resolveEffectiveBuildReviewVerdict(
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
-    effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {});
+    effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, new Set(), deps.minSeverity ?? {});
     // The adjudication coordinator finalizes cases and marks the step done; this
     // completion check must honor the same settlement or the gate re-selects a
     // settled lap until the loop guard halts it. Unreadable case state settles
@@ -287,7 +308,7 @@ export async function resolveEffectiveBuildReviewVerdict(
     if (effective && effective.unresolvedFindingIds.length > 0) {
       const settledSourceIds = await readSettledBuildReviewSourceIds(projectRoot, feature, deps);
       if (settledSourceIds.size > 0) {
-        effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds);
+        effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {}, settledSourceIds, deps.minSeverity ?? {});
       }
     }
   } catch {

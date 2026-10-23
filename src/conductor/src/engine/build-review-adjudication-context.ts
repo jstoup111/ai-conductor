@@ -117,6 +117,9 @@ export interface BuildReviewAdjudicationContext {
   readonly effectPointers: readonly string[];
   /** Non-blocking suppression history; it is intentionally not a source set. */
   readonly suppressionHistory: readonly RemediationCaseSuppressionEntry[];
+  /** Per-rubric thresholds are engine facts that bound an advisory downgrade. */
+  readonly declaredSeverityThresholds: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  readonly admittedDispositions: readonly RemediationCaseDisposition[];
 }
 
 export interface AssembleBuildReviewAdjudicationContextInput {
@@ -133,6 +136,7 @@ export interface AssembleBuildReviewAdjudicationContextInput {
   /** Durable work-order attempt evidence; renders into `effectPointers`. */
   readonly attemptedCaseIds?: readonly string[];
   readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
+  readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
 }
 
 export type BuildReviewAdjudicationContextStop =
@@ -150,10 +154,10 @@ const LIMITS = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
 // Keyed by the store's own vocabularies: a value the store learns to persist
 // fails to compile here until this boundary represents it too.
 const OUTCOMES: Readonly<Record<RemediationCaseSourceOutcome, true>> = Object.freeze({
-  acted: true, deferred: true, rejected: true, refuted: true, merged: true, escalate: true, carried: true,
+  acted: true, deferred: true, rejected: true, refuted: true, advisory: true, merged: true, escalate: true, carried: true,
 });
 const DISPOSITIONS: Readonly<Record<RemediationCaseDisposition, true>> = Object.freeze({
-  act: true, defer: true, reject: true, refute: true, escalate: true,
+  act: true, defer: true, reject: true, refute: true, advisory: true, escalate: true,
 });
 const ESCALATION_OWNERS: Readonly<Record<RemediationCaseEscalationOwner, true>> = Object.freeze({
   product: true, plan: true, architecture: true,
@@ -542,6 +546,11 @@ export function assembleBuildReviewAdjudicationContext(
     suppressionHistory: Object.freeze([...(input.suppressions ?? [])]
       .sort((left, right) => left.findingId.localeCompare(right.findingId))
       .map((entry) => Object.freeze({ ...entry }))),
+    declaredSeverityThresholds: Object.freeze({ ...(input.declaredSeverityThresholds ?? {}) }),
+    admittedDispositions: Object.freeze<RemediationCaseDisposition[]>([
+      'act', 'defer', 'reject', 'refute', ...(Object.values(input.declaredSeverityThresholds ?? {}).some((threshold) => threshold !== 'nit') ? ['advisory' as const] : []),
+      ...(mode === 'case-v2' ? ['escalate' as const] : []),
+    ]),
   });
   const actual = bytes(JSON.stringify(context));
   if (actual > LIMITS.maxSerializedBytes) {

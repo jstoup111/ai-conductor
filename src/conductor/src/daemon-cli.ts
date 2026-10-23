@@ -3565,6 +3565,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       for (const finding of event.suppressedFindings ?? []) {
         log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
       }
+      for (const finding of event.advisoryFindings ?? []) {
+        log(`${dot} build_review advisory ${finding.rubric}:${finding.findingId} (severity ${finding.severity} < threshold ${finding.threshold})`);
+      }
       const raw = event.rawVerdict === event.effectiveVerdict ? '' : ` (raw: ${event.rawVerdict})`;
       const reason = event.reason ? ` — ${event.reason}` : '';
       const unresolvedMarkers = event.unresolvedMarkers

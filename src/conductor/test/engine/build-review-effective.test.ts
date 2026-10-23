@@ -53,9 +53,9 @@ function customAggregate(confidence: number | undefined) {
   const findings = [{
     concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
     evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferences.sourceRegions,
-    ...(confidence === undefined ? {} : { confidence }),
+    ...(confidence === undefined ? {} : { confidence }), severity: 'minor' as const,
   }];
-  const judged = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v1', findings }, customStamp, customReferences)!;
+  const judged = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v2', findings }, customStamp, customReferences)!;
   const descriptor = {
     version: 'v1', semanticSkill: 'portable-policy', declaration: customStamp.declaration,
     installation: { source: 'project' }, effectivePolicy: customStamp.policy,
@@ -582,7 +582,7 @@ describe('live build-review effective resolver', () => {
     expect(projectBuildReviewSuppressionEntries({
       aggregate: raw, suppressedFindingIds: [findingId], floors: { portablePolicy: 80 },
     })).toEqual([{
-      findingId, rubric: 'portablePolicy', summary: 'The changed boundary lacks compatibility evidence.',
+      kind: 'confidence', findingId, rubric: 'portablePolicy', summary: 'The changed boundary lacks compatibility evidence.',
       confidence: 72, floor: 80, lastSeenLap: 'lap-current',
     }]);
   });

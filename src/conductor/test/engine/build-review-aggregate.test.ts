@@ -211,9 +211,9 @@ describe('build-review raw aggregate', () => {
       policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
       reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
     } as const;
-    const judgedWithFinding = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v1', findings: [{
+    const judgedWithFinding = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v2', findings: [{
       concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', evidenceLocations: ['src/widget.ts:8'],
-      sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
+      severity: 'minor', sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
     }] }, stamp, { sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }] })!;
     const member = {
       descriptor: { version: 'v1', semanticSkill: 'portable-policy', declaration, installation: { source: 'project' }, effectivePolicy: stamp.policy, reviewedInput: stamp.reviewedInput, producer: stamp.candidate },

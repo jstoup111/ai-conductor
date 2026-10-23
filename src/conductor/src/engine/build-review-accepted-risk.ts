@@ -14,9 +14,11 @@ export const BUILD_REVIEW_ACCEPTED_RISK_START = '<!-- build-review-accepted-risk
 export const BUILD_REVIEW_ACCEPTED_RISK_END = '<!-- build-review-accepted-risk:end -->';
 export const REDUCED_BUILD_REVIEW_COVERAGE_HEADING = '## Reduced build-review coverage';
 export const BUILD_REVIEW_ACCEPTED_RISK_HEADING = '## Accepted build-review risk';
+export const BUILD_REVIEW_ADVISORY_HEADING = '## Advisory build-review findings';
 export const ENGINE_OWNED_PR_BODY_TEXTS = [
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
   BUILD_REVIEW_ACCEPTED_RISK_HEADING,
+  BUILD_REVIEW_ADVISORY_HEADING,
   BUILD_REVIEW_ACCEPTED_RISK_START,
   BUILD_REVIEW_ACCEPTED_RISK_END,
   PR_BODY_FLOOR_MARKER,

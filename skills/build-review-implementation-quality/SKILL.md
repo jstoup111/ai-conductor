@@ -45,4 +45,7 @@ conformance, ADR conformance (owned by the as-built architecture review), or hyp
 
 Return only `{ "findings": [...] }`. Each finding has `concernKind`, `summary`,
 `evidenceLocations`, an `anchor` with this rubric and a changed content-region locus, and optional
-integer `confidence`. Return an empty findings array when there is no concrete defect.
+integer `confidence`, and required `severity`. Use `critical` for security exposure, data loss, or
+wrong results; `major` for a real defect or broken invariant; `minor` for a real low-impact quality
+issue; and `nit` only for cosmetic naming or style. Return an empty findings array when there is no
+concrete defect.
