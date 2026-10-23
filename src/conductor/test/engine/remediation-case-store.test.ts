@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT,
+  buildReviewRecurrenceLineage,
+  classifyBuildReviewRecurrence,
   currentBuildReviewSourceLinks,
   finalizedBuildReviewSourceIds,
   parseRemediationCaseDomainRecord,
@@ -233,6 +236,112 @@ describe('remediation case store', () => {
     expect(currentBuildReviewSourceLinks([earlier, open, tiedLater]).get(sourceId)).toEqual({
       record: open,
       link: open.sources[0],
+    });
+  });
+
+  it('classifies a resolved action owner as a recurrence unless the judge declares it distinct', () => {
+    const owner: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'R',
+      resolution: 'resolved',
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+      sources: [{ sourceId: 'testQuality:S', outcome: 'merged', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+    const declaration = { caseId: 'R', reason: 'The current finding concerns daemon liveness, not in-flight age.' };
+
+    expect([
+      classifyBuildReviewRecurrence([owner], ['testQuality:S'], []),
+      classifyBuildReviewRecurrence([owner], ['testQuality:S'], [declaration]),
+    ]).toEqual([
+      { recurrenceOf: ['R'], distinctFrom: [] },
+      { recurrenceOf: [], distinctFrom: [declaration] },
+    ]);
+  });
+
+  it('drops declarations that do not name a resolved action owner of a source', () => {
+    const owner: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'R', resolution: 'resolved',
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+      sources: [{ sourceId: 'testQuality:S', outcome: 'merged', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+    const unrelated = (id: string, resolution: 'open' | 'resolved', disposition: 'act' | 'defer'): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0], id, resolution, disposition,
+      effect: disposition === 'act'
+        ? { id: `effect-${id}`, kind: 'action', status: 'reserved' }
+        : { id: `effect-${id}`, kind: 'deferral', status: 'reserved' },
+      sources: [{ sourceId: `testQuality:${id}`, outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    });
+    const declared = (caseId: string) => [{ caseId, reason: 'This case addresses a distinct concern.' }];
+
+    expect([
+      classifyBuildReviewRecurrence([owner], ['testQuality:S'], declared('unknown')),
+      classifyBuildReviewRecurrence([owner, unrelated('O', 'open', 'act')], ['testQuality:S'], declared('O')),
+      classifyBuildReviewRecurrence([owner, unrelated('D', 'resolved', 'defer')], ['testQuality:S'], declared('D')),
+    ]).toEqual([
+      { recurrenceOf: ['R'], distinctFrom: [] },
+      { recurrenceOf: ['R'], distinctFrom: [] },
+      { recurrenceOf: ['R'], distinctFrom: [] },
+    ]);
+  });
+
+  it('does not classify an open owner or an unowned source as a recurrence', () => {
+    const openOwner: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0], id: 'O',
+      sources: [{ sourceId: 'testQuality:S', outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+
+    expect([
+      classifyBuildReviewRecurrence([openOwner], ['testQuality:S'], []),
+      classifyBuildReviewRecurrence([], ['testQuality:unowned'], []),
+    ]).toEqual([
+      { recurrenceOf: [], distinctFrom: [] },
+      { recurrenceOf: [], distinctFrom: [] },
+    ]);
+  });
+
+  it('counts applied action cases once across recurrence paths and excludes failed actions', () => {
+    const failed: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0], id: 'failed', resolution: 'resolved',
+      effect: { id: 'effect-failed', kind: 'action', status: 'failed', diagnostic: 'attempt failed' },
+    };
+    const root: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0], id: 'R', resolution: 'resolved',
+      effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+    };
+    const left: RemediationCaseRecord = {
+      ...root, id: 'N1', effect: { id: 'effect-N1', kind: 'action', status: 'applied', workOrderId: 'work-order-N1' }, recurrenceOf: ['R'],
+    };
+    const right: RemediationCaseRecord = {
+      ...root, id: 'N2', effect: { id: 'effect-N2', kind: 'action', status: 'applied', workOrderId: 'work-order-N2' }, recurrenceOf: ['R'],
+    };
+    const leaf: RemediationCaseRecord = {
+      ...root, id: 'N3', effect: { id: 'effect-N3', kind: 'action', status: 'applied', workOrderId: 'work-order-N3' }, recurrenceOf: ['N1', 'N2'],
+    };
+
+    expect([
+      buildReviewRecurrenceLineage([failed], ['failed']),
+      buildReviewRecurrenceLineage([root, left, right, leaf], ['N3']),
+    ]).toEqual([
+      { caseIds: ['failed'], appliedAttempts: 0 },
+      { caseIds: ['R', 'N1', 'N2', 'N3'], appliedAttempts: 4 },
+    ]);
+  });
+
+  it('sets the recurrence attempt limit at three and returns a root-first applied lineage', () => {
+    const record = (id: string, recurrenceOf: readonly string[]): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0], id, resolution: 'resolved', recurrenceOf,
+      effect: { id: `effect-${id}`, kind: 'action', status: 'applied', workOrderId: `work-order-${id}` },
+    });
+
+    expect({
+      limit: BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT,
+      lineage: buildReviewRecurrenceLineage([
+        record('R', []), record('N', ['R']), record('N2', ['N']),
+      ], ['N2']),
+    }).toEqual({
+      limit: 3,
+      lineage: { caseIds: ['R', 'N', 'N2'], appliedAttempts: 3 },
     });
   });
 

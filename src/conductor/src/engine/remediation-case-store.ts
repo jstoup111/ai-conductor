@@ -168,6 +168,83 @@ export function currentBuildReviewSourceLinks(
   return current;
 }
 
+/** A recurrence lineage may consume no more than three applied BUILD attempts. */
+export const BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT = 3;
+
+export interface BuildReviewRecurrenceDeclaration {
+  readonly caseId: string;
+  readonly reason: string;
+}
+
+export interface BuildReviewRecurrenceClassification {
+  readonly recurrenceOf: readonly string[];
+  readonly distinctFrom: readonly BuildReviewRecurrenceDeclaration[];
+}
+
+/**
+ * Classify the resolved action cases that authoritatively own a new row's
+ * sources. A judge declaration is retained only when it names one of those
+ * owners; the remaining owners establish the recurrence.
+ */
+export function classifyBuildReviewRecurrence(
+  cases: readonly RemediationCaseRecord[],
+  sourceIds: readonly string[],
+  declared: readonly BuildReviewRecurrenceDeclaration[],
+): BuildReviewRecurrenceClassification {
+  const owners: string[] = [];
+  const ownerIds = new Set<string>();
+  const sourceLinks = currentBuildReviewSourceLinks(cases);
+  for (const sourceId of sourceIds) {
+    const source = sourceLinks.get(sourceId);
+    if (source?.record.resolution !== 'resolved' || source.record.disposition !== 'act' || ownerIds.has(source.record.id)) continue;
+    ownerIds.add(source.record.id);
+    owners.push(source.record.id);
+  }
+
+  const declarationsByOwner = new Map<string, BuildReviewRecurrenceDeclaration>();
+  for (const declaration of declared) {
+    if (ownerIds.has(declaration.caseId) && !declarationsByOwner.has(declaration.caseId)) {
+      declarationsByOwner.set(declaration.caseId, declaration);
+    }
+  }
+  return {
+    recurrenceOf: owners.filter((caseId) => !declarationsByOwner.has(caseId)),
+    distinctFrom: owners.flatMap((caseId) => {
+      const declaration = declarationsByOwner.get(caseId);
+      return declaration === undefined ? [] : [declaration];
+    }),
+  };
+}
+
+export interface BuildReviewRecurrenceLineage {
+  readonly caseIds: readonly string[];
+  readonly appliedAttempts: number;
+}
+
+/** Walk recurrence ancestry once per case and count applied action attempts. */
+export function buildReviewRecurrenceLineage(
+  cases: readonly RemediationCaseRecord[],
+  caseIds: readonly string[],
+): BuildReviewRecurrenceLineage {
+  const records = new Map(cases.map((record) => [record.id, record]));
+  const visited = new Set<string>();
+  const lineage: string[] = [];
+  let appliedAttempts = 0;
+  const visit = (caseId: string): void => {
+    if (visited.has(caseId)) return;
+    visited.add(caseId);
+    const record = records.get(caseId);
+    if (record === undefined) return;
+    for (const predecessor of record.recurrenceOf ?? []) visit(predecessor);
+    lineage.push(record.id);
+    if (record.disposition === 'act' && record.effect.kind === 'action' && record.effect.status === 'applied') {
+      appliedAttempts += 1;
+    }
+  };
+  for (const caseId of caseIds) visit(caseId);
+  return { caseIds: lineage, appliedAttempts };
+}
+
 /**
  * Rubric-namespaced source ids (`<rubric>:<findingId>`) that a finalized case
  * durably settles. Each source is read through its authoritative link: a
