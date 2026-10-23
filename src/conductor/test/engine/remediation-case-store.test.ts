@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:9, task:20, task:rem-prd-audit-r21-1
+// Covers: task:1, task:2, task:9, task:20, task:rem-prd-audit-r21-1, task:rem-prd-audit-r21-2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
