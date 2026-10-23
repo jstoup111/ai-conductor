@@ -304,6 +304,7 @@ import {
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskPaths } from './plan-task-parse.js';
+import { runRemediationClosurePass } from './remediation-closure-judgement.js';
 import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
@@ -12157,6 +12158,20 @@ export class Conductor {
                       await demoteUnavailableCitations(this.projectRoot, status, pending, reason);
                       await emitTracked({ type: 'done_when_citation_judged', citations: pending.map((citation) => ({ taskId: citation.taskId, check: citation.checkIndex, unavailable: judgement.cause })) });
                     }
+                  }
+                  if (this.stepRunner.dispatchRemediationClosureJudgement) {
+                    const planText = await readFile(planPath, 'utf8');
+                    const taskIds = [...parsePlanTaskBodies(planText).keys()];
+                    const currentStatus = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
+                      .then((raw) => JSON.parse(raw) as unknown);
+                    await runRemediationClosurePass({
+                      projectRoot: this.projectRoot,
+                      planPath,
+                      planText,
+                      status: currentStatus,
+                      scopeTaskIds: taskIds,
+                      dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
+                    });
                   }
                   }
                 } catch (error) {

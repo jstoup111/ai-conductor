@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 import { execa } from 'execa';
 import { canonicalTaskId, listCommitsWithTrailers } from './autoheal.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+import { parsePlanTaskBodies, parsePlanTaskTitles } from './plan-task-parse.js';
+import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
+import { readRemediationClosureState, recordRemediationClosureVerdicts } from './remediation-closure-state.js';
+import { resolveTaskIdsWithDiagnostics } from './task-progress.js';
 
 /** Maximum UTF-8 byte projection of a candidate's cited commit diffs. */
 export const REMEDIATION_CLOSURE_DIFF_CAP_BYTES = 48_000;
@@ -282,4 +286,66 @@ export function validateRemediationClosureOutput(
     return { kind: 'invalid', reason: 'remediation closure judgement omitted a candidate verdict' };
   }
   return { kind: 'valid', verdicts };
+}
+
+/**
+ * Runs the BUILD-boundary closure judgement after citation settlement.  This
+ * task deliberately records only the initial verdict: reopening and hand-off
+ * behavior are applied by their owning follow-up tasks.
+ */
+export async function runRemediationClosurePass(input: {
+  projectRoot: string;
+  planPath: string;
+  planText: string;
+  status: unknown;
+  scopeTaskIds: readonly string[];
+  dispatch: (input: RemediationClosureInput) => Promise<
+    | { readonly kind: 'valid'; readonly verdicts: readonly RemediationClosureVerdictResult[] }
+    | { readonly kind: 'unavailable'; readonly cause: string }
+  >;
+}): Promise<void> {
+  const [closureState, repairs, resolution] = await Promise.all([
+    readRemediationClosureState(input.projectRoot),
+    createRepairObligationStore(input.projectRoot, `${input.projectRoot}/.pipeline/engine-state.json`).read(),
+    resolveTaskIdsWithDiagnostics(input.projectRoot, [...input.scopeTaskIds]),
+  ]);
+  if (closureState.kind === 'incompatible') throw new Error(closureState.message);
+  if (!repairs.ok) throw new Error(`could not read repair obligations: ${repairs.message}`);
+
+  const planIdentity = repairPlanIdentity(input.projectRoot, input.planPath);
+  const openCitationTaskIds = new Set<string>();
+  for (const obligation of Object.values(repairs.value.records)) {
+    if (obligation.planIdentity !== planIdentity || obligation.source.authority !== 'done-when-citation') continue;
+    for (const taskId of obligation.taskIds) {
+      if (obligation.tasks[taskId]?.status === 'open') openCitationTaskIds.add(taskId);
+    }
+  }
+  const state = closureState.state.plans[planIdentity]?.tasks ?? {};
+  const candidates = selectRemediationClosureCandidates({
+    status: input.status,
+    scopeTaskIds: input.scopeTaskIds,
+    resolvedIds: resolution.resolved,
+    state,
+    openCitationTaskIds,
+  });
+  if (candidates.length === 0) return;
+
+  const titles = parsePlanTaskTitles(input.planText);
+  const judgementInput = await buildRemediationClosureInput(
+    input.projectRoot,
+    candidates.map((candidate) => ({ ...candidate, title: titles.get(candidate.taskId) ?? candidate.title })),
+    parsePlanTaskBodies(input.planText),
+  );
+  const judgement = await input.dispatch(judgementInput);
+  if (judgement.kind !== 'valid') return;
+  await recordRemediationClosureVerdicts(input.projectRoot, input.planPath, judgement.verdicts.map((verdict) => {
+    const candidate = candidates.find(({ taskId }) => taskId === verdict.taskId)!;
+    return {
+      taskId: verdict.taskId,
+      closeIdentity: candidate.closeIdentity,
+      verdict: verdict.verdict,
+      rationale: verdict.rationale,
+      disposition: 'left-closed',
+    };
+  }));
 }
