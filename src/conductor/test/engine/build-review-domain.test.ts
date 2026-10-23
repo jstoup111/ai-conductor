@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:1, task:3
 // Covers: task:5, task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -20,8 +20,10 @@ import {
   parseBuildReviewLapId,
   parseBuildReviewRubricContractVersion,
   parseBuildReviewRubricResult,
+  parseBuildReviewSeverity,
   parseBuildReviewSkip,
   renderBuildReviewUnresolvedSkillRemedy,
+  isBelowSeverityThreshold,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection, CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
@@ -263,6 +265,23 @@ describe('build-review domain', () => {
     for (const confidence of [-1, 101, 72.5, 'high']) {
       expect(parseBuildReviewJudgedResult(judged([finding({ confidence })]))).toBeUndefined();
     }
+  });
+
+  it('parses only the four closed build-review severities', () => {
+    for (const severity of ['critical', 'major', 'minor', 'nit']) {
+      expect(parseBuildReviewSeverity(severity)).toBe(severity);
+    }
+    for (const severity of ['blocker', 'Major', 2, null]) {
+      expect(parseBuildReviewSeverity(severity)).toBeUndefined();
+    }
+  });
+
+  it('compares severity thresholds strictly in reviewer order', () => {
+    expect(isBelowSeverityThreshold('nit', 'major')).toBe(true);
+    expect(isBelowSeverityThreshold('minor', 'major')).toBe(true);
+    expect(isBelowSeverityThreshold('major', 'major')).toBe(false);
+    expect(isBelowSeverityThreshold('critical', 'major')).toBe(false);
+    expect(isBelowSeverityThreshold('nit', 'nit')).toBe(false);
   });
 
   it('brands lap identities from the closed grammar', () => {

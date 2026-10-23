@@ -16,6 +16,8 @@ import type {
 import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
 
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
+export type BuildReviewSeverity = 'critical' | 'major' | 'minor' | 'nit';
+export const BUILD_REVIEW_SEVERITIES = Object.freeze(['critical', 'major', 'minor', 'nit'] as const);
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
 export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
 export type BuildReviewSkipReason = 'disabled' | 'test_quality_empty_scope' | 'leaf-only';
@@ -382,6 +384,41 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 }
 export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined { return typeof value === 'string' && isCanonicalBuildReviewRepoRelativePath(value) ? value : undefined; }
 export function parseBuildReviewLapId(value: unknown): BuildReviewLapId | undefined { return typeof value === 'string' && LAP.test(value) ? value as BuildReviewLapId : undefined; }
+export function parseBuildReviewSeverity(value: unknown): BuildReviewSeverity | undefined {
+  switch (value) {
+    case 'critical': return value;
+    case 'major': return value;
+    case 'minor': return value;
+    case 'nit': return value;
+  }
+  return undefined;
+}
+export function isBelowSeverityThreshold(severity: BuildReviewSeverity, threshold: BuildReviewSeverity): boolean {
+  switch (severity) {
+    case 'critical': return false;
+    case 'major':
+      switch (threshold) {
+        case 'critical': return true;
+        case 'major': return false;
+        case 'minor': return false;
+        case 'nit': return false;
+      }
+    case 'minor':
+      switch (threshold) {
+        case 'critical': return true;
+        case 'major': return true;
+        case 'minor': return false;
+        case 'nit': return false;
+      }
+    case 'nit':
+      switch (threshold) {
+        case 'critical': return true;
+        case 'major': return true;
+        case 'minor': return true;
+        case 'nit': return false;
+      }
+  }
+}
 export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined { return value === 'v1' || value === 'v2' || value === 'v3' ? value : undefined; }
 // `occurrence` is the 0-based ordinal among equal-content regions in one path;
 // 0 is the unique/first region and normalizes away so identities never differ
