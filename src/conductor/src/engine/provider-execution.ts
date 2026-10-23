@@ -14,7 +14,7 @@ import type {
   HarnessConfig,
   ProviderSelection,
 } from '../types/config.js';
-import { resolveProviderCandidates } from './provider-selection.js';
+import { normalizeProviderSelection, resolveProviderCandidates } from './provider-selection.js';
 import type {
   ProviderRuntime,
   ProviderRuntimeSet,
@@ -55,6 +55,7 @@ import {
 import type { SelfHostProviderId } from './self-host/provider-home.js';
 import {
   CODEX_DISPLAY_NAME,
+  DEFAULT_PROVIDER,
   findBuiltInProviderDescriptor,
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
@@ -906,6 +907,7 @@ export async function executeProviderCandidates({
   optionsForCandidate,
 }: ExecuteProviderCandidatesInput): Promise<ProviderExecutionResult> {
   const resolvedNativeConfigStep = nativeConfigStep ?? step;
+  const inheritedProvider = normalizeProviderSelection(config?.llm_provider)[0] ?? DEFAULT_PROVIDER;
   const substitutionPolicy = config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution;
   const candidates = resolveProviderCandidates({
     configuredProviders,
@@ -951,7 +953,7 @@ export async function executeProviderCandidates({
     for (const [index, providerKey] of candidates.entries()) {
       const runtime = runtimes.get(providerKey);
       const resolved = resolveProviderCandidateNativeConfig({
-        step: resolvedNativeConfigStep, candidateIndex: index, preferredProvider, inheritedProvider: configuredProviders[0],
+        step: resolvedNativeConfigStep, candidateIndex: index, preferredProvider, inheritedProvider,
         runtime, config, tier, attempt, escalate, modelOverride, effortOverride,
       });
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
@@ -975,7 +977,7 @@ export async function executeProviderCandidates({
       step: resolvedNativeConfigStep,
       candidateIndex: index,
       preferredProvider,
-      inheritedProvider: configuredProviders[0],
+      inheritedProvider,
       runtime,
       config,
       tier,
@@ -1529,12 +1531,10 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       preferredProvider: input.policy.llm_provider,
       attempt,
       escalate: input.policy.escalate,
-      // A caller that names a native configuration step needs every provider
-      // candidate resolved in that step's domain, not pinned to the primary
-      // provider's already-resolved model and effort.
-      ...(input.nativeConfigStep === undefined
-        ? { modelOverride: input.policy.model, effortOverride: input.policy.effort }
-        : {}),
+      // Overrides apply only to candidate zero; fallback candidates resolve in
+      // nativeConfigStep through resolveFallbackProviderNativeStepConfig.
+      modelOverride: input.policy.model,
+      effortOverride: input.policy.effort,
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
       captureAttempt,

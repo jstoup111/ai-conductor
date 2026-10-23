@@ -36,6 +36,10 @@ async function subject(options: {
   readonly codexResults?: readonly InvokeResult[];
   readonly native?: boolean;
   readonly heads?: readonly (string | null)[];
+  readonly reviewModel?: string | null;
+  readonly reviewEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  readonly globalDefaultModel?: string;
+  readonly reviewProviders?: readonly string[];
 } = {}) {
   const claudeResults = options.claudeResults ?? [{ success: true, output: 'done', exitCode: 0, finalStructuredResult: valid }];
   const codexResults = options.codexResults ?? [{ success: true, output: 'done', exitCode: 0, finalStructuredResult: valid }];
@@ -44,6 +48,8 @@ async function subject(options: {
   const heads = [...(options.heads ?? ['head', 'head'])];
   const readHead = vi.fn(async () => heads.shift() ?? 'head');
   const lifecycle = vi.fn();
+  const reviewModel = options.reviewModel === undefined ? 'review-model' : options.reviewModel;
+  const reviewEffort = options.reviewEffort ?? 'high';
   const runtimes = new ProviderRuntimeSet([
     {
       key: 'claude', provider: { name: 'claude', invoke: claudeInvoke } as unknown as LLMProvider,
@@ -53,7 +59,7 @@ async function subject(options: {
       availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     },
     {
-      key: 'schema-fallback', provider: { name: 'schema-fallback', invoke: codexInvoke } as unknown as LLMProvider,
+      key: 'codex', provider: { name: 'codex', invoke: codexInvoke } as unknown as LLMProvider,
       lifecycleCapability: { synchronousSpawnPermit: true },
       ...(options.native === false ? {} : { nativeSchemaCapability: { nativeOutputSchema: true as const } }),
       policy: CODEX_MODEL_POLICY, builtIn: false,
@@ -67,9 +73,16 @@ async function subject(options: {
     runner: new DefaultStepRunner({ name: 'claude', invoke: vi.fn() } as unknown as LLMProvider, 'remediation-closure', projectDir, {
       config: {
         llm_provider: 'claude',
+        ...(options.globalDefaultModel === undefined
+          ? {}
+          : { defaults: { model: options.globalDefaultModel } }),
         steps: {
           build: { llm_provider: 'claude' },
-          build_review: { llm_provider: ['claude', 'schema-fallback'], model: 'review-model', effort: 'high' },
+          build_review: {
+            llm_provider: options.reviewProviders ?? ['claude', 'codex'],
+            ...(reviewModel === null ? {} : { model: reviewModel }),
+            effort: reviewEffort,
+          },
         },
       },
       configuredProviders: ['claude'], providerRuntimes: runtimes, sessionStore: new ProviderSessionStore(),
@@ -79,7 +92,7 @@ async function subject(options: {
 }
 
 describe('DefaultStepRunner.dispatchRemediationClosureJudgement', () => {
-  it('uses the build_review policy in order while supervised as BUILD, without a skill invocation', async () => {
+  it('passes explicit build_review model and effort to the preferred candidate while supervised as BUILD', async () => {
     const { runner, claudeInvoke, codexInvoke, lifecycle, projectDir } = await subject();
 
     await expect(runner.dispatchRemediationClosureJudgement(input)).resolves.toEqual({
@@ -93,6 +106,22 @@ describe('DefaultStepRunner.dispatchRemediationClosureJudgement', () => {
       cwd: projectDir, interactive: false, readOnlyReview: true, nativeSchema: REMEDIATION_CLOSURE_JUDGEMENT_SCHEMA,
     }));
     expect(lifecycle).toHaveBeenCalledWith('build', expect.anything());
+  });
+
+  it('does not inherit the global Claude default model into a Codex build_review selection', async () => {
+    const { runner, claudeInvoke, codexInvoke } = await subject({
+      reviewModel: null,
+      globalDefaultModel: 'opus',
+      reviewProviders: ['codex'],
+    });
+
+    await runner.dispatchRemediationClosureJudgement(input);
+
+    expect(claudeInvoke).not.toHaveBeenCalled();
+    expect(codexInvoke).toHaveBeenCalledWith(expect.objectContaining({
+      model: CODEX_MODEL_POLICY.stepModels.build_review,
+    }));
+    expect(codexInvoke).not.toHaveBeenCalledWith(expect.objectContaining({ model: 'opus' }));
   });
 
   it('resolves the fallback candidate model and effort under build_review while supervised as BUILD', async () => {
