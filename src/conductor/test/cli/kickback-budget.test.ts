@@ -1,5 +1,6 @@
 // Covers: task:rem-prd-audit-R20
 // Covers: task:8, task:11, task:27, task:28, task:31.2, task:33
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -195,11 +196,92 @@ describe('kickback-budget inspect --child', () => {
   });
 
   it('rejects a missing child state before reconciliation or ledger reads', async () => {
-    const fixture = await makeFeature('{corrupt');
+    const fixture = await makeFeature({ version: 1, gates: { build_review: baseEntry } });
     try {
+      const flat = join(fixture.worktree, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(flat);
       await expect(inspect(fixture, '3')).resolves.toEqual({
         code: 1, output: 'kickback-budget: child 3 has no child state.',
       });
+      expect(await readFile(flat)).toEqual(before);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('routes whole-feature gates to the flat ledger while retaining child-owned gates', async () => {
+    const adjustment = (id: string) => ({
+      id, kind: 'raise' as const, beforeConsumed: 2, afterConsumed: 2, beforeLimit: 2, afterLimit: 4,
+      operator: 'operator', rationale: 'more review', timestamp: '2026-10-23T00:00:00.000Z', haltGeneration: 'g1', allowance: 'laps' as const,
+    });
+    const fixture = await makeFeature({
+      version: 1,
+      gates: {
+        architecture_review_as_built: {
+          ...baseEntry, laps: 3, effectiveLapCap: 4, adjustmentsKnown: true,
+          adjustments: [adjustment('as-built-raise')],
+          capEvidence: { gate: 'architecture_review_as_built', consumed: 3, limit: 3, latestReason: 'cap', haltGeneration: 'g1', allowance: 'laps' },
+          resumeAuthorization: { adjustmentId: 'as-built-raise', haltGeneration: 'g1', consumed: false },
+        },
+        prd_audit: { ...baseEntry, laps: 5, effectiveLapCap: 5, adjustmentsKnown: true, adjustments: [adjustment('prd-raise-1'), adjustment('prd-raise-2')] },
+        build_review: { ...baseEntry, cumulative: 1 },
+      },
+    });
+    try {
+      const childPath = join(fixture.worktree, '.pipeline', 'children', '2');
+      await mkdir(childPath, { recursive: true });
+      await writeFile(join(childPath, 'kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: {
+          architecture_review_as_built: { ...baseEntry, laps: 0, adjustmentsKnown: true },
+          prd_audit: { ...baseEntry, laps: 0, adjustmentsKnown: true },
+          build_review: { ...baseEntry, cumulative: 4, effectiveLimit: 6 },
+          restack: { ...baseEntry, cumulative: 2, lastReason: 'child two restack' },
+        },
+      }));
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: g1');
+
+      const human = await inspect(fixture, '2');
+      expect(human.code).toBe(0);
+      expect(human.output).toContain('Kickback budget (architecture_review_as_built): 3/4 consumed; 1 remaining');
+      expect(human.output).toContain('Adjustment history: raise as-built-raise (laps)');
+      expect(human.output).toContain('Resume authorization: awaiting daemon sweep');
+      expect(human.output).toContain('Kickback budget (build_review): 4/6 consumed; 2 remaining');
+      expect(human.output).toContain('Kickback budget (restack): 0/3 consumed; 3 remaining');
+      expect(human.output).toContain('Latest reason: child two restack');
+
+      const json = await inspect(fixture, '2', 'json');
+      expect(json.code).toBe(0);
+      const parsed = JSON.parse(json.output) as { child: number; gates: Array<Record<string, unknown>> };
+      expect(parsed.child).toBe(2);
+      expect(parsed.gates.find((gate) => gate.gate === 'prd_audit')).toMatchObject({
+        consumed: 5, limit: 5, laps: 5, lapCap: 5,
+        adjustments: [expect.objectContaining({ id: 'prd-raise-1' }), expect.objectContaining({ id: 'prd-raise-2' })],
+      });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('shows a feature-wide raise in the child inspect view', async () => {
+    const fixture = await makeChildFeature({ version: 1, gates: { architecture_review_as_built: { ...baseEntry, laps: 0 } } });
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: {
+          architecture_review_as_built: {
+            ...baseEntry, laps: 3, effectiveLapCap: 3,
+            capEvidence: { gate: 'architecture_review_as_built', consumed: 3, limit: 3, latestReason: 'cap', haltGeneration: 'g1', allowance: 'laps' },
+          },
+        },
+      }));
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: g1');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'architecture_review_as_built', by: 1, rationale: 'more review', format: 'human', child: '2' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true, resolveOperator: () => 'operator', print: () => {}, appendEvent: () => {} },
+      )).toBe(0);
+      const entry = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8')).gates.architecture_review_as_built;
+      const adjustmentId = entry.adjustments[0].id;
+      const result = await inspect(fixture, '2');
+      expect(result.output).toContain('Kickback budget (architecture_review_as_built): 3/4 consumed; 1 remaining');
+      expect(result.output).toContain(`Adjustment history: raise ${adjustmentId} (laps)`);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 

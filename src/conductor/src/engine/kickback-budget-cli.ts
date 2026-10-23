@@ -198,15 +198,17 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     // here would render a budget the ledger does not actually hold.
     const refused = await reconcile(child);
     if (refused !== undefined) return refused;
-    const ledger = await readKickbackLedger(worktree, child);
-    if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
+    const flatLedger = await readKickbackLedger(worktree);
+    const childLedger = child === undefined ? flatLedger : await readKickbackLedger(worktree, child);
+    if (isUnreadableKickbackLedger(childLedger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
+    const ledgerFor = (gate: string) => WHOLE_FEATURE_GATES.has(gate) ? flatLedger : childLedger;
     const defaults = await defaultsFor(worktree);
     // Resolve plan growth from the same authored-task cap as remediation. A
     // read-only inspect deliberately does not reconcile or persist it.
-    const planGrowth = await planGrowthViewFor(worktree, ledger, child);
+    const planGrowth = await planGrowthViewFor(worktree, childLedger, child);
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
-    const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
+    const unavailable = unreadableKickbackGates(childLedger).filter((gate) => GATES.has(gate));
     // `restack` is a per-originating-child pseudo-gate backed by the cascade
     // ref.  A feature without a durable child state has no such budget, and
     // must retain the established N=1 inspect rendering.
@@ -216,14 +218,14 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
     const pendingLaps = (gate: string) =>
       gate === 'prd_audit' || gate === 'architecture_review_as_built'
-        ? ledger.pendingRepair?.charges[gate]?.laps ?? 0
+        ? childLedger.pendingRepair?.charges[gate]?.laps ?? 0
         : 0;
     const views = readable.map((gate) => kickbackBudgetView(
-      ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
+      ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
     ));
     const human = [
         ...views.map((view) => renderKickbackBudgetView(
-          ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
+          ledgerFor(view.gate).gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
           undefined, pendingLaps(view.gate),
         )),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
