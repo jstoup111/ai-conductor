@@ -192,8 +192,9 @@ function advisoryFindings(
     readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
     readonly rationale: string;
   }>();
-  for (const [sourceId, { record }] of currentBuildReviewSourceLinks(cases)) {
-    if (record.disposition !== 'advisory' || record.adjudicatedSeverity === undefined) continue;
+  for (const [sourceId, { record, link }] of currentBuildReviewSourceLinks(cases)) {
+    if (record.disposition !== 'advisory' || record.adjudicatedSeverity === undefined ||
+      (link.outcome !== 'advisory' && link.outcome !== 'merged')) continue;
     adjudicated.set(sourceId, { severity: record.adjudicatedSeverity, rationale: record.rationale });
   }
   const projected: AdvisoryFindingProjection[] = [];

@@ -1303,6 +1303,49 @@ describe('build-review findings with current custom rubrics', () => {
     ));
   });
 
+  // Covers: task:rem-as-built-rem-as-built-r16-4
+  it('reports a carried source attached to an operator-resolved advisory case only as carried', async () => {
+    const { aggregate, identity } = customJudgedAggregate({ severity: 'critical' });
+    const sourceId = `portablePolicy:${identity.id}`;
+    const state: RemediationCaseStoreState = {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-carried-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low',
+        rationale: 'This source was already carried by the operator.', confidence: 'high', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'carried', recordedAt: '2026-10-23T00:00:00.000Z' }],
+        effect: { kind: 'none' }, adjudicatedSeverity: 'nit',
+        operatorResolution: { operator: 'release-operator', rationale: 'The carried risk remains accepted.', resolvedAt: '2026-10-23T01:00:00.000Z' },
+      }],
+    };
+    const loadConfig = async () => ({
+      ok: true as const, warnings: [],
+      config: { build_review: { custom_rubrics: {
+        portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_severity: 'minor' },
+      } } },
+    });
+
+    const output = await jsonFindings(findingsDeps(aggregate, {
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+      loadConfig,
+    }));
+
+    expect(output).toMatchObject({ carriedSources: [{ sourceId, caseId: 'case-carried-advisory' }] });
+    expect(output).not.toHaveProperty('advisoryFindings');
+
+    const human = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      ...findingsDeps(aggregate, {
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+        loadConfig,
+      }),
+      print: human,
+    })).resolves.toBe(0);
+
+    const humanOutput = human.mock.calls[0]![0] as string;
+    expect(humanOutput).toContain(`Carried source: ${sourceId}; case: case-carried-advisory;`);
+    expect(humanOutput).not.toContain(`Advisory finding: ${identity.id};`);
+  });
+
   // Covers: task:16, task:rem-prd-audit-r16-1
   it('reads persisted v3 and custom-v1 findings with no severity without creating advisories', async () => {
     const builtin = {
