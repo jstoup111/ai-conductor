@@ -1379,17 +1379,19 @@ refused and changes nothing.
 gate's effective lap limit by `--by`; for a plan-growth halt it increases the feature's effective
 plan-growth cap by `--by`. `reset` returns only a gate's lap count to zero without lowering an
 already authorized effective limit, and refuses plan-growth evidence; use `raise` for that recovery.
-Inspect shows the effective plan-growth cap and whether it is config-derived or raised. Without
-`--child`, it computes that cap from the feature's resolved plan without rewriting the ledger; when
-no plan resolves and the cap was not
-raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
+Inspect shows the effective plan-growth cap and whether it is config-derived or raised. With or
+without `--child`, it computes that feature-wide cap from the feature's resolved plan without
+rewriting the ledger; when no plan resolves and the cap was not raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
 mutation, the command temporarily parks an unparked feature while it records the authorization and
 removes that temporary park after success. It preserves a park that already existed; unpark that
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
 
-`inspect --child <k>` reads child `k`'s ledger instead of the flat one. Human output starts with
-`Child: <k>`; JSON adds a `child` field. `raise --child <k>` and `reset --child <k>` check cap evidence
-in, and apply the authorization to, child `k`'s ledger. See
+`inspect --child <k>` reads `build_review` from child `k`'s ledger. The feature-wide gates
+`prd_audit` and `architecture_review_as_built`, their pending charges, and plan growth always come
+from the flat ledger, so every child view shows the same feature-wide values; inspect reconciles
+both ledgers first. Human output starts with `Child: <k>`; JSON adds a `child` field.
+`raise --child <k>` and `reset --child <k>` for `build_review` check cap evidence in, and apply the
+authorization to, child `k`'s ledger; the feature-wide gates always use the flat ledger. See
 [Per-child selection](#per-child-selection---child).
 
 `--gate restack` recovers a [restack cascade cap](configuration.md#restack) halt and requires

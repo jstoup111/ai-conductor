@@ -1,10 +1,11 @@
-// Covers: task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
+// Covers: task:1, task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
 import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildOutcomeRung, Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { readKickbackLedger, type KickbackLedger, type PendingRepair } from '../../src/engine/kickback-ledger.js';
 import type { BuildOutcomeStore } from '../../src/engine/build-outcome.js';
 import { sameNoOpCycle } from '../../src/engine/build-outcome.js';
@@ -72,6 +73,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       growthCap?: number;
       authoredTasks?: number;
       buildResult?: { success: true; model?: string; effort?: 'low' | 'medium' | 'high' };
+      activeRegionChild?: number;
     } = {},
   ): Promise<{
     build: ReturnType<typeof vi.fn>;
@@ -109,7 +111,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     if (options.treeHash !== undefined) {
       vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(options.treeHash);
     }
-    await new Conductor({
+    const conductor = new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
       stepRunner: runner,
@@ -120,7 +122,11 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
         prd_audit: { max_remediation_laps: 1, max_appended_tasks: options.growthCap ?? 5, max_appended_ratio: 1 },
         architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
       },
-    } as never).run();
+    } as never);
+    if (options.activeRegionChild !== undefined) {
+      (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild = parseChildId(options.activeRegionChild);
+    }
+    await conductor.run();
     return { build };
   }
 
@@ -453,6 +459,45 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(ledger.gates.architecture_review_as_built?.capEvidence).toMatchObject({
       allowance: 'laps', consumed: 3, limit: 3,
     });
+  });
+
+  it('renders a child inspect whole-feature cap line identically to its real child-qualified halt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-kickback-inspect-root-'));
+    const originalDir = dir;
+    dir = join(root, '.worktrees', 'transition');
+    statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    try {
+      await runBuild({
+        receiptId: 'child-as-built-exhausted', taskIds: ['rem-1'],
+        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+      }, {
+        version: 1,
+        gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      }, { activeRegionChild: 2 });
+
+      const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+      expect(halt).toContain('for child 2');
+      const childPipeline = join(dir, '.pipeline', 'children', '2');
+      await mkdir(childPipeline, { recursive: true });
+      await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: { architecture_review_as_built: entry(0) },
+      }));
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'transition', format: 'human', child: '2' },
+        { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
+      )).toBe(0);
+      const haltLine = halt.split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      const inspectLine = output.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      expect(inspectLine).toBe(haltLine);
+    } finally {
+      dir = originalDir;
+      statePath = join(dir, '.pipeline', 'conduct-state.json');
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('fails closed before BUILD for a malformed pending repair', async () => {

@@ -8,7 +8,7 @@ import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readGrowth, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackGateEntry, type KickbackLedger } from './kickback-ledger.js';
+import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackGateEntry, type KickbackLedger } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView, withPendingGrowth, type KickbackPlanGrowthView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
@@ -16,7 +16,7 @@ import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
-import { kickbackBudgetFallbackLimit, prdAuditAppendCap, readPlanGrowthBudget } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget } from './remediation-caps.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
@@ -49,33 +49,14 @@ async function defaultsFor(worktree: string): Promise<Record<string, number>> {
 }
 
 /** Resolve the shared plan-growth accounting view without consulting halt prose. */
-async function planGrowthViewFor(worktree: string, ledger: KickbackLedger, child?: ChildId): Promise<KickbackPlanGrowthView> {
+async function planGrowthViewFor(worktree: string, ledger: KickbackLedger): Promise<KickbackPlanGrowthView> {
   const config = await loadConfig(worktree);
-  if (child === undefined) {
-    const budget = await readPlanGrowthBudget(worktree, config.ok ? config.config : {} as HarnessConfig, { persist: false });
-    return withPendingGrowth({
-      ...budget.growth,
-      cap: budget.authoredSource === 'unresolved' && budget.capSource === 'config-derived' ? null : budget.cap,
-      capSource: budget.capSource,
-      authoredSource: budget.authoredSource,
-    }, ledger.pendingRepair);
-  }
-
-  // Child inspections retain their child-ledger accounting path. Feature-wide
-  // plan selection and non-persisting reconciliation apply only to non-child
-  // operator views.
-  const storedGrowth = ledger.growth ?? await readGrowth(worktree, 0);
-  const configGrowthCap = prdAuditAppendCap(
-    config.ok ? config.config : {} as HarnessConfig,
-    storedGrowth.authored,
-  );
-  const cap = ledger.effectiveGrowthCap ?? configGrowthCap;
+  const budget = await readPlanGrowthBudget(worktree, config.ok ? config.config : {} as HarnessConfig, { persist: false });
   return withPendingGrowth({
-    ...storedGrowth,
-    remaining: Math.max(0, cap - storedGrowth.added),
-    cap,
-    capSource: ledger.effectiveGrowthCap === undefined ? 'config-derived' : 'raised',
-    authoredSource: ledger.growth === undefined ? 'unresolved' : 'ledger',
+    ...budget.growth,
+    cap: budget.authoredSource === 'unresolved' && budget.capSource === 'config-derived' ? null : budget.cap,
+    capSource: budget.capSource,
+    authoredSource: budget.authoredSource,
   }, ledger.pendingRepair);
 }
 
@@ -198,15 +179,26 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     // here would render a budget the ledger does not actually hold.
     const refused = await reconcile(child);
     if (refused !== undefined) return refused;
-    const ledger = await readKickbackLedger(worktree, child);
-    if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
+    if (child !== undefined) {
+      const refusedFlat = await reconcile(undefined);
+      if (refusedFlat !== undefined) return refusedFlat;
+    }
+    const flatLedger = await readKickbackLedger(worktree);
+    const childLedger = child === undefined ? flatLedger : await readKickbackLedger(worktree, child);
+    if (isUnreadableKickbackLedger(flatLedger) || isUnreadableKickbackLedger(childLedger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
+    const ledgerFor = (gate: string) => WHOLE_FEATURE_GATES.has(gate) ? flatLedger : childLedger;
     const defaults = await defaultsFor(worktree);
     // Resolve plan growth from the same authored-task cap as remediation. A
     // read-only inspect deliberately does not reconcile or persist it.
-    const planGrowth = await planGrowthViewFor(worktree, ledger, child);
+    const planGrowth = await planGrowthViewFor(worktree, flatLedger);
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
-    const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
+    const unavailable = child === undefined
+      ? unreadableKickbackGates(flatLedger).filter((gate) => GATES.has(gate))
+      : [
+          ...unreadableKickbackGates(flatLedger).filter((gate) => GATES.has(gate) && WHOLE_FEATURE_GATES.has(gate)),
+          ...unreadableKickbackGates(childLedger).filter((gate) => GATES.has(gate) && !WHOLE_FEATURE_GATES.has(gate)),
+        ];
     // `restack` is a per-originating-child pseudo-gate backed by the cascade
     // ref.  A feature without a durable child state has no such budget, and
     // must retain the established N=1 inspect rendering.
@@ -216,14 +208,14 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const liveHaltGeneration = await readKickbackHaltGeneration(worktree);
     const pendingLaps = (gate: string) =>
       gate === 'prd_audit' || gate === 'architecture_review_as_built'
-        ? ledger.pendingRepair?.charges[gate]?.laps ?? 0
+        ? flatLedger.pendingRepair?.charges[gate]?.laps ?? 0
         : 0;
     const views = readable.map((gate) => kickbackBudgetView(
-      ledger.gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
+      ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
     ));
     const human = [
         ...views.map((view) => renderKickbackBudgetView(
-          ledger.gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
+          ledgerFor(view.gate).gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
           undefined, pendingLaps(view.gate),
         )),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
@@ -380,8 +372,8 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       ledgerChild,
     );
     committed = true;
-    const adjustedLedger = await readKickbackLedger(worktree, ledgerChild);
-    const planGrowth = await planGrowthViewFor(worktree, adjustedLedger, ledgerChild);
+    const flatLedger = await readKickbackLedger(worktree);
+    const planGrowth = await planGrowthViewFor(worktree, flatLedger);
     print(`${renderKickbackBudgetView(applied, gate, defaults[gate], planGrowth)}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
   } catch (error) {
