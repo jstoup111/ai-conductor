@@ -1,4 +1,4 @@
-// Covers: task:2, task:30
+// Covers: task:2, task:30, task:rem-prd-audit-r18-1
 import { describe, expect, it } from 'vitest';
 
 import {
