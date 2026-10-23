@@ -100,7 +100,7 @@ As the operator, I want an agent that cannot produce a test to record that hones
 
 **Requirement:** adr-2026-08-22-done-when-evidence-at-task-close D8
 
-Only checks carrying an explicit `unverified` task-close record count as unverified. A build whose tasks are all resolved and which has no such record and no `pending-judgement` record completes exactly as before.
+Only checks carrying an explicit `unverified` task-close record count as unverified. A build whose tasks are all resolved, which has no such record and no `pending-judgement` record, and in which the remediation-closure judgement reopens no task (`adr-2026-08-22-done-when-evidence-at-task-close` D19), completes exactly as before.
 
 As the operator, I want BUILD to get one chance to fix unverified checks before moving on, so that most gaps are fixed while the code is fresh and none of them stalls the feature.
 
