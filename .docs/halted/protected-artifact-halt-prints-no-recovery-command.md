@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-10-23T09:46:34.867Z
 Slug: protected-artifact-halt-prints-no-recovery-command
 Class: needs-human
 Halting step: unknown
