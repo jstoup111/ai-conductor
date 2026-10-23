@@ -96,6 +96,19 @@ describe('config consumer registry', () => {
     });
   });
 
+  it('declares min_severity for built-in and custom build-review rubrics', () => {
+    expect(CONFIG_CONSUMER_KEY_SETS['build_review.rubrics']).toContain('min_severity');
+    expect(CONFIG_CONSUMER_KEY_SETS['build_review.custom_rubrics']).toContain('min_severity');
+    expect(configConsumerRegistry).toMatchObject({
+      'build_review.rubrics.min_severity': {
+        consumer: 'src/conductor/src/engine/resolved-config.ts',
+      },
+      'build_review.custom_rubrics.min_severity': {
+        consumer: 'src/conductor/src/engine/resolved-config.ts',
+      },
+    });
+  });
+
   it('registers the BUILD child cursor as a direct stacked-PR enablement consumer', () => {
     const childCursorSource = readFileSync(new URL('../../src/engine/child-cursor.ts', import.meta.url), 'utf8');
 
