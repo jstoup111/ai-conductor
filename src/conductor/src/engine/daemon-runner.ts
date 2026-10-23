@@ -409,7 +409,7 @@ export function makeRunFeature(
     let featureRun: FeatureRunScope | undefined;
     let featureLog = log;
     let providerExecution: ProviderExecutionContext | undefined;
-    let endDispatch: ((outcome: 'complete' | 'halted' | 'terminated') => Promise<void>) | undefined;
+    let endDispatch: (outcome: 'complete' | 'halted' | 'terminated') => Promise<FeatureOutcome['halt'] | undefined> = async () => undefined;
     let dispatchEnded = false;
     let haltingStep: string | undefined;
     try {
