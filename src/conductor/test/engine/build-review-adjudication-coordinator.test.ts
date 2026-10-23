@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de
+// Covers: task:1, task:3, task:4, task:5, task:6, task:7, task:8, task:12, task:14, task:16, task:34, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-asbuilt-b00b54a4-5-r1, task:rem-as-built-rem-asbuilt-0d789f28-1-r1, task:rem-prd-audit-refusal-d18cb085-2ffb-44bf-9999-75aa58a055de, task:rem-prd-audit-r18-2
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -343,6 +343,29 @@ function failOnlyDecisionStopMutation(reason: 'lock-timeout' | 'malformed-state'
 describe('coordinateBuildReviewAdjudication', () => {
   const customAggregate = customMixedAggregate();
   const customSource = projectBuildReviewAggregateSources(customAggregate)!.find((source) => source.rubric === 'security')!;
+
+  it('rejects an advisory judgement when its live source rubric lacks a declared threshold', async () => {
+    const advisoryJudgement = (): RemediationCaseJudgement => ({
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'advisory', caseRef: 'advisory-case' }],
+      cases: [{
+        caseRef: 'advisory-case', disposition: 'advisory', priority: 'low', confidence: 'high',
+        rationale: 'The reviewer finding is below the declared severity threshold.',
+        effect: { kind: 'none' }, adjudicatedSeverity: 'minor',
+      }],
+    });
+
+    const rejected = await coordinateBuildReviewAdjudication({
+      ...input(await projectRoot(), async () => advisoryJudgement()),
+      declaredSeverityThresholds: { security: 'major' },
+    });
+
+    expect(rejected).toMatchObject({
+      ok: false,
+      detail: 'invalid remediation judgement invalid-advisory-threshold',
+    });
+  });
+
   it('routes an explicitly bound accepted action re-raise through the carry lane', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

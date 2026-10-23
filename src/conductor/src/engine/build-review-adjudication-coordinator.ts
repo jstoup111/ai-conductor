@@ -726,6 +726,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, {
     existingCaseIds: prior.state.cases.map((record) => record.id),
     admittedTaskIds: planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
+    sourceRubrics: Object.fromEntries(dispatchSources.map((source) => [
+      buildReviewAdjudicationSourceId(source), source.rubric,
+    ])),
+    declaredSeverityThresholds: input.declaredSeverityThresholds,
   });
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
   // The v2 consistency/escalation gate is an effect authority, not advisory
