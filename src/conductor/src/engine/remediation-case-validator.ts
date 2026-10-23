@@ -38,12 +38,17 @@ export type RemediationCaseGraphRejection =
   | 'missing-admission-task'
   | 'duplicate-admission-task'
   | 'unknown-admission-task'
-  | 'missing-admission-rationale';
+  | 'missing-admission-rationale'
+  | 'invalid-advisory-threshold';
 
 /** Engine-supplied identities; provider output cannot expand either set. */
 export interface RemediationCaseValidationReferences {
   readonly existingCaseIds?: readonly string[];
   readonly admittedTaskIds?: readonly string[];
+  /** Rubric identity for each frozen source supplied to the judgement. */
+  readonly sourceRubrics?: Readonly<Record<string, string>>;
+  /** Resolved non-nit thresholds declared by the operator, keyed by rubric. */
+  readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
 }
 
 export interface ProposedRemediationCase {
@@ -152,6 +157,17 @@ function outcomeMatchesDisposition(
     || (outcome === 'advisory' && disposition === 'advisory');
 }
 
+function hasDeclaredAdvisoryThreshold(
+  sourceId: string,
+  references: RemediationCaseValidationReferences,
+): boolean {
+  const rubric = references.sourceRubrics?.[sourceId];
+  const threshold = rubric === undefined
+    ? undefined
+    : references.declaredSeverityThresholds?.[rubric];
+  return threshold !== undefined && threshold !== 'nit';
+}
+
 function validateConsistency(
   currentSources: ReadonlySet<string>,
   casesByRef: ReadonlyMap<string, RemediationCaseRow>,
@@ -234,6 +250,9 @@ export function validateRemediationCaseGraph(
       }
     } else if (!outcomeMatchesDisposition(source.outcome, caseRow.disposition)) {
       return { ok: false, reason: 'contradictory-source-outcome' };
+    }
+    if (caseRow.disposition === 'advisory' && !hasDeclaredAdvisoryThreshold(source.sourceId, references)) {
+      return { ok: false, reason: 'invalid-advisory-threshold' };
     }
 
     seenSources.add(source.sourceId);

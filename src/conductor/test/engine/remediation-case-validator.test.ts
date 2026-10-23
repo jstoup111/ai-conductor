@@ -157,7 +157,58 @@ const VALID_CASE_V2_REFUTATION = {
   ],
 } as const satisfies RemediationCaseJudgement;
 
+function advisoryJudgement(mode: 'case-v1' | 'case-v2'): RemediationCaseJudgement {
+  const base = mode === 'case-v1' ? VALID_JUDGEMENT : VALID_CASE_V2_JUDGEMENT;
+  return {
+    ...base,
+    sourceOutcomes: [
+      { ...base.sourceOutcomes[0], outcome: 'advisory' },
+      ...base.sourceOutcomes.slice(1),
+    ],
+    cases: [{
+      ...base.cases[0],
+      disposition: 'advisory',
+      rationale: 'The finding is below the configured operator threshold.',
+      effect: { kind: 'none' },
+      adjudicatedSeverity: 'minor',
+    }, ...base.cases.slice(1)],
+  } as RemediationCaseJudgement;
+}
+
+const SOURCE_RUBRICS = Object.freeze(Object.fromEntries(
+  CURRENT_SOURCE_IDS.map((sourceId) => [sourceId, 'testQuality']),
+));
+
+function advisoryReferences(
+  mode: RemediationCaseJudgement['mode'],
+  declaredSeverityThresholds: Readonly<Record<string, 'major'>>,
+) {
+  return {
+    ...(mode === 'case-v2' ? CASE_V2_ADMISSION : {}),
+    sourceRubrics: SOURCE_RUBRICS,
+    declaredSeverityThresholds,
+  };
+}
+
 describe('remediation case graph validator', () => {
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement when no rubric threshold is declared', (_mode, judgement) => {
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement,
+      advisoryReferences(judgement.mode, {}),
+    )).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement when its source rubric lacks a threshold', (_mode, judgement) => {
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement,
+      advisoryReferences(judgement.mode, { security: 'major' }),
+    )).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
   it('reconstructs every current source through exactly one canonical case', () => {
     const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, VALID_JUDGEMENT);
 
