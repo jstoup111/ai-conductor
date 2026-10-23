@@ -144,6 +144,16 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 > This is the predecessor's decision 5 store used as designed: the occurrence is emitted on the
 > spine (D4.5), and the store carries it as durable control input for later judgement.
 
+> **Amended 2026-10-19 by #3298:** D4.2 kept the result contract at `v3` because `confidence` is
+> optional. A required, reviewer-assigned `severity` (critical, major, minor, nit) now moves fresh
+> built-in results to `v4`. Because contract version is part of built-in finding identity, every
+> built-in finding id re-keys once at upgrade (custom ids are unchanged), and stored `v3` dispositions invalidate through the existing
+> `build_review_disposition_version_invalidated` path; where remediate binds the re-keyed finding to
+> the accepted case, #3271 still carries it. D4.3's buckets gain `advisory`, classified
+> after `suppressed`: a finding whose severity is strictly below its rubric's declared `min_severity`
+> never reaches remediate, is never charged, and is recorded on the same event, seam and store
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D2, D4, D5).
+
 ### D5 — Exact-id recurrence of a settled finding does not re-dispatch the judge
 
 > **Amended 2026-09-06 by #2383:** The predecessor's decision 7 says a previously deferred or
@@ -180,6 +190,13 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   exact id, so a refuted claim is neither re-dispatched to the judge nor halted as a regression.
 >   A `refute` case whose deferral effect is `reserved` or `failed` does not satisfy the predicate,
 >   exactly as D5.2 prescribes for every other unfinished effect.
+
+> **Amended 2026-10-19 by #3298:** D5.1's finalized cases also include a remediate case with
+> disposition `advisory` and effect `none`, read through the D5.5 authoritative link. That case
+> settles only while every source rubric's current `min_severity` stays strictly above the case's
+> adjudicated severity. Lowering or removing
+> the threshold makes its sources live again. The predicate remains read-only
+> (adr-2026-10-19-build-review-finding-severity-advisory-threshold D6, D7).
 
 > **Amended 2026-10-19 by #3292:** Source ownership is scoped to open cases, and an unbound
 > re-raise of resolved history is admitted. The predecessor's D5 store kept one case per source id
@@ -219,6 +236,48 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   that would add a second open owner of a source is refused this way. The named halt is that
 >   escalation's durable stopping point under portable-build-review-policy D9. Superseding an open
 >   owner with a stop is #3005's decision and is not made here.
+
+> **Amended 2026-10-23 by #3124:** An undeclared unbound re-raise is a recorded recurrence that
+> shares its prior case's attempt limit. D5.6 read every unbound proposal as "the judge's statement
+> that the case is not that one". That let a returning defect open fresh repair cycles until the
+> feature-wide kickback cap stopped it, with nothing linking the new case to the attempts that
+> already failed. The operator's goal is fewer halts, so the safe default is a bounded autonomous
+> repair, not a halt. This amendment narrows D5.6 for `act` and adds the decisions below.
+>
+> - **D5.8 — Distinctness is declared, never inferred.** A remediate case row with disposition `act`
+>   and no `existingCaseId` may carry `distinctFrom`: one or more `{ caseId, reason }` entries, each
+>   with a non-empty bounded reason. An entry counts only when its `caseId` is the D5.5
+>   authoritative owner of one of the row's sources, and that owner is a resolved `act` case. The
+>   engine drops every other entry and halts on none. A row with a malformed `distinctFrom` shape is
+>   rejected like any other malformed artifact. Nothing infers distinctness or sameness from prose,
+>   summaries, or tree movement.
+> - **D5.9 — An undeclared re-raise is a recurrence.** When reconciliation mints a new `act` case
+>   whose sources' authoritative owners include resolved `act` cases that no counted entry names,
+>   the new case is stamped `recurrenceOf` with those owners' ids. A case named by a counted entry
+>   is recorded on the new case as `distinctFrom` with its reason, and the new case starts no
+>   lineage with it. Both fields are optional, engine-stamped, and written only on the new case at
+>   creation. Every resolved row stays byte-identical, and the store version is unchanged. The
+>   frozen prior-case projection the judge reads exposes both fields, and `build-review findings`
+>   shows them next to the case they reference.
+> - **D5.10 — A lineage shares one attempt limit of three.** A case's lineage is that case plus
+>   every case reachable through `recurrenceOf`. Its attempt count is the number of distinct
+>   lineage `act` cases whose action effect is `applied`, read from the store, not from lap-local
+>   work-order evidence. Before reconciliation reserves any effect, the coordinator checks every
+>   undeclared recurrence proposal. A proposal whose lineage already counts three attempts does not
+>   reconcile. Instead its live sources are linked to the authoritative resolved owner through the
+>   existing halting-binding writer, and the lap halts through the existing operator-acceptance-aware
+>   halt as `semantic remediation case recurrence limit <case id>`, naming every lineage case id and
+>   the attempt count. Under the limit, the recurrence is admitted and charged exactly as D5.6
+>   prescribes. The cumulative kickback cap still applies on top. The limit is a fixed engine
+>   constant, not configuration.
+> - **D5.11 — Recurrence is reported on the existing spine.** `remediation_case_reconciled` for a
+>   newly opened case carries optional `recurrenceOf` and `distinctFrom` (case ids, with reasons
+>   for distinct). `remediation_semantic_repeat_halt` gains the reason `recurrence-limit` and an
+>   optional `lineageCaseIds`. No new event type, sink entry, or sidecar is added. Non-`act`
+>   dispositions, decision and consistency stops (D5.7, #3005), explicit `existingCaseId` rebinds
+>   (the predecessor D7 regression halt and carry), and resolved rows are unchanged.
+
+> **Amended 2026-10-20 by #3271:** The settled predicate of D5.1 also admits a source by exact id when its D5.5 authoritative link is `carried`. A binding to a carry-eligible case is classified `carry` before D5.6's explicit-rebind regression halt and before D5.7's decision-stop persistence, so neither applies to it. D5.4's unchanged-resolved-row rule gains three engine writers that may change a resolved row: `finalize` acceptance origins, the carry lane, and reuse-halt source linking (adr-2026-10-20-operator-acceptance-is-durable-case-state D2, D3). D5.2's exclusion of `failed` and `reserved` action cases from settlement no longer applies to retirement: such a case retires under the shared retirement predicate when every source is covered by operator acceptance or carry, or is no longer raised on a mechanically healthy lap (adr-2026-10-20-operator-acceptance-is-durable-case-state D4, D5).
 
 ## Consequences
 

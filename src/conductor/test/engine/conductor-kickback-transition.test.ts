@@ -1,10 +1,11 @@
-// Covers: task:6, task:12, task:rem-prd-audit-11-r3
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:1, task:4, task:5, task:6, task:12, task:rem-prd-audit-11-r3
+import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildOutcomeRung, Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { readKickbackLedger, type KickbackLedger, type PendingRepair } from '../../src/engine/kickback-ledger.js';
 import type { BuildOutcomeStore } from '../../src/engine/build-outcome.js';
 import { sameNoOpCycle } from '../../src/engine/build-outcome.js';
@@ -42,6 +43,25 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     lastReason: 'blocking finding', priorVerdict: true, resolvedBefore: 0,
   });
 
+  const asBuiltFindings = [
+    {
+      gate: 'architecture_review_as_built' as const,
+      finding: 'as-built:a:1',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'Task 5',
+      summary: 'first as-built finding',
+      outcome: 'remediated' as const,
+    },
+    {
+      gate: 'architecture_review_as_built' as const,
+      finding: 'as-built:a:2',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'Task 5',
+      summary: 'second as-built finding',
+      outcome: 'remediated' as const,
+    },
+  ];
+
   async function runBuild(
     pendingRepair: PendingRepair | unknown,
     ledger: Omit<KickbackLedger, 'pendingRepair'>,
@@ -50,7 +70,10 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       buildOutcome?: BuildOutcomeStore;
       treeHash?: string | null;
       effort?: 'low' | 'medium' | 'high';
+      growthCap?: number;
+      authoredTasks?: number;
       buildResult?: { success: true; model?: string; effort?: 'low' | 'medium' | 'high' };
+      activeRegionChild?: number;
     } = {},
   ): Promise<{
     build: ReturnType<typeof vi.fn>;
@@ -65,6 +88,13 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
       tasks: [{ id: 'rem-1', status: 'pending' }],
     }));
+    if (options.authoredTasks !== undefined) {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'transition.md'), Array.from(
+        { length: options.authoredTasks },
+        (_, index) => `### Task ${index + 1}: Authored work`,
+      ).join('\n'));
+    }
     await writeKickbackLedger(dir, { ...ledger, pendingRepair } as KickbackLedger);
     if (options.buildOutcome !== undefined) {
       await writeFile(join(dir, '.pipeline', 'build-outcome.json'), JSON.stringify(options.buildOutcome));
@@ -81,7 +111,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     if (options.treeHash !== undefined) {
       vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(options.treeHash);
     }
-    await new Conductor({
+    const conductor = new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
       stepRunner: runner,
@@ -89,10 +119,14 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
       config: {
         defaults: { model: 'test-model', effort: options.effort ?? 'medium', max_retries: 1, escalate: false },
-        prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
+        prd_audit: { max_remediation_laps: 1, max_appended_tasks: options.growthCap ?? 5, max_appended_ratio: 1 },
         architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
       },
-    } as never).run();
+    } as never);
+    if (options.activeRegionChild !== undefined) {
+      (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild = parseChildId(options.activeRegionChild);
+    }
+    await conductor.run();
     return { build };
   }
 
@@ -366,7 +400,7 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      'Findings: S1.1, S1.2',
+      'Findings (prd_audit): S1.1, S1.2',
     );
   });
 
@@ -393,7 +427,9 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(allowance, 'i'));
     if (Object.hasOwn(charges, 'prd_audit')) {
-      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('Findings: S2.1');
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+        _name.includes('as-built') ? 'Also pending (prd_audit): S2.1' : 'Findings (prd_audit): S2.1',
+      );
     }
     await expect(readFile(statePath, 'utf8')).resolves.not.toMatch(/"build": "done"/);
     await expect(readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).resolves.toMatch(/"status":"pending"/);
@@ -425,13 +461,275 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     });
   });
 
+  it('renders a child inspect whole-feature cap line identically to its real child-qualified halt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'conductor-kickback-inspect-root-'));
+    const originalDir = dir;
+    dir = join(root, '.worktrees', 'transition');
+    statePath = join(dir, '.pipeline', 'conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    try {
+      await runBuild({
+        receiptId: 'child-as-built-exhausted', taskIds: ['rem-1'],
+        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+      }, {
+        version: 1,
+        gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      }, { activeRegionChild: 2 });
+
+      const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+      expect(halt).toContain('for child 2');
+      const childPipeline = join(dir, '.pipeline', 'children', '2');
+      await mkdir(childPipeline, { recursive: true });
+      await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: { architecture_review_as_built: entry(0) },
+      }));
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'transition', format: 'human', child: '2' },
+        { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
+      )).toBe(0);
+      const haltLine = halt.split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      const inspectLine = output.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      expect(inspectLine).toBe(haltLine);
+    } finally {
+      dir = originalDir;
+      statePath = join(dir, '.pipeline', 'conduct-state.json');
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed before BUILD for a malformed pending repair', async () => {
     const { build } = await runBuild({ receiptId: '', taskIds: [], charges: {} }, {
       version: 1, gates: { prd_audit: entry(), architecture_review_as_built: entry() }, growth: { authored: 4, added: 0, byGate: {} },
     });
 
     expect(build).not.toHaveBeenCalled();
-    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/kickback|allowance/i);
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Pending remediation findings are unavailable because the repair record is malformed.');
+    expect(halt).not.toContain('Findings (');
+    expect(halt).not.toContain('Also pending (');
+  });
+
+  it('leads an as-built exhaustion with its findings and retains PRD findings as also pending', async () => {
+    const { build } = await runBuild({
+      receiptId: 'as-built-findings-first', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
+      prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry(1) },
+      growth: { authored: 4, added: 0, byGate: {} },
+      pendingAsBuiltRemediationFindings: asBuiltFindings,
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Findings (architecture_review_as_built): as-built:a:1, as-built:a:2');
+    expect(halt).toContain('Also pending (prd_audit): S5.1, S5.2, S5.3');
+    expect(halt).not.toContain('Findings: S5.1');
+    expect(halt).toContain('Blocking findings:\nas-built:a:1');
+    expect((await readKickbackLedger(dir)).gates.architecture_review_as_built?.capEvidence?.latestReason).toMatch(
+      /^Findings \(architecture_review_as_built\): as-built:a:1/,
+    );
+  });
+
+  it('leads a PRD exhaustion with its criteria and retains as-built findings as also pending', async () => {
+    const { build } = await runBuild({
+      receiptId: 'prd-findings-first', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
+      prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(1), architecture_review_as_built: entry() },
+      growth: { authored: 4, added: 0, byGate: {} },
+      pendingAsBuiltRemediationFindings: asBuiltFindings,
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Findings (prd_audit): S5.1, S5.2, S5.3\nAlso pending (architecture_review_as_built): as-built:a:1, as-built:a:2',
+    );
+  });
+
+  it('does not add an also-pending line to a PRD-only exhaustion', async () => {
+    const { build } = await runBuild({
+      receiptId: 'prd-only-findings', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 0 } }, prdAuditCriteria: ['S1.1'],
+    }, {
+      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 4, added: 0, byGate: {} },
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Findings (prd_audit): S1.1');
+    expect(halt).not.toContain('Also pending (');
+  });
+
+  it('uses pending task ids when an as-built exhaustion has no as-built findings', async () => {
+    const { build } = await runBuild({
+      receiptId: 'as-built-task-fallback', taskIds: ['rem-1', 'rem-2'],
+      charges: { architecture_review_as_built: { laps: 1, growth: 0 } }, prdAuditCriteria: ['S5.1'],
+    }, {
+      version: 1, gates: { architecture_review_as_built: entry(1) }, growth: { authored: 4, added: 0, byGate: {} },
+    });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('Pending remediation tasks: rem-1, rem-2');
+    expect(halt).not.toContain('Findings (architecture_review_as_built): S5.1');
+  });
+
+  it('renders projected pending growth and its minimum raise when BUILD growth is exhausted', async () => {
+    const { build } = await runBuild({
+      receiptId: 'growth-projection', taskIds: ['rem-1'],
+      charges: {
+        prd_audit: { laps: 1, growth: 3 },
+        architecture_review_as_built: { laps: 1, growth: 8 },
+      },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 0, byGate: {} },
+    }, { growthCap: 10, authoredTasks: 40 });
+
+    expect(build).not.toHaveBeenCalled();
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(
+      'Plan growth: 0/10 added; 0 remaining (config-derived cap)\n' +
+      'Pending growth: 11 (prd_audit 3, architecture_review_as_built 8); would reach 11/10 when build dispatches; minimum raise 1',
+    );
+    expect(halt).toContain(
+      'Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature transition --gate architecture_review_as_built --by 1 --rationale "«why»"',
+    );
+    const uncharged = await readKickbackLedger(dir);
+    expect(uncharged.gates).toMatchObject({
+      prd_audit: { laps: 0 },
+      architecture_review_as_built: { laps: 0, capEvidence: { allowance: 'growth' } },
+    });
+    expect(uncharged.growth).toMatchObject({ added: 0, byGate: {} });
+  });
+
+  it('renders the projected minimum raise for raised and at-cap growth exhaustion', async () => {
+    const raised = await runBuild({
+      receiptId: 'raised-growth-projection', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 2 } },
+    }, {
+      version: 1, effectiveGrowthCap: 13,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 9, byGate: { prd_audit: 9 } },
+    }, { authoredTasks: 40 });
+    expect(raised.build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Plan growth: 9/13 added; 0 remaining (raised cap)\nPending growth: 5 (prd_audit 3, architecture_review_as_built 2); would reach 14/13 when build dispatches; minimum raise 1',
+    );
+
+    const atCap = await runBuild({
+      receiptId: 'at-cap-growth-projection', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 2 } },
+    }, {
+      version: 1,
+      gates: { prd_audit: entry() },
+      growth: { authored: 40, added: 10, byGate: { prd_audit: 10 } },
+    }, { growthCap: 10, authoredTasks: 40 });
+    expect(atCap.build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Plan growth: 10/10 added; 0 remaining (config-derived cap)\nPending growth: 2 (prd_audit 2); would reach 12/10 when build dispatches; minimum raise 2',
+    );
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'BUILD dispatch halted: prd_audit growth allowance exhausted',
+    );
+  });
+
+  it('settles the projected repair after a raise and leaves no HALT', async () => {
+    const { build } = await runBuild({
+      receiptId: 'raised-settlement', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 8 } },
+    }, {
+      version: 1, effectiveGrowthCap: 11,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 0, byGate: {} },
+    }, { authoredTasks: 40 });
+
+    expect(build).toHaveBeenCalledOnce();
+    const settled = await readKickbackLedger(dir);
+    expect(settled.growth?.added).toBe(11);
+    expect(settled.pendingRepair).toBeUndefined();
+    await expect(access(join(dir, '.pipeline', 'HALT'))).rejects.toThrow();
+  });
+
+  it('keeps a projected growth repair byte-identical when no raise is applied twice', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'unraised-growth-projection', taskIds: ['rem-1'],
+      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 8 } },
+    };
+    const ledger: KickbackLedger = {
+      version: 1,
+      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+      growth: { authored: 40, added: 0, byGate: {} },
+      pendingRepair,
+    };
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])), build: 'pending',
+      session_started_at: Date.now() - 1_000, run_started_at: Date.now() - 1_000, feature_desc: 'transition',
+    });
+    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: 'rem-1', status: 'pending' }] }));
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'plans', 'transition.md'), Array.from(
+      { length: 40 }, (_, index) => `### Task ${index + 1}: Authored work`,
+    ).join('\n'));
+    await writeKickbackLedger(dir, ledger);
+    const before = (await readKickbackLedger(dir)).pendingRepair;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const build = vi.fn(async () => ({ success: true }));
+      await new Conductor({
+        stateFilePath: statePath, projectRoot: dir, stepRunner: { run: async (step: string) => step === 'build' ? build() : { success: true } },
+        events: new ConductorEventEmitter(), mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false,
+        config: {
+          defaults: { model: 'test-model', effort: 'medium', max_retries: 1, escalate: false },
+          prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 },
+          architecture_review_as_built: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 },
+        },
+      } as never).run();
+      expect(build).not.toHaveBeenCalled();
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('minimum raise 1');
+      const after = await readKickbackLedger(dir);
+      expect(JSON.stringify(after.pendingRepair)).toBe(JSON.stringify(before));
+      expect(after.gates).toMatchObject({ prd_audit: { laps: 0 }, architecture_review_as_built: { laps: 0 } });
+      expect(after.growth).toMatchObject({ added: 0, byGate: {} });
+    }
+  });
+
+  it('does not offer a growth raise for lap exhaustion or malformed pending repairs', async () => {
+    await runBuild({
+      receiptId: 'lap-with-growth', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 3 } },
+    }, {
+      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 40, added: 2, byGate: {} },
+    }, { growthCap: 10, authoredTasks: 40 });
+    const lapHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(lapHalt).toContain('laps allowance exhausted');
+    expect(lapHalt).toContain('Pending growth: 3 (prd_audit 3); would reach 3/10 when build dispatches');
+    expect(lapHalt).not.toContain('minimum raise');
+    expect(lapHalt).toContain('--by «N»');
+
+    await runBuild({
+      receiptId: 'lap-without-growth', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 0 } },
+    }, {
+      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 40, added: 0, byGate: {} },
+    }, { growthCap: 10, authoredTasks: 40 });
+    const lapsOnlyHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(lapsOnlyHalt).toContain('Plan growth: 0/10 added; 10 remaining (config-derived cap)');
+    expect(lapsOnlyHalt).not.toContain('Pending growth:');
+
+    await runBuild({ receiptId: '', taskIds: [], charges: {} }, {
+      version: 1, gates: { prd_audit: entry() }, growth: { authored: 40, added: 0, byGate: {} },
+    });
+    const malformedHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(malformedHalt).toContain('Kickback budget (prd_audit): growth allowance unavailable (');
+    expect(malformedHalt).not.toContain('Pending growth:');
+    expect(malformedHalt).toContain('--by «N»');
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toContain('needs-human');
   });
 
   it.each(['build_review', 'test_suite', 'manual_test'] as const)(

@@ -44,7 +44,11 @@ export function isNoTaskProgressBuildStall(input: {
   return input.attempt >= 2 &&
     input.resolvedTasksAfter <= input.resolvedTasksBefore &&
     !input.headMovedThisAttempt &&
-    !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:');
+    // These reasons describe bounded completion work the conductor has
+    // deliberately admitted after task resolution.  Treating either as a
+    // no-progress stall would prevent its one permitted follow-up lap.
+    !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:') &&
+    !input.completionReason?.startsWith('Done-when citation refused:');
 }
 
 /**

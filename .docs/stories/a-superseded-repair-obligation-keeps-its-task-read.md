@@ -63,7 +63,7 @@ superseded obligation is still recorded. The repair can then finish instead of b
 - Given a superseded obligation, when `RepairObligationStore.close` is called for it directly, then it is still refused as `stale` with the message "Repair obligation has been superseded for this task", and the record stays open.
 
 ### Done When
-- [ ] `completeTaskDoneWhen` closes exactly the live open obligations for the task and never tries to close a superseded one.
+- [ ] `completeTaskDoneWhen` closes exactly the live open obligations for the task and never tries to close a superseded one; a live `done-when-citation` obligation settles only the re-closed checks whose new record is `verified`, as decision 13 of `adr-2026-09-06-reopened-task-resolution` defines.
 - [ ] `openRepairForTask` and `RepairObligationStore.close` agree on which obligation is superseded, because they share one definition.
 
 ## Story 3: Task seeding does not reopen a task for a superseded obligation

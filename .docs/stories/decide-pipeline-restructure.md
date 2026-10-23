@@ -39,6 +39,7 @@
   exists, then DECIDE blocks at `prd` (cannot proceed to architecture without the product spec).
 - **Negative (SHIP gate tracks):** Given `Track: technical`, when SHIP runs, then `prd-audit`
   runs against the stories with explicit no-PRD context; given `Track: product`, it also receives applicable PRD intent.
+- **Negative (only the feature's own marker counts):** Given an interactive run with no seeded track in a worktree that inherits other features' `.docs/track` markers, when the track is resolved, then it comes from the marker named for this feature or the single marker this branch wrote, adding, removing, or renaming other features' markers never changes it, and with no marker of its own the run defaults to `product`.
 
 ## S4 — PRD is product-only with the external-constraint carve-out (FR-4)
 
@@ -92,7 +93,11 @@
 ## S8 — architecture-review is convergent under kickback (FR-12)
 
 - **Happy (full pass):** Given the pre-stories run, when `architecture-review` executes, then it does
-  a full feasibility/alignment pass and produces APPROVED ADRs.
+  a full feasibility/alignment pass over the PRD's functional requirements (product) or the explore
+  output (technical), produces APPROVED ADRs, and hands off to `stories`.
+- **Negative (no not-yet-existing inputs):** Given the pre-stories run, when `architecture-review`
+  follows its instructions and verification checklist, then none of them requires stories or a plan,
+  which do not exist yet at that point.
 - **Happy (amendment):** Given a story or conflict re-opens architecture with a specific structural
   gap, when `architecture-review` re-runs, then it performs a targeted amendment addressing only that
   gap (not a from-scratch re-derivation) and converges.

@@ -80,6 +80,29 @@ The operator selected shared semantics for explicitly reopened tasks, confirmed 
 >
 > N=1 obligations omit `branch` and are unchanged.
 
+
+> **Amended 2026-10-21 by #3200:** a refused Done-when test citation becomes an admitted repair source,
+> narrowly, for the reopen that `adr-2026-08-22-done-when-evidence-at-task-close` D14 defines. Decisions
+> 1-12 are unchanged.
+>
+> 13. When the BUILD-boundary citation judgement refuses one or more checks of a task, the engine
+> admits one obligation for that task with source authority `done-when-citation`. Its finding id is
+> digested from the task id and the set of the task's currently open refused checks (check index, check
+> text, and cited reference). Admission uses the same idempotent admission, replay, and restage path as
+> the other existing-task sources. A later refusal on the same task admits a new obligation covering
+> every check still open, which supersedes the prior one under the existing current-obligation rule, so
+> exactly one citation obligation per task is live. It charges no lap and no gate allowance. The
+> per-check refusal count bounding it belongs to D14 of that ADR; it is not a repair retry counter, so
+> decision 8's "no new retry counter" stands. Under decision 4, pre-reopen trailers and the old close
+> record do not resolve the task. For decision 8, its governing review is the next BUILD-boundary
+> citation judgement of the re-closed checks: a `task done` re-close settles a listed check only when
+> its new record is `verified`, and a `pending-judgement` re-close leaves it open until that judgement.
+> It is not a gate remediation for decision 11: a plan-text change drops a listed check whose text no
+> longer appears in the plan task rather than leaving the obligation open beside the plan-change reopen.
+> The obligation resolves when none of its checks is still
+> open, whether each was re-closed and accepted, demoted under D14, dropped because its plan text
+> changed, or accepted by the operator under D16.
+
 ## Architectural Alignment
 
 This is a durable state-transition decision, so an ADR is warranted even at Medium tier. No existing ADR covers a current repair obligation spanning resolver, reconstruction, task close, and restart. The July 23 trailer-union ADR continues to own the shared resolution/authority split; its bounded freshness exception and the July 13 no-op guard qualification are amended beside their original clauses in this same DECIDE change.

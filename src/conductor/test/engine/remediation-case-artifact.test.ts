@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -337,6 +337,18 @@ describe('remediation case artifact', () => {
       ...CASE_V1,
       cases: [{ ...CASE_V1.cases[0], effectId: 'provider-effect-id' }],
     }, 'invalid-case-keys'],
+    ['operator acceptance state', {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] } }],
+    }, 'operator-owned-acceptance'],
+    ['operator resolution state', {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], operatorResolution: { operator: 'operator', rationale: 'Accepted risk.', resolvedAt: '2026-10-21T00:00:00.000Z' } }],
+    }, 'operator-owned-resolution'],
+    ['carried source outcome', {
+      ...CASE_V1,
+      sourceOutcomes: [{ ...CASE_V1.sourceOutcomes[0], outcome: 'carried' }],
+    }, 'operator-owned-carried-source-outcome'],
     ['taskless action', {
       ...CASE_V1,
       cases: [{ ...CASE_V1.cases[0], effect: { kind: 'action', route: 'build', tasks: [] } }],

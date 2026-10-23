@@ -1,4 +1,5 @@
 // Covers: task:29, task:32
+// Covers: task:1
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -129,14 +130,30 @@ describe('recovery CLIs default to the active child', () => {
     }
   });
 
-  it('reads child 2’s kickback ledger when inspect omits --child', async () => {
-    const { root } = await stackedFixture();
+  it('routes whole-feature inspect gates to the flat ledger when child 2 is the default', async () => {
+    const { root, worktree } = await stackedFixture();
+    await writeFile(join(worktree, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        architecture_review_as_built: {
+          count: 0, cumulative: 0, laps: 3, treeHash: null, lastReason: 'cap', priorVerdict: true, resolvedBefore: 0,
+          effectiveLapCap: 4, adjustmentsKnown: true,
+          adjustments: [{ id: 'flat-raise', kind: 'raise', beforeConsumed: 3, afterConsumed: 3, beforeLimit: 3, afterLimit: 4, operator: 'operator', rationale: 'more review', timestamp: '2026-10-23T00:00:00.000Z', haltGeneration: 'g1', allowance: 'laps' }],
+        },
+      },
+    }));
+    await writeFile(join(worktree, '.pipeline', 'children', '2', 'kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: { architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, adjustmentsKnown: true } },
+    }));
     const output: string[] = [];
     await expect(dispatchKickbackBudgetCommand(
-      { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+      { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
       { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
     )).resolves.toBe(0);
-    expect(JSON.parse(output.join('\n'))).toMatchObject({ feature: 'feature', child: 2 });
+    expect(output.join('\n')).toContain('Child: 2');
+    expect(output.join('\n')).toContain('Kickback budget (architecture_review_as_built): 3/4 consumed; 1 remaining');
+    expect(output.join('\n')).toContain('Adjustment history: raise flat-raise (laps)');
   });
 
   it('keeps read-only CLI default-child resolution on child 2 while repair is pending', async () => {

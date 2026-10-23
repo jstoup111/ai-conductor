@@ -1,4 +1,4 @@
-// Covers: task:1, task:10
+// Covers: task:1, task:10, task:15
 
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
@@ -16,6 +16,7 @@ import {
 } from '../../src/execution/daemon-session.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 import { COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
+import { dispatchCliEntry } from '../../src/index.js';
 
 // Daemon-session boundary enforcement. Engine-dispatched maker sessions have
 // attempted to run ai-conductor themselves (including daemon park/unpark/
@@ -57,6 +58,7 @@ describe('guardDaemonSessionInvocation', () => {
     ['config', false],
     ['test-suite', false],
     ['build-review', false],
+    ['done-when', false],
     ['finish-record', false],
   ] as const)(
     'shares the production command policy with audit callers for %s',
@@ -149,6 +151,15 @@ describe('guardDaemonSessionInvocation', () => {
       expect(guardDaemonSessionInvocation(argv, markedEnv({ CONDUCT_CONFIG: 'daemon.yml' })))
         .toMatchObject({ allowed: false });
     }
+  });
+
+  it('refuses done-when at CLI entry with its bounded operator-only identity', async () => {
+    const dispatch = vi.fn(async () => 0);
+    await expect(dispatchCliEntry({
+      argv: argvFor('done-when', 'accept', '--feature', 'slug', '--task', '24', '--check', '3', '--reason', 'manual review'),
+      environment: markedEnv(), dispatch, diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 1, refused: true });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('permits the generated commit-msg hook to invoke scope-check inside a daemon session', () => {

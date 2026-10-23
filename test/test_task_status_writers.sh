@@ -31,6 +31,12 @@ if [ ! -f "$CHECKER" ]; then
   exit 1
 fi
 
+# The aggregate verifier can invoke this fixture after Vitest has installed a
+# run root but without forwarding TMPDIR. Prefer that owned root to the real
+# system tmpdir so the fixture remains contained.
+if [ -n "${AI_CONDUCTOR_TEST_TMP_ROOT:-}" ] && { [ -z "${TMPDIR:-}" ] || [ "$TMPDIR" = "/tmp" ]; }; then
+  export TMPDIR="$AI_CONDUCTOR_TEST_TMP_ROOT"
+fi
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/task-status-writers-XXXXXX")
 cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT

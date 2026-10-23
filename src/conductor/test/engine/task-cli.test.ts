@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:26, task:15
+// Covers: task:1, task:2, task:3, task:6, task:12, task:26, task:15
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -517,6 +517,30 @@ describe('runTaskStart', () => {
   });
 
   describe('happy path — start row 7', () => {
+    it('records HEAD as startHead without changing other row fields, and preserves it on restart', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [
+        { id: '7', name: 'Task seven', status: 'pending', owner: 'build' },
+      ] }, null, 2));
+
+      await expect(runTaskStart(dir, '7', { resolveHead: async () => 'a'.repeat(40) })).resolves.toBe(0);
+      let task = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8')).tasks[0];
+      expect(task).toEqual({ id: '7', name: 'Task seven', status: 'in_progress', owner: 'build', startHead: 'a'.repeat(40) });
+
+      await expect(runTaskStart(dir, '7', { resolveHead: async () => 'b'.repeat(40) })).resolves.toBe(0);
+      task = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8')).tasks[0];
+      expect(task.startHead).toBe('a'.repeat(40));
+    });
+
+    it('still starts when resolving HEAD fails', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '7', status: 'pending' }] }));
+
+      await expect(runTaskStart(dir, '7', { resolveHead: async () => { throw new Error('git failed'); } })).resolves.toBe(0);
+      expect(JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8')).tasks[0])
+        .toEqual({ id: '7', status: 'in_progress' });
+    });
+
     it('flips row 7 to in_progress and leaves others unchanged', async () => {
       // Setup: seed task-status.json with 12 pending rows (1..12)
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -939,6 +963,66 @@ describe('runTaskDone', () => {
     });
   });
 
+  it.each([
+    ['verified replacement', true, 'resolved'],
+    ['pending replacement', false, 'open'],
+  ])('settles a done-when citation refusal only for a %s', async (_name, addAfterStart, expectedStatus) => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.mkdir(join(dir, 'test'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+      '### Task 7: Repair refused citation',
+      '**Done when:**',
+      '- [test] repaired behavior is covered.',
+      '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+      activePlanPath: '.docs/plans/feature.md',
+    }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '7', status: 'pending' }],
+    }));
+    const testPath = join(dir, 'test', 'citation-repair.test.ts');
+    const testText = "// Covers: task:7\nit('repaired behavior is covered', () => {});\n";
+    if (!addAfterStart) await fsPromises.writeFile(testPath, testText);
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'seed citation repair'], { cwd: dir });
+    const startHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    if (addAfterStart) {
+      await fsPromises.writeFile(testPath, testText);
+      await execa('git', ['add', 'test/citation-repair.test.ts'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'add repaired citation test'], { cwd: dir });
+    }
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{
+        id: '7', status: 'pending', startHead,
+        doneWhen: [{
+          check: '[test] repaired behavior is covered.',
+          evidence: 'test:test/citation-repair.test.ts::repaired behavior is covered',
+          source: 'judged', verdict: 'does-not-assert', reason: 'prior citation was refused',
+        }],
+      }],
+    }));
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const admitted = await repairs.admitOrReplay('citation-refusal', {
+      id: 'citation-refusal', planPath: '.docs/plans/feature.md', taskIds: ['7'],
+      source: { findingId: 'citation-refusal', authority: 'done-when-citation', instruction: 'repair refused citation' },
+      baseline: { head: startHead, tree: 'tree', resolvedTaskIds: [] },
+    });
+    if (!admitted.ok) throw new Error(admitted.message);
+
+    await expect(runTaskDone(dir, '7', [{
+      index: 1,
+      evidence: 'test:test/citation-repair.test.ts::repaired behavior is covered',
+    }])).resolves.toBe(0);
+
+    const state = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf8'));
+    expect(state.repairObligations.records['citation-refusal'].tasks['7'].status).toBe(expectedStatus);
+  });
+
   it('keeps a legacy plan_amendment close unresolved until a post-boundary Task trailer', async () => {
     await execa('git', ['init', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
@@ -1122,6 +1206,7 @@ describe('runTaskDone', () => {
       testText: string;
       check?: string;
       storyText?: string;
+      testAddedAfterStart?: boolean;
     }): Promise<void> {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: dir });
@@ -1155,10 +1240,17 @@ describe('runTaskDone', () => {
       await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
         tasks: [{ id: '3', status: 'pending' }],
       }));
-      await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+      if (!options.testAddedAfterStart) {
+        await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+      }
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'seed committed test'], { cwd: dir });
       await expect(runTaskStart(dir, '3')).resolves.toBe(0);
+      if (options.testAddedAfterStart) {
+        await fsPromises.writeFile(join(dir, 'test', 'close.test.ts'), options.testText);
+        await execa('git', ['add', 'test/close.test.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'add focused test after task start'], { cwd: dir });
+      }
     }
 
     async function close(evidence: string, cwd = dir): Promise<number> {
@@ -1167,7 +1259,7 @@ describe('runTaskDone', () => {
       ])!, cwd);
     }
 
-    it('closes a tagged check from a committed task-marked test and records verified', async () => {
+    it('holds a pre-existing tagged test for judgement', async () => {
       await prepareTaggedTask({
         testText: '// Covers: task:3\nit(\'closes the tagged task\', () => {});\n',
       });
@@ -1176,8 +1268,97 @@ describe('runTaskDone', () => {
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
       expect(status.tasks[0]).toMatchObject({
         status: 'completed',
+        doneWhen: [{ source: 'pending-judgement' }],
+      });
+    });
+
+    // Covers: task:6
+    it('records verified when the cited title was added after the task start', async () => {
+      await prepareTaggedTask({
+        testAddedAfterStart: true,
+        testText: '// Covers: task:3\nit(\'adds the focused test after start\', () => {});\n',
+      });
+
+      expect(await close('test:test/close.test.ts::adds the focused test after start')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed',
         doneWhen: [{ source: 'verified' }],
       });
+      await expect(fsPromises.access(join(dir, '.pipeline', 'events.jsonl'))).rejects.toThrow();
+      await expect(fsPromises.access(join(dir, '.pipeline', 'pipeline-events.jsonl'))).rejects.toThrow();
+    });
+
+    // Covers: task:6
+    it('records verified for a task-4 test added after task 3 started through a shared story criterion', async () => {
+      await prepareTaggedTask({
+        testAddedAfterStart: true,
+        testText: '// Covers: S2.1\nit(\'task 4 added shared criterion coverage\', () => {});\n',
+      });
+
+      expect(await close('test:test/close.test.ts::task 4 added shared criterion coverage')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen).toEqual([expect.objectContaining({ source: 'verified' })]);
+    });
+
+    // Covers: task:6
+    it('holds a citation for judgement when the task has no start boundary', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'pre-existing without a start boundary\', () => {});\n',
+      });
+      const statusPath = join(dir, '.pipeline', 'task-status.json');
+      const state = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      delete state.tasks[0].startHead;
+      await fsPromises.writeFile(statusPath, JSON.stringify(state));
+
+      expect(await close('test:test/close.test.ts::pre-existing without a start boundary')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed', doneWhen: [{ source: 'pending-judgement' }],
+      });
+    });
+
+    // Covers: task:6
+    it('holds a citation for judgement when its recorded start commit is no longer an ancestor', async () => {
+      await prepareTaggedTask({
+        testText: '// Covers: task:3\nit(\'pre-existing after a rebase\', () => {});\n',
+      });
+      await execa('git', ['checkout', '--orphan', 'rebased-away'], { cwd: dir });
+      await fsPromises.writeFile(join(dir, 'stale.txt'), 'stale\n');
+      await execa('git', ['add', 'stale.txt'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'stale start boundary'], { cwd: dir });
+      const rebasedAwayHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+      await execa('git', ['checkout', 'main'], { cwd: dir });
+      const statusPath = join(dir, '.pipeline', 'task-status.json');
+      const state = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      state.tasks[0].startHead = rebasedAwayHead;
+      await fsPromises.writeFile(statusPath, JSON.stringify(state));
+
+      expect(await close('test:test/close.test.ts::pre-existing after a rebase')).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf8'));
+      expect(status.tasks[0]).toMatchObject({
+        status: 'completed', doneWhen: [{ source: 'pending-judgement' }],
+      });
+    });
+
+    // Covers: task:6
+    it('records reported alongside pending-judgement for a mixed close', async () => {
+      await prepareTaggedTask({
+        check: 'the ordinary outcome is reported\n- [test] the pre-existing test is held for review',
+        testText: '// Covers: task:3\nit(\'the pre-existing test is held for review\', () => {});\n',
+      });
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '3',
+        '--done-when', '1=ordinary proof',
+        '--done-when', '2=test:test/close.test.ts::the pre-existing test is held for review',
+      ]);
+
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
+      expect(status.tasks[0].doneWhen).toEqual([
+        expect.objectContaining({ source: 'reported' }),
+        expect.objectContaining({ source: 'pending-judgement' }),
+      ]);
     });
 
     // Covers: task:5
@@ -1199,7 +1380,7 @@ describe('runTaskDone', () => {
       expect(status.tasks[0]).toMatchObject({
         status: 'completed',
         doneWhen: [
-          { source: 'verified' },
+          { source: 'pending-judgement' },
           {
             source: 'unverified',
             reason: 'the integration environment is unavailable',
@@ -1246,7 +1427,7 @@ describe('runTaskDone', () => {
       expect(stdErr.join('\n')).toContain('not a tagged Done when check');
     });
 
-    it('closes from a criterion marker and a test committed before the feature branch', async () => {
+    it('holds a criterion-marked test that predates the task start for judgement', async () => {
       await prepareTaggedTask({
         testText: '// Covers: S2.1\nit(\'proves the criterion\', () => {});\n',
       });
@@ -1256,7 +1437,7 @@ describe('runTaskDone', () => {
       expect(await close('test:test/close.test.ts::proves the criterion')).toBe(0);
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
       expect(status.tasks[0].doneWhen).toEqual(expect.arrayContaining([
-        expect.objectContaining({ source: 'verified' }),
+        expect.objectContaining({ source: 'pending-judgement' }),
       ]));
     });
 
@@ -1268,7 +1449,7 @@ describe('runTaskDone', () => {
 
       expect(await close('test:test/close.test.ts::proves from a subdirectory', join(dir, 'nested', 'work'))).toBe(0);
       const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'));
-      expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'verified' });
+      expect(status.tasks[0].doneWhen[0]).toMatchObject({ source: 'pending-judgement' });
     });
 
     // Covers: task:5

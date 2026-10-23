@@ -137,6 +137,15 @@ export interface PendingRepair {
   prdAuditCriteria?: string[];
 }
 
+/** The plan-growth impact that a durable, not-yet-dispatched repair would incur. */
+export interface PendingGrowthProjection {
+  total: number;
+  byGate: Record<string, number>;
+  projected: number;
+  minimumRaise?: number;
+  exceedingGate?: 'prd_audit' | 'architecture_review_as_built';
+}
+
 /** Current allowance snapshot for one gate named by a pending repair. */
 export interface PendingRepairSettlementBudget {
   gate: 'prd_audit' | 'architecture_review_as_built';
@@ -144,6 +153,41 @@ export interface PendingRepairSettlementBudget {
   growthCap: number;
   growth: PlanGrowth;
   authoredSource: 'plan' | 'ledger' | 'unresolved';
+}
+
+/**
+ * Project a pending repair's plan-growth charge without settling any of its
+ * gate laps or durable accounting. Charge order is significant: it identifies
+ * the first gate whose cumulative growth would exceed the cap.
+ */
+export function projectPendingGrowth(
+  added: number,
+  charges: PendingRepair['charges'] | undefined,
+  cap: number | null,
+): PendingGrowthProjection | undefined {
+  if (charges === undefined) return undefined;
+
+  const byGate: Record<string, number> = {};
+  let total = 0;
+  let cumulative = added;
+  let exceedingGate: PendingGrowthProjection['exceedingGate'];
+  for (const [gate, charge] of Object.entries(charges)) {
+    if (charge === undefined) continue;
+    total += charge.growth;
+    cumulative += charge.growth;
+    if (charge.growth > 0) byGate[gate] = charge.growth;
+    if (cap !== null && exceedingGate === undefined && cumulative > cap) {
+      exceedingGate = gate as PendingGrowthProjection['exceedingGate'];
+    }
+  }
+
+  return {
+    total,
+    byGate,
+    projected: added + total,
+    ...(cap === null ? {} : { minimumRaise: Math.max(0, added + total - cap) }),
+    ...(exceedingGate === undefined ? {} : { exceedingGate }),
+  };
 }
 
 export type PendingRepairSettlementResult =
@@ -1574,13 +1618,14 @@ export async function settlePendingRepair(
     ]>;
     const initialGrowth = ledger.growth ?? budgets[0]?.growth;
     if (initialGrowth === undefined) throw new Error('pending repair settlement requires a growth budget');
+    const cap = charges.length === 0 ? null : budgetByGate.get(charges[0]![0])?.growthCap ?? null;
+    const projection = projectPendingGrowth(initialGrowth.added, pendingRepair.charges, cap);
     const nextGrowth: PlanGrowthRecord = {
       authored: initialGrowth.authored,
       added: initialGrowth.added,
       byGate: { ...initialGrowth.byGate },
     };
     const nextGates = { ...ledger.gates };
-    let growthCap: number | undefined;
 
     for (const [gate, charge] of charges) {
       const budget = budgetByGate.get(gate);
@@ -1592,11 +1637,9 @@ export async function settlePendingRepair(
       if ((current.laps ?? 0) + charge.laps > budget.lapCap) {
         return { result: { kind: 'exhausted', gate, allowance: 'laps' } as const };
       }
-      const cap = growthCap ?? budget.growthCap;
-      if (nextGrowth.added + charge.growth > cap) {
+      if (projection?.exceedingGate === gate) {
         return { result: { kind: 'exhausted', gate, allowance: 'growth' } as const };
       }
-      growthCap = cap;
       nextGates[gate] = { ...current, laps: (current.laps ?? 0) + charge.laps };
       if (charge.growth > 0) {
         nextGrowth.added += charge.growth;
@@ -1608,7 +1651,7 @@ export async function settlePendingRepair(
     const growthChanged = charges.some(([, charge]) => charge.growth > 0);
     const recordedGrowth = growthChanged
       ? await recordGrowth(projectRoot, nextGrowth, {
-          cap: growthCap ?? nextGrowth.added,
+          cap: cap ?? nextGrowth.added,
           prepareOnly: true,
         })
       : undefined;

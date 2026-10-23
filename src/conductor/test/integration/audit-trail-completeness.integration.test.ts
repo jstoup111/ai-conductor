@@ -132,6 +132,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   remediation_adjudication_started: 'not-audited-by-design',
   remediation_adjudication_completed: 'not-audited-by-design',
   remediation_adjudication_failed: 'not-audited-by-design',
+  build_review_acceptance_carried: 'not-audited-by-design',
+  remediation_case_operator_resolved: 'not-audited-by-design',
   remediation_case_reconciled: 'not-audited-by-design',
   remediation_case_refuted: 'friction-mapped',
   prd_widening_reconciled: 'not-audited-by-design',
@@ -274,6 +276,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_inapplicable_refused: 'not-audited-by-design',
   build_active_stall: 'not-audited-by-design',
   build_done_when_unverified: 'not-audited-by-design',
+  decide_artifacts_pruned: 'not-audited-by-design',
+  done_when_citation_judged: 'not-audited-by-design',
+  done_when_citation_accepted: 'not-audited-by-design',
   remediation_routed: 'not-audited-by-design',
   remediation_rerouted: 'not-audited-by-design',
   routed_repair_phase: 'not-audited-by-design',
@@ -525,6 +530,8 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   remediation_adjudication_started: { type: 'remediation_adjudication_started', domain: 'build_review', lapId: 'lap-1' },
   remediation_adjudication_completed: { type: 'remediation_adjudication_completed', domain: 'build_review', lapId: 'lap-1', caseIds: ['case-1'], effectIds: ['effect-1'] },
   remediation_adjudication_failed: { type: 'remediation_adjudication_failed', domain: 'build_review', lapId: 'lap-1', reason: 'invalid-result' },
+  build_review_acceptance_carried: { type: 'build_review_acceptance_carried', eventId: 'carried-1', feature: 'feature', lapId: 'lap-1', sourceId: 'testQuality:finding-1', caseId: 'case-1', originSourceIds: ['testQuality:finding-0'], originLapIds: ['lap-0'] },
+  remediation_case_operator_resolved: { type: 'remediation_case_operator_resolved', eventId: 'operator-resolved-1', feature: 'feature', caseId: 'case-1', sourceIds: ['testQuality:finding-1'] },
   remediation_case_reconciled: { type: 'remediation_case_reconciled', domain: 'build_review', lapId: 'lap-1', caseId: 'case-1', resolution: 'open' },
   remediation_case_refuted: { type: 'remediation_case_refuted', domain: 'build_review', lapId: 'lap-1', caseId: 'case-1' },
   prd_widening_reconciled: { type: 'prd_widening_reconciled', sourceId: 'source-1', caseId: 'case-1', outcome: 'same-case' },
@@ -1011,6 +1018,19 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_done_when_unverified: {
     type: 'build_done_when_unverified',
     checks: [{ taskId: '1', check: '[test] proves the outcome' }],
+  },
+  decide_artifacts_pruned: {
+    type: 'decide_artifacts_pruned', removed: [], deferred: [], skipped: [], excluded: [],
+  },
+  done_when_citation_judged: {
+    type: 'done_when_citation_judged',
+    citations: [],
+  },
+  done_when_citation_accepted: {
+    type: 'done_when_citation_accepted',
+    taskId: '1',
+    check: 1,
+    reason: 'operator accepted the citation',
   },
   remediation_routed: {
     type: 'remediation_routed', eventId: 'route-1', occurredAt: '2030-01-01T00:00:00.000Z',

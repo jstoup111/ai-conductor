@@ -88,6 +88,16 @@ result and block as infrastructure failure. A contract version changes only when
 change; that change intentionally prevents an old disposition from silently matching the new
 meaning. Pure wording changes retain the version and identity.
 
+> **Amended 2026-10-19 by #3298:** The built-in rubric contract moves from `v3` to `v4` for a
+> required, reviewer-assigned `severity` that is excluded from identity, so identity semantics do
+> not change. Contract version is still an identity input, so every built-in finding id re-keys once
+> at upgrade and stored `v3` dispositions stop matching by exact identity; the operator accepted
+> that cost over a dual-version parse path. Custom finding ids do not re-key: the custom identity
+> grammar pins its own version. Where adjudication is enabled, a re-keyed finding that `remediate`
+> binds to the case holding the accepted `v3` source is carried acceptance
+> (`adr-2026-10-20-operator-acceptance-is-durable-case-state` D3, D4); any other must be
+> re-accepted (adr-2026-10-19-build-review-finding-severity-advisory-threshold D1, D2).
+
 The LLM judges what concern and anchors apply as part of rubric evaluation. Everything after that
 judgement — schema validation, canonicalization, ID creation, collision handling, and matching — is
 deterministic.
@@ -103,6 +113,8 @@ The store is never included in grader input. The raw aggregate remains an indepe
 the completion predicate and failure-detail renderer read the store afterward and suppress only the
 matching finding's blocking effect. New, unmatched, malformed, legacy, and infrastructure findings
 remain blocking.
+
+> **Amended 2026-10-20 by #3271:** Exact dispositions in this store remain the only source of accepted risk. Their effect now also extends to later re-raises that the judge binds to a case holding an acceptance origin derived from them, recorded in the remediation case store as `carried` (adr-2026-10-20-operator-acceptance-is-durable-case-state D2, D3, D9). Invalidating a disposition stops new carry admission from it.
 
 ### 3. Serialize the coordinator and CLI through one state transaction
 
@@ -158,6 +170,8 @@ Acceptance during an active kickback loop is visible to the next deterministic g
 so the feature can converge without parking or waiting for the cumulative cap. This decision does
 not make the command a general HALT clearer; existing halted-feature recovery remains authoritative.
 
+> **Amended 2026-10-20 by #3271:** A third pre-boot local operation, `build-review resolve-case`, resolves an open remediation case under the same TTY and machine-identity gate as `accept` (adr-2026-10-20-operator-acceptance-is-durable-case-state D7). `findings` additionally lists carried sources with their origin dispositions, and operator-resolved cases (adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
+
 ### 5. Reuse the external-process event ledger and one reader contract
 
 Generalize the existing external event writer for any allowlisted `ConductorEvent`, retaining
@@ -178,6 +192,8 @@ uses the same renderer/data contract. Each entry includes finding ID, rubric, su
 rationale, operator, and acceptance time. Missing or unreadable disposition state cannot fabricate
 accepted risk; a known accepted record that cannot be rendered blocks completion rather than silently
 disappearing.
+
+> **Amended 2026-10-20 by #3271:** The accepted-risk renderer also lists carried findings (id, rubric, carried-from origin id and lap) and operator-resolved cases (case id, source ids), with no operator, rationale, summary or time (#1614). An unreadable case store fabricates no carried row and is reported (adr-2026-10-20-operator-acceptance-is-durable-case-state D8).
 
 ## Event-Spine Verdict
 

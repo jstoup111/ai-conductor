@@ -1,4 +1,4 @@
-// Covers: task:5, task:19, task:rem-as-built-rem-ab2-4
+// Covers: task:1, task:5, task:19, task:rem-as-built-rem-ab2-4
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -413,7 +413,7 @@ describe('remediation case recovery', () => {
     expect(retry).toMatchObject({ kind: 'ready' });
     expect(retry.context).not.toContain('orphaned-case-id');
     expect(reduceBuildReviewAdjudication({
-      currentSourceIds: [buildReviewAdjudicationSourceId(distinctSource)], cases: persisted.state.cases, mechanical: 'healthy',
+      currentSourceIds: [buildReviewAdjudicationSourceId(distinctSource)], feature: 'remediation-case-recovery', child: undefined, cases: persisted.state.cases, mechanical: 'healthy',
     })).toMatchObject({ route: 'build', remainingMechanical: false });
   });
 
@@ -433,15 +433,22 @@ describe('remediation case recovery', () => {
       nextState: {
         version: 'v1', feature,
         cases: [{
-          id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
-          rationale: 'This applied repair remains the authoritative history.', resolution: 'resolved',
-          sources: [{ sourceId: rejectedSourceId, outcome: 'acted', recordedAt: '2026-10-10T00:00:00.000Z' }],
-          effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+          id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'This applied repair remains the authoritative history.', resolution: 'open',
+          sources: [
+            { sourceId: rejectedSourceId, outcome: 'acted', recordedAt: '2026-10-10T00:00:00.000Z' },
+            { sourceId: 'testQuality:prior-finding', outcome: 'acted', recordedAt: '2026-10-10T00:00:00.000Z' },
+          ],
+          effect: { id: 'effect-O', kind: 'action', status: 'applied', workOrderId: 'order-O' },
         }],
       },
     }));
+    await publishBuildReviewWorkOrder(projectRoot, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-O',
+      cases: [{ caseId: 'case-O', priority: 'high', tasks: [{ title: 'Repair the earlier finding' }] }],
+    });
     const savedStore = await readFile(storePath, 'utf8');
-    const savedCaseR = (JSON.parse(savedStore) as { cases: readonly unknown[] }).cases[0];
+    const savedCaseO = (JSON.parse(savedStore) as { cases: readonly unknown[] }).cases[0];
 
     const rejectedJudgement: RemediationCaseJudgement = {
       mode: 'case-v1', domain: 'build_review',
@@ -482,7 +489,7 @@ describe('remediation case recovery', () => {
     await expect(run(rejectedAggregate, rejectedJudgement, ['case-N', 'effect-N'], repeatedEvents)).resolves.toMatchObject({ ok: false });
     expect(repeatedEvents).toContainEqual(expect.objectContaining({
       type: 'remediation_adjudication_failed',
-      rejectedTransition: { invariant: 'source-linked-by-multiple-cases', caseIds: ['case-R', 'case-N'], sourceIds: [rejectedSourceId] },
+      rejectedTransition: { invariant: 'source-linked-by-multiple-cases', caseIds: ['case-O', 'case-N'], sourceIds: [rejectedSourceId] },
     }));
     expect(await readFile(storePath, 'utf8')).toBe(savedStore);
 
@@ -503,7 +510,7 @@ describe('remediation case recovery', () => {
     const recovered = await new RemediationCaseStore(projectRoot, feature).read();
     expect(recovered).toMatchObject({ ok: true, state: { cases: expect.arrayContaining([expect.objectContaining({ id: 'case-U' })]) } });
     if (!recovered.ok) throw new Error(`unexpected case-store recovery failure: ${recovered.reason}`);
-    const caseR = recovered.state.cases.find((record) => record.id === 'case-R');
-    expect(JSON.stringify(caseR)).toBe(JSON.stringify(savedCaseR));
+    const caseO = recovered.state.cases.find((record) => record.id === 'case-O');
+    expect(JSON.stringify(caseO)).toBe(JSON.stringify(savedCaseO));
   });
 });

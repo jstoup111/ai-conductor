@@ -120,6 +120,17 @@ ordinary_done_when_close_contract_holds() {
     && grep -qF "if (completion.kind === 'refused')" <<<"$run_task_done"
 }
 
+pending_and_refused_citation_contract_holds() {
+  local skill_file="$1"
+
+  grep -qF 'pending-judgement' "$skill_file" \
+    && grep -qF 'judges it when the BUILD session ends' "$skill_file" \
+    && grep -qF 'retry hint naming the check and the judge' "$skill_file" \
+    && grep -qF 'writing or citing a test that asserts the check' "$skill_file" \
+    && grep -qF -- '--unverified <n>=<reason>' "$skill_file" \
+    && ! grep -qiE 'done-when[[:space:]]+accept' "$skill_file"
+}
+
 ship_verdict_artifacts_read_only_contract_holds() {
   local pipeline_skill="$1"
   local tdd_skill="$2"
@@ -367,6 +378,25 @@ else
 
   rm -f "$ordinary_close_skill_mutation" "$ordinary_close_cli_mutation"
 fi
+
+# A citation not added during the task remains pending until the conductor's
+# BUILD-boundary judgement. The pipeline agent repairs a refusal through test
+# evidence or ordinary unverified closure; the operator-only override command
+# must not leak into this session-facing contract.
+citation_skill_mutation="$(mktemp "${TMPDIR:-/tmp}/pending-refused-citation-skill.XXXXXX")"
+sed '/judges it when the BUILD session ends/d' "$SKILL_FILE" >"$citation_skill_mutation"
+if pending_and_refused_citation_contract_holds "$citation_skill_mutation"; then
+  fail "pending/refused citation predicate rejects missing BUILD-boundary judgement guidance"
+else
+  pass "pending/refused citation predicate rejects missing BUILD-boundary judgement guidance"
+fi
+
+if pending_and_refused_citation_contract_holds "$SKILL_FILE"; then
+  pass "pipeline explains pending/refused citations without leaking the operator override command"
+else
+  fail "pipeline must explain pending/refused citations, their repair, and omit the operator override command"
+fi
+rm -f "$citation_skill_mutation"
 
 # Must reference the session-hook ADR or PreToolUse/PostToolUse hooks
 if grep -qE 'PreToolUse|PostToolUse|session-hook-task-stamping' "$SKILL_FILE"; then

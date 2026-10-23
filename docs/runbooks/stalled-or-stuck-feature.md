@@ -589,7 +589,9 @@ ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<
 ```
 
 When the budget view identifies exhausted **plan growth**, recover it with `raise`: it extends the
-growth allowance. `reset` is for lap evidence only and cannot recover a plan-growth halt.
+growth allowance. `reset` is for lap evidence only and cannot recover a plan-growth halt. The
+`Pending growth:` line states the `minimum raise` that lets the pending repair settle, and the
+halt's recovery command already uses it as `--by`; a smaller raise halts again.
 
 A `prd_audit` or as-built `kickback-cap` halt fires at the `build` transition, after the repair's tasks
 are already appended and `pending`. Once the authorization is consumed, the feature resumes into `build`
@@ -1141,7 +1143,14 @@ ai-conductor reseal \
   --clear-halt
 ```
 
-Repeat `--path` for each amended file. The command only runs from an interactive operator terminal —
+Repeat `--path` for each amended file. When the `build` step halts on a seal violation and reseal's
+own pre-write checks would accept the change, the HALT text ends with a ready-to-run command: an
+`Approve this change as an operator amendment by running, from the repository root that contains
+.worktrees/<slug>, in an interactive terminal:` line followed by `ai-conductor reseal --slug <slug>
+--path <path> ... --reason "«why»" --clear-halt`. It lists every sealed path the reseal needs and
+changes nothing — no seal write, no event. Replace `«why»` with your rationale, and run it only after
+reviewing the diff. No command is printed when reseal would refuse (for example an uncommitted or
+feature-deleted artifact); handle those by the reasons above. The command only runs from an interactive operator terminal —
 it refuses under a step subprocess or any non-TTY invocation — and refuses the whole reseal if any
 protected path outside the given `--path` list has also drifted, so it cannot be used to launder
 unrelated changes into the seal. On success it writes a new baseline at the current commit, appends a
@@ -1610,7 +1619,8 @@ The matching `remediation_adjudication_failed` event carries `rejectedTransition
 invariant: `source-linked-by-multiple-cases`, `duplicate-case-id`, `duplicate-effect-id`, or
 `invalid-next-state`. The store refused the transition and wrote nothing, so
 `.pipeline/remediation-cases.json` is still the last valid history. Most often the judgement linked a
-source that an existing case — usually a resolved one — already owns to a new case. A halt that
+source that another open case already owns to a new case. Only open cases own a source: re-raising a
+source that only resolved cases link opens a new case and does not trip this invariant. A halt that
 instead reads `case store malformed-state` or `suppression store malformed-state`, without the
 `persisted case history is valid` line, means the persisted file itself is corrupt. This section does
 not cover that case.
@@ -1636,6 +1646,44 @@ not cover that case.
 `remediation_adjudication_completed` and the earlier cases still byte-identical in the case store, or
 repeats the same rejection. A repeat means the transition is still inadmissible. Leave the feature
 halted.
+
+### build_review halted on an open action case
+
+**Symptom:** `.pipeline/HALT` (class `needs-human`) reads one of:
+
+```text
+build_review adjudication halted: open action case <case> has a failed effect while a current remediation source remains unaccepted; resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+build_review clean-PASS durable settlement halted: clean PASS cannot settle open action case <case> (<status>); resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+```
+
+**Diagnosis:** an action case's BUILD effect failed or never finished, and the engine cannot retire it:
+at least one of its sources is still raised and not accepted, or the lap was not mechanically healthy
+enough to treat an absent source as gone. A clean-PASS settlement halt that names a `deferral` case
+carries no `resolve with` command; this section does not cover it.
+
+**Recovery:**
+
+1. Inspect the case, its sources, and its effect:
+
+   ```bash
+   ai-conductor build-review findings --feature <slug> [--child <child>]
+   ```
+
+2. Leave `.pipeline/remediation-cases.json` unchanged. Do not hand-edit case history.
+3. If the remaining finding is accepted risk or already fixed, run the command from the halt in an
+   interactive terminal:
+
+   ```bash
+   ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+   ```
+
+   Otherwise, fix the finding in the feature worktree and leave the case open.
+4. Clear the halt with an [audited clear](#audited-clear).
+
+**Verification:** `findings` lists the case as an operator-resolved case, plus a pending outbox entry
+until the engine's next pass. After that pass, `.pipeline/events.jsonl` holds one
+`remediation_case_operator_resolved` event for the case, and `build_review` settles or routes without
+repeating this halt.
 
 ### build_review halted on an exhausted mechanical fault allowance
 

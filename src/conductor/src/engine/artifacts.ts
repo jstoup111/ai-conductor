@@ -36,6 +36,7 @@ import {
   type PrdWideningClassification,
 } from './prd-widening-classification.js';
 import {
+  prdWideningCasesForState,
   readRemediationCaseStoreFeature,
   RemediationCaseStore,
 } from './remediation-case-store.js';
@@ -130,7 +131,7 @@ export type ArtifactPatternContract =
       identity?: never;
     };
 
-function artifactMatchesFeatureIdentity(
+export function artifactMatchesFeatureIdentity(
   artifactPath: string,
   featureIdentity: string,
   strategy: FeatureArtifactIdentityStrategy,
@@ -3870,6 +3871,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               )(dir, aggregate, {
                 minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
                   .map(([id, policy]) => [id, policy.min_confidence])),
+                child: ctx.activeChild,
+                adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
               });
               if (!effectiveResolution.ok) {
                 return {
@@ -3978,6 +3981,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       )(dir, aggregate, {
         minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
           .map(([id, policy]) => [id, policy.min_confidence])),
+        child: ctx.activeChild,
+        adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
       });
       if (!effectiveResolution.ok) {
         return {
@@ -4912,7 +4917,7 @@ export async function classifyPrdAuditWideningProjection(
       if (!caseRead.ok) {
         evidenceFault = 'corrupt-case-store';
       } else {
-        cases = caseRead.state.version === 'v2' ? caseRead.state.prdWideningCases : [];
+        cases = prdWideningCasesForState(caseRead.state);
         const decisionStore = new AcceptedWideningDecisionStore(dir, {
           version: 1,
           repository: featureRead.feature.repository,

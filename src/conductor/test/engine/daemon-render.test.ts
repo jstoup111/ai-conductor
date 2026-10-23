@@ -69,9 +69,27 @@ describe('renderDaemonEvent', () => {
       .toEqual(['·   build ✓ done']);
   });
 
+  it('bounds a failed test_suite to its summary line and points at the full output (#3337)', () => {
+    const error = [
+      'Excerpt only. The complete suite output (122348 bytes, every failure) is in .pipeline/test-suite-output.log; read it and fix every failure it lists before rerunning.',
+      'Suite #2/3 (index 1) failed: command npm test; directory /repo; duration 10ms; exit code 1; 1 unexecuted.',
+      'warning: core.fsyncObjectFiles is deprecated; use core.fsync instead',
+      "error: unknown option '--step'",
+    ].join('\n');
+    expect(lines({ type: 'step_failed', step: 'test_suite', error, retryCount: 1 })).toEqual([
+      '· ✗ test_suite failed (try 1): Excerpt only. The complete suite output (122348 bytes, every failure) is in .pipeline/test-suite-output.log; read it and fix every failure it lists before rerunning. (+3 more lines omitted; full output in test-suite-output.log)',
+    ]);
+    expect(lines({ type: 'step_failed', step: 'test_suite', error: 'Full test suite failed', retryCount: 1 })).toEqual([
+      '· ✗ test_suite failed (try 1): Full test suite failed',
+    ]);
+  });
+
   it('renders failures', () => {
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 })).toEqual([
       '· ✗ build failed (try 2): boom',
+    ]);
+    expect(lines({ type: 'step_failed', step: 'build', error: 'boom\nat frame', retryCount: 2 })).toEqual([
+      '· ✗ build failed (try 2): boom\nat frame',
     ]);
     expect(lines({
       type: 'step_refused',

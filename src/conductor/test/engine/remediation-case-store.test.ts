@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2, task:9, task:20
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,13 +6,17 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  currentBuildReviewSourceLinks,
+  finalizedBuildReviewSourceIds,
   parseRemediationCaseDomainRecord,
   RemediationCaseStore,
   selectBuildReviewRemediationCases,
   selectPrdWideningRemediationCases,
+  withPrdWideningCases,
 } from '../../src/engine/remediation-case-store.js';
 import type {
   RemediationCaseDomainRecord,
+  RemediationCaseRecord,
   RemediationCaseStoreFilesystem,
   RemediationCaseStoreState,
 } from '../../src/engine/remediation-case-store.js';
@@ -44,6 +48,68 @@ const CASE_STATE: RemediationCaseStoreState = {
   prdWideningCases: [],
   suppressions: [],
 };
+
+const CURRENT_CASE_STATE = { ...CASE_STATE, version: 'v3' as const, outbox: [] };
+
+const V3_OPERATOR_CASE = {
+  ...CASE_STATE.cases[0],
+  sources: [{ ...CASE_STATE.cases[0].sources[0], outcome: 'carried' }],
+  operatorAcceptance: {
+    origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-origin' }],
+  },
+  operatorResolution: {
+    operator: 'operator@example.test',
+    rationale: 'The remaining risk was explicitly accepted by the operator.',
+    resolvedAt: '2026-10-21T12:00:00.000Z',
+  },
+};
+
+const V3_OUTBOX = [
+  {
+    eventId: 'outbox-carried-1',
+    occurredAt: '2026-10-21T12:01:00.000Z',
+    event: {
+      type: 'build_review_acceptance_carried',
+      eventId: 'outbox-carried-1',
+      feature: FEATURE.feature,
+      lapId: 'lap-carried',
+      sourceId: 'testQuality:finding-2',
+      caseId: 'case-1',
+      originSourceIds: ['testQuality:finding-1'],
+      originLapIds: ['lap-origin'],
+    },
+  },
+  {
+    eventId: 'outbox-operator-resolved-1',
+    occurredAt: '2026-10-21T12:02:00.000Z',
+    event: {
+      type: 'remediation_case_operator_resolved',
+      eventId: 'outbox-operator-resolved-1',
+      feature: FEATURE.feature,
+      caseId: 'case-1',
+      sourceIds: ['testQuality:finding-1'],
+    },
+  },
+  {
+    eventId: 'outbox-reconciled-1',
+    occurredAt: '2026-10-21T12:03:00.000Z',
+    event: {
+      type: 'remediation_case_reconciled',
+      eventId: 'outbox-reconciled-1',
+      domain: 'build_review',
+      lapId: 'lap-reconciled',
+      caseId: 'case-1',
+      resolution: 'resolved',
+    },
+  },
+] as const;
+
+const V3_STATE = {
+  ...CASE_STATE,
+  version: 'v3',
+  cases: [V3_OPERATOR_CASE],
+  outbox: V3_OUTBOX,
+} as const;
 
 const REFUTATION = {
   claim: 'The alleged missing coverage is present in the focused regression test.',
@@ -139,6 +205,118 @@ afterEach(async () => {
 });
 
 describe('remediation case store', () => {
+  it('selects the open link or the latest resolved link for every shared source', () => {
+    const sourceId = 'testQuality:shared';
+    const resolved = (id: string, recordedAt: string, outcome: 'merged' | 'deferred'): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0],
+      id,
+      disposition: outcome === 'merged' ? 'act' : 'defer',
+      resolution: 'resolved',
+      sources: [{ sourceId, outcome, recordedAt }],
+      effect: outcome === 'merged'
+        ? { id: `${id}-effect`, kind: 'action', status: 'applied', workOrderId: `${id}-work-order` }
+        : { id: `${id}-effect`, kind: 'deferral', status: 'applied', issueUrl: `https://example.test/${id}` },
+    });
+    const open: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T12:00:00.000Z' }],
+    };
+    const earlier = resolved('earlier', '2026-10-18T12:00:00.000Z', 'merged');
+    const latest = resolved('latest', '2026-10-19T12:00:00.000Z', 'deferred');
+    const tiedLater = resolved('tied-later', '2026-10-19T12:00:00.000Z', 'merged');
+
+    expect(currentBuildReviewSourceLinks([earlier, latest, tiedLater]).get(sourceId)).toEqual({
+      record: tiedLater,
+      link: tiedLater.sources[0],
+    });
+    expect(currentBuildReviewSourceLinks([earlier, open, tiedLater]).get(sourceId)).toEqual({
+      record: open,
+      link: open.sources[0],
+    });
+  });
+
+  it('returns no settled source for resolved R and open N on S when N is authoritative', () => {
+    const sourceId = 'testQuality:shared';
+    const settled: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'settled', disposition: 'defer', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'carried', recordedAt: '2026-10-19T12:00:00.000Z' }],
+      effect: { id: 'settled-effect', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/settled' },
+    };
+    const unsettled: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'unsettled', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T12:00:00.000Z' }],
+      effect: { id: 'unsettled-effect', kind: 'action', status: 'failed', diagnostic: 'build failed' },
+    };
+    const open: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      id: 'open',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+
+    const laterSettled = {
+      ...settled,
+      sources: [{ ...settled.sources[0]!, recordedAt: '2026-10-21T12:00:00.000Z' }],
+    };
+
+    expect(finalizedBuildReviewSourceIds([unsettled, laterSettled])).toEqual(new Set([sourceId]));
+    expect(finalizedBuildReviewSourceIds([settled, unsettled])).toEqual(new Set());
+    expect(finalizedBuildReviewSourceIds([settled, open])).toEqual(new Set());
+  });
+
+  it('settles carried authoritative links for built-in and custom rubric sources', () => {
+    const carried = (id: string, sourceId: string): RemediationCaseRecord => ({
+      ...CASE_STATE.cases[0],
+      id,
+      resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'carried', recordedAt: '2026-10-21T12:00:00.000Z' }],
+      effect: { id: `${id}-effect`, kind: 'action', status: 'applied', workOrderId: `${id}-work-order` },
+    });
+
+    expect(finalizedBuildReviewSourceIds([
+      carried('built-in-case', 'testQuality:built-in-finding'),
+      carried('custom-case', 'portablePolicy:custom-finding'),
+    ])).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
+  });
+
+  it('settles the current acted link of an operator-resolved action despite its failed effect', () => {
+    const operatorResolved: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      resolution: 'resolved',
+      effect: { id: 'effect-operator-resolved', kind: 'action', status: 'failed', diagnostic: 'original attempt failed' },
+      operatorResolution: {
+        operator: 'operator@example.test',
+        rationale: 'The operator accepts this remaining risk.',
+        resolvedAt: '2026-10-21T12:00:00.000Z',
+      },
+    };
+
+    expect(finalizedBuildReviewSourceIds([operatorResolved])).toEqual(new Set(['testQuality:finding-1']));
+  });
+
+  it('preserves the former any-link settlement result when no source is shared', () => {
+    const records: RemediationCaseRecord[] = [
+      { ...CASE_STATE.cases[0], id: 'settled-rejection', disposition: 'reject', resolution: 'resolved', effect: { kind: 'none' } },
+      { ...CASE_STATE.cases[0], id: 'unsettled-action', sources: [{ sourceId: 'security:unsettled', outcome: 'acted', recordedAt: '2026-10-20T12:00:00.000Z' }] },
+      {
+        ...CASE_STATE.cases[0], id: 'settled-action', resolution: 'resolved',
+        sources: [{ sourceId: 'security:settled', outcome: 'merged', recordedAt: '2026-10-20T12:00:00.000Z' }],
+        effect: { id: 'settled-action-effect', kind: 'action', status: 'applied', workOrderId: 'work-order' },
+      },
+    ];
+    const formerAnyLinkRule = new Set(records.flatMap((record) =>
+      record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+        ? record.sources.map((source) => source.sourceId)
+        : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
+          ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
+          : [],
+    ));
+
+    expect(finalizedBuildReviewSourceIds(records)).toEqual(formerAnyLinkRule);
+  });
+
   it('parses separate domain records and selects only their domain without sharing display ordinals', () => {
     const buildReview = parseRemediationCaseDomainRecord({
       ...CASE_STATE.cases[0],
@@ -171,7 +349,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v2', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [] },
+      state: { version: 'v3', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [], outbox: [] },
     });
   });
 
@@ -184,7 +362,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: CASE_STATE,
+      state: CURRENT_CASE_STATE,
     });
   });
 
@@ -203,34 +381,195 @@ describe('remediation case store', () => {
 
     await expect(writer.mutate(async () => ({ value: 'seeded' as const, nextState: state })))
       .resolves.toEqual({ ok: true, value: 'seeded' });
-    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: true, state });
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: { ...state, version: 'v3', outbox: [] },
+    });
   });
 
-  it('migrates a v1 envelope under the store lease without losing build-review history or suppression entries', async () => {
-    const projectRoot = await createProjectRoot();
-    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
-    const v1State = {
+  it('reads a v2 envelope without changing any case, link, effect, or suppression', async () => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(CASE_STATE)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    }).read()).resolves.toEqual({ ok: true, state: CASE_STATE });
+    expect({ writes: tracked.writes, renames: tracked.renames }).toEqual({ writes: [], renames: [] });
+  });
+
+  it('reads a v3 case with operator-owned state and every supported outbox event without changing it', async () => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(V3_STATE)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    }).read()).resolves.toEqual({ ok: true, state: V3_STATE });
+    expect({ writes: tracked.writes, renames: tracked.renames }).toEqual({ writes: [], renames: [] });
+  });
+
+  it('preserves v3 outbox entries when a PRD-widening writer replaces its cases', async () => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(V3_STATE)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+
+    await expect(store.mutate(async (state) => ({
+      value: 'replaced' as const,
+      nextState: withPrdWideningCases(state, [PRD_WIDENING_CASE]),
+    }))).resolves.toEqual({ ok: true, value: 'replaced' });
+
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true,
+      state: { version: 'v3', prdWideningCases: [PRD_WIDENING_CASE], outbox: V3_OUTBOX },
+    });
+  });
+
+  it.each([
+    ['v1', {
       version: 'v1',
       feature: FEATURE,
       cases: CASE_STATE.cases,
       suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
-    };
-    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await writeFile(statePath, JSON.stringify(v1State), 'utf8');
-    const store = new RemediationCaseStore(projectRoot, FEATURE);
-    await expect(store.mutate(async (state) => ({ value: 'migrated' as const, nextState: state }))).resolves.toEqual({ ok: true, value: 'migrated' });
-    await expect(store.read()).resolves.toEqual({
-      ok: true,
-      state: { ...CASE_STATE, suppressions: v1State.suppressions },
-    });
-    const serializedV2 = `${JSON.stringify({
+    }, {
       ...CASE_STATE,
-      suppressions: v1State.suppressions,
-    })}\n`;
-    await expect(readFile(statePath, 'utf8')).resolves.toBe(serializedV2);
-    expect(predecessorV1Decoder(JSON.parse(serializedV2))).toBe(false);
-    await expect(store.mutate(async (state) => ({ value: 'repeated' as const, nextState: state }))).resolves.toEqual({ ok: true, value: 'repeated' });
-    await expect(store.read()).resolves.toEqual({ ok: true, state: { ...CASE_STATE, suppressions: v1State.suppressions } });
+      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
+    }],
+    ['v2', CASE_STATE, CASE_STATE],
+  ] as const)('upgrades a valid %s envelope on its first mutation without inventing optional state', async (_version, legacyState, preservedState) => {
+    const tracked = createTrackedFilesystem(`${JSON.stringify(legacyState)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+    const expectedState = { ...preservedState, version: 'v3', outbox: [] };
+
+    await expect(store.mutate(async (state) => ({ value: 'migrated' as const, nextState: state })))
+      .resolves.toEqual({ ok: true, value: 'migrated' });
+    expect(JSON.parse(tracked.contents)).toEqual(expectedState);
+    expect(JSON.parse(tracked.contents).cases[0]).not.toHaveProperty('operatorAcceptance');
+    expect(JSON.parse(tracked.contents).cases[0]).not.toHaveProperty('operatorResolution');
+    expect(JSON.parse(tracked.contents).outbox).toEqual([]);
+    expect(predecessorV1Decoder(JSON.parse(tracked.contents))).toBe(false);
+  });
+
+  it.each([
+    ['an envelope key', { ...CASE_STATE, version: 'v3', outbox: [], unexpected: true }],
+    ['a case key', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{ ...CASE_STATE.cases[0], unexpected: true }],
+    }],
+    ['a source-link key', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{
+        ...CASE_STATE.cases[0],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], unexpected: true }],
+      }],
+    }],
+    ['an effect key', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{ ...CASE_STATE.cases[0], effect: { ...CASE_STATE.cases[0].effect, unexpected: true } }],
+    }],
+    ['an unknown source outcome', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [],
+      cases: [{
+        ...CASE_STATE.cases[0],
+        sources: [{ ...CASE_STATE.cases[0].sources[0], outcome: 'unknown' }],
+      }],
+    }],
+    ['an extra operator-acceptance key', {
+      ...V3_STATE,
+      cases: [{ ...V3_OPERATOR_CASE, operatorAcceptance: { ...V3_OPERATOR_CASE.operatorAcceptance, unexpected: true } }],
+    }],
+    ['an extra acceptance-origin key', {
+      ...V3_STATE,
+      cases: [{
+        ...V3_OPERATOR_CASE,
+        operatorAcceptance: { origins: [{ ...V3_OPERATOR_CASE.operatorAcceptance.origins[0], unexpected: true }] },
+      }],
+    }],
+    ['a malformed acceptance-origin lap id', {
+      ...V3_STATE,
+      cases: [{
+        ...V3_OPERATOR_CASE,
+        operatorAcceptance: { origins: [{ ...V3_OPERATOR_CASE.operatorAcceptance.origins[0], lapId: '' }] },
+      }],
+    }],
+    ['an extra operator-resolution key', {
+      ...V3_STATE,
+      cases: [{ ...V3_OPERATOR_CASE, operatorResolution: { ...V3_OPERATOR_CASE.operatorResolution, unexpected: true } }],
+    }],
+    ['a malformed operator-resolution value', {
+      ...V3_STATE,
+      cases: [{ ...V3_OPERATOR_CASE, operatorResolution: { ...V3_OPERATOR_CASE.operatorResolution, resolvedAt: 'not-a-time' } }],
+    }],
+    ['an extra outbox-entry key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[0], unexpected: true }],
+    }],
+    ['a malformed outbox-entry occurrence time', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[0], occurredAt: 'not-a-time' }],
+    }],
+    ['an unknown outbox event type', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [{
+        eventId: 'event-1',
+        occurredAt: '2026-10-21T12:00:00.000Z',
+        event: { type: 'unknown_event' },
+      }],
+    }],
+    ['an outbox event whose body is invalid', {
+      ...CASE_STATE,
+      version: 'v3',
+      outbox: [{
+        eventId: 'event-1',
+        occurredAt: '2026-10-21T12:00:00.000Z',
+        event: { type: 'build_review_acceptance_carried' },
+      }],
+    }],
+    ['an extra carried-event key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[0], event: { ...V3_OUTBOX[0].event, unexpected: true } }],
+    }],
+    ['an extra operator-resolution-event key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[1], event: { ...V3_OUTBOX[1].event, unexpected: true } }],
+    }],
+    ['a malformed operator-resolution-event value', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[1], event: { ...V3_OUTBOX[1].event, sourceIds: [] } }],
+    }],
+    ['an extra reconciled-event key', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[2], event: { ...V3_OUTBOX[2].event, unexpected: true } }],
+    }],
+    ['a malformed reconciled-event value', {
+      ...V3_STATE,
+      outbox: [{ ...V3_OUTBOX[2], event: { ...V3_OUTBOX[2].event, resolution: 'unknown' } }],
+    }],
+  ])('fails closed for v3 with %s without writing it', async (_description, malformedState) => {
+    const original = `${JSON.stringify(malformedState)}\n`;
+    const tracked = createTrackedFilesystem(original);
+    const store = new RemediationCaseStore('/project', FEATURE, {
+      filesystem: tracked.filesystem,
+      lock: IMMEDIATE_LEASE,
+    });
+
+    await expect(store.read()).resolves.toEqual({ ok: false, reason: 'malformed-state' });
+    await expect(store.mutate(async () => ({ value: null, nextState: CASE_STATE })))
+      .resolves.toEqual({ ok: false, reason: 'malformed-state' });
+    expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
+      .toEqual({ contents: original, writes: [], renames: [] });
   });
 
   it('leaves the original v1 envelope readable when migration replacement is interrupted', async () => {
@@ -263,7 +602,7 @@ describe('remediation case store', () => {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], domain: 'prd_audit' }],
     }, 'foreign-domain'],
-    ['an unsupported state version', { ...CASE_STATE, version: 'v3' }, 'unknown-version'],
+    ['an unsupported state version', { ...CASE_STATE, version: 'v4' }, 'unknown-version'],
     ['a mismatched action effect', {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } }],
@@ -329,7 +668,7 @@ describe('remediation case store', () => {
   it.each([
     ['foreign feature', JSON.stringify({ ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }), 'foreign-feature'],
     ['malformed JSON', '{not-json', 'malformed-json'],
-    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v3' }), 'unknown-version'],
+    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v4' }), 'unknown-version'],
   ])('does not overwrite %s while refusing it', async (_description, original, reason) => {
     const projectRoot = await createProjectRoot();
     const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
@@ -399,14 +738,94 @@ describe('remediation case store', () => {
     await expect(readFile(dispositionPath, 'utf8')).resolves.toBe('{"operator":"only"}\n');
   });
 
-  it('rejects a proposed case that links a source owned by a resolved case without writing history', async () => {
-    const persistedState: RemediationCaseStoreState = {
+  it('admits a proposed case that links a source owned only by a resolved case', async () => {
+    const resolvedState: RemediationCaseStoreState = {
       ...CASE_STATE,
       cases: [{
         ...CASE_STATE.cases[0],
         id: 'case-R',
         resolution: 'resolved',
         effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+      }],
+    };
+    const proposedState: RemediationCaseStoreState = {
+      ...resolvedState,
+      cases: [...resolvedState.cases, {
+        ...CASE_STATE.cases[0],
+        id: 'case-N',
+        effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+      }],
+    };
+    const resolvedRow = JSON.stringify(resolvedState.cases[0]);
+    const tracked = createTrackedFilesystem(`${JSON.stringify(resolvedState)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
+
+    await expect(store
+      .mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({ ok: true, value: null });
+    const currentState = { ...proposedState, version: 'v3' as const, outbox: [] };
+    expect(tracked.contents).toBe(`${JSON.stringify(currentState)}\n`);
+    await expect(store.read()).resolves.toEqual({ ok: true, state: currentState });
+    await expect(store.mutate(async (state) => ({ value: state.cases, nextState: state }))).resolves.toEqual({
+      ok: true,
+      value: currentState.cases,
+    });
+    expect(JSON.stringify((JSON.parse(tracked.contents) as RemediationCaseStoreState).cases[0])).toBe(resolvedRow);
+  });
+
+  it('admits two resolved source owners before one open owner without rewriting either resolved row', async () => {
+    const resolvedState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [
+        {
+          ...CASE_STATE.cases[0],
+          id: 'case-R1',
+          resolution: 'resolved',
+          effect: { id: 'effect-R1', kind: 'action', status: 'applied', workOrderId: 'work-order-R1' },
+          sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+        },
+        {
+          ...CASE_STATE.cases[0],
+          id: 'case-R2',
+          resolution: 'resolved',
+          effect: { id: 'effect-R2', kind: 'action', status: 'applied', workOrderId: 'work-order-R2' },
+          sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+        },
+      ],
+    };
+    const proposedState: RemediationCaseStoreState = {
+      ...resolvedState,
+      cases: [...resolvedState.cases, {
+        ...CASE_STATE.cases[0],
+        id: 'case-N',
+        effect: { id: 'effect-N', kind: 'action', status: 'reserved' },
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+      }],
+    };
+    const resolvedRows = resolvedState.cases.map((record) => JSON.stringify(record));
+    const tracked = createTrackedFilesystem(`${JSON.stringify(resolvedState)}\n`);
+    const store = new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE });
+
+    await expect(store.mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({ ok: true, value: null });
+    const currentState = { ...proposedState, version: 'v3' as const, outbox: [] };
+    await expect(store.read()).resolves.toEqual({ ok: true, state: currentState });
+    await expect(store.mutate(async (state) => ({ value: state.cases, nextState: state }))).resolves.toEqual({
+      ok: true,
+      value: currentState.cases,
+    });
+    const written = (JSON.parse(tracked.contents) as RemediationCaseStoreState).cases;
+    expect(written.map((record) => record.id)).toEqual(['case-R1', 'case-R2', 'case-N']);
+    expect(written.slice(0, 2).map((record) => JSON.stringify(record))).toEqual(resolvedRows);
+  });
+
+  it('rejects a proposed case that links a source owned by an open case without writing history', async () => {
+    const persistedState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [{
+        ...CASE_STATE.cases[0],
+        id: 'case-O',
+        effect: { id: 'effect-O', kind: 'action', status: 'applied', workOrderId: 'work-order-O' },
         sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
       }],
     };
@@ -427,12 +846,39 @@ describe('remediation case store', () => {
       reason: 'rejected-transition',
       violation: {
         invariant: 'source-linked-by-multiple-cases',
-        caseIds: ['case-R', 'case-N'],
+        caseIds: ['case-O', 'case-N'],
         sourceIds: ['source-S'],
       },
     });
     expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
       .toEqual({ contents: `${JSON.stringify(persistedState)}\n`, writes: [], renames: [] });
+  });
+
+  it('rejects two proposed open owners over resolved history without writing history', async () => {
+    const resolvedState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [{
+        ...CASE_STATE.cases[0], id: 'case-R', resolution: 'resolved',
+        effect: { id: 'effect-R', kind: 'action', status: 'applied', workOrderId: 'work-order-R' },
+        sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }],
+      }],
+    };
+    const proposedState: RemediationCaseStoreState = {
+      ...resolvedState,
+      cases: [...resolvedState.cases,
+        { ...CASE_STATE.cases[0], id: 'case-N1', effect: { id: 'effect-N1', kind: 'action', status: 'reserved' }, sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }] },
+        { ...CASE_STATE.cases[0], id: 'case-N2', effect: { id: 'effect-N2', kind: 'action', status: 'reserved' }, sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'source-S' }] },
+      ],
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(resolvedState)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE })
+      .mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({
+      ok: false, reason: 'rejected-transition',
+      violation: { invariant: 'source-linked-by-multiple-cases', caseIds: ['case-N1', 'case-N2'], sourceIds: ['source-S'] },
+    });
+    expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
+      .toEqual({ contents: `${JSON.stringify(resolvedState)}\n`, writes: [], renames: [] });
   });
 
   it('rejects a proposed state with a duplicate case id', async () => {
@@ -452,6 +898,42 @@ describe('remediation case store', () => {
         sourceIds: [],
       },
     });
+    expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
+      .toEqual({ contents: `${JSON.stringify(CASE_STATE)}\n`, writes: [], renames: [] });
+  });
+
+  it('refuses a proposed duplicate durable effect id without writing history', async () => {
+    const proposedState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [...CASE_STATE.cases, { ...CASE_STATE.cases[0], id: 'case-2' }],
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(CASE_STATE)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE })
+      .mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({
+      ok: false,
+      reason: 'rejected-transition',
+      violation: { invariant: 'duplicate-effect-id', caseIds: ['case-1', 'case-2'], sourceIds: [] },
+    });
+    expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
+      .toEqual({ contents: `${JSON.stringify(CASE_STATE)}\n`, writes: [], renames: [] });
+  });
+
+  it('refuses a proposed duplicate source id within one case without writing history', async () => {
+    const proposedState: RemediationCaseStoreState = {
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], sources: [CASE_STATE.cases[0].sources[0], CASE_STATE.cases[0].sources[0]] }],
+    };
+    const tracked = createTrackedFilesystem(`${JSON.stringify(CASE_STATE)}\n`);
+
+    await expect(new RemediationCaseStore('/project', FEATURE, { filesystem: tracked.filesystem, lock: IMMEDIATE_LEASE })
+      .mutate(async () => ({ value: null, nextState: proposedState }))).resolves.toEqual({
+      ok: false,
+      reason: 'rejected-transition',
+      violation: { invariant: 'invalid-next-state', caseIds: [], sourceIds: [] },
+    });
+    expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
+      .toEqual({ contents: `${JSON.stringify(CASE_STATE)}\n`, writes: [], renames: [] });
   });
 
   it('keeps a persisted duplicate source link malformed for reads and mutations', async () => {
@@ -469,6 +951,8 @@ describe('remediation case store', () => {
     await expect(store.read()).resolves.toEqual({ ok: false, reason: 'malformed-state' });
     await expect(store.mutate(async () => ({ value: null, nextState: CASE_STATE })))
       .resolves.toEqual({ ok: false, reason: 'malformed-state' });
+    expect({ contents: tracked.contents, writes: tracked.writes, renames: tracked.renames })
+      .toEqual({ contents: `${JSON.stringify(corruptedState)}\n`, writes: [], renames: [] });
   });
 
   it('keeps invalid JSON malformed for reads and mutations', async () => {

@@ -31,6 +31,8 @@ import { parsePlanTaskBodies, parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from '
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { readGitBlobs } from './git-blob-batch.js';
 import {
+  parseDoneWhenCloseSource,
+  classifyCitationProvenance,
   parseDoneWhenTestReference,
   verifyDoneWhenTestReference,
 } from './done-when-test-reference.js';
@@ -396,7 +398,7 @@ export interface DoneWhenUnverifiedInput {
 export interface DoneWhenEvidenceRecord {
   check: string;
   evidence: string;
-  source: 'verified' | 'reported' | 'verify-only' | 'unverified';
+  source: 'verified' | 'reported' | 'verify-only' | 'unverified' | 'pending-judgement' | 'judged' | 'operator-accepted';
   reason?: string;
 }
 
@@ -635,6 +637,42 @@ export async function completeTaskDoneWhen(
       message: `[task-cli] task id "${id}" not found in task-status.json`,
     };
   }
+  if (Array.isArray(task.doneWhen)) {
+    for (const rawClose of task.doneWhen) {
+      if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) continue;
+      const source = parseDoneWhenCloseSource((rawClose as Record<string, unknown>).source);
+      if (source instanceof Error) {
+        return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${source.message}` };
+      }
+    }
+  }
+
+  // A citation is mechanically verified only when its named title was added
+  // in the task's recorded start window.  Any missing boundary or git error
+  // deliberately falls through to bounded judgement rather than refusing an
+  // otherwise valid close.
+  const taggedSources = new Map<number, 'verified' | 'pending-judgement'>();
+  for (const { index } of taggedChecks) {
+    if (unverifiedByIndex.has(index)) continue;
+    taggedSources.set(index, 'pending-judgement');
+    const startHead = typeof task.startHead === 'string' ? task.startHead : undefined;
+    const reference = parseDoneWhenTestReference(evidenceByIndex.get(index)!);
+    if (!startHead || !reference) continue;
+    try {
+      const ancestor = await execa('git', ['merge-base', '--is-ancestor', startHead, 'HEAD'], {
+        cwd: projectRoot, reject: false,
+      });
+      if (ancestor.exitCode !== 0) continue;
+      const diff = await execa('git', ['diff', startHead, 'HEAD', '--', reference.path], {
+        cwd: projectRoot, reject: false,
+      });
+      if (diff.exitCode === 0 && classifyCitationProvenance({
+        path: reference.path, title: reference.title, diffText: diff.stdout,
+      }) === 'task-added') taggedSources.set(index, 'verified');
+    } catch {
+      // pending-judgement is the safe, non-blocking fallback.
+    }
+  }
 
   const doneWhenRecords: DoneWhenEvidenceRecord[] = checks.map((check, index) => {
     const checkIndex = index + 1;
@@ -653,12 +691,35 @@ export async function completeTaskDoneWhen(
         ? 'prove-closed'
         : evidenceByIndex.get(checkIndex)!,
       source: check.trimStart().startsWith(TEST_DONE_WHEN_TAG)
-        ? 'verified'
+        ? taggedSources.get(checkIndex) ?? 'pending-judgement'
         : verifyOnly ? 'verify-only' : 'reported',
     };
   });
 
+  // A Done-when citation refusal is narrower than an ordinary repair
+  // obligation: only the check that the judge refused can settle it, and the
+  // replacement must be mechanically verified.  Re-closing with another
+  // pending citation (or an explicit unverified disposition) must leave the
+  // refusal open for its bounded retry/demotion path.
+  const previouslyRefusedCitationChecks = new Set(
+    Array.isArray(task.doneWhen)
+      ? task.doneWhen.flatMap((rawClose, index) => {
+        if (!rawClose || typeof rawClose !== 'object' || Array.isArray(rawClose)) return [];
+        const close = rawClose as Record<string, unknown>;
+        const source = parseDoneWhenCloseSource(close.source);
+        if (source instanceof Error) return [];
+        return source === 'judged' && close.verdict === 'does-not-assert' ? [index + 1] : [];
+      })
+      : [],
+  );
+  const refusedCitationsReverified = previouslyRefusedCitationChecks.size > 0 &&
+    [...previouslyRefusedCitationChecks].every((index) => doneWhenRecords[index - 1]?.source === 'verified');
+
   for (const obligationId of openObligationIds) {
+    const obligation = standing.kind === 'live'
+      ? standing.live.find(({ id: candidateId }) => candidateId === obligationId)
+      : undefined;
+    if (obligation?.source.authority === 'done-when-citation' && !refusedCitationsReverified) continue;
     const closure = await repairs.close({
       planPath: activePlanPath,
       taskId: id,

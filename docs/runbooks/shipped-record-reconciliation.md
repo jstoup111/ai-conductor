@@ -206,6 +206,24 @@ the local cache is repaired under the **new** slug.
 If the plan or stories content changed, the hash no longer matches and the candidate is a
 genuinely different spec — it will be dispatched, correctly.
 
+### A plan was pruned after it shipped
+
+[`ai-conductor docs-prune`](../reference/cli.md#ai-conductor-docs-prune) deletes a shipped feature's
+plan from `main`. `shipment-evidence reconcile` and `shipment-evidence audit` handle that without
+operator action: when the plan is absent at the commit they read, they locate the deleting commit
+(`git log -1 --diff-filter=D <commit> -- .docs/plans/<slug>.md`) and hash the plan bytes from its
+parent, so `spec_hash` is unchanged.
+
+When no reachable deleting commit holds the plan, the lookup refuses with `shipment-plan-pruned`:
+
+| Command | Output | Exit |
+| --- | --- | --- |
+| `shipment-evidence reconcile` | `shipped-record: shipment-plan-pruned: .docs/plans/<slug>.md[: <detail>]` on stderr | 1 |
+| `shipment-evidence audit` | row classified `unresolved` with reason `shipment-plan-pruned` | 0 |
+
+**Recovery:** the deletion is not in the history the command can reach. On a shallow clone, run
+`git fetch --unshallow`, then rerun.
+
 ## Verification
 
 Verify the record, then verify that the dedup actually took. The first without the second is the

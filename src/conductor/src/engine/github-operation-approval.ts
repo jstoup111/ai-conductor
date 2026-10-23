@@ -141,7 +141,7 @@ function interactiveConfirmation(value: unknown): value is InteractiveGithubOper
 }
 
 /**
- * Only pre-spec intake, shared-resource, and initial-publication writes may
+ * Only pre-spec intake, shared-resource, and docs-prune publication writes may
  * obtain this authority. A remote-ref push reaches this path only when the
  * CLI could not resolve owned feature provenance; the remote adapter checks
  * the same opaque, exact-request capability again before transport.
@@ -149,7 +149,9 @@ function interactiveConfirmation(value: unknown): value is InteractiveGithubOper
 function requiresExplicitApproval(request: GithubOperationRequest): boolean {
   return request.access === 'intake-write'
     || request.access === 'shared-write'
-    || (request.access === 'remote-ref-write' && request.operation === 'remote-ref.push');
+    || (request.access === 'remote-ref-write' && request.operation === 'remote-ref.push')
+    || request.operation === 'pull-request.create'
+    || request.operation === 'pull-request.edit';
 }
 
 /**

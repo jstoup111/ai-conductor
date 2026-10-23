@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { offeredCaseToPersistedOffer } from './prd-widening-offers.js';
 import {
+  prdWideningCasesForState,
   readRemediationCaseStoreFeature,
   RemediationCaseStore,
   selectPrdWideningRemediationCases,
@@ -103,9 +104,7 @@ export async function renderRebaseFenceDecisionNote(projectRoot: string): Promis
   const caseRead = await caseStore.read();
   if (!caseRead.ok) return unreadableCaseStoreNote();
 
-  const offers = (caseRead.state.version === 'v2'
-    ? selectPrdWideningRemediationCases(caseRead.state.prdWideningCases)
-    : [])
+  const offers = selectPrdWideningRemediationCases(prdWideningCasesForState(caseRead.state))
     .map(offeredCaseToPersistedOffer)
     .filter((offer): offer is NonNullable<typeof offer> => offer !== undefined);
   const offeredFindings = new Map(offers.map((offer) => [offer.criterion, offer.summary]));

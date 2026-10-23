@@ -103,9 +103,12 @@ As an operator, I want concrete uncertain candidates resolved from source withou
 - Given a result omits or duplicates a required candidate resolution, when the engine validates it, then it rejects the result through bounded malformed-result handling rather than passing or creating a bad-test finding
 - Given a proposed candidate resolution cites a foreign obligation, absent source region or unrelated sibling, when validated, then that proposed authority and any finding relying on it are rejected
 - Given unsupported syntax exists without a concrete opted-in candidate, when scope is assessed, then unsupported syntax alone does not create a halt or review requirement
+- Given test-file helper code calls a member whose name matches a declaration keyword on a non-declaration object, such as a regular expression test call, when declarations are analyzed, then no declaration diagnostic is produced
+- Given a wrapper call receives a real declaration binding or its modifier chain, when declarations are analyzed, then it is still reported as an unsupported declaration wrapper
 
 ### Done When
 - [ ] A fake-provider integration resolves an unsupported candidate and validates the quality result with one ordinary dispatch.
+- [ ] A parser fixture proves member names such as a regular expression test call produce no declaration diagnostic while a wrapped real declaration is still reported.
 - [ ] Result-boundary negative fixtures reject missing/duplicate dispositions and invalid source or obligation authority.
 
 

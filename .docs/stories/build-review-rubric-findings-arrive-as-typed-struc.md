@@ -13,19 +13,19 @@ As the build_review coordinator, I want each effective catalog member to hand me
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the built-in registry, when the effective catalog is resolved with no custom policy, then the `testQuality` and `security` members each expose a descriptor whose projection version is `v3`, whose output contract version is `v3`, whose output JSON Schema is a frozen object, and whose identity canonicalizer produces the same finding id as today's built-in canonicalizer for a fixed finding.
-- Given a validated custom policy declaration, when the effective catalog is resolved, then the custom member exposes a descriptor whose output contract version is `v1`, whose JSON Schema admits the `custom-findings` payload and the `unsupported-policy` alternative, and whose identity canonicalizer produces the same `custom-v1` id as today for a fixed finding.
+- Given the built-in registry, when the effective catalog is resolved with no custom policy, then the `testQuality` and `security` members each expose a descriptor whose projection version is `v3`, whose output contract version is the current built-in contract version, whose output JSON Schema is a frozen object, and whose identity canonicalizer produces the same finding id as today's built-in canonicalizer for a fixed finding.
+- Given a validated custom policy declaration, when the effective catalog is resolved, then the custom member exposes a descriptor whose output contract version is the current custom contract version, whose JSON Schema admits the `custom-findings` payload and the `unsupported-policy` alternative, and whose identity canonicalizer produces the same custom finding id as the pre-seam canonicalizer under the same custom contract version for a fixed finding.
 - Given any descriptor, when its prompt shape is rendered, then the rendered text is derived from the descriptor's JSON Schema and names exactly the top-level keys and enum members the schema admits.
 
 #### Negative Paths
 - Given a registry entry constructed without an output JSON Schema, when the catalog is resolved, then resolution fails at authoring time with a message naming the member and the missing descriptor part, and no dispatch is attempted for any member.
 - Given two descriptors that declare the same rubric id, when the catalog is resolved, then resolution fails naming the duplicated id rather than dispatching either.
-- Given a descriptor whose JSON Schema admits a top-level key outside the closed provider field set for its contract, when the built-in catalog is constructed, then a unit test asserting the `judged` v3 schema's top-level `properties` equal exactly `findings`, `relocationAudit`, `counterfactualSensitivity`, `scopeResolutions` fails.
+- Given a descriptor whose JSON Schema admits a top-level key outside the closed provider field set for its contract, when the built-in catalog is constructed, then a unit test asserting the current `judged` schema's top-level `properties` equal exactly `findings`, `relocationAudit`, `counterfactualSensitivity`, `scopeResolutions` fails.
 
 ### Done When
 - [ ] A `RubricContractDescriptor` type exists with projection, output, and identity parts, and every `BUILD_REVIEW_RUBRIC_REGISTRY` entry and every resolved custom member carries one.
 - [ ] A unit test asserts the three descriptors' versions, frozen JSON Schema objects, and identity parity with the pre-change canonicalizers for fixed findings.
-- [ ] A unit test asserts the `judged` v3 schema's top-level properties are exactly the four closed provider fields and its `concernKind` enums equal the engine vocabularies for `testQuality` and `security`.
+- [ ] A unit test asserts the current `judged` schema's top-level properties are exactly the four closed provider fields and its `concernKind` enums equal the engine vocabularies for `testQuality` and `security`.
 - [ ] A unit test asserts catalog resolution fails, naming the member, when a descriptor part is absent or a rubric id is duplicated.
 
 ## Story 2: One generic dispatch requests the provider's native structured output for every member
@@ -38,7 +38,7 @@ As the build_review coordinator, I want a single dispatch path to send the descr
 - Given a `testQuality` branch with an admitted projection and a Claude candidate, when the branch is dispatched, then the recorded invocation options carry `nativeSchema` equal to the descriptor's JSON Schema and the Claude adapter fixture receives `--json-schema` with that schema serialized.
 - Given the same branch with a Codex candidate, when the branch is dispatched, then the Codex adapter fixture receives `--output-schema` naming a file under the invocation's engine-owned scratch home whose bytes equal the serialized schema, and the scratch home is removed after the invocation settles.
 - Given a provider result whose `finalStructuredResult` is a valid payload and whose `output` text is a valid payload wrapped in prose with a different `findings` array, when the branch is validated, then the stamped result's findings equal the structured result's findings and the prose payload is never parsed.
-- Given a `custom-v1` branch, when it is dispatched, then it passes through the same dispatch function as the built-in branches with its own descriptor's schema and the policy bundle text still precedes the skill invocation in the prompt.
+- Given a custom-policy branch, when it is dispatched, then it passes through the same dispatch function as the built-in branches with its own descriptor's schema and the policy bundle text still precedes the skill invocation in the prompt.
 
 #### Negative Paths
 - Given a provider result with `success: true`, a prose `output` containing a well-formed payload, and no `finalStructuredResult`, when the branch is validated, then it is rejected as an absent structured result and the prose payload is not used.
@@ -98,7 +98,7 @@ As the build_review coordinator, I want a lap whose admitted candidates cannot h
 - [ ] A test asserts an adapter-reported `nativeSchemaUnsupported` result classifies as `native-schema-unsupported`.
 - [ ] The event-sink exhaustiveness check admits both new causes on `build_review_rubric_infrastructure_failure`.
 
-## Story 5: The custom-v1 reviewer contract is a descriptor on the shared seam
+## Story 5: The custom reviewer contract is a descriptor on the shared seam
 
 As a project that declares a custom build_review rubric, I want my reviewer's payload to be requested and validated through the same native-schema seam as the built-in rubrics so that the shape my reviewer is shown is the shape the engine accepts and an unsupported-policy outcome is a valid result rather than a parse failure.
 
@@ -106,7 +106,7 @@ As a project that declares a custom build_review rubric, I want my reviewer's pa
 
 #### Happy Path
 - Given a resolved custom member, when its policy contract is rendered, then the reviewer-facing shape text is derived from the descriptor's JSON Schema and names exactly `kind`, `version`, `findings` for the findings payload and `kind`, `requirement` for the unsupported-policy alternative.
-- Given a custom reviewer's structured result of kind `custom-findings` with source regions inside the admitted frozen regions, when it is validated, then the engine stamps rubric, lap, provider, bundle digest, verdict, case id, and effect id exactly as today and the `custom-v1` finding ids equal the pre-change ids for the same findings.
+- Given a custom reviewer's structured result of kind `custom-findings` with source regions inside the admitted frozen regions, when it is validated, then the engine stamps rubric, lap, provider, bundle digest, verdict, case id, and effect id exactly as today and the custom finding ids under a given custom contract version equal the ids computed before the shared-seam move for the same findings.
 - Given a custom reviewer's structured result of kind `unsupported-policy` with a non-empty `requirement`, when it is validated, then the branch settles as an explicit unsupported-policy result, not as `invalid-structured-result` and not as an empty-findings success.
 
 #### Negative Paths
@@ -116,10 +116,10 @@ As a project that declares a custom build_review rubric, I want my reviewer's pa
 
 ### Done When
 - [ ] `renderBuildReviewPolicyContract` renders the reviewer shape from the custom descriptor's JSON Schema; the separate key-list constant has no remaining caller.
-- [ ] A test asserts `custom-v1` finding ids and stamped envelope fields are unchanged for a fixed fixture before and after the migration.
+- [ ] A test asserts custom finding ids and stamped envelope fields under the current custom contract version are unchanged for a fixed fixture by moving the contract onto the shared seam.
 - [ ] A test asserts `unsupported-policy` is a valid structured alternative and an out-of-region source or non-integer confidence is a field-named rejection.
 
-## Story 6: Skills carry judgement guidance only and identity is preserved at contract v3
+## Story 6: Skills carry judgement guidance only and identity is preserved by the migration
 
 As the operator, I want the two build_review skills to teach the judge what a finding is and not how to format one, and I want every existing disposition and cached identity to keep meaning what it meant, so that rewriting the skill text costs one cache miss and nothing else.
 
@@ -128,18 +128,18 @@ As the operator, I want the two build_review skills to teach the judge what a fi
 #### Happy Path
 - Given `skills/build-review-test-quality/SKILL.md` and `skills/build-review-security/SKILL.md`, when read, then each has no `## Result contract` section, no fenced JSON payload example, no per-field list of result keys, and no reference-grammar sentence, while each still defines every member of its rubric's concern-kind vocabulary and its non-finding conditions.
 - Given a rubric prompt assembled for `security`, when inspected, then the shape block in the prompt equals the descriptor's rendered shape and the SKILL.md text contributes no shape sentences.
-- Given a disposition record accepted before the migration for a `testQuality` finding, when the same finding is raised after the migration, then it matches the record on `id` and `canonicalJson` and is suppressed exactly as before, with `contractVersion` still `v3`.
-- Given a cache entry written before the migration for the same snapshot, when looked up after the migration, then it misses on engine identity and the fresh entry records `contractVersion: v3` and `projectionVersion: v3`.
+- Given a disposition record accepted before the migration for a `testQuality` finding, when the same finding is raised after the migration, then it matches the record on `id` and `canonicalJson` and is suppressed exactly as before, because the migration itself does not change `contractVersion`.
+- Given a cache entry written before the migration for the same snapshot, when looked up after the migration, then it misses on engine identity and the fresh entry records the current built-in `contractVersion` and `projectionVersion: v3`.
 
 #### Negative Paths
 - Given a finding whose summary wording differs from an accepted disposition's but whose anchor and concern kind are identical, when it is raised after the migration, then it still matches the disposition, proving identity remains wording-insensitive.
-- Given a cache entry declaring `contractVersion: v4`, when parsed, then it is rejected as invalid, proving the accepted version set did not advance.
+- Given a cache entry declaring a contract version above the current built-in contract version, when parsed, then it is rejected as invalid, proving the accepted version set advances only with the contract.
 - Given the two SKILL.md files, when either regains a fenced JSON object containing a `findings` key, then the integrity suite fails (Story 7) before the change can land.
 
 ### Done When
 - [ ] Both SKILL.md files have no result-contract, JSON example, field-list, or grammar prose and retain every vocabulary member as a judgement definition.
 - [ ] A test asserts a pre-migration disposition matches a post-migration finding with identical anchor and concern kind regardless of summary wording.
-- [ ] A test asserts `parseBuildReviewCacheEntry` still rejects `contractVersion: v4` and a pre-migration entry misses on engine identity.
+- [ ] A test asserts `parseBuildReviewCacheEntry` still rejects a contract version above the current one and a pre-migration entry misses on engine identity.
 
 ## Story 7: The audits bind the descriptor to the skill text and forbid output-format prose
 

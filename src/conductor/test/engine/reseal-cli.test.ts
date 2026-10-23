@@ -1,4 +1,4 @@
-// Covers: task:5, task:8
+// Covers: task:2, task:3, task:5, task:8
 import { describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -6,10 +6,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { createProgram } from '../../src/cli.js';
-import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
+import { describeResealRecovery, detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
-import { createProtectedArtifactSeal, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { createProtectedArtifactSeal, PROTECTED_ARTIFACT_SEAL_PATH, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
@@ -199,6 +199,180 @@ describe('detectResealCommand', () => {
       ).toBeNull();
     },
   );
+});
+
+describe('describeResealRecovery', () => {
+  async function makeRecoveryFixture(
+    paths: Record<string, string>,
+    layout = '.worktrees',
+  ): Promise<{ root: string; worktree: string }> {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-recovery-'));
+    const worktree = join(root, layout, 'feat-x');
+    const git = (args: string[]) => execFile('git', args, { cwd: worktree });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await initTestRepo(worktree);
+      for (const path of Object.keys(paths)) {
+        await mkdir(dirname(join(worktree, path)), { recursive: true });
+        await writeFile(join(worktree, path), 'approved\n');
+      }
+      await git(['add', '.']);
+      await git(['commit', '-q', '-m', 'approved artifacts']);
+      await createProtectedArtifactSeal({ projectRoot: worktree, baselineCommit: (await git(['rev-parse', 'HEAD'])).stdout.trim() });
+      await git(['checkout', '-q', '-b', 'feat-x']);
+      for (const [path, content] of Object.entries(paths)) await writeFile(join(worktree, path), content);
+      await git(['add', '.docs']);
+      await git(['commit', '-q', '-m', 'amend approved artifacts']);
+      return { root, worktree };
+    } catch (error) {
+      await rm(root, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  it('renders the exact operator recovery command for one committed sealed change', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-example.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await expect(describeResealRecovery(worktree, path)).resolves.toBe([
+        'Approve this change as an operator amendment by running, from the repository root that contains .worktrees/feat-x, in an interactive terminal:',
+        '  ai-conductor reseal --slug feat-x --path .docs/decisions/adr-2026-10-17-example.md --reason "«why»" --clear-halt',
+      ].join('\n'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accumulates every committed sealed change in path order', async () => {
+    const first = '.docs/decisions/adr-2026-10-17-a.md';
+    const second = '.docs/decisions/adr-2026-10-17-b.md';
+    const { root, worktree } = await makeRecoveryFixture({ [first]: 'corrected a\n', [second]: 'corrected b\n' });
+    try {
+      await expect(describeResealRecovery(worktree, first)).resolves.toBe([
+        'Approve this change as an operator amendment by running, from the repository root that contains .worktrees/feat-x, in an interactive terminal:',
+        '  ai-conductor reseal --slug feat-x --path .docs/decisions/adr-2026-10-17-a.md --path .docs/decisions/adr-2026-10-17-b.md --reason "«why»" --clear-halt',
+      ].join('\n'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('shell-quotes a changed path that contains a space', async () => {
+    const path = '.docs/decisions/adr 2026 space.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await expect(describeResealRecovery(worktree, path)).resolves.toContain("--slug feat-x --path '.docs/decisions/adr 2026 space.md'");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined outside the .worktrees layout', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-example.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' }, 'work');
+    try {
+      await expect(describeResealRecovery(worktree, path)).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  async function noApprovalState(worktree: string, path: string): Promise<{
+    seal: string;
+    events: boolean;
+    hint: string | undefined;
+  }> {
+    const sealPath = join(worktree, PROTECTED_ARTIFACT_SEAL_PATH);
+    const hint = await describeResealRecovery(worktree, path);
+    return {
+      seal: await readFile(sealPath, 'utf8'),
+      events: await readFile(join(worktree, '.pipeline/events.jsonl'), 'utf8').then(() => true, () => false),
+      hint,
+    };
+  }
+
+  it('returns no hint or approval for an added unsealed protected artifact', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const added = '.docs/decisions/adr-2026-10-17-new.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await writeFile(join(worktree, added), 'new decision\n');
+      await execFile('git', ['add', '.docs'], { cwd: worktree });
+      await execFile('git', ['commit', '-q', '-m', 'add unsealed decision'], { cwd: worktree });
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns no hint or approval for an uncommitted sealed change', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await writeFile(join(worktree, path), 'uncommitted correction\n');
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns no hint or approval for a feature-branch deletion', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const { root, worktree } = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    try {
+      await unlink(join(worktree, path));
+      await execFile('git', ['add', '-A'], { cwd: worktree });
+      await execFile('git', ['commit', '-q', '-m', 'delete protected decision'], { cwd: worktree });
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, path)).resolves.toEqual({ seal: before, events: false, hint: undefined });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns undefined without throwing for an unreadable seal or non-Git worktree', async () => {
+    const path = '.docs/decisions/adr-2026-10-17-a.md';
+    const fixture = await makeRecoveryFixture({ [path]: 'corrected\n' });
+    const nonGitRoot = await mkdtemp(join(tmpdir(), 'reseal-recovery-non-git-'));
+    const nonGitWorktree = join(nonGitRoot, '.worktrees', 'feat-x');
+    try {
+      await writeFile(join(fixture.worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'not json');
+      await mkdir(join(nonGitWorktree, '.pipeline'), { recursive: true });
+      await writeFile(join(nonGitWorktree, PROTECTED_ARTIFACT_SEAL_PATH), JSON.stringify({
+        version: 2, baselineCommit: 'base', protectedArtifacts: [{ path, fingerprint: 'sha256:before' }], rebaselines: [],
+      }));
+
+      await expect(Promise.all([
+        describeResealRecovery(fixture.worktree, path),
+        describeResealRecovery(nonGitWorktree, path),
+      ])).resolves.toEqual([undefined, undefined]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+      await rm(nonGitRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not approve the successful two-path recovery preview', async () => {
+    const first = '.docs/decisions/adr-2026-10-17-a.md';
+    const second = '.docs/decisions/adr-2026-10-17-b.md';
+    const { root, worktree } = await makeRecoveryFixture({ [first]: 'corrected a\n', [second]: 'corrected b\n' });
+    try {
+      const before = await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');
+
+      await expect(noApprovalState(worktree, first)).resolves.toEqual({
+        seal: before,
+        events: false,
+        hint: expect.stringContaining('--path .docs/decisions/adr-2026-10-17-b.md'),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('dispatchResealCommand', () => {
@@ -1089,6 +1263,9 @@ describe('dispatchResealCommand', () => {
       }]);
       await expect(verifyProtectedArtifactSeal({ projectRoot: worktree, baseBranch: 'main' }))
         .resolves.toMatchObject({ ok: true });
+      const seal = JSON.parse(await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')) as { protectedArtifacts: { path: string }[] };
+      expect(seal.protectedArtifacts.map(({ path }) => path)).not.toContain(retired);
+      await expect(access(join(worktree, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

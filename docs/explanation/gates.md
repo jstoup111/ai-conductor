@@ -553,6 +553,27 @@ is never a plan gap. Unverified closes cost one extra BUILD pass per lap: the fi
 attempt is refused so the builder can add a test or confirm each reason, and that refusal does not
 count as a no-progress stall. A BUILD that then completes with unverified checks emits
 `build_done_when_unverified`, and `prd_audit` receives the checks and reasons as audit input.
+
+A committed test is not proof that it asserts the check. A citation closes `verified` only when the
+task added the cited title after its recorded start commit (`startHead`, stamped by `task start`). Any other
+citation closes `pending-judgement`; when the BUILD session ends, one schema-constrained judgement
+decides whether each pending test asserts its check. The judgement:
+
+- reads the task text and a bounded window of the cited file at `HEAD`;
+- runs only on a configured provider that declares native output-schema support, with one retry;
+- emits `done_when_citation_judged` for every pass.
+
+An `asserts` verdict closes the check. A `does-not-assert` verdict reopens the task through a
+`done-when-citation` repair obligation and withholds BUILD completion with a retry hint starting
+`Done-when citation refused:` that names the task, check, citation, and reason. That refused attempt
+is not a no-progress stall. The builder repairs it by citing a test it adds, or by closing the check
+`--unverified`. The refusal stays open until the refused check re-closes `verified`. A second refusal
+for the same check, an unrepaired refusal at the next session end, or a refusal on the final BUILD
+attempt demotes the check to `unverified`. A judge that cannot run demotes every pending citation to
+`unverified` with the cause as its reason. Demoted checks then follow the unverified path above.
+An operator can overturn a refusal with
+[`ai-conductor done-when accept`](../reference/cli.md#ai-conductor-done-when).
+
 Criterion-bound `prd_audit` remediation tasks tag their first check `[test]`. Command syntax:
 [`ai-conductor task`](../reference/cli.md#ai-conductor-task).
 
@@ -576,7 +597,12 @@ When `build` next dispatches, the conductor settles the pending repair all or no
 lease. Within every allowance, each named gate is charged its lap and growth, `plan_growth` is emitted,
 and the record is removed, so a retried or restarted `build` charges nothing again. When any named
 allowance is exhausted, nothing is charged, `build` stays not done, and the feature halts `kickback-cap`
-naming the gate, the allowance, and every finding with a fresh halt generation. A consumed
+naming the gate, the allowance, and every finding with a fresh halt generation. The halt lists the
+halting gate's findings as `Findings (<gate>): ...` (its `Pending remediation tasks:` when it has
+none) and the other gate's as `Also pending (<gate>): ...`. Its budget detail adds a `Pending growth:`
+line projecting where the repair would take plan growth; a plan-growth halt's recovery command uses
+that projection's minimum raise as `--by`. Settlement, the halt, `kickback-budget inspect`, and
+`daemon status` share one projection, so a raise of that size settles the repair. A consumed
 [`kickback-budget raise`](../reference/cli.md#ai-conductor-kickback-budget) therefore resumes straight
 into `build` on the already-appended tasks instead of re-auditing unchanged code; a raise that is too
 small or names the other gate halts again at the same boundary.
@@ -697,9 +723,40 @@ an action route takes precedence while an uncovered infrastructure failure remai
 BUILD attempt. Invalid, incomplete, stale, repeated, or unfinished case state halts rather than silently
 routing or passing.
 
+Only open cases own a source. A later judgement may re-raise a source that resolved history already
+links; the re-raise opens a new case, leaves the resolved case intact, and an action charges the
+`build_review` kickback cap like any other. Each source is read through one current link: an open case
+outranks resolved history, otherwise the latest link wins. A decision stop never settles its source, so
+a later judgement can re-evaluate it; an escalation with the same owner and source outcomes converges
+on the existing stop, and a different owner halts as a
+[rejected case transition](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-a-rejected-case-transition).
+
+An operator acceptance survives a re-raise under a new finding id. When a lap finishes, the engine
+records each current-lap source that an exact `build-review accept` disposition covers as an
+acceptance origin on its case. A case is carry-eligible when an operator resolved it with
+`build-review resolve-case`, or when it is resolved, holds an origin, every origin's disposition is
+still effective, and no origin comes from the current lap. If the judgement binds a same-substance
+finding to a carry-eligible case through `existingCaseId`, the engine links the new source as
+`carried` and emits `build_review_acceptance_carried`. A carried source counts as settled in the
+effective verdict; it reserves no effect, publishes no work order, opens no decision stop, files no
+intake, and charges no kickback. Carry is never decided by text matching: an unbound look-alike
+finding routes as usual. Carry stays within the feature and its child case store. A later
+invalidation of an origin disposition stops new carry but leaves existing carried links in place. The
+PR and shipped-record accepted-risk section lists carried findings and operator-resolved cases without
+operator names or rationales.
+
 The case store and work order survive a daemon restart. BUILD stamps the work order before it starts,
-so an already attempted case cannot receive another free route; a later clean review settles cases
-whose sources are absent. Inspect the durable state and lifecycle events in
+so an already attempted case cannot receive another free route. One settlement predicate retires
+open cases. It is used for absence resolution, for acceptance retirement when a lap finishes, and at
+clean-PASS settlement. A source counts as covered when it is accepted in the current lap, holds an
+acceptance origin, or is carried. It also counts as covered on a mechanically healthy lap when it is
+no longer raised. A lap is mechanically healthy only when no current rubric had an infrastructure
+failure or incomplete scope in that lap; a reduced-coverage decision does not make a lap healthy. An
+action case whose effect is `failed` or `reserved` also retires when every source is covered, and a
+`reserved` effect becomes `failed` with a diagnostic. A failed action whose source is still raised
+and unaccepted, a failed deferral, and an open decision stop still block; the halt names the exact
+[`resolve-case` command](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case)
+for an action case. Inspect the durable state and lifecycle events in
 [`artifacts`](../reference/artifacts.md#verdict-and-evidence-artifacts) when diagnosing a halt.
 
 Not every gate reruns on retry. For the three judged SHIP gates, a genuine fresh non-passing decision routes

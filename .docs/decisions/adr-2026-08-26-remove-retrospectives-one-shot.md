@@ -55,6 +55,8 @@ remains in force for future step retirements.
 5. Historical `.docs/retros/` reports and retro-era spec artifacts remain as records.
    Recovery anchor: git tag `retro-last` marks the last pre-removal main commit.
 
+> **Amended 2026-10-21 by #2963:** a historical `.docs/retros/` report whose stem has a `.docs/shipped/<stem>.md` record on main may be removed from main by the operator-run `ai-conductor docs-prune` through a reviewed PR (adr-2026-10-15-operator-cli-prunes-shipped-decide-artifacts D1). It remains recoverable from git history, including the `retro-last` tag. Retro-era spec artifacts in kept families are not affected.
+
 > **Amended 2026-10-12 by #3056:** the remaining closeout obligation roster, the `pipeline_closeout.obligation` union, and the `CLOSEOUT_OBLIGATIONS` allowlist are removed entirely by adr-2026-10-12-retire-pipeline-closeout-obligation-telemetry decision 1. No batch gate enforces any closeout obligation.
 
 ## Consequences

@@ -1,6 +1,6 @@
 export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectBuildReviewResolveCaseCommand, detectDoneWhenAcceptCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 
 import type { RunMode } from './types/index.js';
@@ -81,7 +81,9 @@ import {
   detectInline,
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
+  detectBuildReviewResolveCaseCommand,
   detectBuildReviewRecordReducedCoverageCommand,
+  detectDoneWhenAcceptCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
   detectHaltClearCommand,
@@ -100,7 +102,8 @@ import {
 import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
+import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
 import type { StepName } from './types/index.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
@@ -171,6 +174,7 @@ import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
 } from './engine/shipment-evidence-cli.js';
+import { detectDocsPruneCommand, dispatchDocsPrune } from './engine/docs-prune-cli.js';
 
 import {
   detectFinishRecordCommand,
@@ -921,6 +925,18 @@ async function dispatchCliCommand(): Promise<void> {
     return;
   }
 
+  const buildReviewResolveCaseCmd = detectBuildReviewResolveCaseCommand(process.argv);
+  if (buildReviewResolveCaseCmd) {
+    process.exitCode = await dispatchBuildReviewResolveCase(buildReviewResolveCaseCmd);
+    return;
+  }
+
+  const doneWhenAcceptCmd = detectDoneWhenAcceptCommand(process.argv);
+  if (doneWhenAcceptCmd) {
+    process.exitCode = await dispatchDoneWhenAccept(doneWhenAcceptCmd);
+    return;
+  }
+
   const buildReviewRecordReducedCoverageCmd = detectBuildReviewRecordReducedCoverageCommand(process.argv);
   if (buildReviewRecordReducedCoverageCmd) {
     process.exitCode = await dispatchBuildReviewRecordReducedCoverage(buildReviewRecordReducedCoverageCmd);
@@ -1094,6 +1110,13 @@ async function dispatchCliCommand(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  const docsPruneCmd = detectDocsPruneCommand(process.argv);
+  if (docsPruneCmd) {
+    const repoRoot = makeProductionGit()(['rev-parse', '--show-toplevel'], { cwd: process.cwd() });
+    const code = await dispatchDocsPrune(docsPruneCmd, (await repoRoot).stdout.trim());
     process.exit(code);
   }
 

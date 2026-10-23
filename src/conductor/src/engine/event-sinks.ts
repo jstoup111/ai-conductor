@@ -10,6 +10,7 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS = {
+  decide_artifacts_pruned: { render: false, persist: true, audit: true, otel: false },
   // ADR-014 D17: spool health must survive the process without becoming input
   // to the spool itself, a renderer stream, or aggregate usage accounting.
   otel_spool_drop: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
@@ -118,6 +119,8 @@ export const EVENT_SINKS = {
   remediation_adjudication_started: { render: false, persist: true, audit: false, otel: false },
   remediation_adjudication_completed: { render: true, persist: true, audit: false, otel: false },
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
+  build_review_acceptance_carried: { render: false, persist: true, audit: false, otel: false },
+  remediation_case_operator_resolved: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },
   prd_widening_reconciled: { render: false, persist: true, audit: false, otel: false },
@@ -200,6 +203,8 @@ export const EVENT_SINKS = {
   build_review_repair_context: { render: false, persist: true, audit: false, otel: false },
   mode_skip: { render: false, persist: true, audit: false, otel: false },
   build_done_when_unverified: { render: false, persist: true, audit: false, otel: false },
+  done_when_citation_judged: { render: false, persist: true, audit: false, otel: false },
+  done_when_citation_accepted: { render: false, persist: true, audit: false, otel: false },
   build_stall: { render: true, persist: true, audit: false, otel: true },
   build_progress: { render: true, persist: true, audit: false, otel: true },
   step_in_flight: { render: true, persist: true, audit: false, otel: false },

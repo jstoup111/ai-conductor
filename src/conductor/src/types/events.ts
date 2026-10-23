@@ -135,27 +135,27 @@ export interface ParkedReconcileMaintenanceSummary {
   skipped: number;
 }
 
-type DaemonMaintenancePhaseBase = {
+type DaemonMaintenancePhaseBase<Outcome extends MaintenancePhaseOutcome> = {
   type: 'daemon_maintenance_phase';
   durationMs: number;
-  outcome: MaintenancePhaseOutcome;
+  outcome: Outcome;
 };
 
-/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data. */
+/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data or another phase's outcome. */
 export type DaemonMaintenancePhaseEvent =
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed' | 'deferred'> & {
       phase: 'repair';
       prUrl: string;
       slug?: string;
       summary?: never;
     })
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'skipped-unchanged' | 'failed'> & {
       phase: 'parked-reconcile';
       summary?: ParkedReconcileMaintenanceSummary;
       prUrl?: never;
       slug?: never;
     })
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed'> & {
       phase: Exclude<MaintenancePhase, 'repair' | 'parked-reconcile'>;
       prUrl?: never;
       slug?: never;
@@ -496,6 +496,15 @@ export interface SessionEventDeliveryDiagnosticEvent {
 }
 
 type ConductorEventBody =
+  | {
+      /** Operator-run cleanup of transient DECIDE artifacts for shipped work. */
+      type: 'decide_artifacts_pruned';
+      removed: string[];
+      deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[];
+      skipped: { stem: string; reason: 'no-shipped-record' }[];
+      excluded: string[];
+      pullRequestUrl?: string;
+    }
   | BotCoAuthorSkippedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
@@ -981,8 +990,29 @@ type ConductorEventBody =
       };
     }
   | {
+      /** A new source was carried from a prior operator-accepted remediation case. */
+      type: 'build_review_acceptance_carried';
+      eventId: string;
+      feature: string;
+      lapId: string;
+      sourceId: string;
+      caseId: string;
+      originSourceIds: readonly string[];
+      originLapIds: readonly string[];
+    }
+  | {
+      /** An operator resolved a remediation case outside the adjudication judgement. */
+      type: 'remediation_case_operator_resolved';
+      eventId: string;
+      feature: string;
+      caseId: string;
+      sourceIds: readonly string[];
+    }
+  | {
       /** One canonical remediation case was reconciled against the current lap. */
       type: 'remediation_case_reconciled';
+      /** Makes outbox delivery of a retirement occurrence replay-safe. */
+      eventId?: string;
       domain: 'build_review';
       lapId: string;
       caseId: string;
@@ -1519,6 +1549,23 @@ type ConductorEventBody =
   | {
       type: 'build_done_when_unverified';
       checks: readonly { readonly taskId: string; readonly check: string }[];
+    }
+  | {
+      /** One native citation-judgement pass, including an unavailable fallback. */
+      type: 'done_when_citation_judged';
+      citations: readonly {
+        readonly taskId: string;
+        readonly check: number;
+        readonly verdict?: 'asserts' | 'does-not-assert';
+        readonly unavailable?: string;
+      }[];
+    }
+  | {
+      /** An operator accepted one previously refused Done-when citation. */
+      type: 'done_when_citation_accepted';
+      taskId: string;
+      check: number;
+      reason: string;
     }
   | {
       type: 'build_stall';

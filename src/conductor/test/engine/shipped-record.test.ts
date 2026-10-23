@@ -1,4 +1,4 @@
-// Covers: task:1, task:20
+// Covers: task:1, task:20, task:24
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -27,6 +27,7 @@ import type { BuildReviewDispositionRecord } from '../../src/engine/build-review
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
 import type { TimingRollup } from '../../src/engine/timing-rollup.js';
+import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
@@ -515,6 +516,78 @@ describe('appendTimingSection', () => {
 });
 
 describe('accepted build-review risk shipped projection', () => {
+  // Covers: task:24
+  it('projects carried findings and operator-resolved cases without publishing private decision data', () => {
+    const origin = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/origin.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'origin' } } })!;
+    const carried = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/carried.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'carried' } } })!;
+    const feature = { version: 'v1' as const, repository: 'repo', feature: 'feature' };
+    const direct: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding: origin, sourceLapId: parseBuildReviewLapId('lap-origin')!,
+      summary: 'DIRECT-SUMMARY-MUST-NOT-PUBLISH', rationale: 'DIRECT-RATIONALE-MUST-NOT-PUBLISH',
+      operator: 'DIRECT-OPERATOR-MUST-NOT-PUBLISH', acceptedAt: '2026-10-22T10:00:00.000Z',
+    };
+    const caseState = {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-carried', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'CARRIED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+        sources: [
+          { sourceId: `testQuality:${origin.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' },
+          { sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T11:00:00.000Z' },
+        ],
+        effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'order-carried' },
+        operatorAcceptance: { origins: [{ sourceId: `testQuality:${origin.id}`, lapId: 'lap-origin' }] },
+      }, {
+        id: 'case-operator-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+        sources: [{ sourceId: `testQuality:${origin.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' }],
+        effect: { id: 'effect-resolved', kind: 'action', status: 'failed', diagnostic: 'resolved by operator' },
+        operatorResolution: { operator: 'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', rationale: 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH', resolvedAt: '2026-10-22T12:00:00.000Z' },
+      }],
+    } satisfies RemediationCaseStoreState;
+
+    const rendered = appendBuildReviewAcceptedRisk('---\nslug: feature\n---\n', [direct], { ok: true, state: caseState });
+
+    expect(rendered).toContain(`Finding: \`${origin.id}\` — rubric: testQuality`);
+    expect(rendered).toContain(`- Carried finding: \`${carried.id}\` — rubric: testQuality; carried from: \`testQuality:${origin.id}\` (lap lap-origin)`);
+    expect(rendered).toContain(`- Operator-resolved case: \`case-operator-resolved\` — source ids: \`testQuality:${origin.id}\``);
+    for (const privateValue of [
+      direct.summary, direct.rationale, direct.operator, direct.acceptedAt,
+      // Every case-source timestamp remains private, including the carried source.
+      ...caseState.cases.flatMap(({ sources }) => sources.map(({ recordedAt }) => recordedAt)),
+      'CARRIED-RATIONALE-MUST-NOT-PUBLISH', 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH',
+      'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
+      '2026-10-22T12:00:00.000Z',
+    ]) expect(rendered).not.toContain(privateValue);
+  });
+
+  // Covers: task:24
+  it('does not render carried or operator-resolved rows when case-store input is absent', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/no-case-state.test.ts', contentHash: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', display: 'no case state' } } })!;
+    const direct: BuildReviewDispositionRecord = {
+      version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding,
+      sourceLapId: parseBuildReviewLapId('lap-direct')!, summary: 'summary', rationale: 'rationale',
+      operator: 'operator', acceptedAt: '2026-10-22T10:00:00.000Z',
+    };
+
+    const rendered = appendBuildReviewAcceptedRisk('---\nslug: feature\n---\n', [direct]);
+
+    expect(rendered).toContain(`Finding: \`${finding.id}\` — rubric: testQuality`);
+    expect(rendered).not.toMatch(/^- Carried finding:/m);
+    expect(rendered).not.toMatch(/^- Operator-resolved case:/m);
+  });
+
+  // Covers: task:24
+  it('keeps direct accepted risk visible when the case store is unreadable without fabricating carried state', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/unreadable-case-state.test.ts', contentHash: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', display: 'unreadable case state' } } })!;
+    const direct: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-direct')!, summary: 'summary', rationale: 'rationale', operator: 'operator', acceptedAt: '2026-10-22T10:00:00.000Z' };
+
+    const rendered = appendBuildReviewAcceptedRisk('---\nslug: feature\n---\n', [direct], { ok: false, reason: 'malformed-state' });
+
+    expect(rendered).toContain(finding.id);
+    expect(rendered).toMatch(/case store: unreadable/i);
+    expect(rendered).not.toMatch(/carried/i);
+    expect(rendered).not.toMatch(/operator-resolved/i);
+  });
+
   it('reuses the deterministic accepted-risk section without changing frontmatter or cost blocks', () => {
     const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v1', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus: { path: 'test/engine/shipped-record.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } })!;
     const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
@@ -586,6 +659,45 @@ describe('reduced build-review coverage shipped projection', () => {
 });
 
 describe('shipped-record reduced-coverage dispatch', () => {
+  // Covers: task:24
+  it('projects carried and operator-resolved case state through the shipped-record command', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shipped-record-accepted-risk-cases-'));
+    const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
+    const caseState: RemediationCaseStoreState = {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-carried', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'private', resolution: 'resolved',
+        sources: [{ sourceId: 'testQuality:F2', outcome: 'carried', recordedAt: '2026-10-22T10:00:00.000Z' }],
+        effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'work-carried' },
+        operatorAcceptance: { origins: [{ sourceId: 'testQuality:F1', lapId: 'lap-origin' }] },
+      }, {
+        id: 'case-O', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'private', resolution: 'resolved',
+        sources: [{ sourceId: 'testQuality:O-source', outcome: 'acted', recordedAt: '2026-10-22T11:00:00.000Z' }],
+        effect: { id: 'effect-O', kind: 'action', status: 'failed', diagnostic: 'operator resolved' },
+        operatorResolution: { operator: 'operator', rationale: 'private resolution', resolvedAt: '2026-10-22T12:00:00.000Z' },
+      }],
+    };
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.docs', 'plans', 'feature.md'), '# Plan\n');
+      await writeFile(join(root, '.pipeline', 'build-review-dispositions.json'), JSON.stringify({ version: 'v1', records: [] }));
+      await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify(caseState));
+      await execFile('git', ['init', '-b', 'main', root]);
+      await execFile('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+      await execFile('git', ['-C', root, 'config', 'user.name', 'Test']);
+      await execFile('git', ['-C', root, 'add', '.']);
+      await execFile('git', ['-C', root, 'commit', '-m', 'fixture']);
+
+      await expect(dispatchShippedRecord({ kind: 'write', slug: 'feature', pr: 'local' }, root)).resolves.toBe(0);
+      const record = await readFile(join(root, '.docs', 'shipped', 'feature.md'), 'utf8');
+      expect(record).toContain('- Carried finding: `F2` — rubric: testQuality; carried from: `testQuality:F1` (lap lap-origin)');
+      expect(record).toContain('- Operator-resolved case: `case-O` — source ids: `testQuality:O-source`');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('writes rendered current-lap coverage and blocks known-but-unrenderable evidence before writing', async () => {
     const root = await mkdtemp(join(tmpdir(), 'shipped-record-reduced-coverage-'));
     const lapId = parseBuildReviewLapId('lap-current')!;

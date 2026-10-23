@@ -1,0 +1,9 @@
+# Track: build_review findings carry a severity with a per-rubric advisory threshold
+
+Track: technical
+
+Scope boundary: comprehensive — a required `severity` (critical / major / minor / nit) on every built-in AND custom build_review finding (built-in contract v3→v4; custom contract bumped likewise); a per-rubric `min_severity` for `build_review.rubrics.<id>` and `build_review.custom_rubrics.<id>`; below-threshold findings classified advisory by the engine before adjudication (never judged, never kicked back, never charged), recorded on the outer-verdict event, the suppression history, the `build-review findings` CLI and an engine-owned PR body section; an adjudicator `advisory` downgrade outcome with rationale, persisted by finding id across laps; per-concern-kind severity guidance in the rubric skills. Severity stays out of finding identity. Undeclared `min_severity` keeps today's behavior (every surviving finding kicks back). Excluded: re-enabling implementationQuality or setting thresholds in this repo's `.ai-conductor/config.yml` (separate operator change); finding-id drift across laps (#3294).
+
+Engine/gating machinery for operators — no end-user product requirements; acceptance criteria live in stories (precedent: confidence floor, #2383). Operator confirmed 2026-10-19. Source: jstoup111/ai-conductor#3298.
+
+Chosen approach: reviewer-assigned severity + engine-side threshold beside the confidence floor + adjudicator downgrade. Rejected: (B) operator config mapping concernKind→severity — deterministic but kind is not impact; #3298's evidence has high- and low-impact findings within one kind. (C) adjudicator-only severity — keeps the rubric contract but every raw-FAIL lap still pays a remediate dispatch and severity is invisible per finding. Missing severity is a malformed result (required field), not an implicit kickback.

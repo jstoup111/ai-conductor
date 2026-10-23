@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:28, task:rem-as-built-8
+// Covers: task:3, task:4, task:14, task:28, task:rem-as-built-8
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -163,6 +163,102 @@ function priorDecisionStop(id: string): RemediationCaseRecord {
 }
 
 describe('build-review adjudication context', () => {
+  it('marks only carry-eligible prior cases with their acceptance origins', () => {
+    const accepted = {
+      ...priorCase('case-accepted'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: {
+        origins: [
+          { sourceId: 'testQuality:accepted-first', lapId: 'lap-first' },
+          { sourceId: 'security:accepted-second', lapId: 'lap-second' },
+        ],
+      },
+    };
+    const withdrawn = {
+      ...priorCase('case-withdrawn'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:withdrawn', lapId: 'lap-prior' }] },
+    };
+    const noLongerMatches = {
+      ...priorCase('case-no-longer-matches'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:invalidated', lapId: 'lap-prior' }] },
+    };
+    const currentLap = {
+      ...priorCase('case-current-lap'),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:current', lapId: 'lap-current' }] },
+    };
+
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [accepted, withdrawn, noLongerMatches, currentLap],
+      carryInput: {
+        currentLapId: lapId,
+        effectiveAcceptedSourceIds: new Set(['testQuality:accepted-first', 'security:accepted-second', 'testQuality:current']),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.context.priorCases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'case-accepted',
+        operatorAccepted: {
+          originSourceIds: ['testQuality:accepted-first', 'security:accepted-second'],
+          originLapIds: ['lap-first', 'lap-second'],
+        },
+      }),
+      expect.not.objectContaining({ id: 'case-withdrawn', operatorAccepted: expect.anything() }),
+      expect.not.objectContaining({ id: 'case-no-longer-matches', operatorAccepted: expect.anything() }),
+      expect.not.objectContaining({ id: 'case-current-lap', operatorAccepted: expect.anything() }),
+    ]));
+  });
+
+  it('does not expose operator details and preserves the prior-case overflow rule for marked cases', () => {
+    const resolvedByOperator = {
+      ...priorCase('case-operator-resolved'),
+      resolution: 'resolved' as const,
+      operatorResolution: {
+        operator: 'operator@example.test',
+        rationale: 'The operator accepted this bounded risk.',
+        resolvedAt: '2026-10-22T12:00:00.000Z',
+      },
+    };
+    const marked = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [resolvedByOperator],
+      carryInput: { currentLapId: lapId, effectiveAcceptedSourceIds: new Set() },
+    });
+
+    expect(marked).toMatchObject({ ok: true });
+    if (!marked.ok) return;
+    expect(marked.context.priorCases[0]).toMatchObject({
+      operatorAccepted: { originSourceIds: [], originLapIds: [] },
+    });
+    expect(JSON.stringify(marked.context)).not.toContain('operator@example.test');
+    expect(JSON.stringify(marked.context)).not.toContain('The operator accepted this bounded risk.');
+
+    const atCeiling = Array.from({ length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxPriorCases }, (_value, index) => ({
+      ...priorCase(`case-${index.toString().padStart(3, '0')}`),
+      resolution: 'resolved' as const,
+      operatorAcceptance: { origins: [{ sourceId: `testQuality:case-${index}`, lapId: 'lap-prior' }] },
+      rationale: 'x'.repeat(BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxTextBytes),
+    }));
+    const unmarked = assembleBuildReviewAdjudicationContext({ aggregate: aggregate(finding('current')), priorCases: atCeiling });
+    const overflowingMarked = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: atCeiling,
+      carryInput: {
+        currentLapId: lapId,
+        effectiveAcceptedSourceIds: new Set(atCeiling.flatMap((record) => record.operatorAcceptance!.origins.map((origin) => origin.sourceId))),
+      },
+    });
+
+    expect(unmarked).toMatchObject({ ok: false, stop: { code: 'serialized-byte-overflow' } });
+    expect(overflowingMarked).toMatchObject({ ok: false, stop: { code: 'serialized-byte-overflow' } });
+  });
+
   it('requires case-v2 admission for implementation-quality and exposes its raw source question', () => {
     const missing = assembleBuildReviewAdjudicationContext({ aggregate: implementationQualityAggregate(), priorCases: [] });
     expect(missing).toEqual({ ok: false, stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' } });

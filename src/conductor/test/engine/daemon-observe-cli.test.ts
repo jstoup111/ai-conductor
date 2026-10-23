@@ -1217,6 +1217,93 @@ describe('engine/daemon-observe-cli', () => {
       });
 
       // Covers: task:7
+      it('renders unresolved flat pending growth without inventing a cap or recovery raise', async () => {
+        const repo = join(root, 'repo-unresolved-pending-plan');
+        const slug = 'unresolved-pending-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 3), {
+          planName: 'first-other.md',
+          otherPlan: { name: 'also-other.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          pendingRepair: {
+            receiptId: 'unresolved-pending', taskIds: ['rem-1'],
+            charges: { prd_audit: { laps: 1, growth: 4 } },
+          },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-unresolved-pending-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [unresolved-pending-feature]: plan unresolved; added 0; pending 4 (prd_audit 4)');
+      });
+
+      // Covers: task:7
+      it('renders flat pending growth through daemon status and preserves its projection details', async () => {
+        const repo = join(root, 'repo-pending-growth');
+        const slug = 'pending-growth-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 40), tasks('rem-', 11)].join('\n'));
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          growth: { authored: 40, added: 0, byGate: {} },
+          pendingRepair: {
+            receiptId: 'pending-growth',
+            taskIds: Array.from({ length: 11 }, (_, index) => `rem-${index + 1}`),
+            charges: {
+              prd_audit: { laps: 1, growth: 3 },
+              architecture_review_as_built: { laps: 1, growth: 8 },
+            },
+          },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-pending-growth', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain(
+          '  PLAN GROWTH [pending-growth-feature]: authored 40; added 0; remaining 0/10; pending 11 (prd_audit 3, architecture_review_as_built 8), minimum raise 1',
+        );
+      });
+
+      // Covers: task:7
+      it('shows pending growth only when it is chargeable, and leaves ordinary status lines unchanged', async () => {
+        const repo = join(root, 'repo-status-growth-variants');
+        const pendingRoot = await writeDaemonPlan(repo, 'partial-pending', [tasks('', 40), tasks('rem-', 3)].join('\n'));
+        const baseLedger = { version: 1, gates: {}, growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } } };
+        await mkdir(join(pendingRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(pendingRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(pendingRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          ...baseLedger,
+          pendingRepair: {
+            receiptId: 'partial', taskIds: ['rem-1', 'rem-2', 'rem-3'],
+            charges: { prd_audit: { laps: 1, growth: 3 } },
+          },
+        }), 'utf8');
+        const lapsRoot = await writeDaemonPlan(repo, 'laps-only', [tasks('', 40), tasks('rem-', 1)].join('\n'));
+        await writeFile(join(lapsRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          ...baseLedger,
+          growth: { authored: 39, added: 2, byGate: { prd_audit: 2 } },
+          pendingRepair: {
+            receiptId: 'laps-only', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 0 } },
+          },
+        }), 'utf8');
+        // A settled flat ledger's active plan includes its two charged tasks.
+        const ordinaryRoot = await writeDaemonPlan(repo, 'ordinary', tasks('', 42));
+        await writeFile(join(ordinaryRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify(baseLedger), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-status-growth-variants', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 5/10; pending 3 (prd_audit 3)');
+        expect(out.find((line) => line.startsWith('  PLAN GROWTH [partial-pending]:'))).not.toContain('minimum raise');
+        expect(out).toContain('  PLAN GROWTH [laps-only]: authored 39; added 2 (prd_audit: 2); remaining 3/5');
+        expect(out).toContain('  PLAN GROWTH [ordinary]: authored 40; added 2 (prd_audit: 2); remaining 3/5');
+      });
+
+      // Covers: task:7
       it('renders config-derived and raised shared budgets for recorded growth', async () => {
         const repo = join(root, 'repo-shared-budget');
         const slug = 'shared-budget-feature';

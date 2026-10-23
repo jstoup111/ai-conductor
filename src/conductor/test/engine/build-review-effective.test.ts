@@ -1,13 +1,14 @@
-// Covers: task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
+// Covers: task:2, task:9, task:25, task:26, task:27, task:rem-prd-audit-7, task:rem-prd-audit-7-2
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
-import { deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { deriveComposedBuildReviewEffectiveVerdict, isBuildReviewLapHealthyForAbsenceRetirement, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict, type BuildReviewEffectiveResolverDeps } from '../../src/engine/build-review-effective.js';
 import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
 import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
 import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
+import { finalizedBuildReviewSourceIds } from '../../src/engine/remediation-case-store.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 const root = '/repo';
@@ -15,6 +16,14 @@ const worktree = '/repo/.worktrees/feature';
 const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
 type Rubric = 'testQuality' | 'security';
 const currentContractVersion: BuildReviewRubricContractVersion = 'v3';
+
+if (false) {
+  // @ts-expect-error child scope is mandatory at every resolver call.
+  const missingChild: BuildReviewEffectiveResolverDeps = { adjudicationEnabled: true };
+  // @ts-expect-error adjudication authority is mandatory at every resolver call.
+  const missingAdjudication: BuildReviewEffectiveResolverDeps = { child: undefined };
+  void [missingChild, missingAdjudication];
+}
 
 const testQualityFinding = { concernKind: 'test-insensitive', summary: 'Actionable finding summary', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
 const securityFinding = { concernKind: 'committed-secret', summary: 'Credential committed to source.', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security' as const, locus: { path: 'src/a.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'credential assignment' } } };
@@ -123,9 +132,34 @@ function scopeAggregate(resolution: 'indeterminate' | 'resolved', includeTestQua
   } });
 }
 
-const identityDeps = { resolveMainRoot: async () => root, realpath: async (path: string) => path };
+const identityDeps = {
+  resolveMainRoot: async () => root,
+  realpath: async (path: string) => path,
+  child: undefined,
+  adjudicationEnabled: true,
+};
 
 describe('live build-review effective resolver', () => {
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17f, task:rem-as-built-rem-as-built-R17g
+  it('shares current-lap absence-retirement health for built-in, custom, scope, and healthy laps', () => {
+    const healthy = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot',
+          contractVersion: currentContractVersion, findings: [], verdict: 'PASS',
+        },
+        security: securityPass(),
+      },
+    } as never);
+
+    expect([
+      aggregate({ faults: { testQuality: 'provider-error' } }),
+      customFailureAggregate(),
+      scopeAggregate('indeterminate'),
+      healthy,
+    ].map(isBuildReviewLapHealthyForAbsenceRetirement)).toEqual([false, false, false, true]);
+  });
+
   it('keeps an above-floor implementation-quality finding unresolved and suppresses a below-floor one', () => {
     const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
@@ -367,11 +401,40 @@ describe('live build-review effective resolver', () => {
       } });
     });
 
+    it('passes built-in and custom findings whose authoritative case links are carried', async () => {
+      const carriedCase = (sourceId: string) => ({
+        ...caseRecord(sourceId, 'act', { id: 'action-effect', kind: 'action', status: 'applied', workOrderId: 'work-order' }),
+        resolution: 'resolved' as const,
+        sources: [{ sourceId, outcome: 'carried' as const }],
+      });
+      const { aggregate: customRaw, findingId: customFindingId } = customAggregate(undefined);
+
+      await expect(Promise.all([
+        withCases(aggregate(), [carriedCase(`testQuality:${builtinId}`)]),
+        withCases(customRaw, [carriedCase(`portablePolicy:${customFindingId}`)]),
+      ])).resolves.toMatchObject([
+        { ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', settledFindingIds: [builtinId] } },
+        { ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', settledFindingIds: [customFindingId] } },
+      ]);
+    });
+
     it('keeps the finding blocking for an open action case, another rubric, or unreadable case state', async () => {
       const blocked = { ok: true, effective: { verdict: 'FAIL', unresolvedFindingIds: [builtinId] } };
       await expect(withCases(aggregate(), [caseRecord(`testQuality:${builtinId}`, 'act', { kind: 'action', status: 'reserved' })])).resolves.toMatchObject(blocked);
       await expect(withCases(aggregate(), [caseRecord(`security:${builtinId}`, 'reject')])).resolves.toMatchObject(blocked);
       await expect(withCases(aggregate(), 'unreadable')).resolves.toMatchObject(blocked);
+    });
+
+    it('derives the coordinator-equivalent unsettled set for resolved R and open N on S', async () => {
+      const sourceId = `testQuality:${builtinId}`;
+      const resolved = caseRecord(sourceId, 'reject');
+      const open = caseRecord(sourceId, 'act', { kind: 'action', status: 'reserved' });
+      const cases = [resolved, open];
+
+      expect(finalizedBuildReviewSourceIds(cases as never)).toEqual(new Set());
+      await expect(withCases(aggregate(), cases)).resolves.toMatchObject({ ok: true, effective: {
+        verdict: 'FAIL', unresolvedFindingIds: [builtinId],
+      } });
     });
   });
 

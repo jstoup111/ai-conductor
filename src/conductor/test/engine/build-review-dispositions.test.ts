@@ -1,4 +1,4 @@
-// Covers: task:8, task:26, task:rem-prd-audit-8-5
+// Covers: task:8, task:24, task:26, task:rem-prd-audit-8-5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,6 +24,7 @@ import {
   type BuildReviewDispositionRecord,
 } from '../../src/engine/build-review-dispositions.js';
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
+import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 class MemoryFilesystem implements BuildReviewDispositionFilesystem {
   readonly files = new Map<string, string>();
@@ -64,6 +65,88 @@ const finding = canonicalizeBuildReviewFindingIdentity({
 })!;
 
 describe('build-review dispositions', () => {
+  // Covers: task:24
+  it('renders direct, carried, and operator-resolved accepted risk without private operator decision data', () => {
+    const origin = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: { rubric: 'testQuality', locus: { path: 'test/origin.test.ts', contentHash: testContentHash, display: 'origin' } },
+    })!;
+    const carried = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      anchor: { rubric: 'testQuality', locus: { path: 'test/carried.test.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'carried' } },
+    })!;
+    const direct: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding: origin, sourceLapId: parseBuildReviewLapId('lap-origin')!,
+      summary: 'DIRECT-SUMMARY-MUST-NOT-PUBLISH', rationale: 'DIRECT-RATIONALE-MUST-NOT-PUBLISH',
+      operator: 'DIRECT-OPERATOR-MUST-NOT-PUBLISH', acceptedAt: '2026-10-22T10:00:00.000Z',
+    };
+    const caseState = {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-carried', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'CASE-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+        sources: [
+          { sourceId: `testQuality:${origin.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' },
+          { sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T11:00:00.000Z' },
+        ],
+        effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'order-carried' },
+        operatorAcceptance: { origins: [{ sourceId: `testQuality:${origin.id}`, lapId: 'lap-origin' }] },
+      }, {
+        id: 'case-operator-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'RESOLVED-CASE-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+        sources: [{ sourceId: `testQuality:${origin.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' }],
+        effect: { id: 'effect-resolved', kind: 'action', status: 'failed', diagnostic: 'resolved by operator' },
+        operatorResolution: {
+          operator: 'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', rationale: 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
+          resolvedAt: '2026-10-22T12:00:00.000Z',
+        },
+      }],
+    } satisfies RemediationCaseStoreState;
+
+    const rendered = renderBuildReviewAcceptedRisk([direct], { ok: true, state: caseState });
+
+    expect(rendered).toMatchObject({ ok: true });
+    if (!rendered.ok) return;
+    expect(rendered.section).toContain(`Finding: \`${origin.id}\` — rubric: testQuality`);
+    expect(rendered.section).toContain(`- Carried finding: \`${carried.id}\` — rubric: testQuality; carried from: \`testQuality:${origin.id}\` (lap lap-origin)`);
+    expect(rendered.section).toContain(`- Operator-resolved case: \`case-operator-resolved\` — source ids: \`testQuality:${origin.id}\``);
+    for (const privateValue of [
+      direct.summary, direct.rationale, direct.operator, direct.acceptedAt,
+      ...caseState.cases.flatMap(({ sources }) => sources.map(({ recordedAt }) => recordedAt)),
+      'CASE-RATIONALE-MUST-NOT-PUBLISH', 'RESOLVED-CASE-RATIONALE-MUST-NOT-PUBLISH',
+      'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
+      '2026-10-22T12:00:00.000Z',
+    ]) expect(rendered.section).not.toContain(privateValue);
+  });
+
+  // Covers: task:24
+  it('keeps direct rows, reports an unreadable case store, and adds no carried or resolved rows without case state', () => {
+    const direct: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-direct')!,
+      summary: 'summary', rationale: 'rationale', operator: 'operator', acceptedAt: '2026-10-22T10:00:00.000Z',
+    };
+
+    const unreadable = renderBuildReviewAcceptedRisk([direct], { ok: false, reason: 'malformed-state' });
+    expect(unreadable).toMatchObject({ ok: true });
+    if (unreadable.ok) {
+      expect(unreadable.section).toContain(finding.id);
+      expect(unreadable.section).toMatch(/case store: unreadable/i);
+      expect(unreadable.section).not.toMatch(/carried/i);
+      expect(unreadable.section).not.toMatch(/operator-resolved/i);
+    }
+
+    const noState = renderBuildReviewAcceptedRisk([direct], {
+      ok: true,
+      state: { version: 'v3', feature, cases: [], prdWideningCases: [], suppressions: [], outbox: [] },
+    });
+    expect(noState).toMatchObject({ ok: true });
+    if (noState.ok) {
+      expect(noState.section).toContain(finding.id);
+      expect(noState.section).not.toMatch(/carried/i);
+      expect(noState.section).not.toMatch(/operator-resolved/i);
+    }
+  });
+
   it('persists the versioned feature, complete canonical finding, lap, rationale, operator, and clock time', async () => {
     const filesystem = new MemoryFilesystem();
     const store = new BuildReviewDispositionStore('/repo', {

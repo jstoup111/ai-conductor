@@ -37,6 +37,7 @@ import { prdAuditScopeProjection } from './prd-audit-routing.js';
 import { REMEDIATION_PLAN_SCHEMA, renderRemediationPlanShape, validateRemediationPlan } from './remediation-plan-contract.js';
 import { persistRemediationPlan, type RemediationPlanStoreFilesystem } from './remediation-plan-store.js';
 import type {
+  CitationJudgementDispatchResult,
   ComplexityAssessment,
   StepRunner,
   StepRunResult,
@@ -93,6 +94,11 @@ import { PREREQUISITE_CLAIM_SCHEMA } from './routing/prerequisite-claim.js';
 import { parseFeatureRef } from './feature-branch-identity.js';
 import { REBASE_REGRADE_SKILL } from './rebase-regrade-judgement.js';
 import { RESIDUE_ROUTING_CALL_MEMBER } from './routing/residue-routing-call.js';
+import {
+  DONE_WHEN_CITATION_JUDGEMENT_SCHEMA,
+  validateCitationJudgementOutput,
+  type CitationJudgementInput,
+} from './done-when-citation-judgement.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { resolveSkillName } from './skill-names.js';
@@ -2800,6 +2806,58 @@ export class DefaultStepRunner implements StepRunner {
     return { success: dispatched.success, output: dispatched.output };
   }
 
+  /**
+   * Dispatch the bounded Done-when citation judgement.  This is deliberately
+   * a free-form BUILD dispatch rather than a skill invocation: the engine owns
+   * both the complete input projection and the native terminal schema.
+   */
+  async dispatchDoneWhenCitationJudgement(
+    input: CitationJudgementInput,
+  ): Promise<CitationJudgementDispatchResult> {
+    const schemaCandidates = this.providerRuntimes === undefined
+      ? []
+      : this.configuredProviders.filter(
+          (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+        );
+    if (schemaCandidates.length === 0) {
+      return {
+        kind: 'unavailable',
+        cause: `Done-when citation judgement cannot enforce its native output schema: candidate set [${this.configuredProviders.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema.`,
+      };
+    }
+
+    let lastCause = 'provider returned no structured citation judgement';
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const dispatched = await this.executeProviderAwareOneShot('build', {
+          prompt: `DONE-WHEN CITATION JUDGEMENT (engine-owned input):\n${JSON.stringify(input)}\n\nReturn only the native-schema response. Judge whether each cited test asserts the named Done-when check.`,
+          cwd: this.projectDir,
+          interactive: false,
+          readOnlyReview: true,
+          nativeSchema: DONE_WHEN_CITATION_JUDGEMENT_SCHEMA,
+        });
+        this.callCount++;
+        if (dispatched === undefined) {
+          return { kind: 'unavailable', cause: 'Done-when citation judgement provider runtime is unavailable.' };
+        }
+        if (!dispatched.success) {
+          lastCause = dispatched.output ?? 'citation judgement provider dispatch failed';
+          continue;
+        }
+        if (dispatched.structuredResultFailure !== undefined || dispatched.finalStructuredResult === undefined) {
+          lastCause = 'citation judgement provider returned no valid native-schema result';
+          continue;
+        }
+        const validated = validateCitationJudgementOutput(dispatched.finalStructuredResult, input.citations);
+        if (validated.kind === 'valid') return validated;
+        lastCause = validated.reason;
+      } catch (error) {
+        lastCause = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return { kind: 'unavailable', cause: `Done-when citation judgement unavailable after two attempts: ${lastCause}` };
+  }
+
   async resolveRebaseConflict(ctx: ResolutionContext): Promise<ResolutionAttempt> {
     const rebaseSkillName = await resolveSkillName(this.skillNameRoot, 'rebase');
     const conflictList =
@@ -3657,6 +3715,7 @@ export class DefaultStepRunner implements StepRunner {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
+      ...(inputs.securitySourceSnapshot === undefined ? {} : { securitySnapshotDigest: inputs.securitySourceSnapshot.digest }),
       results: validResults,
       declaredReplicationSuppressions,
       ...(customResults === undefined ? {} : {
@@ -3668,6 +3727,8 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(config),
+      child,
+      adjudicationEnabled: config.adjudication.enabled,
     });
     const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
       ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }
@@ -4408,6 +4469,8 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(input.config),
+      child: input.child,
+      adjudicationEnabled: input.config.adjudication.enabled,
     });
     const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
       ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }

@@ -29,10 +29,13 @@ import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import {
   buildReviewConfidenceFloors,
+  isBuildReviewLapHealthyForAbsenceRetirement,
   rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   applyBuildReviewOutcome,
@@ -48,7 +51,7 @@ import {
   readBuildReviewWorkOrder,
   readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
-import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { appendRemediationCaseOutbox, drainRemediationCaseOutbox, prdWideningCasesForState, readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
@@ -68,7 +71,8 @@ import {
   type RefusalReworkAllowanceBlocker,
   type RefusalRoundOutcome,
 } from './prd-widening-refusal-rework.js';
-import { reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
 import {
   buildRemediationProjection,
   type RemediationProjectionLimits,
@@ -115,6 +119,15 @@ import {
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
+import {
+  applyCitationVerdicts,
+  admitCitationRefusals,
+  buildCitationJudgementInput,
+  collectPendingCitations,
+  demoteUnavailableCitations,
+  settleCitationRefusals,
+} from './done-when-citation-judgement.js';
+import { readGitBlobs } from './git-blob-batch.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -164,6 +177,7 @@ import {
   verifyProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineEvent,
 } from './protected-artifact-seal.js';
+import { describeResealRecovery } from './reseal-cli.js';
 import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
@@ -356,7 +370,7 @@ import {
   type chargeBuildReviewEffectInLedger,
   type PlanGrowth,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, renderKickbackRecoveryHint, withPendingGrowth } from './kickback-budget-view.js';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
@@ -3478,7 +3492,7 @@ export class Conductor {
       await this.emitPrdWideningRejections('persistence-failed', visible.map(prdWideningSourceId));
       return renderPrdWideningRecovery('persistence-failed', visible.map((finding) => finding.criterion));
     }
-    let prdCases = storedCases.state.version === 'v2' ? storedCases.state.prdWideningCases : [];
+    let prdCases = prdWideningCasesForState(storedCases.state);
     // Only the first observed source opens an authority offer. Once this
     // feature has history, every unmatched source (including a renumbered NC)
     // enters the semantic coordinator instead of minting report-local authority.
@@ -3503,7 +3517,7 @@ export class Conductor {
         await this.emitPrdWideningRejections('persistence-failed', newFindings.map(prdWideningSourceId));
         return renderPrdWideningRecovery('persistence-failed', newFindings.map((finding) => finding.criterion));
       }
-      prdCases = refreshedCases.state.version === 'v2' ? refreshedCases.state.prdWideningCases : [];
+      prdCases = prdWideningCasesForState(refreshedCases.state);
     }
     const context = buildPrdWideningContext(report, prdCases,
       storedDecisions.kind === 'valid' ? storedDecisions.state.decisions : [], relations);
@@ -3693,7 +3707,7 @@ export class Conductor {
       typed.report,
       typed.relations,
       decisions.kind === 'valid' ? decisions.state.decisions : [],
-      cases.state.version === 'v2' ? cases.state.prdWideningCases : [],
+      prdWideningCasesForState(cases.state),
     );
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the
@@ -4389,6 +4403,7 @@ export class Conductor {
     let activePlanTaskIds: ReadonlySet<string> | undefined;
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
+    const escalatedAsBuiltGaps: RemediationGap[] = [];
     const gateAdmissions = (gapId: string) => ({
       prdAuditAdmits: prdAuditValidated && prdAuditFindings.has(gapId.toUpperCase()),
       asBuiltAdmits: asBuiltValidated && asBuiltFindings.has(gapId),
@@ -4491,6 +4506,13 @@ export class Conductor {
         }
         continue;
       }
+      // A task-free step disposition is the planner escalating the finding to
+      // that step (#3320): credit it, then halt with it below.
+      if (remediationDispositionAppendsToPlan(gap.disposition) && gap.tasks.length === 0 && asBuiltFindings.has(gap.id)) {
+        escalatedAsBuiltGaps.push(gap);
+        admittedAsBuiltFindingCounts.set(gap.id, (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1);
+        continue;
+      }
       if (
         !sealedArtifactGapIds.has(gap.id) &&
         remediationDispositionAppendsToPlan(gap.disposition) &&
@@ -4554,7 +4576,8 @@ export class Conductor {
       const duplicate = [...admittedAsBuiltFindingCounts]
         .filter(([, count]) => count !== 1)
         .map(([id]) => id);
-      if (missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0) {
+      const mismatched = missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0;
+      if (mismatched || escalatedAsBuiltGaps.length > 0) {
         // A halt disposition is credited above by finding id, so a planner that
         // keyed one by anything else — its governing clause, in every observed
         // case — misses that credit and lands here instead. This exit then
@@ -4570,7 +4593,11 @@ export class Conductor {
         // unchanged; only the operator's copy of the reason is restored.
         const plannerHalts = gaps.filter((gap) => gap.disposition === 'halt');
         const detail = [
-          'As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.',
+          ...(escalatedAsBuiltGaps.length > 0
+            ? ['As-built review remediation planner escalated findings to a non-build step: ' +
+                escalatedAsBuiltGaps.map((gap) => `${gap.id}→${gap.disposition} (${gap.rationale})`).join('; ') + '.']
+            : []),
+          ...(mismatched ? ['As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.'] : []),
           ...(missing.length > 0 ? [`Missing: ${missing.join(', ')}.`] : []),
           ...(duplicate.length > 0 ? [`Duplicate: ${duplicate.join(', ')}.`] : []),
           ...(unexpectedAsBuiltGapIds.size > 0
@@ -5363,35 +5390,61 @@ export class Conductor {
     const store = new RemediationCaseStore(this.projectRoot, feature, {
       ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
     });
+    const drainOutbox = async (): Promise<void> => {
+      await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    };
+    await drainOutbox();
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
-    const missingAttemptEvidence = classifyBuildReviewDurableRead(attemptEvidence) === 'absent';
-    if (missingAttemptEvidence) {
-      const state = await store.read();
-      if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
-      // Shared effect-status obligation: an applied action awaiting its work
-      // order, or ANY reserved/failed effect (action or deferral), is durable
-      // unfinished evidence — settling around it would turn it into a
-      // terminal PASS.
-      const obligationCase = state.state.cases.find(isBuildReviewSettlementObligationCase);
-      if (obligationCase && obligationCase.effect.kind !== 'none') {
-        return {
-          kind: 'invalid',
-          reason: `work order attempt missing-work-order with open ${obligationCase.effect.kind} case ${obligationCase.id} (${obligationCase.effect.status})`,
-        };
-      }
-    }
     if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
       return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     }
+    const dispositions = await new BuildReviewDispositionStore(this.projectRoot).list(feature);
+    if (!dispositions.ok) return { kind: 'invalid', reason: `build-review disposition state ${dispositions.message}` };
+    const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
+    const acceptedSourceIds = new Set(dispositions.records
+      .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
+        record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
+      .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
     // A clean PASS is the evidence that the content set is empty, whether or
     // not an earlier lap left a work order on disk: absent non-action history
     // settles benignly here too, while the reconciler's shared effect-status
     // test keeps any reserved or failed effect open.
+    const retirement = await store.mutate(async (state) => {
+      const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
+        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+        allowAppliedByAbsence: attemptEvidence.ok,
+        resolveAbsentOpenNonActionCases: true,
+        referenced: false,
+      }));
+      if (retired.length === 0) return { value: undefined };
+      const events = retired.map((record) => {
+        const eventId = randomUUID();
+        return { eventId, occurredAt: new Date().toISOString(), event: {
+          type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+          lapId: aggregate.lapId, caseId: record.id, resolution: 'resolved' as const,
+        } };
+      });
+      const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+      const ids = new Set(retired.map((record) => record.id));
+      return {
+        value: undefined,
+        nextState: {
+          ...upgraded,
+          cases: upgraded.cases.map((record) => ids.has(record.id) ? retireOpenBuildReviewCase(record) : record),
+          outbox: [...upgraded.outbox, ...events.slice(1)],
+        },
+      };
+    });
+    if (!retirement.ok) return { kind: 'invalid', reason: `case settlement ${retirement.reason}` };
+    await drainOutbox();
     const reconciled = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: new Date().toISOString(),
       generateId: randomUUID,
       attemptedCaseIds: attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [],
+      lapId: aggregate.lapId,
+      effectiveAcceptedSourceIds: acceptedSourceIds,
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
       resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {
@@ -5402,26 +5455,25 @@ export class Conductor {
         }`,
       };
     }
-    for (const caseId of reconciled.resolvedAbsentCaseIds) {
-      await this.events.emit({
-        type: 'remediation_case_reconciled',
-        domain: 'build_review',
-        lapId: aggregate.lapId,
-        caseId,
-        resolution: 'resolved',
-      });
-    }
+    await drainOutbox();
     // The obligation test runs on what SURVIVED reconciliation, regardless of
     // whether attempt evidence existed. A stale work order used to skip this
     // guard entirely, so a deferral whose intake create failed (effect still
     // reserved) settled into a terminal PASS with its intake unfiled.
     const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
+    // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
+      const actionResolution = survivingObligation.effect.kind === 'action'
+        ? `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`
+        : '';
+      await drainOutbox();
       return {
         kind: 'invalid',
-        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})`,
+        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${actionResolution}`,
       };
     }
+    // /ai-conductor:session-command-context
+    await drainOutbox();
     return { kind: 'settled' };
   }
 
@@ -10118,11 +10170,24 @@ export class Conductor {
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
             const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
             const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
-            const findings = prdAuditCriteria.length > 0
-              ? `Findings: ${prdAuditCriteria.join(', ')}`
+            const asBuiltFindingIds = pendingAsBuiltFindings.map((finding) => finding.finding);
+            const haltingFindings = gate === 'architecture_review_as_built'
+              ? asBuiltFindingIds
+              : prdAuditCriteria;
+            const otherGate = gate === 'architecture_review_as_built'
+              ? 'prd_audit'
+              : 'architecture_review_as_built';
+            const otherFindings = gate === 'architecture_review_as_built'
+              ? prdAuditCriteria
+              : asBuiltFindingIds;
+            const findings = haltingFindings.length > 0
+              ? `Findings (${gate}): ${haltingFindings.join(', ')}`
               : pendingTasks.length > 0
               ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
               : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const alsoPending = otherFindings.length > 0
+              ? `Also pending (${otherGate}): ${otherFindings.join(', ')}`
+              : '';
             const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
               ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
                   `${finding.finding} (${finding.class}; ${finding.reference === undefined
@@ -10135,14 +10200,14 @@ export class Conductor {
             const fallbackLapCap = remediationLapCapForGate(gate, this.config);
             const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
-              : {
+              : withPendingGrowth({
                   ...settlementGrowth,
                   cap: growthCap,
                   capSource: settlementLedger?.effectiveGrowthCap === undefined
                     ? 'config-derived' as const
                     : 'raised' as const,
                   authoredSource: settlementAuthoredSource,
-                };
+                }, settlementLedger?.pendingRepair);
             const detail = settlementFailure === undefined
               ? renderKickbackBudgetView(
                   settlementLedger?.gates[gate],
@@ -10172,11 +10237,14 @@ export class Conductor {
             }
             const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
-              `${detail}\n${findings}${asBuiltFindingDetail}\n` +
+              `${detail}\n${findings}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,
                 allowance,
+                ...(allowance === 'growth' && settlementFailure === undefined && growthView?.pendingGrowth?.minimumRaise !== undefined && growthView.pendingGrowth.minimumRaise > 0
+                  ? { by: growthView.pendingGrowth.minimumRaise }
+                  : {}),
               }),
             );
             await this.writeHaltMarker(
@@ -10775,6 +10843,10 @@ export class Conductor {
               });
               if (!sealVerdict.ok) {
                 protectedArtifactIssue = sealVerdict.reason;
+                if (step.name === 'build') {
+                  const recovery = await describeResealRecovery(this.projectRoot, sealVerdict.path);
+                  if (recovery) protectedArtifactIssue += `\n${recovery}`;
+                }
               } else {
                 if (sealVerdict.selfAmendments.length > 0) {
                   console.warn(
@@ -12001,11 +12073,100 @@ export class Conductor {
             }
             let completion = handshake;
             if (!completion) {
+              // Citation provenance is settled exactly once at the BUILD
+              // session boundary, before its task-status predicate observes
+              // the close records.  A missing runner capability is handled by
+              // the later bounded fallback task; this happy-path boundary
+              // only applies durable verdicts from a valid native dispatch.
+              let citationRefusalReason: string | undefined;
+              if (step.name === 'build' && this.stepRunner.dispatchDoneWhenCitationJudgement) {
+                try {
+                  const status = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
+                    .then((raw) => JSON.parse(raw) as unknown)
+                    .catch(() => undefined);
+                  const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
+                  // BUILD can legitimately reach this boundary before either
+                  // task status or a resolvable plan exists.  There is then no
+                  // citation authority to settle or dispatch.
+                  if (status === undefined || !planPath) {
+                    // completion below owns the ordinary missing-artifact path
+                  } else {
+                  const pending = collectPendingCitations(status);
+                  // A refusal is allowed one repair lap.  This runs even
+                  // when no new citation was re-closed in this session. It
+                  // must precede replay admission: a crash after a second
+                  // refusal verdict is already at its bound, so recovery
+                  // demotes it instead of reopening the task once more.
+                  await settleCitationRefusals(this.projectRoot, planPath, status, attempt >= stepMaxRetries);
+                  // Replay only the refusal records still eligible after
+                  // settlement. This repairs an interrupted first-refusal
+                  // admission without resurrecting a bounded disposition.
+                  await admitCitationRefusals(this.projectRoot, planPath, [], [], status);
+                  if (pending.length > 0) {
+                    const planText = planPath ? await readFile(planPath, 'utf8') : '';
+                    const blobs = await readGitBlobs(
+                      this.projectRoot,
+                      'HEAD',
+                      [...new Set(pending.map((citation) => citation.path))],
+                    ).catch(() => new Map());
+                    const input = buildCitationJudgementInput(pending, parsePlanTaskBodies(planText), blobs);
+                    const judgement = await this.stepRunner.dispatchDoneWhenCitationJudgement(input);
+                    if (judgement.kind === 'valid') {
+                      await emitTracked({ type: 'done_when_citation_judged', citations: judgement.verdicts.map((verdict) => ({ taskId: verdict.taskId, check: verdict.checkIndex, verdict: verdict.verdict })) });
+                      await applyCitationVerdicts(this.projectRoot, status, judgement.verdicts);
+                      const demoted = await settleCitationRefusals(this.projectRoot, planPath, status, attempt >= stepMaxRetries);
+                      const demotedKeys = new Set(demoted.map(({ taskId, checkIndex }) => `${taskId}\u0000${checkIndex}`));
+                      const admissions = await admitCitationRefusals(this.projectRoot, planPath, pending,
+                        judgement.verdicts.filter(({ taskId, checkIndex }) => !demotedKeys.has(`${taskId}\u0000${checkIndex}`)), status);
+                      if (admissions.length > 0) {
+                        citationRefusalReason = admissions.map(({ taskId, checks }) =>
+                          `Done-when citation refused: Task ${taskId} must repair its refused test citation(s): ` +
+                          checks.map((check) => `check ${check.checkIndex} (${check.check}; test:${check.path}::${check.title}; ${check.reason})`).join('; '),
+                        ).join('\n');
+                      }
+                    } else {
+                      const reason = `citation judgement unavailable: ${judgement.cause}`;
+                      // Unavailability is not a refusal: persist the terminal
+                      // demotion directly so crash recovery never observes a
+                      // judged does-not-assert record to replay.
+                      await demoteUnavailableCitations(this.projectRoot, status, pending, reason);
+                      await emitTracked({ type: 'done_when_citation_judged', citations: pending.map((citation) => ({ taskId: citation.taskId, check: citation.checkIndex, unavailable: judgement.cause })) });
+                    }
+                  }
+                  }
+                } catch (error) {
+                  // Never complete BUILD with a citation still awaiting a
+                  // judgement.  Native unavailability is demoted above; a
+                  // persistence or parsing failure is a named boundary error.
+                  throw new Error(`citation judgement unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                }
+              }
+              // A final BUILD attempt cannot consume a future review lap.
+              // Mark its nudge spent before evaluating completion so a forced
+              // demotion remains a successful terminal disposition.
+              if (step.name === 'build' && attempt >= stepMaxRetries) {
+                // An empty or missing plan reaches BUILD before a task-status
+                // file exists.  Let the completion predicate classify that
+                // gate miss (and the daemon auto-park contradiction guard)
+                // rather than turning it into a conductor error here.
+                const status = await readFile(
+                  join(this.projectRoot, '.pipeline', 'task-status.json'),
+                  'utf8',
+                )
+                  .then((raw) => JSON.parse(raw) as unknown)
+                  .catch(() => undefined);
+                if (status !== undefined && collectUnverifiedDoneWhenChecks(status).length > 0) {
+                  await this.recordUnverifiedDoneWhenNudge(state);
+                }
+              }
               completion = await checkStepCompletion(
                 this.projectRoot,
                 step.name,
-                await this.completionCtx(state),
+                {
+                  ...(await this.completionCtx(state)),
+                },
               );
+              if (citationRefusalReason) completion = { ...completion, done: false, reason: citationRefusalReason };
             }
 
             // Task 2, session-fresh-verdict-artifacts: audit-trail event for
@@ -12274,7 +12435,10 @@ export class Conductor {
               });
             }
 
-            if (step.name === 'build' && completion.done && await this.unverifiedDoneWhenNudgeSpent(state)) {
+            // Emit once when the ordinary unverified-check nudge has reached
+            // its terminal completion evaluation.  Demoted citations use this
+            // same path; they do not publish a second event at demotion.
+            if (step.name === 'build' && (completion.done || attempt >= stepMaxRetries) && await this.unverifiedDoneWhenNudgeSpent(state)) {
               try {
                 const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8'));
                 const checks = collectUnverifiedDoneWhenChecks(status);
@@ -13437,6 +13601,8 @@ export class Conductor {
                     {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      child: this.activeRegionChild,
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     },
                   );
                   // Old raw aggregate fixtures (and pre-adjudication callers)
@@ -13481,6 +13647,10 @@ export class Conductor {
                   const mechanical = uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0
                     ? 'healthy'
                     : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
+                  // Covered faults can release retry routing, but they never
+                  // prove that a case source was absent. Keep that evidence
+                  // boundary distinct from the retry/halt mechanical lane.
+                  const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,
@@ -13488,10 +13658,24 @@ export class Conductor {
                       {
                         emit: async (event) => { await this.events.emit(event); },
                         minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                        child: this.activeRegionChild,
+                        adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                       },
                     );
                     if (!latest.ok) throw new Error(latest.reason);
                     return new Set(latest.effective.acceptedFindingIds);
+                  };
+                  // Carry authority is the feature's current disposition
+                  // ledger, not merely the current lap's accepted ids.  The
+                  // origin necessarily belongs to an earlier finding id.
+                  const resolveEffectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> => {
+                    const listed = await new BuildReviewDispositionStore(this.projectRoot).list(effective.feature);
+                    if (!listed.ok) throw new Error(listed.message);
+                    return new Set(listed.records
+                      .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
+                        record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
+                      .map((record) =>
+                      `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
                   // A deferred issue is creation, not an existing-resource
@@ -13541,7 +13725,9 @@ export class Conductor {
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     suppressions,
                     resolveOperatorResolvedFindingIds,
+                    resolveEffectiveAcceptedSourceIds,
                     mechanical,
+                    absenceRetirementMechanicallyHealthy,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
                       resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),
@@ -13583,6 +13769,7 @@ export class Conductor {
                       } }),
                     }),
                     emit: async (event) => { await this.events.emit(event); },
+                    emitOrThrow: async (event) => this.events.emitOrThrow(event),
                     },
                   });
                   if (outcome.kind === 'decision-stop' || (outcome.kind === 'infrastructure' && outcome.status === 'halt')) {
@@ -13694,6 +13881,8 @@ export class Conductor {
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      child: this.activeRegionChild,
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {
@@ -16700,19 +16889,28 @@ export class Conductor {
    */
   /**
    * Resolve the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). Prefers `state.track` (daemon-seeded);
-   * otherwise reads the committed `.docs/track/<slug>.md` marker that `/explore`
-   * wrote in the interactive flow (newest file wins — one feature per worktree),
-   * caches it into `state.track`, and persists. Defaults to `product` when no
-   * usable marker exists, so PRD / prd-audit run unless the work was explicitly
-   * classified `technical`. Best-effort: any fs error falls back to `product`.
+   * otherwise reads the `.docs/track/<slug>.md` marker that `/explore` wrote in
+   * the interactive flow, caches it into `state.track`, and persists. Only this
+   * feature's own marker counts (#3334): one named by a feature identity, else
+   * the single marker this branch changed — never another feature's marker
+   * inherited from the base branch. Defaults to `product` when no own marker
+   * exists, so PRD / prd-audit run unless the work was explicitly classified
+   * `technical`. Best-effort: any fs error falls back to `product`.
    */
   private async resolveTrack(state: ConductState): Promise<Track> {
     if (state.track) return state.track;
     try {
       const dir = join(this.projectRoot, '.docs', 'track');
-      const entries = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
-      if (entries.length > 0) {
-        const content = await readFile(join(dir, entries[entries.length - 1]), 'utf-8');
+      const markers = (await readdir(dir)).filter((f) => f.endsWith('.md'));
+      const { featureIdentities, changedPaths } = await buildArtifactResolutionContext(this.projectRoot, {
+        featureDesc: state.feature_desc ?? this.featureSlug ?? this.featureDesc,
+        git: this.prdAuditGit(),
+      });
+      const changed = markers.filter((f) => changedPaths.has(`.docs/track/${f}`));
+      const own = featureIdentities.map((id) => `${id}.md`).find((f) => markers.includes(f))
+        ?? (changed.length === 1 ? changed[0] : undefined);
+      if (own) {
+        const content = await readFile(join(dir, own), 'utf-8');
         const parsed = parseTrack(content);
         if (parsed) {
           const persisted = await this.currentStateForMutation();

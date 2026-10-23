@@ -1,13 +1,16 @@
 import { access, readFile } from 'node:fs/promises';
 import { writeSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { execa } from 'execa';
 import {
   PROTECTED_ARTIFACT_SEAL_PATH,
+  prepareProtectedArtifactReseal,
+  ProtectedArtifactResealRefusal,
   resealProtectedArtifactSeal,
   type ProtectedArtifactSeal,
   type ResealProtectedArtifactSealOptions,
 } from './protected-artifact-seal.js';
+import { shellQuote } from './canonical-launcher.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { EventPersister } from './event-persister.js';
 import { clearMarker } from './daemon-rekick.js';
@@ -29,6 +32,65 @@ export interface ResealDispatch {
   paths: string[];
   reason: string;
   clearHalt: boolean;
+}
+
+/** Resolve the base branch consistently for reseal dispatch and dry-run hints. */
+export async function resolveResealBaseBranch(worktree: string): Promise<string> {
+  return (await originDefaultBranch(makeGitRunner(worktree))) ?? 'main';
+}
+
+function recoveryShellArgument(value: string): string {
+  return /^[A-Za-z0-9._/-]+$/.test(value) ? value : shellQuote(value);
+}
+
+/**
+ * Describes a reseal command only when reseal's own pre-write checks permit it.
+ * This is deliberately dry-run only: it never emits events or updates the seal.
+ */
+export async function describeResealRecovery(
+  worktreePath: string,
+  namedPath: string | undefined,
+): Promise<string | undefined> {
+  if (!namedPath || basename(dirname(worktreePath)) !== '.worktrees') return undefined;
+
+  try {
+    const seal = JSON.parse(
+      await readFile(join(worktreePath, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8'),
+    ) as ProtectedArtifactSeal;
+    const sealedPaths = new Set(seal.protectedArtifacts.map(({ path }) => path));
+    const paths = new Set([namedPath]);
+    const slug = basename(worktreePath);
+    const toCommit = (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreePath })).stdout.trim();
+    const baseBranch = await resolveResealBaseBranch(worktreePath);
+
+    while (true) {
+      try {
+        await prepareProtectedArtifactReseal({
+          projectRoot: worktreePath,
+          seal,
+          toCommit,
+          trigger: 'operator-reseal',
+          paths: [...paths],
+          featureDesc: slug,
+          baseBranch,
+        });
+        const sortedPaths = [...paths].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
+        // ai-conductor:session-command-context=operator-only
+        return [
+          `Approve this change as an operator amendment by running, from the repository root that contains .worktrees/${slug}, in an interactive terminal:`,
+          `  ai-conductor reseal --slug ${recoveryShellArgument(slug)}${sortedPaths.map((path) => ` --path ${recoveryShellArgument(path)}`).join('')} --reason "«why»" --clear-halt`,
+        ].join('\n');
+        // /ai-conductor:session-command-context
+      } catch (error) {
+        if (!(error instanceof ProtectedArtifactResealRefusal) || !error.path || !sealedPaths.has(error.path) || paths.has(error.path)) {
+          return undefined;
+        }
+        paths.add(error.path);
+      }
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 export function detectResealCommand(argv: string[]): ResealDispatch | null {
@@ -206,8 +268,7 @@ export async function dispatchResealCommand(
 
   const resolveHead = deps.resolveHead ?? (async (projectRoot: string): Promise<string> =>
     (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim());
-  const resolveBaseBranch = deps.resolveBaseBranch ?? (async (projectRoot: string): Promise<string> =>
-    (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main');
+  const resolveBaseBranch = deps.resolveBaseBranch ?? resolveResealBaseBranch;
 
   let resealed: ProtectedArtifactSeal;
   try {

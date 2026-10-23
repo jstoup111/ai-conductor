@@ -71,6 +71,8 @@ to be a separate artifact.
    record is rewritten with `Status: resolved`, the resolution cause, and the resolution
    timestamp, and that rewrite is committed. The file is not deleted.
 
+> **Amended 2026-10-21 by #2963:** the record is not deleted by resume or while its feature is in flight. Once the feature's `.docs/shipped/<stem>.md` record is on main, the operator-run `ai-conductor docs-prune` may remove it from main through a reviewed PR (adr-2026-10-15-operator-cli-prunes-shipped-decide-artifacts D1). The record then lives in git history only.
+
 8. **The record is durable state, not a channel.** Per `.agents/skills/event-spine/SKILL.md` §4
    exception C, state artifacts are read by name and answer "what is true now". The occurrences
    the record generates ride the existing spine as additive `ConductorEvent` members:

@@ -157,7 +157,7 @@ self-host candidates — both providers, invoke and interactive paths) carries
 run — printing `ai-conductor may not be invoked from inside a daemon-managed session; the engine owns
 all conductor operations for this run (blocked subcommand: <name>).` and exiting 1 — before any
 subcommand parsing. `<name>` is a bounded identity: a recognized subcommand (`daemon`, `config`,
-`test-suite`, `build-review`, `finish-record`, or a sanctioned one), `unknown` for any other text, or
+`test-suite`, `build-review`, `done-when`, `finish-record`, `docs-prune`, or a sanctioned one), `unknown` for any other text, or
 `<none>`. Unrecognized argv is never echoed. When the engine supplied a managed-session context, the
 refusal also records a [`session_command_refused`](artifacts.md#managed-session-occurrence-events)
 event; without that context the command prints `session refusal telemetry unavailable` and still
@@ -176,8 +176,9 @@ keeps engine prompts and shipped skills from directing a managed session to a re
 ## `ai-conductor build-review`
 
 ```bash
-ai-conductor build-review findings --feature <slug> [--json]
+ai-conductor build-review findings --feature <slug> [--child <child>] [--json]
 ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <id> --rationale <text>
 ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
@@ -186,7 +187,12 @@ autonomous remediation-case outcomes; `--json` includes those cases under `cases
 autonomous outcomes separate from operator dispositions and includes each case's disposition, resolution,
 source ids, effect state, rationale, and, for a refutation, its claim and assertion verdicts. A missing
 case store is a successful listing with no autonomous cases. An unreadable or unsupported case store makes
-`findings` name the store and exit 1 rather than silently omitting its cases. `accept` changes state only from an interactive terminal with
+`findings` name the store and exit 1 rather than silently omitting its cases. `--child` reads that
+child's case store instead of the feature's. `findings` also lists each carried source (its case,
+origin source ids, origin laps, and the origin dispositions' operators and rationales), each
+operator-resolved case (operator, rationale, and time), and each case-store outbox entry the engine has
+not yet delivered; `--json` reports them under `carriedSources`, `operatorResolvedCases`, and
+`pendingOutbox`, each omitted when empty. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
@@ -200,6 +206,41 @@ It records a decision only when that rubric currently has an exhausted mechanica
 fault, or a current `projection-oversized` fault (which halts without consuming that allowance).
 Judged, skipped, duplicate, unknown-rubric, allowance-remaining for every other cause, and stale-review
 requests are refused without changing the decision state.
+
+`resolve-case` resolves one open remediation case in the feature's case store, or in the child's with
+`--child`. It has the same interactive-terminal and local-operator-identity gate as `accept` and
+requires a non-empty rationale. It records the operator resolution, turns a `reserved` effect into
+`failed`, keeps every source link and the effect history, and queues one
+`remediation_case_operator_resolved` event that the engine delivers at its next pass. It prints
+`build-review resolve-case: resolved <id>.` and exits 0. An unknown case, an already resolved case, an
+empty rationale, an invalid child id, a non-interactive session, an unresolved identity, or a feature
+mismatch is refused without changing the store and exits 1. A resolved case can carry acceptance to
+later same-substance findings; see
+[post-join build-review adjudication](../explanation/gates.md#post-join-build-review-adjudication).
+Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case).
+
+## `ai-conductor done-when`
+
+```bash
+ai-conductor done-when accept --feature <slug> --task <id> --check <n> --reason <text>
+```
+
+Operator-only. Overrides one refused `[test]` citation: a check the
+[citation judge](../explanation/gates.md#per-task-done-when-evidence) answered `does-not-assert`,
+whether still open or already demoted to `unverified`. All four flags are required, in this order;
+any other shape is not recognized as this command. `<n>` is the one-based check number.
+
+On success the check's record in the feature worktree's `.pipeline/task-status.json` becomes
+`source: "operator-accepted"` with the trimmed reason, and its verdict is removed. When no other
+check on the task is pending or refused, the task's open `done-when-citation` repair obligation is
+closed. The command appends `done_when_citation_accepted` to the feature's
+[`events.jsonl`](artifacts.md#pipelineeventsjsonl) and exits 0.
+
+It exits 1 without writing when the reason is blank, the feature or task is unknown, the check number
+exceeds the task's close records, any close record has an unknown source, the check has no refused
+citation, or the repair state cannot be read or closed. A citation demoted because the judge was
+unavailable carries no verdict and cannot be accepted. A
+[daemon-managed session](#daemon-session-refusal) is refused before parsing.
 
 ## `ai-conductor scope-check`
 
@@ -473,8 +514,13 @@ so far (broken down by the gate that added them, when any), and how many remain 
 The authored count comes from the feature's resolved plan — the same selection the daemon uses — so
 the line reports the budget remediation enforces. When no plan resolves and the ledger records no
 authored count, the line reads `plan unresolved; added <n>` instead of a zero authored count and
-zero cap, appending `remaining <r>/<cap>` only when the cap was raised. The line never rewrites the
-ledger.
+zero cap, appending `remaining <r>/<cap>` only when the cap was raised. While an appended
+[pending repair](../explanation/gates.md#remediation-caps-settle-at-the-build-transition) carries plan
+growth, `remaining` subtracts it and the line appends `; pending <total> (<gate> <n>, ...)`, plus
+`, minimum raise <k>` when settling it would exceed the cap — for example
+`PLAN GROWTH [<slug>]: authored 40; added 0; remaining 0/10; pending 11 (prd_audit 3, architecture_review_as_built 8), minimum raise 1`.
+For an unresolved plan the pending segment replaces `remaining` and carries no minimum raise. The line
+never rewrites the ledger.
 When the growth accounting cannot be read, the line reads `PLAN GROWTH [<slug>]: unavailable (<error>)`
 and the budget lines still print.
 
@@ -919,7 +965,9 @@ Exactly two positionals: the verb and a task id matching `[A-Za-z0-9._-]+` (for 
 `rem-fr10-1`). A missing or unknown verb, or a missing id, prints the guide to stderr and exits 2.
 
 `start` reads `.pipeline/task-status.json`, flips the matching row's status to `in_progress`, writes it
-back atomically, then writes the id into `.pipeline/current-task`. It exits 1 when the status file is
+back atomically, then writes the id into `.pipeline/current-task`. A row with no `startHead` also gets
+the current `git rev-parse HEAD`. A later start never moves that field, and a git failure leaves it
+absent without failing the start. It exits 1 when the status file is
 unreadable, corrupt, not an object, or has no `tasks` array; when the id is not found (the error lists
 the valid ids); or when either write fails.
 
@@ -930,7 +978,11 @@ close and names the check. A check tagged `[test]` needs `--done-when <n>=test:<
 file must exist at `HEAD`, contain the title, and carry a `Covers:` marker for the task or one of its
 cited story criteria; otherwise the close is refused and names the failing part. A tagged check that no
 test can verify may close with `--unverified <n>=<reason>` instead; the reason must be non-empty, and an
-untagged check refuses the flag. `--plan-gap` refuses a tagged check. Both verbs resolve the
+untagged check refuses the flag. An accepted `[test]` citation closes `verified` only when
+`git diff <startHead> HEAD -- <path>` adds the cited title. Otherwise, including a row with no
+`startHead`, it closes `pending-judgement` for the
+[citation judgement](../explanation/gates.md#per-task-done-when-evidence) at BUILD session end.
+`--plan-gap` refuses a tagged check. Both verbs resolve the
 repository root first, so they work from a nested directory. Without a stamp, re-closing an already `completed` or `skipped` row with
 no open repair exits 0 without rewriting `task-status.json`. `--plan-gap <n> --reason <text>` halts
 the task with or without a stamp; when no active plan is recorded, it resolves the plan from the
@@ -1069,6 +1121,46 @@ so a success line on stderr would make every completed ship read as a failure.
 Every other failure exits **0** with one warning and no record written, so the exit code cannot be
 used to detect success. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
+
+## `ai-conductor docs-prune`
+
+```bash
+ai-conductor docs-prune
+```
+
+Opens one reviewed, docs-only PR that deletes the transient DECIDE artifacts of shipped features from
+`main`. Operator-run only: no daemon sweep, finish step, or CI job runs it, and it refuses inside a
+[daemon-managed session](#daemon-session-refusal). It takes no flags; any argument prints
+`conduct docs-prune` to stderr and exits 1.
+
+1. Runs `git fetch origin main` and reads `.docs` from `origin/main` only. Local branches are ignored.
+2. Selects every stem with a committed `.docs/shipped/<stem>.md` and collects that stem's files in the
+   [prunable families](artifacts.md#retention). Plans without a shipped record are reported as skipped
+   (`no-shipped-record`). A date-stripped match shared by more than one plan stem is excluded rather
+   than guessed.
+3. Reads every open PR's changed files. A stem is deferred whole (`open-pr-modifies`) when any open PR,
+   other than the operator's own `docs-prune/*` PR, changes one of its prunable files.
+4. Commits the deletions in a detached temporary worktree off `origin/main`, refusing any staged
+   change that is not an expected deletion, then removes the worktree.
+5. Pushes `docs-prune/<YYYY-MM-DD>` and opens a PR titled `docs: prune shipped DECIDE artifacts`
+   against `main`, with the report as its body. When the operator already owns an open `docs-prune/*`
+   PR, it replaces that branch (`--force-with-lease` against its fetched tip) and edits the PR body
+   instead.
+
+Every remote write — the push, `pull-request.create`, `pull-request.edit` — needs an exact interactive
+terminal approval; a declined or non-interactive confirmation refuses it. The command never pushes
+`main`, merges, or enables auto-merge. A human reviews and merges the PR.
+
+It exits 1 when another operator owns an open `docs-prune/*` PR, when repository resolution fails, or
+when any approval, push, or PR operation is refused. With nothing removable it publishes nothing.
+
+On success it prints the report (`### Removed` and `### Deferred` lists) to stdout, persists one
+`decide_artifacts_pruned` event (`removed`, `deferred`, `skipped`, `excluded`, optional
+`pullRequestUrl`) to `<repo root>/.pipeline/events.jsonl`, and exits 0.
+
+Pruning never changes `spec_hash`, shipment evidence, or the protected-artifact seal. Shipment repair
+and the shipment audit recover a pruned plan from its deleting commit's parent — see
+[shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#a-plan-was-pruned-after-it-shipped).
 
 ## `ai-conductor transcripts`
 
@@ -1253,6 +1345,15 @@ the cap. `consumed` and `laps` count only charged laps. Human output adds
 `Pending charge: <n> lap(s) (charged when build dispatches)` while a charge is pending; JSON reports
 `pendingLaps` (`0` when none) on both remediation gates.
 
+Plan growth follows the same rule: the plan-growth `remaining` also subtracts a pending repair's growth
+(floored at `0`). Human output prints, directly after the `Plan growth:` line,
+`Pending growth: <total> (<gate> <n>, ...); would reach <projected>/<cap> when build dispatches`,
+appending `; minimum raise <k>` when the pending growth would exceed the cap; `<k>` is the smallest
+plan-growth `raise --by` that lets `build` settle the repair. Without a resolved cap only
+`Pending growth: <total> (<gate> <n>, ...)` prints. JSON adds
+`planGrowth.pendingGrowth: { total, byGate, projected, minimumRaise? }`. A pending repair that charges
+laps but no growth adds neither.
+
 Inspect reports each gate's resume authorization against the live halt generation. Human output
 prints one `Resume authorization:` line per gate:
 
@@ -1278,17 +1379,19 @@ refused and changes nothing.
 gate's effective lap limit by `--by`; for a plan-growth halt it increases the feature's effective
 plan-growth cap by `--by`. `reset` returns only a gate's lap count to zero without lowering an
 already authorized effective limit, and refuses plan-growth evidence; use `raise` for that recovery.
-Inspect shows the effective plan-growth cap and whether it is config-derived or raised. Without
-`--child`, it computes that cap from the feature's resolved plan without rewriting the ledger; when
-no plan resolves and the cap was not
-raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
+Inspect shows the effective plan-growth cap and whether it is config-derived or raised. With or
+without `--child`, it computes that feature-wide cap from the feature's resolved plan without
+rewriting the ledger; when no plan resolves and the cap was not raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
 mutation, the command temporarily parks an unparked feature while it records the authorization and
 removes that temporary park after success. It preserves a park that already existed; unpark that
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
 
-`inspect --child <k>` reads child `k`'s ledger instead of the flat one. Human output starts with
-`Child: <k>`; JSON adds a `child` field. `raise --child <k>` and `reset --child <k>` check cap evidence
-in, and apply the authorization to, child `k`'s ledger. See
+`inspect --child <k>` reads `build_review` from child `k`'s ledger. The feature-wide gates
+`prd_audit` and `architecture_review_as_built`, their pending charges, and plan growth always come
+from the flat ledger, so every child view shows the same feature-wide values; inspect reconciles
+both ledgers first. Human output starts with `Child: <k>`; JSON adds a `child` field.
+`raise --child <k>` and `reset --child <k>` for `build_review` check cap evidence in, and apply the
+authorization to, child `k`'s ledger; the feature-wide gates always use the flat ledger. See
 [Per-child selection](#per-child-selection---child).
 
 `--gate restack` recovers a [restack cascade cap](configuration.md#restack) halt and requires

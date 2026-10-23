@@ -13,6 +13,7 @@ import type {
   RemediationCaseStoreMutationResult,
   RemediationCaseStoreState,
 } from './remediation-case-store.js';
+import { prdWideningCasesForState, withPrdWideningCases } from './remediation-case-store.js';
 
 const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
@@ -177,7 +178,7 @@ async function materializeLegacySource(
   const caseId = legacyClearReference('case', entry);
   const sourceId = legacyClearReference('source', entry);
   const result = await store.mutate(async (state) => {
-    const cases = state.version === 'v2' ? state.prdWideningCases : [];
+    const cases = prdWideningCasesForState(state);
     const existing = cases.find((candidate) => candidate.id === caseId);
     if (existing) return { value: cases };
     return {
@@ -186,15 +187,11 @@ async function materializeLegacySource(
         originalSources: [{ sourceId, snapshot: entry.summary }],
         currentSources: [], relationships: [],
       }],
-      nextState: {
-        version: 'v2', feature: state.feature, cases: state.cases,
-        suppressions: state.suppressions ?? [],
-        prdWideningCases: [...cases, {
+      nextState: withPrdWideningCases(state, [...cases, {
           id: caseId, domain: 'prd_widening' as const,
           originalSources: [{ sourceId, snapshot: entry.summary }],
           currentSources: [], relationships: [],
-        }],
-      },
+        }]),
     };
   });
   return result.ok && result.value.some((record) => record.id === caseId && record.originalSources.some((source) =>
@@ -223,7 +220,7 @@ async function persistedOffers(
   store: PrdWideningCaptureOfferStore,
 ): Promise<RemediationCaseStoreMutationResult<readonly RemediationCasePrdWideningRecord[]>> {
   return store.mutate(async (state) => ({
-    value: state.version === 'v2' ? state.prdWideningCases : [],
+    value: prdWideningCasesForState(state),
   }));
 }
 

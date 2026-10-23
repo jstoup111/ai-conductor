@@ -483,6 +483,21 @@ Content with \`src/file3.ts\`
   });
 
   describe('Task 14: reseed no longer restores rows from evidence stamps', () => {
+    it('keeps task 4\'s startHead while reseeding its existing row', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(planPath, '# Plan\n\n## Task 4: Citation repair\n');
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: [{ id: '4', name: 'Citation repair', status: 'completed', startHead: 'A' }],
+      }));
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
+      expect(status.tasks).toEqual([expect.objectContaining({ id: '4', startHead: 'A' })]);
+    });
+
     it('creates a plan task not present in task-status.json as pending, even when an evidence stamp exists for it', async () => {
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       // No task-status.json yet — task-status.json is the sole source of
