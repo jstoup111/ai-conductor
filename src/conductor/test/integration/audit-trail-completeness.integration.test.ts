@@ -299,6 +299,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   provider_transcripts_retention_failed: 'not-audited-by-design',
 };
 
+it('classifies remediation-closure judgements as intentionally outside the audit trail', () => {
+  expect(EVENT_TYPE_CLASSIFICATION.remediation_closure_judged).toBe('not-audited-by-design');
+});
+
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
   otel_spool_drop: {

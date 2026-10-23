@@ -57,6 +57,16 @@ it('declares one persistent sink row for each stack event', () => {
   }
 });
 
+it('declares remediation-closure judgements as durable, unaudited event-spine records', () => {
+  expect(EVENT_SINKS.remediation_closure_judged).toEqual({
+    render: false,
+    persist: true,
+    audit: false,
+    otel: false,
+  });
+  expect(persistedEventTypes()).toContain('remediation_closure_judged');
+});
+
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
   (<Value>() => Value extends Right ? 1 : 2)

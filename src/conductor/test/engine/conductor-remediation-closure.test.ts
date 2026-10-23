@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { applyRemediationClosureVerdicts, remediationCloseIdentity, replayRemediationClosureReopens, runRemediationClosurePass } from '../../src/engine/remediation-closure-judgement.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
@@ -183,17 +184,33 @@ describe('BUILD remediation-closure judgement boundary', () => {
   });
 
   it('does not send an ordinary reported task to the closure judge', async () => {
+    await writeFile(join(root, '.docs', 'plans', 'no-rem.md'), [
+      '### Task 4: Citation task', 'Citation text.', '', '**Done when:**', '- [test] cited check.', '',
+    ].join('\n'));
+    const state = JSON.parse(await readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8'));
+    state.feature_desc = 'no-rem';
+    await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify(state));
     await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{
       id: '4', status: 'completed',
       doneWhen: [{ check: 'cited check.', evidence: 'reported deadbee', source: 'reported' }],
     }] }));
     const closures = vi.fn();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
     const runner: StepRunner = { run: async () => ({ success: true }), dispatchRemediationClosureJudgement: closures };
 
-    await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
-      events: new ConductorEventEmitter(), mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
+    try {
+      await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+        events, mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
 
-    expect(closures).not.toHaveBeenCalled();
+      expect(closures).not.toHaveBeenCalled();
+      const records = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+        .filter(Boolean).map((line) => JSON.parse(line));
+      expect(records.filter((event) => event.type === 'remediation_closure_judged')).toEqual([]);
+    } finally {
+      persister.stop();
+    }
   });
 
   it('records every close unjudged when the judge is unavailable after two attempts', async () => {
@@ -205,25 +222,38 @@ describe('BUILD remediation-closure judgement boundary', () => {
     const closures = vi.fn(async () => ({ kind: 'unavailable' as const, attempts: 2, cause: 'provider failed twice' }));
     const retries: unknown[] = [];
     const runner: StepRunner = { run: async (_step, _state, options) => { retries.push(options?.retryReason); return { success: true }; }, dispatchRemediationClosureJudgement: closures };
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
 
-    await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
-      events: new ConductorEventEmitter(), mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
+    try {
+      await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
+        events, mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
 
-    expect(closures).toHaveBeenCalledOnce();
-    const [status, state, engine] = await Promise.all([
-      readFile(join(root, '.pipeline', 'task-status.json'), 'utf8').then(JSON.parse),
-      readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8').then(JSON.parse),
-      readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8').then(JSON.parse),
-    ]);
-    expect(status.tasks.filter((task: { id: string }) => task.id.startsWith('rem-as-built-'))
-      .map((task: { status: string }) => task.status)).toEqual(['completed', 'completed']);
-    expect([state.build, retries]).toEqual(['done', [undefined]]);
-    expect(Object.values(engine.repairObligations?.records ?? {})).toEqual([]);
-    expect(Object.values(engine.remediationClosure.plans['.docs/plans/closure.md'].tasks)
-      .flatMap((task: any) => Object.values(task.verdicts))).toEqual([
-      expect.objectContaining({ verdict: 'unjudged', disposition: 'left-closed', applied: false }),
-      expect.objectContaining({ verdict: 'unjudged', disposition: 'left-closed', applied: false }),
-    ]);
+      expect(closures).toHaveBeenCalledOnce();
+      const [status, state, engine] = await Promise.all([
+        readFile(join(root, '.pipeline', 'task-status.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8').then(JSON.parse),
+      ]);
+      expect(status.tasks.filter((task: { id: string }) => task.id.startsWith('rem-as-built-'))
+        .map((task: { status: string }) => task.status)).toEqual(['completed', 'completed']);
+      expect([state.build, retries]).toEqual(['done', [undefined]]);
+      expect(Object.values(engine.repairObligations?.records ?? {})).toEqual([]);
+      expect(Object.values(engine.remediationClosure.plans['.docs/plans/closure.md'].tasks)
+        .flatMap((task: any) => Object.values(task.verdicts))).toEqual([
+        expect.objectContaining({ verdict: 'unjudged', disposition: 'left-closed', applied: false }),
+        expect.objectContaining({ verdict: 'unjudged', disposition: 'left-closed', applied: false }),
+      ]);
+      const judged = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+        .filter(Boolean).map((line) => JSON.parse(line)).filter((event) => event.type === 'remediation_closure_judged');
+      expect(judged).toEqual([expect.objectContaining({ outcome: 'unjudged', attempts: 2, candidates: [
+        expect.objectContaining({ taskId: 'rem-as-built-R5', verdict: 'unjudged' }),
+        expect.objectContaining({ taskId: 'rem-as-built-R11', verdict: 'unjudged' }),
+      ] })]);
+    } finally {
+      persister.stop();
+    }
   });
 
   it('records eligible closes unjudged when the runner has no closure-judgement port', async () => {
@@ -407,6 +437,117 @@ describe('BUILD remediation-closure judgement boundary', () => {
     expect(Object.values(task.verdicts)).toEqual(expect.arrayContaining([
       expect.objectContaining({ disposition: 'bound-exhausted', applied: false }),
     ]));
+  });
+
+  it('hands off after two reopened closes and records the terminal bound-exhausted pass', async () => {
+    const taskId = 'rem-as-built-R5';
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+      { id: '4', status: 'completed', doneWhen: [] },
+      { id: taskId, status: 'completed', doneWhen: [{ check: 'Repair one is committed.', evidence: 'reported close 0', source: 'reported' }] },
+      { id: 'rem-as-built-R11', status: 'completed', doneWhen: [] },
+    ] }));
+    let runs = 0;
+    const closures = vi.fn(async (input: { candidates: Array<{ taskId: string }> }) => ({
+      kind: 'valid' as const, attempts: 1,
+      verdicts: input.candidates.map(({ taskId: candidateId }) => ({ taskId: candidateId, verdict: 'persists' as const, rationale: 'Repair is absent.' })),
+    }));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: {
+        run: async () => {
+          runs += 1;
+          if (runs > 1) {
+            await writeFile(join(root, `repair-${runs}.txt`), `repair ${runs}\n`);
+            await exec('git', ['add', `repair-${runs}.txt`], { cwd: root });
+            await exec('git', ['commit', '-q', '-m', `repair ${runs}\n\nTask: ${taskId}`], { cwd: root });
+            await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+              { id: '4', status: 'completed', doneWhen: [] },
+              { id: taskId, status: 'completed', doneWhen: [{ check: 'Repair one is committed.', evidence: `reported close ${runs - 1}`, source: 'reported' }] },
+              { id: 'rem-as-built-R11', status: 'completed', doneWhen: [] },
+            ] }));
+          }
+          return { success: true };
+        },
+        dispatchRemediationClosureJudgement: closures,
+      }, events, mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 3 } as never).run();
+
+      const [status, state, engine, eventsText] = await Promise.all([
+        readFile(join(root, '.pipeline', 'task-status.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'),
+      ]);
+      expect([runs, closures.mock.calls.length, status.tasks[0].status, state.build]).toEqual([3, 3, 'completed', 'done']);
+      expect(Object.values(engine.repairObligations?.records ?? {})).toHaveLength(2);
+      const terminalIdentity = remediationCloseIdentity(taskId, 2, [{
+        check: 'Repair one is committed.', evidence: 'reported close 2', source: 'reported',
+      }]);
+      expect(Object.values(engine.repairObligations.records)).not.toContainEqual(expect.objectContaining({
+        source: expect.objectContaining({ authority: 'remediation-closure', findingId: terminalIdentity }),
+      }));
+      expect(eventsText.trim().split('\n').map(JSON.parse).filter((event) => event.type === 'remediation_closure_judged').at(-1))
+        .toMatchObject({ outcome: 'judged', candidates: [expect.objectContaining({ taskId, disposition: 'bound-exhausted' })] });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('leaves a persists verdict closed on the last allowed BUILD attempt and hands off', async () => {
+    const taskId = 'rem-as-built-R5';
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+      { id: '4', status: 'completed', doneWhen: [] },
+      { id: taskId, status: 'completed', doneWhen: [{ check: 'Repair one is committed.', evidence: 'reported close', source: 'reported' }] },
+      { id: 'rem-as-built-R11', status: 'completed', doneWhen: [] },
+    ] }));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: {
+        run: async () => ({ success: true }),
+        dispatchRemediationClosureJudgement: async (input) => ({ kind: 'valid' as const, attempts: 1, verdicts: input.candidates.map(({ taskId: candidateId }) => ({ taskId: candidateId, verdict: 'persists' as const, rationale: 'Repair is absent.' })) }),
+      }, events, mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 1 } as never).run();
+      const [status, state, engine, eventsText] = await Promise.all([
+        readFile(join(root, '.pipeline', 'task-status.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'conduct-state.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'engine-state.json'), 'utf8').then(JSON.parse),
+        readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'),
+      ]);
+      expect([status.tasks[0].status, state.build, Object.values(engine.repairObligations?.records ?? {})]).toEqual(['completed', 'done', []]);
+      expect(eventsText.trim().split('\n').map(JSON.parse).filter((event) => event.type === 'remediation_closure_judged'))
+        .toEqual([expect.objectContaining({ attempts: 1, candidates: [expect.objectContaining({ taskId, disposition: 'bound-exhausted' })] })]);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('applies verdicts returned on the second attempt and persists one judged event with each disposition', async () => {
+    await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+      { id: 'rem-as-built-R5', status: 'completed', doneWhen: [{ check: 'Repair one is committed.', evidence: 'reported', source: 'reported' }] },
+      { id: 'rem-as-built-R11', status: 'completed', doneWhen: [{ check: 'Repair two is committed.', evidence: 'reported', source: 'reported' }] },
+    ] }));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await new Conductor({ projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: {
+        run: async (_step, _state, options) => options?.retryReason ? { success: false } : { success: true },
+        dispatchRemediationClosureJudgement: async () => ({ kind: 'valid' as const, attempts: 2, verdicts: [
+          { taskId: 'rem-as-built-R11', verdict: 'persists' as const, rationale: 'Second repair is absent.' },
+          { taskId: 'rem-as-built-R5', verdict: 'resolved' as const, rationale: 'First repair is present.' },
+        ] }),
+      }, events, mode: 'auto', resume: true, fromStep: 'build', verifyArtifacts: true, maxRetries: 2 } as never).run();
+      const judged = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
+        .filter(Boolean).map(JSON.parse).filter((event) => event.type === 'remediation_closure_judged');
+      expect(judged).toEqual([expect.objectContaining({ outcome: 'judged', attempts: 2, candidates: expect.arrayContaining([
+        expect.objectContaining({ taskId: 'rem-as-built-R11', verdict: 'persists', rationale: 'Second repair is absent.', disposition: 'reopened' }),
+        expect.objectContaining({ taskId: 'rem-as-built-R5', verdict: 'resolved', rationale: 'First repair is present.', disposition: 'left-closed' }),
+      ]) })]);
+    } finally {
+      persister.stop();
+    }
   });
 
   it('emits one structured pass result for a valid or unavailable closure judgement', async () => {
