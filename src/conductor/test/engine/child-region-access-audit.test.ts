@@ -36,7 +36,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/finish-record-cli.ts:ConductStateStore.apply': 1,
   'engine/gate-verdicts.ts:readVerdict': 3,
   'engine/gate-verdicts.ts:writeVerdict': 2,
-  'engine/kickback-budget-cli.ts:readKickbackLedger': 6,
+  'engine/kickback-budget-cli.ts:readKickbackLedger': 7,
   'engine/kickback-ledger.ts:bumpKickbackGate': 2,
   'engine/kickback-ledger.ts:readKickbackLedger': 20,
   'engine/rebase-transition.ts:ConductStateStore.applyBatch': 1,
