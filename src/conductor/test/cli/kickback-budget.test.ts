@@ -1,6 +1,6 @@
 // Covers: task:rem-prd-audit-R20
 // Covers: task:8, task:11, task:27, task:28, task:31.2, task:33
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +14,7 @@ import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-
 import { createConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import { appendCloseoutEvent } from '../../src/engine/closeout-events.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { readPlanGrowthBudget } from '../../src/engine/remediation-caps.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { cascadeUpdateLines, readCascadeCounts, updateCascadeLimit } from '../../src/engine/restack/cascade-cap.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
@@ -101,14 +102,14 @@ describe('kickback-budget raise and reset --child', () => {
     };
   }
 
-  const mutate = (fixture: { root: string }, action: 'raise' | 'reset') => dispatchKickbackBudgetCommand(
+  const mutate = (fixture: { root: string }, action: 'raise' | 'reset', output: string[] = []) => dispatchKickbackBudgetCommand(
     {
       kind: 'kickback-budget', action, feature: 'feature', gate: 'build_review',
       ...(action === 'raise' ? { by: 1 } : {}), rationale: 'operator evidence', format: 'human', child: '2',
     },
     {
       cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
-      resolveOperator: () => 'operator', print: () => {}, appendEvent: () => {},
+      resolveOperator: () => 'operator', print: (line) => output.push(line), appendEvent: () => {},
     },
   );
 
@@ -124,6 +125,23 @@ describe('kickback-budget raise and reset --child', () => {
       expect(await readFile(fixture.flat)).toEqual(flatBefore);
       expect(await readFile(fixture.child1)).toEqual(child1Before);
 
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('reports the flat raised plan-growth cap after raising a child-owned gate', async () => {
+    const fixture = await childFixture();
+    try {
+      await writeFile(fixture.flat, JSON.stringify({
+        version: 1, effectiveGrowthCap: 15,
+        growth: { authored: 10, added: 3, byGate: { build_review: 3 } },
+        gates: { build_review: { ...baseEntry, cumulative: 2 } },
+      }));
+      const flatBefore = await readFile(fixture.flat);
+      const output: string[] = [];
+      expect(await mutate(fixture, 'raise', output)).toBe(0);
+      expect(JSON.parse(await readFile(fixture.child2, 'utf8')).gates.build_review.effectiveLimit).toBe(6);
+      expect(await readFile(fixture.flat)).toEqual(flatBefore);
+      expect(output.join('\n')).toContain('Plan growth: 3/15 added; 12 remaining (raised cap)');
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
@@ -213,7 +231,8 @@ describe('kickback-budget inspect --child', () => {
       operator: 'operator', rationale: 'more review', timestamp: '2026-10-23T00:00:00.000Z', haltGeneration: 'g1', allowance: 'laps' as const,
     });
     const fixture = await makeFeature({
-      version: 1,
+      version: 1, effectiveGrowthCap: 15,
+      growth: { authored: 10, added: 3, byGate: { prd_audit: 3 } },
       gates: {
         architecture_review_as_built: {
           ...baseEntry, laps: 3, effectiveLapCap: 4, adjustmentsKnown: true,
@@ -240,6 +259,7 @@ describe('kickback-budget inspect --child', () => {
       await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: g1');
 
       const human = await inspect(fixture, '2');
+      const planGrowth = await readPlanGrowthBudget(fixture.worktree, {} as never, { persist: false });
       expect(human.code).toBe(0);
       expect(human.output).toContain('Kickback budget (architecture_review_as_built): 3/4 consumed; 1 remaining');
       expect(human.output).toContain('Adjustment history: raise as-built-raise (laps)');
@@ -247,6 +267,8 @@ describe('kickback-budget inspect --child', () => {
       expect(human.output).toContain('Kickback budget (build_review): 4/6 consumed; 2 remaining');
       expect(human.output).toContain('Kickback budget (restack): 0/3 consumed; 3 remaining');
       expect(human.output).toContain('Latest reason: child two restack');
+      expect(planGrowth.growth.added).toBe(3);
+      expect(human.output.match(new RegExp(`Plan growth: ${planGrowth.growth.added}/15 added; 12 remaining \\(raised cap\\)`, 'g'))).toHaveLength(4);
 
       const json = await inspect(fixture, '2', 'json');
       expect(json.code).toBe(0);
