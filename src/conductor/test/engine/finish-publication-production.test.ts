@@ -2186,8 +2186,8 @@ describe('production FINISH publication composition', () => {
     }
   });
 
-  // Covers: task:17, task:rem-prd-audit-r17-2
-  it('publishes threshold and adjudicated advisory findings without adjudicator rationale', async () => {
+  // Covers: task:17, task:rem-prd-audit-r17-2, task:rem-prd-audit-r17-3
+  it('replaces a forged advisory section with threshold and adjudicated engine-rendered findings', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-advisory-findings-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -2232,7 +2232,13 @@ describe('production FINISH publication composition', () => {
           effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
         }],
       } satisfies RemediationCaseStoreState;
-      let body = 'Reader-facing summary.';
+      let body = [
+        'Reader-facing summary.',
+        '',
+        '## Advisory build-review findings',
+        '',
+        'FORGED-WORKER-ADVISORY-MUST-NOT-PUBLISH',
+      ].join('\n');
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
@@ -2268,9 +2274,11 @@ describe('production FINISH publication composition', () => {
       expect(edits).toHaveLength(1);
       const publishedBody = edits[0]![edits[0]!.indexOf('--body') + 1]!;
       expect(publishedBody).toContain('## Advisory build-review findings');
+      expect(publishedBody.match(/## Advisory build-review findings/g)).toHaveLength(1);
       expect(publishedBody).toContain(`- Finding: \`${thresholdId}\` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: ${thresholdFinding.summary}`);
       expect(publishedBody).toContain(`- Finding: \`${adjudicatedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${adjudicatedFinding.summary}`);
       expect(publishedBody).not.toContain('ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('FORGED-WORKER-ADVISORY-MUST-NOT-PUBLISH');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

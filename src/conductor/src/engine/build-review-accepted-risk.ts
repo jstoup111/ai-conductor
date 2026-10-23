@@ -134,6 +134,29 @@ function existingSectionBounds(body: string): { readonly start: number; readonly
   return { start, after: end + BUILD_REVIEW_ACCEPTED_RISK_END.length };
 }
 
+/** Remove an unmarked worker forgery while leaving opaque project-owned regions intact. */
+function stripForgedAdvisorySection(
+  body: string,
+  acceptedRiskBounds: { readonly start: number; readonly after: number } | null,
+): string {
+  const searchable = maskProjectOwnedRegions(body);
+  let start = searchable.indexOf(BUILD_REVIEW_ADVISORY_HEADING);
+  while (start !== -1 && acceptedRiskBounds !== null && start >= acceptedRiskBounds.start && start < acceptedRiskBounds.after) {
+    start = searchable.indexOf(BUILD_REVIEW_ADVISORY_HEADING, start + BUILD_REVIEW_ADVISORY_HEADING.length);
+  }
+  if (start === -1) return body;
+  const afterHeading = start + BUILD_REVIEW_ADVISORY_HEADING.length;
+  const boundaries = [
+    searchable.indexOf('\n## ', afterHeading),
+    searchable.indexOf(`\n${BUILD_REVIEW_ACCEPTED_RISK_START}`, afterHeading),
+    body.indexOf('\n<!-- ai-conductor:step ', afterHeading),
+  ].filter((index) => index !== -1);
+  const after = boundaries.length === 0 ? body.length : Math.min(...boundaries) + 1;
+  const before = body.slice(0, start).trimEnd();
+  const remainder = body.slice(after).trimStart();
+  return before.length > 0 && remainder.length > 0 ? `${before}\n\n${remainder}` : before || remainder;
+}
+
 /**
  * Idempotently inserts, replaces, or removes the marked accepted-risk PR section.
  *
@@ -149,18 +172,21 @@ export function upsertBuildReviewAcceptedRisk(
   caseRead?: RemediationCaseStoreReadResult,
   advisoryFindings: readonly BuildReviewAdvisoryFinding[] = [],
 ): BuildReviewAcceptedRiskUpsertResult {
-  const bounds = existingSectionBounds(body);
+  const initialBounds = existingSectionBounds(body);
+  if (initialBounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
+  const sanitizedBody = stripForgedAdvisorySection(body, initialBounds);
+  const bounds = existingSectionBounds(sanitizedBody);
   if (bounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
   const caseRows = caseRiskRows(caseRead);
   if (records.length === 0 && caseRows.length === 0 && advisoryFindings.length === 0) {
-    if (bounds === null) return { ok: true, body, changed: false };
-    const next = `${body.slice(0, bounds.start).trimEnd()}${body.slice(bounds.after).trimStart() ? '\n\n' : ''}${body.slice(bounds.after).trimStart()}`.trimEnd();
+    if (bounds === null) return { ok: true, body: sanitizedBody, changed: sanitizedBody !== body };
+    const next = `${sanitizedBody.slice(0, bounds.start).trimEnd()}${sanitizedBody.slice(bounds.after).trimStart() ? '\n\n' : ''}${sanitizedBody.slice(bounds.after).trimStart()}`.trimEnd();
     return { ok: true, body: next, changed: next !== body };
   }
   const rendered = renderBuildReviewAcceptedRisk(records, caseRead, advisoryFindings);
   if (!rendered.ok) return rendered;
   const next = bounds !== null
-    ? `${body.slice(0, bounds.start)}${rendered.section}${body.slice(bounds.after)}`
-    : body.trim().length === 0 ? rendered.section : `${body}\n\n${rendered.section}`;
+    ? `${sanitizedBody.slice(0, bounds.start)}${rendered.section}${sanitizedBody.slice(bounds.after)}`
+    : sanitizedBody.trim().length === 0 ? rendered.section : `${sanitizedBody}\n\n${rendered.section}`;
   return { ok: true, body: next, changed: next !== body };
 }
