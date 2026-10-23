@@ -220,7 +220,8 @@ function projectBuildReviewAdvisoryFindings(
       });
     }
     for (const [sourceId, { record, link }] of currentBuildReviewSourceLinks(read.state.cases)) {
-      if (record.disposition !== 'advisory' || record.adjudicatedSeverity === undefined || link.outcome !== 'advisory') continue;
+      if (record.disposition !== 'advisory' || record.operatorResolution !== undefined || record.adjudicatedSeverity === undefined ||
+        (link.outcome !== 'advisory' && link.outcome !== 'merged')) continue;
       const source = sources.find((candidate) => `${candidate.rubric}:${candidate.findingId}` === sourceId);
       if (!source) continue;
       adjudicated.set(sourceId, {

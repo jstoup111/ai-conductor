@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:24
+// Covers: task:1, task:2, task:3, task:4, task:24, task:rem-as-built-rem-as-built-r17-5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -2186,8 +2186,8 @@ describe('production FINISH publication composition', () => {
     }
   });
 
-  // Covers: task:17, task:rem-prd-audit-r17-2, task:rem-prd-audit-r17-3
-  it('replaces a forged advisory section with threshold and adjudicated engine-rendered findings', async () => {
+  // Covers: task:17, task:rem-prd-audit-r17-2, task:rem-prd-audit-r17-3, task:rem-as-built-rem-as-built-r17-5
+  it('replaces a forged advisory section with threshold and merged adjudicated findings while excluding carried and operator-resolved links', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-advisory-findings-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -2207,14 +2207,26 @@ describe('production FINISH publication composition', () => {
         evidenceLocations: ['test/adjudicated.test.ts:1'],
         anchor: { rubric: 'testQuality' as const, locus: { path: 'test/adjudicated.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'adjudicated test' } },
       };
+      const carriedFinding = {
+        concernKind: 'test-insensitive', summary: 'The carried source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        evidenceLocations: ['test/carried.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/carried.test.ts', contentHash: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', display: 'carried test' } },
+      };
+      const operatorResolvedFinding = {
+        concernKind: 'test-insensitive', summary: 'The operator-resolved source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        evidenceLocations: ['test/operator-resolved.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/operator-resolved.test.ts', contentHash: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', display: 'operator-resolved test' } },
+      };
       const thresholdId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...thresholdFinding })!.id;
       const adjudicatedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...adjudicatedFinding })!.id;
+      const carriedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...carriedFinding })!.id;
+      const operatorResolvedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...operatorResolvedFinding })!.id;
       const aggregate = joinBuildReviewRubricOutcomes({
         lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
         results: {
           testQuality: {
             kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
-            contractVersion: 'v4', findings: [thresholdFinding, adjudicatedFinding], verdict: 'FAIL',
+            contractVersion: 'v4', findings: [thresholdFinding, adjudicatedFinding, carriedFinding, operatorResolvedFinding], verdict: 'FAIL',
           },
         },
       });
@@ -2228,8 +2240,19 @@ describe('production FINISH publication composition', () => {
         cases: [{
           id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
           rationale: 'ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
-          sources: [{ sourceId: `testQuality:${adjudicatedId}`, outcome: 'advisory', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          sources: [{ sourceId: `testQuality:${adjudicatedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
           effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+        }, {
+          id: 'case-carried', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${carriedId}`, outcome: 'carried', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+        }, {
+          id: 'case-operator-resolved', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
+          rationale: 'OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${operatorResolvedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
+          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
+          operatorResolution: { operator: 'operator', rationale: 'OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL', resolvedAt: '2026-10-23T00:00:00.000Z' },
         }],
       } satisfies RemediationCaseStoreState;
       let body = [
@@ -2277,7 +2300,12 @@ describe('production FINISH publication composition', () => {
       expect(publishedBody.match(/## Advisory build-review findings/g)).toHaveLength(1);
       expect(publishedBody).toContain(`- Finding: \`${thresholdId}\` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: ${thresholdFinding.summary}`);
       expect(publishedBody).toContain(`- Finding: \`${adjudicatedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${adjudicatedFinding.summary}`);
+      expect(publishedBody).not.toContain(`- Finding: \`${carriedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${carriedFinding.summary}`);
+      expect(publishedBody).not.toContain(`- Finding: \`${operatorResolvedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${operatorResolvedFinding.summary}`);
       expect(publishedBody).not.toContain('ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
+      expect(publishedBody).not.toContain('OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL');
       expect(publishedBody).not.toContain('FORGED-WORKER-ADVISORY-MUST-NOT-PUBLISH');
     } finally {
       await rm(root, { recursive: true, force: true });
