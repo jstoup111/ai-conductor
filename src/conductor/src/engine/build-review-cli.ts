@@ -8,7 +8,7 @@ import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-i
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
 import { buildReviewConfidenceFloors, buildReviewSeverityThresholds, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
-import { buildReviewSeverityThresholdPolicies, currentBuildReviewSourceLinks, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT, buildReviewRecurrenceLineage, buildReviewSeverityThresholdPolicies, currentBuildReviewSourceLinks, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
@@ -310,13 +310,26 @@ function acceptedDispositions(
   });
 }
 
-function renderCase(caseRecord: RemediationCaseRecord): string {
+function renderCase(caseRecord: RemediationCaseRecord, cases: readonly RemediationCaseRecord[]): string {
   const effect = caseRecord.effect.kind === 'none'
     ? 'none'
     : `${caseRecord.effect.kind}/${caseRecord.effect.status}`;
   const assertions = caseRecord.refutation?.assertions
     .map((assertion) => `${assertion.assertion} (${assertion.verdict})`).join('; ') ?? 'none';
-  return `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}`;
+  const distinctFrom = caseRecord.distinctFrom?.map(({ caseId, reason }) => `distinct from ${caseId}: ${reason}`) ?? [];
+  const recurrence = caseRecord.recurrenceOf === undefined ? [] : (() => {
+    const lineage = buildReviewRecurrenceLineage(cases, [caseRecord.id]);
+    return [`recurs from ${caseRecord.recurrenceOf.join(', ')}; ${lineage.appliedAttempts} of ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT} applied attempts`];
+  })();
+  const declaredDistinct = cases.flatMap((other) => other.distinctFrom
+    ?.filter(({ caseId }) => caseId === caseRecord.id)
+    .map(({ reason }) => `declared distinct by ${other.id}: ${reason}`) ?? []);
+  return [
+    `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}`,
+    ...distinctFrom,
+    ...recurrence,
+    ...declaredDistinct,
+  ].join('\n');
 }
 
 type CarriedSourceFinding = {
@@ -398,7 +411,7 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     ...operatorResolvedCases.map((caseRecord) => `Operator-resolved case: ${caseRecord.caseId}; source ids: ${caseRecord.sourceIds.join(', ') || 'none'}; operator: ${caseRecord.operator}; rationale: ${caseRecord.rationale}; resolved at: ${caseRecord.resolvedAt}`),
     ...pendingOutbox.map((entry) => `Pending case-store outbox entry: ${entry.eventId}; occurred at: ${entry.occurredAt}; event: ${entry.event.type}`),
     `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
-    ...cases.map(renderCase),
+    ...cases.map((caseRecord) => renderCase(caseRecord, cases)),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
     `Advisory build-review findings: ${advisories.length === 0 ? 'none' : ''}`,
     ...advisories.map((advisory) => `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`),

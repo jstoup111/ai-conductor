@@ -48,6 +48,10 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly consistencyStop?: RemediationCaseRecord['consistencyStop'];
   /** The lower severity recorded by a persisted non-blocking advisory case. */
   readonly adjudicatedSeverity?: RemediationCaseRecord['adjudicatedSeverity'];
+  /** Prior cases that establish this case as a recurrence. */
+  readonly recurrenceOf?: readonly string[];
+  /** Prior cases retained as distinct from this case. */
+  readonly distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -438,6 +442,10 @@ function freezePriorCase(
       }),
     }),
     ...(caseRecord.disposition === 'advisory' ? { adjudicatedSeverity: caseRecord.adjudicatedSeverity! } : {}),
+    ...(caseRecord.recurrenceOf === undefined ? {} : { recurrenceOf: Object.freeze([...caseRecord.recurrenceOf]) }),
+    ...(caseRecord.distinctFrom === undefined ? {} : {
+      distinctFrom: Object.freeze(caseRecord.distinctFrom.map((relationship) => Object.freeze({ ...relationship }))),
+    }),
   });
 }
 

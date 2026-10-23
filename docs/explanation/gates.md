@@ -725,7 +725,15 @@ routing or passing.
 
 Only open cases own a source. A later judgement may re-raise a source that resolved history already
 links; the re-raise opens a new case, leaves the resolved case intact, and an action charges the
-`build_review` kickback cap like any other. Each source is read through one current link: an open case
+`build_review` kickback cap like any other. An unbound `act` re-raise over a resolved action case is a
+recurrence: the new case records that owner in `recurrenceOf`, unless the judgement declares it
+distinct through `distinctFrom` with a non-empty reason. A declaration naming any other case is
+ignored. A recurrence lineage — the case and its `recurrenceOf` ancestry — gets three applied BUILD
+attempts. A re-raise whose lineage already holds three halts `needs-human` before BUILD dispatch, binds
+the new source to the latest owner, and emits `remediation_semantic_repeat_halt` with reason
+`recurrence-limit` and `lineageCaseIds`; see
+[recurrence limit](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-a-recurrence-limit).
+Each source is read through one current link: an open case
 outranks resolved history, otherwise the latest link wins. A decision stop never settles its source, so
 a later judgement can re-evaluate it; an escalation with the same owner and source outcomes converges
 on the existing stop, and a different owner halts as a

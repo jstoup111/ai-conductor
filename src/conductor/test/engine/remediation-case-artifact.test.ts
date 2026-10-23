@@ -1,10 +1,11 @@
-// Covers: task:1, task:4
+// Covers: task:1, task:3, task:4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { readRemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
+import { validateRemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 
 const CASE_V1 = {
   mode: 'case-v1',
@@ -131,6 +132,44 @@ describe('remediation case artifact', () => {
     const result = await read(CASE_V1);
 
     expect(result).toEqual({ ok: true, judgement: CASE_V1 });
+  });
+
+  it('admits an act row declaring a distinct resolved case and preserves it in the graph', async () => {
+    const distinctFrom = [{ caseId: 'R', reason: 'asserts daemon-liveness staleness' }] as const;
+    const judgement = {
+      ...CASE_V1,
+      cases: [{
+        ...CASE_V1.cases[0],
+        distinctFrom,
+      }, ...CASE_V1.cases.slice(1)],
+    };
+
+    const parsed = await read(judgement);
+    expect(parsed.ok && validateRemediationCaseGraph(
+      CASE_V1.sourceOutcomes.map((source) => source.sourceId),
+      parsed.judgement,
+    )).toEqual(expect.objectContaining({
+      ok: true,
+      graph: expect.objectContaining({
+        cases: expect.arrayContaining([expect.objectContaining({
+          case: expect.objectContaining({ distinctFrom }),
+        })]),
+      }),
+    }));
+  });
+
+  it.each([
+    ['an empty list', []],
+    ['an empty reason', [{ caseId: 'R', reason: '' }]],
+    ['an over-bound reason', [{ caseId: 'R', reason: 'r'.repeat(8_001) }]],
+    ['an entry with an extra key', [{ caseId: 'R', reason: 'A separate concern.', extra: true }]],
+  ])('rejects distinctFrom with %s as a malformed case row', async (_name, distinctFrom) => {
+    const judgement = {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], distinctFrom }, ...CASE_V1.cases.slice(1)],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({ ok: false, reason: 'invalid-case-keys' });
   });
 
   it('round-trips a case-v2 duplicate repair graph with task admission and consistency provenance', async () => {

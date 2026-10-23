@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:14, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
+// Covers: task:3, task:4, task:5, task:14, task:28, task:rem-as-built-8, task:rem-as-built-r15-1
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -325,6 +325,34 @@ describe('build-review adjudication context', () => {
     expect(JSON.parse(JSON.stringify(result.context)).priorCases[0]).toMatchObject({
       escalation: { owner: 'architecture' }, consistencyStop: stop.consistencyStop,
     });
+  });
+
+  it('projects frozen recurrence lineage and omits it when absent', () => {
+    const recurring = {
+      ...priorCase('case-recurring'),
+      recurrenceOf: ['case-resolved'],
+      distinctFrom: [{ caseId: 'case-distinct', reason: 'The changed source is independently owned.' }],
+    };
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('alpha')),
+      priorCases: [recurring, priorCase('case-without-lineage')],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      context: {
+        priorCases: expect.arrayContaining([expect.objectContaining({
+          id: 'case-recurring',
+          recurrenceOf: ['case-resolved'],
+          distinctFrom: [{ caseId: 'case-distinct', reason: 'The changed source is independently owned.' }],
+        })]),
+      },
+    });
+    if (!result.ok) return;
+    expect(Object.isFrozen(result.context.priorCases[0]!.recurrenceOf)).toBe(true);
+    expect(Object.isFrozen(result.context.priorCases[0]!.distinctFrom)).toBe(true);
+    expect(result.context.priorCases[1]).not.toHaveProperty('recurrenceOf');
+    expect(result.context.priorCases[1]).not.toHaveProperty('distinctFrom');
   });
 
   it('projects an owner-only and a consistency-only decision stop without inventing the absent evidence', () => {

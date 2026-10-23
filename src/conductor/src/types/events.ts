@@ -1019,6 +1019,8 @@ type ConductorEventBody =
       lapId: string;
       caseId: string;
       resolution: 'open' | 'resolved';
+      recurrenceOf?: readonly string[];
+      distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
     }
   | {
       /** One attempted remediation case was refuted against the current lap. */
@@ -1072,7 +1074,8 @@ type ConductorEventBody =
       lapId: string;
       caseId: string;
       effectId?: string;
-      reason: 'already-attempted' | 'regressed';
+      reason: 'already-attempted' | 'regressed' | 'recurrence-limit';
+      lineageCaseIds?: readonly string[];
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | {

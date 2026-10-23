@@ -1,4 +1,6 @@
-// Covers: task:2
+// Covers: task:2, task:11
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   STEP_SKILL_INVOCATIONS,
@@ -75,6 +77,22 @@ describe('provider-native skill invocation', () => {
 
   it('defines the exhaustive semantic invocation map', () => {
     expect(STEP_SKILL_INVOCATIONS).toEqual(EXPECTED_INVOCATIONS);
+  });
+
+  it('publishes the distinct re-raise contract through the shared remediate skill', async () => {
+    const skill = await readFile(resolve(process.cwd(), '../../skills/remediate/SKILL.md'), 'utf8');
+
+    expect({
+      claude: renderSkillInvocation(STEP_SKILL_INVOCATIONS.remediate!, 'claude'),
+      codex: renderSkillInvocation(STEP_SKILL_INVOCATIONS.remediate!, 'codex'),
+      contract: [
+        'distinctFrom',
+        'caseId',
+        'reason must be non-empty',
+        'three applied attempts',
+        'entry not naming a resolved action owner of a row source is ignored',
+      ].every((text) => skill.includes(text)),
+    }).toEqual({ claude: '/remediate', codex: '$remediate', contract: true });
   });
 
   it.each([

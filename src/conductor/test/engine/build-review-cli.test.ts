@@ -1,4 +1,4 @@
-// Covers: task:2, task:16, task:19, task:27, task:rem-prd-audit-r16-1
+// Covers: task:2, task:10, task:16, task:19, task:27, task:rem-prd-audit-r16-1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -154,6 +154,41 @@ describe('build-review findings CLI', () => {
       }],
       acceptedDispositions: [expect.objectContaining({ disposition: expect.objectContaining({ rationale: 'operator risk' }) })],
     });
+  });
+
+  // Covers: task:10
+  it('renders recurrence lineage and distinct-case declarations without changing unrelated case rows', async () => {
+    const recurring = {
+      ...refutedCaseStore.cases[0]!, id: 'N', disposition: 'act' as const, resolution: 'open' as const,
+      rationale: 'This recurrence needs another repair attempt.',
+      sources: [{ sourceId: 'testQuality:sha256:recurring', outcome: 'acted' as const, recordedAt: '2026-10-23T10:00:00.000Z' }],
+      effect: { id: 'effect-N', kind: 'action' as const, status: 'applied' as const, workOrderId: 'work-order-N' },
+      recurrenceOf: ['R'], distinctFrom: [{ caseId: 'R', reason: 'The changed anchor is separate.' }],
+    };
+    const root = {
+      ...refutedCaseStore.cases[0]!, id: 'R', disposition: 'act' as const, resolution: 'resolved' as const,
+      sources: [{ sourceId: 'testQuality:sha256:root', outcome: 'acted' as const, recordedAt: '2026-10-22T10:00:00.000Z' }],
+      effect: { id: 'effect-R', kind: 'action' as const, status: 'applied' as const, workOrderId: 'work-order-R' },
+    };
+    const unrelated = { ...refutedCaseStore.cases[0]!, id: 'U', rationale: 'No lineage relationship exists.' };
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [recurring, root, unrelated] } }) }),
+      readMechanicalFaults: async () => 0, print,
+    })).resolves.toBe(0);
+
+    expect((print.mock.calls[0]![0] as string).split('\n').filter((line) => line.startsWith('Autonomous case outcome:') || line.startsWith('distinct from ') || line.startsWith('recurs from ') || line.startsWith('declared distinct by '))).toEqual([
+      'Autonomous case outcome: N; disposition: act; resolution: open; source ids: testQuality:sha256:recurring; effect: action/applied; claim: The changed test does not observe the behavior.; assertions: The test omits the observable assertion. (refuted); The assertion is reachable. (upheld); rationale: This recurrence needs another repair attempt.',
+      'distinct from R: The changed anchor is separate.',
+      'recurs from R; 2 of 3 applied attempts',
+      'Autonomous case outcome: R; disposition: act; resolution: resolved; source ids: testQuality:sha256:root; effect: action/applied; claim: The changed test does not observe the behavior.; assertions: The test omits the observable assertion. (refuted); The assertion is reachable. (upheld); rationale: The cited assertion is contradicted by the current test.',
+      'declared distinct by N: The changed anchor is separate.',
+      'Autonomous case outcome: U; disposition: refute; resolution: resolved; source ids: testQuality:sha256:refuted; effect: none; claim: The changed test does not observe the behavior.; assertions: The test omits the observable assertion. (refuted); The assertion is reachable. (upheld); rationale: No lineage relationship exists.',
+    ]);
   });
 
   // Covers: task:23
