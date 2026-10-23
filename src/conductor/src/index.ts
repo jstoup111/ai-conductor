@@ -1,6 +1,6 @@
 export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectBuildReviewResolveCaseCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 
 import type { RunMode } from './types/index.js';
@@ -81,6 +81,7 @@ import {
   detectInline,
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
+  detectBuildReviewResolveCaseCommand,
   detectBuildReviewRecordReducedCoverageCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
@@ -100,7 +101,7 @@ import {
 import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
 import type { StepName } from './types/index.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
@@ -166,10 +167,12 @@ import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
+import { detectTranscriptsCommand, dispatchTranscripts } from './engine/transcripts-cli.js';
 import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
 } from './engine/shipment-evidence-cli.js';
+import { detectDocsPruneCommand, dispatchDocsPrune } from './engine/docs-prune-cli.js';
 
 import {
   detectFinishRecordCommand,
@@ -837,6 +840,58 @@ export async function dispatchCliEntry(input: {
 // --- Main ---
 
 async function dispatchCliCommand(): Promise<void> {
+  // Private child entrypoint. It intentionally is not registered in the
+  // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
+  // argv can never satisfy the daemon supervisor process matcher.
+  if (process.argv[2] === 'executor-child') {
+    const [
+      { runExecutorChild, withExecutorBrokerProxies },
+      { runExecutorChildFeature },
+      { createWorkOrderGitRunner },
+      { makeFeatureRunnerDeps },
+      { leafBranchFor },
+      { defaultSelfHostDetector },
+    ] = await Promise.all([
+      import('./engine/executor-child.js'),
+      import('./engine/executor-child-runtime.js'),
+      import('./daemon-cli.js'),
+      import('./engine/daemon-deps.js'),
+      import('./engine/feature-branch-identity.js'),
+      import('./engine/self-host/detector.js'),
+    ]);
+    const projectRoot = process.cwd();
+    await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
+      // Reuse the daemon seam, which verifies the WorkOrder before its first
+      // worktree side effect and performs the pinned-base create under the
+      // brokered lifecycle lock.
+      createWorktree: async (order, worktreeLifecycle) => {
+        const runnerDeps = makeFeatureRunnerDeps({
+          projectRoot,
+          worktreeBase: join(projectRoot, '.worktrees'),
+          baseBranch: 'main',
+          runConductorInWorktree: async () => {},
+          workOrderGit: createWorkOrderGitRunner(projectRoot),
+          worktreeLifecycle: worktreeLifecycle as never,
+        });
+        return runnerDeps.createWorktree(order.slug, order);
+      },
+      run: async (input) => {
+        const branch = leafBranchFor(input.order.slug);
+        return runExecutorChildFeature({
+          ...input,
+          worktree: { path: join(projectRoot, '.worktrees', input.order.slug), branch },
+          projectRoot,
+          supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
+        });
+      },
+      // The WorkOrder is the supervisor's authority for self-host mode.  The
+      // detector is only a compatibility fallback for pre-field orders.
+      liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
+      log: (line) => { process.send?.({ kind: 'log', level: 'info', message: line }); },
+      exit: (code) => { process.exitCode = code; },
+    }));
+    return;
+  }
   // Per-command help is answered by `main()` before the daemon-session guard,
   // so it never reaches this dispatcher.
   const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
@@ -865,6 +920,12 @@ async function dispatchCliCommand(): Promise<void> {
   const buildReviewAcceptCmd = detectBuildReviewAcceptCommand(process.argv);
   if (buildReviewAcceptCmd) {
     process.exitCode = await dispatchBuildReviewAccept(buildReviewAcceptCmd);
+    return;
+  }
+
+  const buildReviewResolveCaseCmd = detectBuildReviewResolveCaseCommand(process.argv);
+  if (buildReviewResolveCaseCmd) {
+    process.exitCode = await dispatchBuildReviewResolveCase(buildReviewResolveCaseCmd);
     return;
   }
 
@@ -1041,6 +1102,21 @@ async function dispatchCliCommand(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  const docsPruneCmd = detectDocsPruneCommand(process.argv);
+  if (docsPruneCmd) {
+    const repoRoot = makeProductionGit()(['rev-parse', '--show-toplevel'], { cwd: process.cwd() });
+    const code = await dispatchDocsPrune(docsPruneCmd, (await repoRoot).stdout.trim());
+    process.exit(code);
+  }
+
+  // Transcript inspection is deliberately read-only: it reconstructs the
+  // retained capture set from the event ledger and never creates pipeline state.
+  const transcriptsCmd = detectTranscriptsCommand(process.argv);
+  if (transcriptsCmd) {
+    const code = await dispatchTranscripts(transcriptsCmd, process.cwd());
     process.exit(code);
   }
 

@@ -902,6 +902,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       mechanical: 'retry',
       'kickback-cap': 'retain',
       'over-scope': 'retain',
+      'stack-tip-diverged': 'retain',
       legacy: 'retry',
     } satisfies Record<HaltDisposition, 'retain' | 'retry'>;
 

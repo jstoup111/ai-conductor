@@ -194,8 +194,8 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     );
   });
 
-  describe('refreshEngineSource wired before rebuildEngine (Task 7, non-fatal)', () => {
-    it('called before rebuildEngine at the pre-dispatch boundary when staleGatesArmed and inFlight empty', async () => {
+  describe('cadence engine refresh does not delay the first dispatch (D8)', () => {
+    it('does not refresh or rebuild before dispatch when staleGatesArmed and the cadence interval has not elapsed', async () => {
       const callOrder: string[] = [];
       const refreshEngineSource = vi.fn(async () => {
         callOrder.push('refresh');
@@ -220,12 +220,12 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         maxIdlePolls: 1,
       });
 
-      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
-      expect(rebuildEngine).toHaveBeenCalledTimes(1);
-      expect(callOrder).toEqual(['refresh', 'rebuild']);
+      expect(refreshEngineSource).not.toHaveBeenCalled();
+      expect(rebuildEngine).not.toHaveBeenCalled();
+      expect(callOrder).toEqual([]);
     });
 
-    it('not called again for the second dispatch while the first feature is still in flight', async () => {
+    it('does not bypass the cadence interval for a second dispatch while the first feature is still in flight', async () => {
       const refreshEngineSource = vi.fn(async () => {});
       let releaseFeature: (() => void) | undefined;
       const runFeature = vi.fn((it: any) => {
@@ -254,11 +254,10 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
       });
 
       // Let the dispatch loop start both features; the first ('f0') stays in
-      // flight (never resolved), so the second's pre-dispatch evaluation
-      // window has inFlight non-empty and must skip the refresh call — it
-      // fired exactly once, for the very first (fully-idle) dispatch.
+      // flight. The maintenance cadence was recorded by startup discovery, so
+      // neither dispatch bypasses its interval with a pre-dispatch refresh.
       await new Promise((r) => setTimeout(r, 20));
-      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(refreshEngineSource).not.toHaveBeenCalled();
 
       releaseFeature?.();
       await runPromise;
@@ -285,7 +284,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
       expect(refreshEngineSource).not.toHaveBeenCalled();
     });
 
-    it('throwing refreshEngineSource is logged and non-fatal: flow continues into rebuildEngine/check(), no restart triggered by the throw', async () => {
+    it('does not let a pending cadence refresh delay the first feature', async () => {
       const logs: string[] = [];
       const refreshEngineSource = vi.fn(async () => {
         throw new Error('fetch failed: origin unreachable');
@@ -311,14 +310,14 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         maxIdlePolls: 1,
       });
 
-      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
-      expect(rebuildEngine).toHaveBeenCalledTimes(1); // continued past the throw
+      expect(refreshEngineSource).not.toHaveBeenCalled();
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).not.toHaveBeenCalled(); // 'current' verdict, no restart
-      expect(res.stoppedReason).toBe('idle_timeout'); // no crash, feature still dispatched
-      expect(logs.some((m) => m.toLowerCase().includes('refresh'))).toBe(true);
+      expect(res.stoppedReason).toBe('idle_timeout'); // feature still dispatched
+      expect(logs.some((m) => m.toLowerCase().includes('refresh'))).toBe(false);
     });
 
-    it('suppression path still short-circuits: refreshEngineSource + rebuildEngine run, but suppressed identity prevents restart', async () => {
+    it('suppression still short-circuits a stale supervisor without a pre-dispatch refresh or rebuild', async () => {
       const refreshEngineSource = vi.fn(async () => {});
       const rebuildEngine = vi.fn(async () => {});
       const requestRestart = vi.fn(async () => ({ fired: true }));
@@ -345,8 +344,8 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         maxIdlePolls: 1,
       });
 
-      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
-      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(refreshEngineSource).not.toHaveBeenCalled();
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).not.toHaveBeenCalled();
       expect(res.stoppedReason).toBe('idle_timeout');
     });
@@ -403,7 +402,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
       expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
     });
 
-    it('not invoked when staleGatesArmed is true (armed path handles refresh instead)', async () => {
+    it('not invoked when staleGatesArmed is true (the cadence job, not pre-dispatch, handles refresh)', async () => {
       const probeEngineStaleness = vi.fn(async () => {});
       const refreshEngineSource = vi.fn(async () => {});
       const deps: DaemonDeps = {
@@ -424,7 +423,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
       });
 
       expect(probeEngineStaleness).not.toHaveBeenCalled();
-      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(refreshEngineSource).not.toHaveBeenCalled();
     });
 
     it('not invoked while a build is in flight (quiescent-only)', async () => {
@@ -568,22 +567,25 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
       return stdout.trim();
     }
 
-    it('Scenario A (HP1/HP2): behind-origin engine-source advance -> quiescent fast-forward "advanced" -> publish stamps the merge SHA -> checker reports "stale" -> requestRestart fires', async () => {
+    it('Scenario A (D8): behind-origin engine-source advance does not block the first dispatch before the maintenance cadence', async () => {
       const { dir, originDir, tmpBase } = await initGitRepo();
       try {
         const distPath = join(tmpBase, 'dist', 'index.js');
         await fakePublish(dir, distPath); // v1: identity currently loaded by the running daemon
         const capturedIdentity = await captureEngineIdentity(distPath);
         const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+        const initialHead = await headSha(dir);
 
-        const mergeSha = await advanceOrigin(originDir, tmpBase, 'engine');
+        await advanceOrigin(originDir, tmpBase, 'engine');
 
         let ffOutcome: any;
+        let dispatched = false;
         const requestRestart = vi.fn(async () => ({ fired: true }));
         const deps = {
           discoverBacklog: async () => [{ slug: 'pending' }],
           runFeature: async () => {
-            throw new Error('must never dispatch: the engine is stale before this item runs');
+            dispatched = true;
+            return { slug: 'pending', status: 'done' as const };
           },
           sleep: async () => {},
           staleEngineChecker: checker,
@@ -603,31 +605,33 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           autoRestartOnStaleEngine: true,
         });
 
-        // ff outcome: advanced, at the merge commit.
-        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: mergeSha }));
-        expect(await headSha(dir)).toBe(mergeSha);
+        // D8 makes refresh/rebuild cadence maintenance. It must not delay the
+        // first eligible dispatch, so the source is unchanged at this point.
+        expect(ffOutcome).toBeUndefined();
+        expect(await headSha(dir)).toBe(initialHead);
 
-        // Publish flips to a new (content-hash) version stamped at the merge SHA.
+        // The active dist remains the boot version until the cadence rebuild.
         const publishedIdentity = await captureEngineIdentity(distPath);
-        expect(publishedIdentity).not.toBe(capturedIdentity);
+        expect(publishedIdentity).toBe(capturedIdentity);
 
-        // Checker sees the drift -> stale -> restart requested.
-        expect(checker.check()).toBe('stale');
-        expect(requestRestart).toHaveBeenCalledTimes(1);
+        expect(checker.check()).toBe('current');
+        expect(dispatched).toBe(true);
+        expect(requestRestart).not.toHaveBeenCalled();
       } finally {
         await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
       }
     });
 
-    it('Scenario B (HP3): docs-only advance -> publish content-unchanged (same identity) -> no restart invoked', async () => {
+    it('Scenario B (D8): docs-only advance also leaves the first dispatch non-blocking until the maintenance cadence', async () => {
       const { dir, originDir, tmpBase } = await initGitRepo();
       try {
         const distPath = join(tmpBase, 'dist', 'index.js');
         await fakePublish(dir, distPath);
         const capturedIdentity = await captureEngineIdentity(distPath);
         const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+        const initialHead = await headSha(dir);
 
-        const docsMergeSha = await advanceOrigin(originDir, tmpBase, 'docs');
+        await advanceOrigin(originDir, tmpBase, 'docs');
 
         let dispatched = false;
         let ffOutcome: any;
@@ -656,10 +660,11 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           autoRestartOnStaleEngine: true,
         });
 
-        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: docsMergeSha }));
-        expect(await headSha(dir)).toBe(docsMergeSha);
+        expect(ffOutcome).toBeUndefined();
+        expect(await headSha(dir)).toBe(initialHead);
 
-        // Docs-only advance: publish reproduces the SAME content-hash identity.
+        // The boot build is unchanged until the cadence rebuild; a docs-only
+        // rebuild will retain this same content identity when it does run.
         const publishedIdentity = await captureEngineIdentity(distPath);
         expect(publishedIdentity).toBe(capturedIdentity);
 

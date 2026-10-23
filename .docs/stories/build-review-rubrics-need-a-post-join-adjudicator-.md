@@ -138,7 +138,7 @@ work cannot override a human decision made during the lap.
 
 #### Negative Paths
 
-- Given an autonomous prior case looks semantically similar to an operator-accepted finding but the exact operator identity does not match, when the reducer runs, then the autonomous case cannot broaden the operator disposition or mark the distinct finding accepted, unless the `remediate` adjudicator binds that finding to an operator-accepted case in a later lap, which is carried operator acceptance (adr-2026-08-29-build-review-remediate-case-adjudication D2.1–D2.5).
+- Given an autonomous prior case looks semantically similar to an operator-accepted finding but the exact operator identity does not match, when the reducer runs, then the autonomous case cannot broaden the operator disposition or mark the distinct finding accepted; the only extension is a later-lap finding the judgement binds by `existingCaseId` to a case holding an operator acceptance, which settles as carried and writes no disposition (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 - Given the operator disposition store cannot be read or validated at an exit, when the effective verdict is derived, then the gate fails closed rather than assuming no acceptance or publishing autonomous PASS.
 
 ### Done When
@@ -194,7 +194,7 @@ semantic non-progress stops instead of cycling.
 #### Negative Paths
 
 - Given BUILD already attempted an action case and a later complete lap binds a current finding to that unresolved case with any disposition other than an admitted `refute` row, when routing is derived, then no new or free BUILD route occurs and the gate halts `needs-human` with both current and prior evidence even if the tree moved.
-- Given an action case not resolved by refutation and holding no operator-accepted source was marked resolved and an equivalent finding reappears, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback.
+- Given an action case not resolved by refutation was marked resolved, holds no operator acceptance and no operator resolution, and the judgement binds a reappearing finding to that case by `existingCaseId` with disposition `act`, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback.
 
 ### Done When
 
@@ -248,7 +248,7 @@ an effective PASS or route never hides what the rubrics reported.
 
 #### Negative Paths
 
-- Given any required case/effect is missing, reserved, failed, contradictory, or unrenderable, when the effective verdict is derived, then it cannot PASS or partially route and names the blocking state.
+- Given any required case/effect is missing, reserved, failed, contradictory, or unrenderable, when the effective verdict is derived, then it cannot PASS or partially route and names the blocking state, except an action case the shared settlement predicate retires because every source is operator-accepted, carried, or no longer raised on a mechanically healthy lap (adr-2026-10-20-operator-acceptance-is-durable-case-state D5).
 - Given raw evidence contains a below-allowance infrastructure failure or an exhausted failure without exact operator reduced coverage, when effective derivation is attempted, then autonomous case state cannot convert that mechanical blocker into PASS.
 
 ### Done When

@@ -88,7 +88,7 @@ export async function refreshPostFinishShippedRecord({
         git: (args) => runGit(args, { cwd }),
         gh,
       });
-      await pushPostFinishShippedRecord({
+      const pushed = await pushPostFinishShippedRecord({
         runGit,
         cwd,
         branch: branchOut.trim(),
@@ -96,6 +96,11 @@ export async function refreshPostFinishShippedRecord({
         remoteMutation: resolvedMutation,
         events,
       });
+      if (pushed.kind === 'refused' && pushed.reason === 'stack-tip-mismatch') {
+        log('post-finish shipped-record refresh skipped: stack-tip-mismatch');
+        return;
+      }
+      if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
     } catch (pushError) {
       let recoveryHead = preRefreshHead;
       let upstreamHead: string | undefined;
@@ -153,7 +158,7 @@ export async function pushPostFinishShippedRecord(input: {
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
   events?: ConductorEventEmitter;
-}): Promise<void> {
+}): Promise<Awaited<ReturnType<typeof executeRemoteGit>>> {
   const pushed = await (input.remoteGit ?? executeRemoteGit)(
     ['push', 'origin', `HEAD:refs/heads/${input.branch}`],
     {
@@ -164,7 +169,7 @@ export async function pushPostFinishShippedRecord(input: {
       events: input.events,
     },
   );
-  if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
+  return pushed;
 }
 
 export function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {

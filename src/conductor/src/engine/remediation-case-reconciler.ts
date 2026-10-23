@@ -1,11 +1,13 @@
 import type { RemediationCaseRow } from './remediation-case-artifact.js';
-import { hasReservedOrFailedRemediationEffect } from './remediation-case-effects.js';
+import { randomUUID } from 'node:crypto';
 import {
   type RemediationCaseEffect,
+  type RemediationCaseOutboxEntry,
   type RemediationCaseRecord,
   type RemediationCaseStoreFailureReason,
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
+  appendRemediationCaseOutbox,
   RemediationCaseStore,
 } from './remediation-case-store.js';
 import type { RemediationCaseGraph } from './remediation-case-validator.js';
@@ -19,10 +21,25 @@ export interface ReconcileRemediationCasesInput {
   readonly generateId: () => string;
   /** Durable BUILD-work-order evidence, supplied by the later work-order seam. */
   readonly attemptedCaseIds?: readonly string[];
-  /** A clean PASS with no order settles absent non-action case history too. */
+  /** Exact operator authority available to this reconciliation. */
+  readonly effectiveAcceptedSourceIds?: ReadonlySet<string>;
+  /** Whether this lap proves absence rather than merely omitting a source. */
+  readonly mechanicallyHealthy?: boolean;
+  /** Full current-lap source projection for exit-time settlement. */
+  readonly liveSourceIds?: ReadonlySet<string>;
+  /** Preserve the established absence settlement for completed non-action history. */
   readonly resolveAbsentOpenNonActionCases?: boolean;
+  /** An attempted applied effect may settle on a normal adjudication lap, never a missing-order PASS. */
+  readonly allowAppliedByAbsence?: boolean;
+  /** The occurrence lap for any absence retirement performed in this mutation. */
+  readonly lapId?: string;
   /** Case identities known by the caller to belong to another feature/domain. */
   readonly foreignCaseIds?: readonly string[];
+  /** Proposals classified as `carry` by `classifyRemediationCaseReuse`. */
+  readonly carry?: {
+    readonly caseRefs: readonly string[];
+    readonly lapId: string;
+  };
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -59,12 +76,93 @@ export type ReconcileRemediationCasesResult =
   };
 
 /** Explicit durable bindings, never prose similarity or tree movement, decide reuse. */
-export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression';
+export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat' | 'halt-regression' | 'carry';
+
+export interface RemediationCaseCarryInput {
+  readonly currentLapId: string;
+  readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+}
+
+/** A durable operator decision carries only after its origin remains effective in a later lap. */
+export function isCarryEligibleRemediationCase(
+  record: RemediationCaseRecord,
+  { currentLapId, effectiveAcceptedSourceIds }: RemediationCaseCarryInput,
+): boolean {
+  if (record.operatorResolution) return true;
+  const origins = record.operatorAcceptance?.origins;
+  return record.resolution === 'resolved'
+    && origins !== undefined
+    && origins.length > 0
+    && origins.every((origin) => effectiveAcceptedSourceIds.has(origin.sourceId) && origin.lapId !== currentLapId);
+}
+
+/**
+ * The sole retirement decision for open build-review action cases.  Acceptance
+ * is authoritative even when an earlier effect failed; absence is evidence
+ * only on a mechanically healthy lap.  Callers own their writes, never a
+ * second interpretation of these conditions.
+ */
+export function retiresOpenBuildReviewCase(
+  record: RemediationCaseRecord,
+  input: {
+    readonly liveSourceIds: ReadonlySet<string>;
+    readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+    readonly mechanicallyHealthy: boolean;
+    readonly allowAppliedByAbsence?: boolean;
+    /** Allows benign absence to settle a referenced-free non-action row. */
+    readonly resolveAbsentOpenNonActionCases?: boolean;
+    /** The caller knows the current graph still explicitly names this case. */
+    readonly referenced?: boolean;
+  },
+): boolean {
+  if (record.resolution !== 'open') return false;
+  // Owner stops are a durable decision, never a benign-absence case. Other
+  // non-actions have no autonomous effect to retire, so absence may settle
+  // only the caller's explicit, mechanically-healthy non-action lane.
+  if (record.disposition !== 'act' || record.effect.kind !== 'action') {
+    return input.mechanicallyHealthy
+      && input.resolveAbsentOpenNonActionCases === true
+      && input.referenced !== true
+      && record.disposition !== 'escalate'
+      && (record.effect.kind === 'none' || record.effect.status === 'applied');
+  }
+  // Historical origins are attribution, not evergreen authority. An origin
+  // participates only while it remains effective in this lap.
+  const originSourceIds = new Set((record.operatorAcceptance?.origins ?? [])
+    .filter((origin) => input.effectiveAcceptedSourceIds.has(origin.sourceId))
+    .map((origin) => origin.sourceId));
+  const covered = record.sources.length > 0 && record.sources.every((source) =>
+    input.effectiveAcceptedSourceIds.has(source.sourceId) || originSourceIds.has(source.sourceId) || source.outcome === 'carried');
+  if (covered) return true;
+  const absent = input.mechanicallyHealthy &&
+    (record.effect.status === 'failed' || record.effect.status === 'reserved' ||
+      (record.effect.status === 'applied' && input.allowAppliedByAbsence === true)) &&
+    record.sources.every((source) => !input.liveSourceIds.has(source.sourceId));
+  return absent;
+}
+
+/** Apply the one durable representation of a build-review retirement. */
+export function retireOpenBuildReviewCase(record: RemediationCaseRecord): RemediationCaseRecord {
+  if (record.effect.kind !== 'none' && record.effect.status === 'reserved') {
+    return {
+      ...record,
+      resolution: 'resolved',
+      effect: {
+        ...record.effect,
+        status: 'failed',
+        diagnostic: 'retired: every source operator-accepted or no longer raised',
+      },
+    };
+  }
+  return { ...record, resolution: 'resolved' };
+}
 
 export function classifyRemediationCaseReuse(
   record: RemediationCaseRecord,
   attemptedCaseIds: ReadonlySet<string>,
+  carryInput?: RemediationCaseCarryInput,
 ): RemediationCaseReuseDisposition {
+  if (carryInput && isCarryEligibleRemediationCase(record, carryInput)) return 'carry';
   if (record.disposition !== 'act') return 'reuse';
   if (record.resolution === 'resolved') return 'halt-regression';
   return attemptedCaseIds.has(record.id) ? 'halt-repeat' : 'resume';
@@ -142,6 +240,7 @@ function reconcileState(
 ): Reconciliation {
   const foreignIds = new Set(input.foreignCaseIds ?? []);
   const attemptedIds = new Set(input.attemptedCaseIds ?? []);
+  const carriedCaseRefs = new Set(input.carry?.caseRefs ?? []);
   const existingById = new Map(state.cases.map((record) => [record.id, record]));
   const usedIds = new Set<string>();
   for (const record of state.cases) {
@@ -152,6 +251,7 @@ function reconcileState(
   const referencedExisting = new Set<string>();
   const replacements = new Map<string, RemediationCaseRecord>();
   const additions: RemediationCaseRecord[] = [];
+  const outbox: RemediationCaseOutboxEntry[] = [];
   const caseIdsByRef = new Map<string, string>();
   const claimed = new Set<string>();
 
@@ -200,32 +300,41 @@ function reconcileState(
     if (!existing) return { ok: false, reason: 'unknown-case-binding' };
     if (existing.domain !== 'build_review') return { ok: false, reason: 'foreign-case-binding' };
     if (referencedExisting.has(existingCaseId)) return { ok: false, reason: 'duplicate-case-binding' };
-    const admitsRefutation = caseRow.disposition === 'refute'
-      && existing.disposition === 'act'
-      && existing.resolution === 'open'
-      && attemptedIds.has(existing.id)
-      && existing.effect.kind === 'action'
-      && existing.effect.status === 'applied';
-    // An applied action whose finding comes back may be conclusively deferred:
-    // the repair was tried, and the judge has found the remaining fix outside
-    // the approved plan. Without this lane the only transitions off an applied
-    // action are refutation or another action, and a legitimate follow-up
-    // halted the feature as an illegal transition.
-    const admitsDeferral = caseRow.disposition === 'defer'
-      && existing.disposition === 'act'
-      && existing.effect.kind === 'action'
-      && existing.effect.status === 'applied';
-    // A failed action effect is terminal (for example charged past the
-    // kickback budget), so no lap can apply it and the open case halted every
-    // lap. Re-raising its finding as action reserves a fresh effect, which is
-    // charged like any new action, so an exhausted budget still stops the lap.
-    const admitsActionRetry = caseRow.disposition === 'act'
-      && existing.disposition === 'act'
-      && existing.resolution === 'open'
-      && existing.effect.kind === 'action'
-      && existing.effect.status === 'failed';
-    if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
-    if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
+    // Carry is a complete lane, not an exception on every autonomous lane.
+    // Decide it first so a carried refutation never consults its historical
+    // refutation and a carried deferral never reserves a new effect.
+    const admitsCarry = carriedCaseRefs.has(caseRow.caseRef);
+    let admitsRefutation = false;
+    let admitsDeferral = false;
+    let admitsActionRetry = false;
+    if (!admitsCarry) {
+      admitsRefutation = caseRow.disposition === 'refute'
+        && existing.disposition === 'act'
+        && existing.resolution === 'open'
+        && attemptedIds.has(existing.id)
+        && existing.effect.kind === 'action'
+        && existing.effect.status === 'applied';
+      // An applied action whose finding comes back may be conclusively deferred:
+      // the repair was tried, and the judge has found the remaining fix outside
+      // the approved plan. Without this lane the only transitions off an applied
+      // action are refutation or another action, and a legitimate follow-up
+      // halted the feature as an illegal transition.
+      admitsDeferral = caseRow.disposition === 'defer'
+        && existing.disposition === 'act'
+        && existing.effect.kind === 'action'
+        && existing.effect.status === 'applied';
+      // A failed action effect is terminal (for example charged past the
+      // kickback budget), so no lap can apply it and the open case halted every
+      // lap. Re-raising its finding as action reserves a fresh effect, which is
+      // charged like any new action, so an exhausted budget still stops the lap.
+      admitsActionRetry = caseRow.disposition === 'act'
+        && existing.disposition === 'act'
+        && existing.resolution === 'open'
+        && existing.effect.kind === 'action'
+        && existing.effect.status === 'failed';
+      if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
+      if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
+    }
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);
     caseIdsByRef.set(caseRow.caseRef, existingCaseId);
@@ -234,6 +343,30 @@ function reconcileState(
     for (const source of sources) {
       const historical = existing.sources.find((link) => link.sourceId === source.sourceId);
       if (historical) {
+        if (admitsCarry) {
+          // A built-in finding commonly re-raises under its original source
+          // id. Its old acted link is the authoritative current link, so carry
+          // must upgrade it (and record the occurrence) rather than treating
+          // it as a replay of an already-carried source.
+          if (historical.outcome === 'carried') continue;
+          const eventId = takeId(input.generateId, usedIds);
+          if (eventId === 'id-generation-failed' || eventId === 'id-collision') return { ok: false, reason: eventId };
+          const origins = existing.operatorAcceptance?.origins ?? [];
+          outbox.push({
+            eventId,
+            occurredAt: input.recordedAt,
+            event: {
+              type: 'build_review_acceptance_carried', eventId, feature: state.feature.feature,
+              lapId: input.carry!.lapId, sourceId: source.sourceId, caseId: existing.id,
+              originSourceIds: origins.map((origin) => origin.sourceId),
+              originLapIds: origins.map((origin) => origin.lapId),
+            },
+          });
+          appendedSources = appendedSources.map((link) => link.sourceId === source.sourceId
+            ? { ...link, outcome: 'carried', recordedAt: input.recordedAt }
+            : link);
+          continue;
+        }
         // An applied action may be conclusively refuted on a later attempted
         // lap. Preserve the source identity while changing its durable
         // outcome; adding a second link would violate the store's unique
@@ -248,9 +381,28 @@ function reconcileState(
         if (historical.outcome !== source.outcome) return { ok: false, reason: 'illegal-source-link' };
         continue;
       }
-      appendedSources.push({ sourceId: source.sourceId, outcome: source.outcome, recordedAt: input.recordedAt });
+      if (admitsCarry) {
+        const eventId = takeId(input.generateId, usedIds);
+        if (eventId === 'id-generation-failed' || eventId === 'id-collision') return { ok: false, reason: eventId };
+        const origins = existing.operatorAcceptance?.origins ?? [];
+        outbox.push({
+          eventId,
+          occurredAt: input.recordedAt,
+          event: {
+            type: 'build_review_acceptance_carried', eventId, feature: state.feature.feature,
+            lapId: input.carry!.lapId, sourceId: source.sourceId, caseId: existing.id,
+            originSourceIds: origins.map((origin) => origin.sourceId),
+            originLapIds: origins.map((origin) => origin.lapId),
+          },
+        });
+      }
+      appendedSources.push({ sourceId: source.sourceId, outcome: admitsCarry ? 'carried' : source.outcome, recordedAt: input.recordedAt });
     }
-    if (admitsRefutation) {
+    if (admitsCarry) {
+      if (appendedSources.some((source, index) => source !== existing.sources[index])) {
+        replacements.set(existingCaseId, { ...existing, sources: appendedSources });
+      }
+    } else if (admitsRefutation) {
       const effectId = caseRow.effect.kind === 'deferral' ? takeId(input.generateId, usedIds) : undefined;
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
       replacements.set(existingCaseId, {
@@ -315,40 +467,46 @@ function reconcileState(
   const resolvedAbsentCaseIds: string[] = [];
   const cases = state.cases.map((record) => {
     const replacement = replacements.get(record.id) ?? record;
-    if (
-      replacement.resolution === 'open'
-      && replacement.disposition === 'act'
-      && replacement.effect.kind === 'action'
-      && !referencedExisting.has(replacement.id)
-      && attemptedIds.has(replacement.id)
-      // Same shared effect-status test as the non-action branch below: an
-      // attempted case whose effect is still reserved or durably failed is
-      // unfinished evidence, and attempt membership alone must not resolve it.
-      && !hasReservedOrFailedRemediationEffect(replacement)
-    ) {
+    const referenced = referencedExisting.has(replacement.id);
+    const retires = !referenced && retiresOpenBuildReviewCase(replacement, {
+      liveSourceIds: input.liveSourceIds ?? new Set(input.graph.sourceOutcomes.map((source) => source.sourceId)),
+      effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds ?? new Set(),
+      mechanicallyHealthy: input.mechanicallyHealthy === true,
+      allowAppliedByAbsence: input.allowAppliedByAbsence,
+      resolveAbsentOpenNonActionCases: input.resolveAbsentOpenNonActionCases,
+      referenced,
+    });
+    if (retires && (attemptedIds.has(replacement.id) || replacement.disposition !== 'act')) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);
-      return { ...replacement, resolution: 'resolved' as const };
-    }
-    if (
-      replacement.resolution === 'open'
-      && replacement.disposition !== 'act'
-      && !referencedExisting.has(replacement.id)
-      && input.resolveAbsentOpenNonActionCases
-      // Shared effect-status test (remediation-case-effects.ts): a reserved or
-      // failed effect is durable unfinished evidence, never benign absence, so
-      // it must not resolve into a terminal PASS.
-      && !hasReservedOrFailedRemediationEffect(replacement)
-    ) {
-      changed = true;
-      resolvedAbsentCaseIds.push(replacement.id);
-      return { ...replacement, resolution: 'resolved' as const };
+      if (input.lapId) {
+        const eventId = randomUUID();
+        outbox.push({ eventId, occurredAt: input.recordedAt, event: {
+          type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.lapId,
+          caseId: replacement.id, resolution: 'resolved',
+        } });
+      }
+      return retireOpenBuildReviewCase(replacement);
     }
     return replacement;
   });
+  for (const record of cases) {
+    const before = existingById.get(record.id);
+    if (!input.lapId || before?.resolution !== 'open' || record.resolution !== 'resolved' || resolvedAbsentCaseIds.includes(record.id)) continue;
+    const eventId = randomUUID();
+    outbox.push({ eventId, occurredAt: input.recordedAt, event: {
+      type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.lapId,
+      caseId: record.id, resolution: 'resolved',
+    } });
+  }
   return {
     ok: true,
-    state: { ...state, cases: [...cases, ...additions] },
+    state: outbox.length > 0
+      ? (() => {
+          const upgraded = appendRemediationCaseOutbox(state, outbox[0]!);
+          return { ...upgraded, cases: [...cases, ...additions], outbox: [...upgraded.outbox, ...outbox.slice(1)] };
+        })()
+      : { ...state, cases: [...cases, ...additions] },
     changed,
     caseIdsByRef,
     resolvedAbsentCaseIds,

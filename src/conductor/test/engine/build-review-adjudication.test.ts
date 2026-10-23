@@ -1,10 +1,11 @@
-// Covers: task:7, task:8, task:31, task:rem-prd-audit-8, task:rem-prd-audit-8-2, task:rem-prd-audit-8-3
+// Covers: task:3, task:7, task:8, task:31, task:rem-prd-audit-8, task:rem-prd-audit-8-2, task:rem-prd-audit-8-3
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { formatBuildReviewResolveCaseCommand, reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { detectBuildReviewResolveCaseCommand } from '../../src/cli.js';
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
@@ -51,6 +52,8 @@ const refute = (status: 'none' | 'reserved' | 'failed' = 'none'): RemediationCas
 
 const reducerInput = (overrides: Partial<Parameters<typeof reduceBuildReviewAdjudication>[0]> = {}) => ({
   currentSourceIds: ['finding-1'],
+  feature: 'adjudication-test',
+  child: undefined,
   cases: [reject()],
   mechanical: 'healthy' as const,
   ...overrides,
@@ -108,6 +111,7 @@ describe('reduceBuildReviewAdjudication', () => {
     const securitySourceId = 'security:sha256:injection';
     const result = reduceBuildReviewAdjudication({
       currentSourceIds: [securitySourceId],
+      feature: 'adjudication-test', child: undefined,
       cases: [{ ...action(), sources: [{ sourceId: securitySourceId, outcome: 'acted', recordedAt: '2026-09-15T00:00:00.000Z' }] }],
       mechanical: 'healthy',
     });
@@ -190,7 +194,7 @@ describe('reduceBuildReviewAdjudication', () => {
   ] as const)('never turns an unadmitted implementation-quality %s act into a plan route', (kind) => {
     const sourceId = `implementationQuality:${kind}`;
     const result = reduceBuildReviewAdjudication({
-      currentSourceIds: [sourceId], mechanical: 'healthy',
+      currentSourceIds: [sourceId], feature: 'adjudication-test', child: undefined, mechanical: 'healthy',
       cases: [{ ...reject(), sources: [{ sourceId, outcome: 'rejected', recordedAt: '2026-10-10T00:00:00.000Z' }] }],
     });
 
@@ -213,7 +217,7 @@ describe('reduceBuildReviewAdjudication', () => {
     ] as const;
 
     for (const { label, record, route } of cases) {
-      const result = reduceBuildReviewAdjudication({ currentSourceIds: [sourceId], cases: [record], mechanical: 'healthy' });
+      const result = reduceBuildReviewAdjudication({ currentSourceIds: [sourceId], feature: 'adjudication-test', child: undefined, cases: [record], mechanical: 'healthy' });
       expect(result, `${kind}/${label}`).toMatchObject({ route });
       expect(result).not.toHaveProperty('plan');
       expect(result).not.toHaveProperty('appendedTask');
@@ -228,11 +232,60 @@ describe('reduceBuildReviewAdjudication', () => {
       .toMatchObject({ route, reason });
   });
 
-  it('halts rather than passing when current source coverage is incomplete or contradictory', () => {
+  it('halts rather than passing when current source coverage is incomplete or duplicated', () => {
     expect(reduceBuildReviewAdjudication(reducerInput({ currentSourceIds: ['finding-1', 'finding-2'] })).route).toBe('halt');
     expect(reduceBuildReviewAdjudication(reducerInput({
-      cases: [reject(), { ...reject(), id: 'case-conflict', sources: [{ ...reject().sources[0], outcome: 'merged' }] }],
+      currentSourceIds: ['finding-1', 'finding-1'],
     })).route).toBe('halt');
+  });
+
+  it('reads a shared source through its open escalation rather than contradicting resolved history', () => {
+    const sourceId = 'security:shared';
+    const resolvedR: RemediationCaseRecord = {
+      ...action(), id: 'case-resolved-r', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+    };
+    const openEscalation: RemediationCaseRecord = {
+      ...decisionStop('architecture'), id: 'case-open-escalation',
+      sources: [{ sourceId, outcome: 'escalate', recordedAt: '2026-10-19T00:00:00.000Z' }],
+    };
+
+    expect(reduceBuildReviewAdjudication({ currentSourceIds: [sourceId], feature: 'adjudication-test', child: undefined, cases: [resolvedR, openEscalation], mechanical: 'healthy' }))
+      .toMatchObject({ route: 'halt', reason: 'architecture decision is required for current remediation sources' });
+  });
+
+  it('routes an open action rather than its resolved shared-source history to BUILD', () => {
+    const sourceId = 'security:shared';
+    const resolvedR: RemediationCaseRecord = {
+      ...action(), id: 'case-resolved-r', resolution: 'resolved',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-18T00:00:00.000Z' }],
+    };
+    const openAction: RemediationCaseRecord = {
+      ...action(), id: 'case-open-n',
+      sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-19T00:00:00.000Z' }],
+    };
+
+    expect(reduceBuildReviewAdjudication({ currentSourceIds: [sourceId], feature: 'adjudication-test', child: undefined, cases: [resolvedR, openAction], mechanical: 'healthy' }))
+      .toMatchObject({ route: 'build', reason: 'applied action effect' });
+  });
+
+  it('preserves the former coverage result when sources are not shared', () => {
+    const sourceIds = ['security:a', 'testQuality:b'];
+    const cases: RemediationCaseRecord[] = [
+      { ...reject(), sources: [{ sourceId: sourceIds[0]!, outcome: 'rejected', recordedAt: '2026-10-18T00:00:00.000Z' }] },
+      { ...reject(), id: 'case-b', sources: [{ sourceId: sourceIds[1]!, outcome: 'rejected', recordedAt: '2026-10-19T00:00:00.000Z' }] },
+    ];
+    const formerAnyLinkCoverage = sourceIds.every((sourceId) => cases.some((record) =>
+      record.sources.some((source) => source.sourceId === sourceId)));
+
+    expect(formerAnyLinkCoverage).toBe(true);
+    expect(reduceBuildReviewAdjudication({ currentSourceIds: sourceIds, feature: 'adjudication-test', child: undefined, cases, mechanical: 'healthy' }))
+      .toMatchObject({ route: 'pass' });
+  });
+
+  it('keeps a current source with no link as a coverage halt', () => {
+    expect(reduceBuildReviewAdjudication(reducerInput({ currentSourceIds: ['security:missing'], cases: [] })))
+      .toMatchObject({ route: 'halt', reason: 'current remediation source coverage is incomplete or contradictory' });
   });
 
   it('routes an applied action that BUILD never attempted to BUILD even when it covers no current source', () => {
@@ -248,9 +301,34 @@ describe('reduceBuildReviewAdjudication', () => {
     }))).toMatchObject({ route: 'build', reason: 'applied action effect awaits its BUILD attempt' });
   });
 
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17c
   it.each(['reserved', 'failed'] as const)('halts when a refutation deferral is %s', (status) => {
     expect(reduceBuildReviewAdjudication(reducerInput({ cases: [refute(status)] })))
       .toMatchObject({ route: 'halt', reason: 'remediation effect is not finalized' });
+  });
+
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17c
+  it.each([
+    { feature: 'operator-acceptance', child: undefined, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action --rationale "<why>"' },
+    { feature: 'operator-acceptance', child: 2 as never, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --child 2 --case case-action --rationale "<why>"' },
+  ])('names the failed action case and its scoped operator-resolution command', ({ feature, child, command }) => {
+    expect(reduceBuildReviewAdjudication(reducerInput({
+      feature, child, cases: [action('failed')],
+    }))).toMatchObject({
+      route: 'halt',
+      reason: expect.stringContaining(command),
+    });
+  });
+
+  it('renders a child-scoped recovery command the CLI recognizes', () => {
+    const command = formatBuildReviewResolveCaseCommand({ feature: 'operator-acceptance', child: 2, caseId: 'case-action' });
+    const parsed = detectBuildReviewResolveCaseCommand([
+      'node', 'ai-conductor', ...command.split(' ').slice(1).map((part) => part.replaceAll('"', '')),
+    ]);
+
+    expect(parsed).toEqual({
+      kind: 'resolve-case', feature: 'operator-acceptance', child: '2', caseId: 'case-action', rationale: '<why>',
+    });
   });
 
   it.each(['product', 'plan', 'architecture'] as const)(
@@ -352,7 +430,7 @@ describe('reduceBuildReviewAdjudication', () => {
     });
   });
 
-  it('still refuses a conflicting stop that reuses an open case id', async () => {
+  it('converges a rationale-only replay of an open decision stop', async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'build-review-open-conflict-'));
     const feature = { version: 'v1', repository: 'acme/repo', feature: 'open-conflict' } as const;
     const stop = decisionStop('architecture');
@@ -360,6 +438,17 @@ describe('reduceBuildReviewAdjudication', () => {
 
     await expect(persistBuildReviewDecisionStop({
       store: new RemediationCaseStore(projectRoot, feature), record: { ...stop, rationale: 'changed' },
+    })).resolves.toEqual({ ok: true, status: 'already-persisted', caseId: stop.id });
+  });
+
+  it('still refuses a conflicting owner for an open decision-stop case id', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-review-open-owner-conflict-'));
+    const feature = { version: 'v1', repository: 'acme/repo', feature: 'open-owner-conflict' } as const;
+    const stop = decisionStop('architecture');
+    await persistBuildReviewDecisionStop({ store: new RemediationCaseStore(projectRoot, feature), record: stop });
+
+    await expect(persistBuildReviewDecisionStop({
+      store: new RemediationCaseStore(projectRoot, feature), record: { ...stop, escalation: { owner: 'plan' } },
     })).resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
   });
 
@@ -381,7 +470,7 @@ describe('reduceBuildReviewAdjudication', () => {
     expect(persisted).toMatchObject({ ok: true, state: { cases: [stop] } });
     if (!persisted.ok) return;
     expect(reduceBuildReviewAdjudication({
-      currentSourceIds: ['finding-1'], cases: persisted.state.cases, mechanical: 'healthy',
+      currentSourceIds: ['finding-1'], feature: 'adjudication-test', child: undefined, cases: persisted.state.cases, mechanical: 'healthy',
     })).toMatchObject({
       route: 'halt',
       reason: 'build-review adjudication consistency is blocked for finding-1: The proposed cases contradict one another.',

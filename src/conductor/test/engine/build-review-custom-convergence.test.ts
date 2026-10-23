@@ -140,7 +140,7 @@ describe('custom build-review convergence', () => {
       buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md', manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Policy\n') }], metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256-v1:${'a'.repeat(64)}` }),
       probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'unavailable' as const, reason: 'fixture unavailable' }),
       buildReviewEffectiveResolver: async (root, aggregate) => useStoredDisposition
-        ? resolveEffectiveBuildReviewVerdict(root, aggregate, { resolveMainRoot: async () => main, realpath: async (path) => path })
+        ? resolveEffectiveBuildReviewVerdict(root, aggregate, { resolveMainRoot: async () => main, realpath: async (path) => path, child: undefined, adjudicationEnabled: true })
         : ({ ok: true, feature: { version: 'v1', repository: main, feature: slug }, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } } as never),
     });
     const source = { identity: { snapshotDigest: 'sha256:roundtrip', contentDigest: 'sha256:roundtrip-content', mergeBase: 'base', headSha: 'head' }, baselinePath: join(projectRoot, 'baseline'), headPath: join(projectRoot, 'head') };
@@ -211,7 +211,7 @@ describe('custom build-review convergence', () => {
     if (!reconciled.ok) return;
 
     const transition = reduceBuildReviewAdjudication({
-      currentSourceIds: [sourceId], cases: reconciled.state.cases, mechanical: 'retry',
+      currentSourceIds: [sourceId], feature: 'custom-convergence', child: undefined, cases: reconciled.state.cases, mechanical: 'retry',
     });
 
     expect({ record: reconciled.state.cases[0], transition }).toMatchObject({

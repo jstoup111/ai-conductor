@@ -1,4 +1,4 @@
-// Covers: task:4, task:3, task:1
+// Covers: task:4, task:3, task:1, task:2
 // Covers: task:7
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
@@ -215,6 +215,73 @@ describe('EventPersister', () => {
     const restarted = new EventPersister(eventsPath, new ConductorEventEmitter());
     await expect(restarted.persistDurably(event)).resolves.toBe('duplicate');
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('deduplicates replayed stack member lifecycle events by eventId', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'stack_member_lifecycle',
+      child: ROUTING_CHILD,
+      pr: 101,
+      state: 'merged',
+      eventId: 'stack-member-101-merged',
+    } as ConductorEvent;
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      type: 'build_review_acceptance_carried',
+      eventId: 'acceptance-carried-1',
+      feature: 'feature-a',
+      lapId: 'lap-2',
+      sourceId: 'finding-2',
+      caseId: 'case-1',
+      originSourceIds: ['finding-1'],
+      originLapIds: ['lap-1'],
+    },
+    {
+      type: 'remediation_case_operator_resolved',
+      eventId: 'operator-resolved-1',
+      feature: 'feature-a',
+      caseId: 'case-1',
+      sourceIds: ['finding-1', 'finding-2'],
+    },
+    {
+      type: 'remediation_case_reconciled',
+      eventId: 'retired-1',
+      domain: 'build_review',
+      lapId: 'lap-2',
+      caseId: 'case-1',
+      resolution: 'resolved',
+    },
+  ] satisfies ConductorEvent[])('deduplicates replayed $type occurrences by eventId', async (event) => {
+    const persister = new EventPersister(eventsPath, emitter);
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  it('continues to persist reconciliation occurrences without an eventId', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'remediation_case_reconciled',
+      domain: 'build_review',
+      lapId: 'lap-2',
+      caseId: 'case-1',
+      resolution: 'resolved',
+    } satisfies ConductorEvent;
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
   });
 
   it('uses a routing event occurrence time rather than its later persistence time', async () => {

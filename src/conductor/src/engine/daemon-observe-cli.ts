@@ -12,14 +12,16 @@
 // re-encode the pidfile path or write anything.
 
 import { open, readFile, stat } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
 import { tailDaemonLog, followDaemonLog, daemonLogPath } from './daemon-log.js';
 import { hasSession, isPaneDead, sessionNameForRepo } from './daemon-tmux.js';
 import { isPaused, readPauseMetadata } from './pause-marker.js';
 import { readRestartPending, type RestartIntent } from './restart-marker.js';
-import { isEngineVersionId } from './engine-store.js';
+import { currentTarget, isEngineVersionId } from './engine-store.js';
+import { listExecutorRecords } from './executor-records.js';
 import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock } from './gated-snapshot.js';
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
@@ -31,7 +33,7 @@ import {
   isUnreadableKickbackLedger,
   readKickbackLedger,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, withPendingGrowth } from './kickback-budget-view.js';
 import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
@@ -51,6 +53,13 @@ import type { HarnessConfig } from '../types/config.js';
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
 const VERSION_UNKNOWN = 'version-unknown';
+const OWN_ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
+
+function installedConductorRoot(): string {
+  return basename(dirname(dirname(OWN_ENGINE_DIR))) === 'dist-versions'
+    ? dirname(dirname(dirname(OWN_ENGINE_DIR)))
+    : dirname(dirname(OWN_ENGINE_DIR));
+}
 /** Chunk size for reverse event-log scans.  Capability events are emitted at
  * startup and can be much older than ordinary daemon telemetry. */
 const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
@@ -749,9 +758,22 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
         .map(([gate, count]) => `${gate}: ${count}`)
         .join(', ');
       const added = `added ${growth.added}${byGate ? ` (${byGate})` : ''}`;
+      // The shared view is the sole pending-growth projection: status only
+      // decides its compact presentation. An unresolved plan has no reliable
+      // cap, so intentionally withhold its projection rather than inventing
+      // one from an otherwise-raised ledger cap.
+      const view = withPendingGrowth(
+        { ...growth, cap: authoredSource === 'unresolved' ? null : cap, capSource, authoredSource },
+        ledger.pendingRepair,
+      );
+      const pending = view.pendingGrowth;
+      const pendingSummary = pending === undefined
+        ? ''
+        : `; pending ${pending.total} (${Object.entries(pending.byGate).map(([gate, amount]) => `${gate} ${amount}`).join(', ')})` +
+          (pending.minimumRaise === undefined ? '' : `, minimum raise ${pending.minimumRaise}`);
       const summary = authoredSource === 'unresolved'
-        ? `plan unresolved; ${added}${capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : ''}`
-        : `authored ${growth.authored}; ${added}; remaining ${growth.remaining}/${cap}`;
+        ? `plan unresolved; ${added}${pendingSummary || (capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : '')}`
+        : `authored ${growth.authored}; ${added}; remaining ${view.remaining}/${cap}${pendingSummary}`;
       out(`  PLAN GROWTH [${feature.slug}${childStatus}]: ${summary}`);
     } catch (error) {
       out(
@@ -823,6 +845,43 @@ export async function renderInFlightSection(
   }
 }
 
+/** Render child executor pins from their durable supervisor-owned records. */
+export async function renderExecutorVersionsSection(repoPath: string, out: (line: string) => void): Promise<void> {
+  // Status observes the installed engine which is actually running, not a
+  // source tree which consumer repositories do not possess.
+  const current = await currentTarget(installedConductorRoot()).catch(() => undefined);
+  const supervisor = await readPidRecord(repoPath).catch(() => null);
+  const entries = await listExecutorRecords(repoPath).catch(() => []);
+  const dispatches = await readFile(join(repoPath, '.daemon', 'events.jsonl'), 'utf8')
+    .then((content) => content.split('\n').flatMap((line) => {
+      try {
+        const event = JSON.parse(line) as { type?: unknown; slug?: unknown; engineVersionId?: unknown };
+        return event.type === 'feature_dispatch_started' && typeof event.slug === 'string'
+          ? [{ slug: event.slug, version: typeof event.engineVersionId === 'string' ? event.engineVersionId : 'unknown' }]
+          : [];
+      } catch { return []; }
+    }))
+    .catch(() => [] as Array<{ slug: string; version: string }>);
+  if (entries.length === 0 && !supervisor && dispatches.length === 0) return;
+  out(`  EXECUTOR ENGINE CURRENT: ${current ?? 'unknown'}`);
+  if (supervisor) {
+    const version = versionIdFromEngineDir(supervisor.engineDir);
+    const older = current !== undefined && version !== VERSION_UNKNOWN && version !== current ? ' (older than current)' : '';
+    out(`  SUPERVISOR ENGINE: ${version}${older}`);
+  }
+  for (const entry of entries) {
+    if (entry.kind === 'unreadable') {
+      out(`  EXECUTOR [${entry.slug}]: version unknown — record unreadable`);
+      continue;
+    }
+    const older = current !== undefined && entry.record.engineVersionId !== current ? ' (older than current)' : '';
+    out(`  EXECUTOR [${entry.slug}]: ${entry.record.engineVersionId}${older}`);
+  }
+  // Legacy dispatch records predate engineVersionId. Render their absence as
+  // an explicit unknown instead of silently pretending they were current.
+  for (const dispatch of dispatches) out(`  DISPATCH [${dispatch.slug}]: engine ${dispatch.version}`);
+}
+
 /**
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
@@ -875,6 +934,7 @@ export async function runDaemonStatus(
       if (row.liveness === 'running') {
         await renderRootRefreshSection(record.path, out);
         await renderInFlightSection(record.path, out, clock);
+        await renderExecutorVersionsSection(record.path, out);
       }
       await renderPlanGrowthSection(record.path, out);
     }

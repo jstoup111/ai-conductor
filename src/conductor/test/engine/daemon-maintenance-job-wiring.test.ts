@@ -1,4 +1,4 @@
-// Covers: task:4, task:7, task:9, task:11
+// Covers: task:4, task:7, task:9, task:11, task:29
 import { describe, expect, it, vi } from 'vitest';
 
 import { runDaemon, type BacklogItem, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
@@ -254,7 +254,9 @@ describe('daemon maintenance job wiring', () => {
 
     await runDaemon(depsFor(calls, [], {
       staleEngineChecker: {
-        check: () => ++staleChecks === 1 ? 'stale' : 'current',
+        // The idle boundary first records the stale observation, then asks
+        // restartStaleSupervisor to re-verify it before requesting restart.
+        check: () => ++staleChecks <= 2 ? 'stale' : 'current',
         targetIdentity: () => 'target',
         capturedIdentity: () => 'captured',
       },

@@ -195,6 +195,14 @@
 # Allowed: an integer >= 1; zero, negative, fractional, or non-numeric values fail the load.
 # Default: 1 (serial).
 # Changing it: anything above 1 shares one repository between builds, so expect more rebase kickbacks and provider spend that scales with the width; a daemon --concurrency flag overrides it.
+# Controls: executor_isolation — whether each daemon feature runs in a separate child process or in the supervisor process.
+# Allowed: child or in-process; any other value fails the load.
+# Default: child.
+# Changing it: child adopts the engine build current at each claim; in-process is the rollback mode and keeps the supervisor's boot build for every feature.
+# Controls: supervisor_max_stale_hours — how long a stale self-host supervisor may keep claiming before it drains and restarts.
+# Allowed: a finite number of hours greater than 0; invalid values warn and resolve to the default.
+# Default: 24.
+# Changing it: a smaller value reaches a fresh supervisor sooner but can stop claims more often; it applies only when stale-engine restart is active.
 # Controls: daemon_heap_limit_mb — the V8 old-space heap cap in megabytes for the continuous daemon.
 # Allowed: an integer >= 256.
 # Default: 4096.

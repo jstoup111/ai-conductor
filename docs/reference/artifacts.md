@@ -93,6 +93,23 @@ tried to `daemon.log`, once per slug, before the daemon applies its default — 
 the log rather than hours later as gate behavior. The relaxed stem is a lookup key only; it never keys
 state, and no other artifact gets it.
 
+### Retention
+
+`DOCS_RETENTION_POLICY` (`src/conductor/src/engine/docs-retention.ts`) is the single definition of
+which per-feature entries [`ai-conductor docs-prune`](cli.md#ai-conductor-docs-prune) may delete once a
+feature has a committed `shipped/` record.
+
+| Class | Entries |
+| --- | --- |
+| Prunable | `plans/`, `conflicts/`, `coherence/`, `coherence-waivers/`, `track/`, `complexity/`, `halted/`, `plan-review/`, `applicability/`, `retros/` |
+| Kept | `stories/`, `specs/`, `decisions/`, `architecture/`, `shipped/`, `intake/`, `release-waivers/` |
+| Never touched (repository-wide) | `audit/`, `audits/`, `baselines/`, `observation/`, top-level `.docs/*.md` |
+
+A file matches a stem by exact plan-stem identity. Every prunable entry except `plans/` also matches the
+date-stripped stem (so `2026-10-01-alpha` claims `conflicts/alpha.md` and
+`retros/2026-10-02-alpha.md`), unless more than one plan shares that undated base. `alpha` never claims
+`alpha-two` files.
+
 ### Waiver grammar
 
 Both waiver kinds share one two-line idiom:
@@ -536,7 +553,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
 | `remediation.json` | Post-join `build_review` adjudication output only, in the strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. Gap plans use `remediation-plan.json`. Its source outcomes include `refuted`; a `refute` case binds an existing attempted action case, has high confidence, and carries a claim plus assertion verdicts with path/excerpt evidence. | `remediate` skill |
 | `remediation-plan.json` | Gap-plan authority: `{ version: 'v1', attemptId, source, requiredReferenceDigest, dispositions[] }`. The engine checks the planner's native structured result against its bounded input projection, then writes it. Each disposition answers one `reference` with `disposition`, `targetStep`, a halt `category` or `null`, `rationale`, new `tasks[]`, and active-plan `boundTaskIds[]`. Every projected PRD criterion, as-built finding, and refusal must be answered exactly once. `source` is `validation-group`, `prd-audit`, `as-built`, `build-stall`, or `finish-verification`. A plan from another attempt reads as absent, and a malformed envelope reads as invalid. Written atomically. | engine (`remediate` step) |
-| `remediation-cases.json` | Version 2 feature-local case state. It retains the version-one `build_review` cases, effects, and suppressions, and adds a distinct `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
+| `remediation-cases.json` | Version 3 feature-local case state; versions 1 and 2 remain readable and upgrade to version 3 on the first write that queues an event. It retains the version-one `build_review` cases, effects, and suppressions, and the version-two `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. Version 3 adds engine-written operator state: a case's `operatorAcceptance.origins` (each `{ sourceId, lapId }` where an exact operator acceptance was first recorded on that case), a case's `operatorResolution` (`operator`, `rationale`, `resolvedAt`, written only by `build-review resolve-case`), the source outcome `carried`, and an `outbox` of `{ eventId, occurredAt, event }` entries written in the same mutation as the state change and drained onto `.pipeline/events.jsonl` once per `eventId`. A child BUILD keeps its own case store, selected with `--child`. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
@@ -588,6 +605,7 @@ To clear a halt safely, use the procedure in
 | `pipeline-events.jsonl` | Externally written `build_review` disposition and kickback-budget authorization events | Separate ledger — see below |
 | `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`, `land_dependency_decided`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
+| `transcripts/<step>/<runId>-a<attempt>[-<member>]-<provider>/` | Sanitized, allowlisted provider session transcripts captured before a self-host provider home is removed | Self-host only. Pruned after a step completes with progress; otherwise retained, capped at 20 captures / 1 GiB per worktree. Read with [`ai-conductor transcripts`](cli.md#ai-conductor-transcripts); see [provider transcripts](../guides/self-hosting.md#provider-transcripts) |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
 | `conduct.log` | Session narrative | Written only by the legacy bash CLI; `ai-conductor` never writes it. Read by `rate-limit-wait.sh` |
 | `progress.log` | Batch-boundary narrative | Appended by the `pipeline` skill |
@@ -601,7 +619,7 @@ To clear a halt safely, use the procedure in
 
 ## `.daemon/`
 
-Daemon-scoped state at the main checkout root. Gitignored. Sixteen paths.
+Daemon-scoped state at the main checkout root. Gitignored. Seventeen paths.
 
 | Path | Contents | Notes |
 | --- | --- | --- |
@@ -613,6 +631,7 @@ Daemon-scoped state at the main checkout root. Gitignored. Sixteen paths.
 | `daemon.log` | The active daemon log | Rotated at open time when it exceeds 1 MB |
 | `daemon.log.1` | The rotated log | Overwritten by each rotation |
 | `daemon.pid` | pid, uuid, engine dir | `O_EXCL` pidfile. Fleet-wide GC cross-checks every pidfile; any read error other than "not found" aborts GC with zero deletions |
+| `executors/<slug>.json` | `{ pid, engineDir, engineVersionId, startedAt }` | Written atomically when a [child executor](configuration.md#executor_isolation) is forked and removed when it exits. Engine-store GC keeps every referenced version and aborts on an unreadable record. At boot a successor removes dead or non-executor records, terminates a live predecessor executor (SIGTERM, then SIGKILL), and fails boot if it survives |
 | `gated.json` | Owner-gate snapshot | — |
 | `last-base-sha` | Fast-forward tracking | — |
 | `mergeable-watch.jsonl` | Append-only mergeable sweep ledger | — |
@@ -651,7 +670,8 @@ On a halt or error the daemon **deliberately leaves the worktree in place** for 
 legacy interactive cleanup path also deletes the branch.
 
 A stacked feature's child branch is `feat/c<k>/<slug>`, with `<k>` from 1 to 9 and a single-segment
-slug. The build loop creates each child branch at its region entry and never pushes it; see
+slug. The build loop creates each child branch at its region entry; only FINISH pushes it, as a
+[stacked publication](configuration.md#stacked-publication) member. See
 [child-by-child build](configuration.md#child-by-child-build). Closure and sealed positions live
 outside `refs/heads` in the shared `.git`, so they survive worktree recreation:
 `refs/conductor/<slug>/closed/c<k>` points at a closed child's tip, and
@@ -663,7 +683,11 @@ operation's journal), `refs/conductor/<slug>/restack/staging/c<k>` (replayed tip
 [`route_whole_feature_fixes`](configuration.md#stacked_prs), routing state lives at
 `refs/conductor/<slug>/routes/r<n>` (route records), `rejected/r<n>/<m>`, `repairing` (the repair-host
 marker), `revalidate` (the revalidation queue), and `red/c<k>`; teardown deletes them only for a
-feature with a closure ref. For every
+feature with a closure ref. A published stack records `refs/conductor/<slug>/publication`, a
+compare-and-swap blob `{version, retarget?, stack?, members[], tornDown?, unreachableReported?}`
+naming each member's position, branch, and PR. `tornDown` retires the record once the worktree is
+removed, by the sweep, `daemon reclaim-worktree`, or park reconciliation, while kept children stay listed.
+Stack teardown deletes `positions` and `publication` only after every child branch is deleted. For every
 feature, `refs/conductor/<slug>/pushed/<branch>` records the tip the engine last force-pushed and
 `refs/conductor/<slug>/push-intent/<branch>` an in-flight push; the next engine force push uses the
 recorded tip as its expected-SHA lease. None of these refs is pushed. Feature teardown deletes them
@@ -804,7 +828,12 @@ when a reseal changes a story's owner without moving a task; and the restack eve
 (`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). Routed repair adds
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
 `remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
-`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome`). Each carries an
+`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome`). Stacked
+publication adds `stack_member_published` and `stack_member_redrafted` (`child`, `pr`),
+`stack_assembled` (`prs`), `stack_member_lifecycle` (`child`, `pr`, `state` of
+`merged`/`closed`/`reverted`, de-duplicated by `eventId`), `stack_members_unreachable` (`child`,
+`pr`), and `stack_tip_diverged` (`prs`); `finish_publication_transition` gains
+`establish_child_prs` and `assemble_stack`. Each routing event carries an
 `eventId` and `occurredAt`; the persister writes an `eventId` once and stamps `ts` from `occurredAt`. None appears for a
 feature without children; `rebase_skipped_for_stack` remains in the union for older logs but is no
 longer emitted. Any feature may persist `push_lease_refused` (`ref`, `expected`, `actual`) when an
@@ -812,18 +841,21 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `persist: true` in `event-sinks.ts`; common persisted types include:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,
-`operator_rewind`,
+`operator_rewind`, `decide_artifacts_pruned`,
 `setup_repair`, `project_setup`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_cache_discarded`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `build_review_stale_aggregate`,
 `build_review_disposition_version_invalidated`, `build_review_mechanical_allowance_exhausted`,
 `remediation_adjudication_started`, `remediation_adjudication_completed`, `remediation_adjudication_failed`,
-`remediation_case_reconciled`, `remediation_case_refuted`, `remediation_effect_reserved`, `remediation_effect_applied`,
+`remediation_case_reconciled`, `remediation_case_refuted`, `remediation_case_operator_resolved`,
+`build_review_acceptance_carried`, `remediation_effect_reserved`, `remediation_effect_applied`,
 `remediation_effect_failed`, `remediation_semantic_repeat_halt`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_discovery`, `provider_attempt`,
 `provider_attempt_started`, `provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
+`provider_transcripts_captured`, `provider_transcripts_harvest_failed`, `provider_transcripts_retained`,
+`provider_transcripts_pruned`, `provider_transcripts_evicted`, `provider_transcripts_retention_failed`,
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `provider_suppressed`, `session_reset`,
@@ -1031,9 +1063,20 @@ phase.
 |---|---|
 | `phase` | `startup-refresh`, `first-claim`, `rekick`, `startup-dashboard`, `halt-pr-reconcile`, `parked-reconcile`, `provider-scratch`, `mergeable-sweep`, or `repair` |
 | `durationMs` | Wall-clock duration of the phase |
-| `outcome` | `completed`, `skipped-unchanged`, `failed`, or `deferred` |
+| `outcome` | `completed` or `failed` for every phase; `skipped-unchanged` is `parked-reconcile` only and `deferred` is `repair` only |
 | `prUrl`, `slug` | `repair` only; `prUrl` is required and `slug` is optional |
 | `summary` | `parked-reconcile` only, optional: `reconciled`, `deferred`, `orphaned`, `parked`, `refused`, `skipped` counts |
+
+#### Executor engine events
+
+Emitted by the supervisor for [child executors](configuration.md#executor_isolation). Persisted to
+`.daemon/events.jsonl` and rendered to the daemon log; not audited or exported to OpenTelemetry.
+
+| Event | Fields |
+|---|---|
+| `feature_dispatch_started` | Adds optional `engineVersionId` (the build pinned at claim; absent in older ledgers) and `pinFallbackReason` (why the supervisor build was used instead of `dist`) |
+| `executor_started` | `slug`, `engineVersionId`, `protocolVersion`, `supervisorEngineVersionId` |
+| `executor_protocol_mismatch` | `slug`, `engineVersionId`, `expectedProtocolVersion`, optional `actualProtocolVersion`, `reason`, `restartRequested` (the supervisor drains for restart) |
 
 ### `.pipeline/pipeline-events.jsonl`
 

@@ -17,6 +17,7 @@
  * All operations are best-effort / non-throwing (C3, FR-15).
  */
 
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -30,7 +31,7 @@ import {
   type PrMergeState,
   type PrRunner,
 } from './pr-labels.js';
-import { createGithubTrackerClient, type TrackerClient } from './tracker-client.js';
+import { createGithubTrackerClient, runTrackerRepositoryRead, type TrackerClient } from './tracker-client.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { GithubOperationRunner } from './github-operations.js';
 import type { FeatureWorktree } from './daemon-runner.js';
@@ -38,6 +39,17 @@ import { shippedRecordOnMain } from './shipped-record-on-main.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { makeGitRunner } from './rebase.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
+import { parseGithubUrl } from './github-target.js';
+import {
+  activePublicationRecord,
+  readPublicationRecord,
+  writePublicationRecord,
+  type PublicationMemberLifecycle,
+  type PublicationRecordDependencies,
+  type StoredPublicationRecord,
+} from './stack-publication-record.js';
+import { recordUnreachableMemberReport, verifyMemberReachability } from './stack-publication.js';
+import { deleteStackChildren } from './stack-teardown.js';
 import {
   classifyShippedReadiness,
   routeShippedReadiness,
@@ -51,7 +63,9 @@ import {
   type AutoresolveOutcome,
   type CiFixRepairOutcome,
 } from './repair-queue.js';
-import type { CiFixOutcome } from './ci-fix.js';
+import { PUBLISHED_STACK_CI_FIX_REASON, type CiFixOutcome } from './ci-fix.js';
+import { escalate, logOutcome } from './autoresolve.js';
+import { emitRestackRefused } from './restack/restack-events.js';
 export type { WatchEntry } from './repair-queue.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
@@ -193,6 +207,96 @@ function logDisposition(
   message: string,
 ): void {
   if (recordDisposition(log, entry, disposition)) log?.(message);
+}
+
+// ── Task 27: published-stack lower-member lifecycle ────────────────────────
+
+/**
+ * The leaf's watch entry is the sole lifecycle observer.  It deliberately
+ * observes only lower members: the leaf was just read by the normal sweep and
+ * its state belongs to the ordinary ship/reap path below.
+ */
+async function observeStackMemberLifecycle(
+  entry: WatchEntry,
+  leafState: PrMergeState,
+  gh: GhRunner,
+  dependencies: PublicationRecordDependencies | undefined,
+  emit: (event: ConductorEvent) => void,
+): Promise<void> {
+  if (leafState.state !== 'OPEN') return;
+  const stored = await activePublicationRecord(entry.repoCwd, entry.slug, dependencies);
+  if (!stored || stored.record.members.length < 2) return;
+
+  const target = parseGithubUrl(entry.prUrl);
+  if (!target) return;
+  const repository = target.repository;
+  const leaf = stored.record.members.at(-1);
+  if (!leaf) return;
+
+  // This is both an existence observation and a deliberately bounded stack
+  // API read: exactly one per open stacked leaf, before any member reads.
+  try {
+    const stdout = await runTrackerRepositoryRead(
+      gh, entry.repoCwd, 'repository.read', repository, { kind: 'repository' },
+      ['api', `repos/${repository}/stacks?pull_request=${leaf.pr}`],
+    );
+    JSON.parse(stdout);
+  } catch {
+    return;
+  }
+
+  let current: StoredPublicationRecord = stored;
+  for (const member of stored.record.members.slice(0, -1)) {
+    let lifecycle: PublicationMemberLifecycle | undefined;
+    try {
+      const stdout = await runTrackerRepositoryRead(
+        gh, entry.repoCwd, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
+        ['pr', 'view', String(member.pr), '-R', repository, '--json', 'state'],
+      );
+      const observed: unknown = JSON.parse(stdout);
+      const state = observed && typeof observed === 'object' && !Array.isArray(observed)
+        ? (observed as { state?: unknown }).state
+        : undefined;
+      if (state === 'CLOSED') lifecycle = 'closed';
+      if (state === 'MERGED') {
+        const reverted = await runTrackerRepositoryRead(
+          gh, entry.repoCwd, 'pull-request.read', repository, { kind: 'pull-request', number: member.pr },
+          ['pr', 'list', '-R', repository, '--state', 'merged', '--base', 'main', '--json', 'number,body'],
+        );
+        const matches: unknown = JSON.parse(reverted);
+        const revertLine = new RegExp(`(^|\\n)Reverts ${repository.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}#${member.pr}(?:\\s|$)`);
+        lifecycle = Array.isArray(matches) && matches.some((candidate) =>
+          candidate !== null && typeof candidate === 'object'
+            && typeof (candidate as { body?: unknown }).body === 'string'
+            && revertLine.test((candidate as { body: string }).body),
+        ) ? 'reverted' : 'merged';
+      }
+    } catch {
+      // This is an observation only. A transient read leaves lastSeen intact
+      // so a later sweep can make the same at-least-once observation.
+      continue;
+    }
+    if (!lifecycle || member.lastSeen === lifecycle) continue;
+
+    emit({
+      type: 'stack_member_lifecycle',
+      child: member.position,
+      pr: member.pr,
+      state: lifecycle,
+      eventId: `${entry.slug}:${member.position}:${lifecycle}`,
+    });
+    const next = {
+      ...current.record,
+      members: current.record.members.map((candidate) => candidate.position === member.position
+        ? { ...candidate, lastSeen: lifecycle }
+        : candidate),
+    };
+    const written = await writePublicationRecord(entry.repoCwd, entry.slug, current, next, dependencies);
+    if (written.kind !== 'updated') return;
+    const refreshed = await activePublicationRecord(entry.repoCwd, entry.slug, dependencies);
+    if (!refreshed) return;
+    current = refreshed;
+  }
 }
 
 // ── Registry helpers ──────────────────────────────────────────────────────────
@@ -476,6 +580,8 @@ export interface SweepOpts {
    * Omitted preserves the standalone sweep's existing behavior.
    */
   canRemoveWorktree?: (slug: string) => boolean | Promise<boolean>;
+  /** Test seam for the ref-backed publication receipt read. */
+  publicationRecordDependencies?: PublicationRecordDependencies;
   /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
   onEvent?: (event: ConductorEvent) => void;
 }
@@ -652,6 +758,7 @@ export async function sweepMergeableLabels({
   teardownWorktree,
   shippedRecordProbe,
   canRemoveWorktree,
+  publicationRecordDependencies,
   onEvent,
   now = () => new Date(),
 }: SweepOpts): Promise<void> {
@@ -724,21 +831,110 @@ export async function sweepMergeableLabels({
           );
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
+            // `tornDown` records completed worktree removal or a retained
+            // member. It is deliberately not a terminal receipt: the same
+            // record is the durable input for later per-member cleanup.
+            const storedPublication = await readPublicationRecord(
+              entry.repoCwd,
+              entry.slug,
+              publicationRecordDependencies,
+            );
             if (canRemoveWorktree && !(await canRemoveWorktree(entry.slug))) {
               survivors.push(entry);
               continue;
             }
             try {
-              if (!teardownWorktree) {
-                throw new Error('worktree teardown dependency unavailable');
+              const worktree = {
+                path: join(entry.repoCwd, '.worktrees', entry.slug),
+                branch: leafBranchFor(entry.slug),
+              };
+              const entryLeafPr = parseGithubUrl(entry.prUrl)?.number;
+              const isReceiptForEntry = (publication: StoredPublicationRecord) =>
+                publication.record.tornDown === true
+                && publication.record.members.at(-1)?.pr === entryLeafPr;
+              let publication: StoredPublicationRecord | undefined;
+              if (storedPublication.kind === 'record' && isReceiptForEntry(storedPublication) && !existsSync(worktree.path)) {
+                // The matching worktree is already gone. Retain this receipt
+                // so a later per-member retry can finish child cleanup.
+                publication = storedPublication;
+              } else {
+                if (!teardownWorktree) {
+                  throw new Error('worktree teardown dependency unavailable');
+                }
+                await teardownWorktree(worktree, false);
+                const reread = await readPublicationRecord(
+                  entry.repoCwd,
+                  entry.slug,
+                  publicationRecordDependencies,
+                );
+                // A torn-down receipt left by an earlier publication of this
+                // slug is not evidence for this watch entry's child cleanup.
+                publication = reread.kind === 'record'
+                  && (reread.record.tornDown !== true || isReceiptForEntry(reread))
+                  ? reread
+                  : undefined;
               }
-              await teardownWorktree(
-                {
-                  path: join(entry.repoCwd, '.worktrees', entry.slug),
-                  branch: leafBranchFor(entry.slug),
-                },
-                false,
-              );
+              // A one-member publication is the ordinary leaf path.  Stack
+              // lifecycle and child cleanup apply only once a second member
+              // makes the receipt a real chained stack.
+              if (publication && publication.record.members.length > 1) {
+                const repository = parseGithubUrl(entry.prUrl)?.repository;
+                const reachability = await verifyMemberReachability(entry.repoCwd, publication.record, {
+                  gh,
+                  repository,
+                });
+                // A failed reachability observation cannot authorize any
+                // deletion. An unreachable member is retained, while the
+                // dedicated teardown still considers every other member.
+                if (reachability.kind === 'unreachable') {
+                  if (publication.record.unreachableReported !== true) {
+                    emitEvent({
+                      type: 'stack_members_unreachable',
+                      child: reachability.member.position,
+                      pr: reachability.member.pr,
+                    });
+                    await recordUnreachableMemberReport(
+                      entry.repoCwd,
+                      publication,
+                      publicationRecordDependencies,
+                    );
+                    const refreshed = await readPublicationRecord(
+                      entry.repoCwd,
+                      entry.slug,
+                      publicationRecordDependencies,
+                    );
+                    if (refreshed.kind === 'record') publication = refreshed;
+                  }
+                  log?.(
+                    `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-unreachable`,
+                  );
+                } else if (reachability.kind === 'indeterminate') {
+                  log?.(
+                    `[mergeable-sweep] retained ${entry.slug} — reason: stack-members-${reachability.kind}`,
+                  );
+                  survivors.push(entry);
+                  continue;
+                }
+                if (repository) {
+                  const result = await deleteStackChildren(entry.repoCwd, entry.slug, publication.record, {
+                    git: makeGitRunner(entry.repoCwd), gh, repository,
+                  });
+                  if (result.kind === 'deleted') {
+                    log?.(`[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main`);
+                    continue;
+                  }
+                  if (result.kind === 'kept') {
+                    await writePublicationRecord(entry.repoCwd, entry.slug, publication, {
+                      ...publication.record,
+                      tornDown: true,
+                    }, publicationRecordDependencies);
+                  }
+                  survivors.push(entry);
+                } else {
+                  survivors.push(entry);
+                }
+                continue;
+              }
               // Teardown has established all of its own shipped-record and
               // worktree safety gates. Ref cleanup is best-effort and must not
               // turn a successful reap into a retained watch entry.
@@ -751,6 +947,10 @@ export async function sweepMergeableLabels({
               log?.(
                 `[mergeable-sweep] reap failed ${entry.slug} (${entry.prUrl}) — reason: shipped-record-on-main — error: ${detail}`,
               );
+              // A reap can have removed the worktree before a later stack
+              // member/ref operation fails. Keep the receipt and watch entry
+              // so the finite, per-member teardown resumes on the next sweep.
+              survivors.push(entry);
             }
           } else if (state.state === 'MERGED') {
             logDisposition(
@@ -800,6 +1000,17 @@ export async function sweepMergeableLabels({
           survivors.push(entry);
           continue;
         }
+
+        // A published stack stays open at its leaf while lower members may be
+        // merged, closed, or reverted by a human.  This observation is
+        // intentionally before all label/repair work and cannot change it.
+        await observeStackMemberLifecycle(
+          entry,
+          state,
+          gh,
+          publicationRecordDependencies,
+          emitEvent,
+        );
 
         // The timestamp begins with the first observation of a head and is
         // reset only when that SHA changes. Do this before classification so
@@ -1118,7 +1329,22 @@ export async function sweepMergeableLabels({
     if (ciFix?.enabled) {
       for (const { entry, state } of failedCandidates) {
         const eligibility = await ciFix.isEligible(entry, state);
-        if (!eligibility.eligible) continue;
+        if (!eligibility.eligible) {
+          // Keep the published-stack stop on the same human-escalation path
+          // used by autoresolve.  It runs before a repair request exists, so
+          // no attempt is claimed or ci-fix dispatcher is invoked.
+          if (eligibility.reason === PUBLISHED_STACK_CI_FIX_REASON) {
+            const reason = 'published stacked feature requires manual resolution (#2945)';
+            emitEvent(emitRestackRefused({ reason: 'published-stack', detail: '#2945' }));
+            await escalate(entry.prUrl, 'published-stack', reason, {
+              runGh: runnerForEntry(gh, entry, operations),
+              cwd: entry.repoCwd,
+              log,
+            });
+            logOutcome(log ?? (() => {}), entry.prUrl, 'published-stack', 'escalated');
+          }
+          continue;
+        }
         const queuedAt = now().toISOString();
         enqueue({
           kind: 'ci-fix', prUrl: entry.prUrl, slug: entry.slug,

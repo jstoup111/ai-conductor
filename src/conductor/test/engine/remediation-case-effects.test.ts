@@ -1,10 +1,10 @@
-// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
+// Covers: task:6, task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker, resolveAbsentFailedBuildReviewCases, settleStrandedBuildReviewActionReservations } from '../../src/engine/remediation-case-effects.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -85,6 +85,248 @@ describe('remediation case effects', () => {
     ['resolved case carries no obligation', { id: 'e', kind: 'deferral', status: 'failed', diagnostic: 'x' }, { resolution: 'resolved' }, false],
   ] as const)('settlement obligation: %s', (_label, effect, overrides, expected) => {
     expect(isBuildReviewSettlementObligationCase(record(effect as RemediationCaseRecord['effect'], overrides as Partial<RemediationCaseRecord>))).toBe(expected);
+  });
+
+  // Covers: task:16, task:rem-as-built-R16a, task:rem-as-built-R16b, task:rem-as-built-R16d
+  it.each(['reserved', 'failed'] as const)('retires an accepted %s action with the shared transformation', async (status) => {
+    const acceptedSourceId = 'testQuality:accepted-action';
+    const original = {
+      ...openAppliedActionRecord(),
+      effect: status === 'reserved'
+        ? { id: 'effect-accepted', kind: 'action' as const, status }
+        : { id: 'effect-accepted', kind: 'action' as const, status, diagnostic: 'earlier failure' },
+      sources: [{ sourceId: acceptedSourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T00:00:00.000Z' }],
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: 'lap-old' }] },
+    };
+    const store = await storeWith({ version: 'v3', feature, cases: [original], prdWideningCases: [], suppressions: [], outbox: [] });
+
+    await expect(resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: new Set(), lapId: 'lap-current', mechanicallyHealthy: true,
+    })).resolves.toEqual({ ok: true, settled: [{ caseId: 'case-1', effectId: 'effect-accepted' }] });
+
+    const settled = await store.read();
+    expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      sources: original.sources,
+      resolution: 'resolved',
+      effect: status === 'reserved'
+        ? {
+            id: 'effect-accepted', kind: 'action', status: 'failed',
+            diagnostic: 'retired: every source operator-accepted or no longer raised',
+          }
+        : { id: 'effect-accepted', kind: 'action', status: 'failed', diagnostic: 'earlier failure' },
+    })] } });
+  });
+
+  // Covers: task:rem-as-built-R16d, task:rem-as-built-R16e
+  it('settles an accepted stranded reservation through the shared predicate and records one identified outbox event', async () => {
+    const acceptedSourceId = 'testQuality:accepted-stranded-action';
+    const original = {
+      ...openAppliedActionRecord(),
+      effect: { id: 'effect-stranded', kind: 'action' as const, status: 'reserved' as const },
+      sources: [{ sourceId: acceptedSourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T00:00:00.000Z' }],
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: 'lap-old' }] },
+    };
+    const store = await storeWith({ version: 'v3', feature, cases: [original], prdWideningCases: [], suppressions: [], outbox: [] });
+
+    await expect(settleStrandedBuildReviewActionReservations({
+      store, liveSourceIds: new Set(), effectiveAcceptedSourceIds: new Set([acceptedSourceId]), mechanicallyHealthy: true,
+      lapId: 'lap-current', readPublishedCaseIds: async () => new Set(),
+    })).resolves.toEqual({ ok: true, settled: [{ caseId: 'case-1', effectId: 'effect-stranded' }] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }) })],
+      outbox: [expect.objectContaining({ eventId: expect.any(String), event: expect.objectContaining({
+        type: 'remediation_case_reconciled', eventId: expect.any(String), caseId: 'case-1', resolution: 'resolved',
+      }) })],
+    } });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it.each([
+    ['the lap is mechanically unhealthy', new Set<string>(), false],
+    ['the only origin was withdrawn and its source remains live', new Set(['testQuality:accepted-stranded-action']), true],
+  ] as const)('leaves a stranded reservation open when %s', async (_reason, liveSourceIds, mechanicallyHealthy) => {
+    const sourceId = 'testQuality:accepted-stranded-action';
+    const store = await storeWith({
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        ...openAppliedActionRecord(),
+        effect: { id: 'effect-stranded', kind: 'action', status: 'reserved' },
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-old' }] },
+      }],
+    });
+
+    await expect(settleStrandedBuildReviewActionReservations({
+      store, liveSourceIds, effectiveAcceptedSourceIds: new Set(), mechanicallyHealthy,
+      lapId: 'lap-current', readPublishedCaseIds: async () => new Set(),
+    })).resolves.toEqual({ ok: true, settled: [] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'reserved' }) })],
+    } });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it('keeps a failed action live when its only acceptance origin was withdrawn', async () => {
+    const sourceId = 'testQuality:withdrawn-origin';
+    const store = await storeWith({
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        ...openAppliedActionRecord(),
+        effect: { id: 'effect-withdrawn', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-old' }] },
+      }],
+    });
+
+    await expect(resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: new Set([sourceId]), lapId: 'lap-current', mechanicallyHealthy: true,
+    })).resolves.toEqual({ ok: true, settled: [] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'failed' }) })],
+    } });
+  });
+
+  // Covers: task:6
+  it('converges an unbound replayed owner stop despite link timestamp and rationale drift', async () => {
+    const original: RemediationCaseRecord = {
+      id: 'case-owner-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-01T00:00:00.000Z' }],
+      escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+    };
+    const store = await storeWith({ version: 'v1', feature, cases: [original] });
+    const replayed = {
+      ...original,
+      id: 'new-case-id',
+      rationale: 'The judgement now explains the same owner decision differently.',
+      sources: [{ ...original.sources[0]!, recordedAt: '2026-10-02T00:00:00.000Z' }],
+    };
+
+    await expect(persistBuildReviewDecisionStop({ store, record: replayed })).resolves.toEqual({
+      ok: true, status: 'already-persisted', caseId: original.id,
+    });
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [original] } });
+  });
+
+  // Covers: task:6
+  it('converges a bound replayed stop despite fresh link timestamps and consistency drift', async () => {
+    const original: RemediationCaseRecord = {
+      id: 'case-owner-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-01T00:00:00.000Z' }],
+      escalation: { owner: 'architecture' },
+      consistencyStop: { sourceIds: ['finding-a'], rationale: 'Architecture must decide.' },
+      effect: { kind: 'none' },
+    };
+    const store = await storeWith({ version: 'v1', feature, cases: [original] });
+
+    await expect(persistBuildReviewDecisionStop({
+      store,
+      record: {
+        ...original,
+        sources: [{ ...original.sources[0]!, recordedAt: '2026-10-02T00:00:00.000Z' }],
+        consistencyStop: { sourceIds: ['finding-a'], rationale: 'A later lap explains the same stop differently.' },
+      },
+    })).resolves.toEqual({ ok: true, status: 'already-persisted', caseId: original.id });
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [original] } });
+  });
+
+  it('converges an unbound ownerless consistency stop despite consistency rationale and source-order drift', async () => {
+    const original: RemediationCaseRecord = {
+      id: 'case-consistency-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'The proposals contradict each other.', confidence: 'high', resolution: 'open',
+      sources: [
+        { sourceId: 'finding-a', outcome: 'rejected', recordedAt: '2026-10-01T00:00:00.000Z' },
+        { sourceId: 'finding-b', outcome: 'merged', recordedAt: '2026-10-01T00:00:00.000Z' },
+      ],
+      consistencyStop: { sourceIds: ['finding-a', 'finding-b'], rationale: 'The proposals contradict each other.' },
+      effect: { kind: 'none' },
+    };
+    const store = await storeWith({ version: 'v1', feature, cases: [original] });
+    const replayed = {
+      ...original,
+      id: 'new-case-id',
+      sources: [...original.sources].reverse().map((source) => ({ ...source, recordedAt: '2026-10-02T00:00:00.000Z' })),
+      consistencyStop: { sourceIds: ['finding-b', 'finding-a'], rationale: 'The later review words the conflict differently.' },
+    };
+
+    await expect(persistBuildReviewDecisionStop({ store, record: replayed })).resolves.toEqual({
+      ok: true, status: 'already-persisted', caseId: original.id,
+    });
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [original] } });
+  });
+
+  // Covers: task:6
+  it('keeps a bound owner or source-set change conflicting', async () => {
+    const original: RemediationCaseRecord = {
+      id: 'case-owner-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-01T00:00:00.000Z' }],
+      escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+    };
+    const store = await storeWith({ version: 'v1', feature, cases: [original] });
+
+    await expect(persistBuildReviewDecisionStop({
+      store, record: { ...original, escalation: { owner: 'product' } },
+    })).resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
+    await expect(persistBuildReviewDecisionStop({
+      store, record: { ...original, sources: [{ ...original.sources[0]!, sourceId: 'finding-b' }] },
+    })).resolves.toEqual({ ok: false, reason: 'conflicting-case-id' });
+  });
+
+  // Covers: task:7
+  it('returns a refused decision-stop transition with its invariant', async () => {
+    const owner: RemediationCaseRecord = {
+      id: 'case-owner', domain: 'build_review', disposition: 'act', priority: 'high',
+      rationale: 'The existing repair remains open.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'finding-a', outcome: 'acted', recordedAt: '2026-10-01T00:00:00.000Z' }],
+      effect: { id: 'effect-owner', kind: 'action', status: 'applied', workOrderId: 'order-owner' },
+    };
+    const store = await storeWith({ version: 'v1', feature, cases: [owner] });
+    const result = await persistBuildReviewDecisionStop({
+      store,
+      record: {
+        id: 'case-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+        rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-02T00:00:00.000Z' }],
+        escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false, reason: 'rejected-transition',
+      violation: { invariant: 'source-linked-by-multiple-cases', caseIds: ['case-owner', 'case-stop'], sourceIds: ['finding-a'] },
+    });
+  });
+
+  async function expectOrdinaryDecisionStopStoreFailure(reason: 'lock-timeout' | 'malformed-state') {
+      const store = await storeWith({ version: 'v1', feature, cases: [] });
+      vi.spyOn(store, 'mutate').mockResolvedValue({ ok: false, reason });
+      const result = await persistBuildReviewDecisionStop({
+        store,
+        record: {
+          id: 'case-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+          rationale: 'An architecture decision is required.', confidence: 'high', resolution: 'open',
+          sources: [{ sourceId: 'finding-a', outcome: 'escalate', recordedAt: '2026-10-02T00:00:00.000Z' }],
+          escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+        },
+      });
+
+      expect(result).toEqual({ ok: false, reason: `case store ${reason}` });
+      expect(result).not.toHaveProperty('violation');
+  }
+
+  // Covers: task:7
+  it('persistBuildReviewDecisionStop returns case store lock-timeout with no violation', async () => {
+    await expectOrdinaryDecisionStopStoreFailure('lock-timeout');
+  });
+
+  // Covers: task:7
+  it('persistBuildReviewDecisionStop returns case store malformed-state with no violation', async () => {
+    await expectOrdinaryDecisionStopStoreFailure('malformed-state');
   });
 
   it('publishes and charges a stable action order once', async () => {

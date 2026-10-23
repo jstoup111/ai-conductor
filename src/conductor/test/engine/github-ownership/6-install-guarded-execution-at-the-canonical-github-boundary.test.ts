@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:7
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -55,14 +55,19 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
   const pullRequest = operation.startsWith('pull-request.');
   const sharedLabel = operation.startsWith('label-definition.');
   const remoteRef = operation.startsWith('remote-ref.');
+  const stack = operation.startsWith('stack.');
   const repositoryResource = operation === 'issue.create'
     || operation === 'pull-request.create'
     || operation === 'commit.status.create'
+    || operation === 'stack.read'
+    || operation === 'stack.create'
     || operation === 'repository.create';
   const resource = sharedLabel
     ? { kind: 'label-definition', name: 'owned-label' }
     : remoteRef
       ? { kind: 'remote-ref', ref: 'refs/heads/owned' }
+      : operation === 'stack.add'
+        ? { kind: 'stack', number: 17 }
       : repositoryResource
         ? { kind: 'repository' }
         : { kind: pullRequest ? 'pull-request' : 'issue', number: 17 };
@@ -72,6 +77,10 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
       ? { body: 'guarded write' }
     : operation.includes('.label.')
       ? { label: 'owned-label' }
+      : operation === 'stack.read'
+        ? { pullRequest: 17 }
+        : stack
+          ? { pullRequests: [17, 18] }
       : operation.includes('.dependency.')
         ? { dependency: { repository: 'acme/owned', resource: { kind: 'issue', number: 18 } } }
         : operation === 'repository.create'
@@ -84,7 +93,9 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
             ? { sha: 'owned-head', state: 'success', context: 'owned-check', description: 'guarded status' }
             : sharedLabel
               ? { name: 'owned-label', color: '0e8a16' }
-              : operation === 'pull-request.edit'
+              : operation === 'pull-request.retarget'
+                ? { base: 'owned-base' }
+                : operation === 'pull-request.edit'
                 ? { title: 'Owned PR' }
                 : undefined;
   return {

@@ -3,6 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { timeMaintenancePhase } from '../../src/engine/maintenance-phase-timer.js';
 
+// Type-only: never invoked. Each call must be rejected by the compiler (`npm run typecheck:test`).
+const options = { now: () => 1, emit: () => {} };
+const summary = { reconciled: 1, deferred: 0, orphaned: 0, parked: 0, refused: 0, skipped: 0 };
+function rejectedPhaseResults(): void {
+  // @ts-expect-error only repairs are deferred.
+  void timeMaintenancePhase({ phase: 'startup-refresh' }, async () => 'deferred' as const, options);
+  // @ts-expect-error only parked reconciliation skips unchanged inputs.
+  void timeMaintenancePhase({ phase: 'repair', prUrl: 'https://example.test/pr/1' }, async () => 'skipped-unchanged' as const, options);
+  // @ts-expect-error only parked reconciliation carries a summary.
+  void timeMaintenancePhase({ phase: 'rekick' }, async () => ({ outcome: 'completed' as const, summary }), options);
+}
+void rejectedPhaseResults;
+
 describe('timeMaintenancePhase', () => {
   it('emits a completed event with the injected clock duration when work resolves', async () => {
     let now = 100;

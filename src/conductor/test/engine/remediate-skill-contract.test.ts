@@ -1,3 +1,4 @@
+// Covers: task:14
 import { readFile } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
@@ -88,6 +89,7 @@ describe('remediate build_review case-mode contract', () => {
     expect(caseMode).toMatch(/must not mint.*durable.*case.*effect.*id/i);
     expect(caseMode).toMatch(/engine.*stamps.*durable.*ids/i);
     expect(caseMode).toMatch(/never assert or create operator\s+acceptance/i);
+    expect(caseMode).toMatch(/same-substance finding may be bound\s+by `existingCaseId` to a prior case marked `operatorAccepted`/i);
     expect(caseMode).toMatch(/do not.*apply.*effect/i);
     expect(caseMode).toMatch(/do not append[\s\S]*approved plan/i);
     expect(caseMode).toMatch(/write.*only.*`\.pipeline\/remediation\.json`/is);

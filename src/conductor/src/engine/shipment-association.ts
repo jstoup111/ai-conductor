@@ -1,9 +1,12 @@
 import type { PersistedAsBuiltVerdict } from './as-built-verdict-store.js';
 import type { PersistedPrdAuditVerdict } from './prd-audit-verdict-store.js';
+import { parseFeatureBranch } from './feature-branch-identity.js';
 
 export interface ShipmentAssociationInput {
   planStems: readonly string[];
   pr: {
+    /** Pull request head ref when its transport exposes one. */
+    headRef?: string;
     /** Exact plan-stem values extracted from authoritative PR metadata. */
     metadataPlanStems: readonly string[];
     changedPaths: readonly string[];
@@ -19,6 +22,7 @@ export type ShipmentAssociationResult =
   };
 
 export type ShipmentAssociationClassification =
+  | 'stack-child'
   | 'spec-only'
   | 'plan-only'
   | 'docs-only'
@@ -122,6 +126,9 @@ export function appendRecordedShipmentFindings(
 export function classifyShipmentAssociation(
   input: ShipmentAssociationInput,
 ): ShipmentAssociationResult {
+  if (parseFeatureBranch(input.pr.headRef ?? '').kind === 'child') {
+    return notApplicable('stack-child');
+  }
   const paths = uniqueNonEmpty(input.pr.changedPaths);
   const changeClassification = classifyNonImplementationChange(paths);
   if (changeClassification) return notApplicable(changeClassification);

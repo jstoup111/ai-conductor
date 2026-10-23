@@ -29,7 +29,8 @@ anything.
 | `daemon status` shows `⏸ paused (process dead)` | [A paused daemon that looks dead](#a-paused-daemon-that-looks-dead) |
 | The same feature fails identically on every start | [Spin loops](#spin-loops) |
 | `corrupt ledger ledger=… quarantine=…` or a ledger lease timeout | [Corrupt intake ledger or stuck ledger lease](#corrupt-intake-ledger-or-stuck-ledger-lease) |
-| `[daemon] engine stale after rebuild — …` | [Stale engine](#stale-engine) |
+| `[daemon] stale supervisor at idle — …`, `executor <slug> protocol mismatch`, or `(older than current)` in `daemon status` | [Stale engine](#stale-engine) |
+| Boot fails with `executor <slug> (pid <n>) survived successor takeover` | [Stale engine](#stale-engine) |
 | Several repos are wrong at once | [Fleet-wide recovery](#fleet-wide-recovery) |
 
 ## Diagnosis
@@ -267,31 +268,54 @@ ai-conductor daemon park <slug>
 
 ### Stale engine
 
-When the daemon builds the harness itself, it checks at idle boundaries whether the engine it is
-running matches the engine on disk. If it drifted, it fast-forwards the engine source, rebuilds,
-and — if still stale — requests a restart, logging
-`[daemon] engine stale after rebuild — captured: <id>, target: <id> — restarting before next
-task`. Source refresh and rebuild failures are logged and degrade to the current engine; they are
-never fatal.
+When the daemon builds the harness itself, its background maintenance job fast-forwards the engine
+source and rebuilds, busy or idle. With the default
+[`executor_isolation: child`](../reference/configuration.md#executor_isolation), each new claim runs
+the build `dist` names at claim time, so only the supervisor and already-running features can be
+stale. A stale supervisor restarts at its next natural idle, logging
+`[daemon] stale supervisor at idle — captured: <id>, target: <id> — restarting before next task`.
+If it stays stale longer than
+[`supervisor_max_stale_hours`](../reference/configuration.md#supervisor_max_stale_hours) while busy,
+or a child fails the executor protocol handshake (`executor <slug> protocol mismatch: <reason>`), it
+stops claiming and drains so it can restart. A mismatched feature is relaunched on the supervisor's
+own build. Rebuild failures log `[daemon] background engine rebuild failed (<reason>); a later pass
+will retry` and are never fatal.
 
-When self-heal is off (or the repo is not self-hosting), the same boundary runs an advisory
-staleness probe only — it warns, never rebuilds, never restarts.
+When self-heal is off (or the repo is not self-hosting), the daemon runs an advisory staleness probe
+only — it warns, never rebuilds, never restarts.
 
 Each launched process pins the resolved `dist-versions/<id>/index.js` rather than the floating
-`dist` symlink, so a republish mid-run cannot change the engine under a running daemon. That is
-also why `daemon status` prints `version:<engine-version-id>`: two repos on different engine
-versions is expected and visible.
+`dist` symlink, so a republish mid-run cannot change the engine under a running process. That is
+also why `daemon status` prints `version:<engine-version-id>` and per-feature `EXECUTOR [<slug>]`
+lines: different versions across repos, the supervisor, and in-flight features are expected and
+visible.
 
-**Recovery:** rebuild, then restart.
+**Diagnose:**
+
+```bash
+ai-conductor daemon status
+readlink src/conductor/dist
+ls .daemon/executors/
+```
+
+A feature marked `(older than current)` is running the build it was claimed on; it does not need
+recovery. A `SUPERVISOR ENGINE` marked `(older than current)` restarts at the next idle.
+
+**Recovery:** to update the supervisor now instead of at the next idle, rebuild, then restart.
 
 ```bash
 cd src/conductor && npm run build
 ai-conductor daemon restart
 ```
 
-**Confirm:** `ai-conductor daemon status` prints the expected `version:` id for the repo, and the
-log stops repeating the staleness line. Self-hosting specifics are in
-[self-hosting](../guides/self-hosting.md).
+If boot fails with `executor <slug> (pid <n>) survived successor takeover`, a predecessor's child is
+still running. Confirm `<n>` is that executor (`ps -o args= -p <n>` names
+`dist-versions/<id>/index.js executor-child`), stop it, and start the daemon again. To roll back
+per-dispatch pinning, set `executor_isolation: in-process` and restart.
+
+**Confirm:** `ai-conductor daemon status` prints the expected `version:` id for the repo, no
+`SUPERVISOR ENGINE` line is marked `(older than current)`, and the log stops repeating the staleness
+line. Self-hosting specifics are in [self-hosting](../guides/self-hosting.md#the-engine-republish-loop).
 
 ### Fleet-wide recovery
 

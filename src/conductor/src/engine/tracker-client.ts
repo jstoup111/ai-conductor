@@ -41,6 +41,8 @@ import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance
 import { readGithubBotCredential, readGithubBotToken } from './github-bot-credential.js';
 import { classifyGhAuthRefusal, GithubBotAuthRefusalError } from './github-bot-auth-refusal.js';
 import { resolvePrivateGhObserverPassthrough } from '../execution/gh-observer-passthrough.js';
+import { validateStackPayload } from './stack-publication-payload-validation.js';
+import type { PublicationRecord } from './stack-publication-record.js';
 
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
 
@@ -60,6 +62,16 @@ export type GhRunner = (
 export interface GithubMutationExecutionContext {
   readonly provenance: MutationProvenanceRequest;
   readonly dependencies: GithubMutationAuthorizationDependencies;
+}
+
+/**
+ * Feature-local stack publication evidence supplied by the CLI composition
+ * root.  The runner owns its ordering: payload binding and the remote-tip
+ * fence both complete before the generic owner gate or `gh` transport.
+ */
+export interface GithubStackPublicationExecutionContext {
+  readonly record: PublicationRecord;
+  readonly guardTips: () => Promise<GithubOperationRunnerRefusal | undefined>;
 }
 
 /** Fresh, independently authorized pre-spec intake write context. */
@@ -98,6 +110,8 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly cwd: string;
   /** Absent context refuses every mutation while retaining discovery reads. */
   readonly mutation?: GithubMutationExecutionContext;
+  /** Record-bound validation for native-stack and retarget operations. */
+  readonly stackPublication?: GithubStackPublicationExecutionContext;
   /** Absent context refuses every existing pre-spec intake mutation. */
   readonly intake?: GithubIntakeMutationExecutionContext;
   /** Transaction-scoped authority for a newly created issue and its metadata. */
@@ -106,6 +120,28 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly shared?: GithubSharedMutationExecutionContext;
   /** Existing event spine for best-effort refusal telemetry. */
   readonly events?: GithubOperationEventEmitter;
+}
+
+function isStackPublicationOperation(request: GithubOperationRequest): boolean {
+  return request.operation === 'stack.read'
+    || request.operation === 'stack.create'
+    || request.operation === 'stack.add'
+    || request.operation === 'pull-request.retarget';
+}
+
+function validateStackPublicationRequest(
+  record: PublicationRecord,
+  request: GithubOperationRequest,
+): GithubOperationRunnerRefusal | undefined {
+  const validation = validateStackPayload(record, request);
+  if (validation.kind === 'refused') return validation;
+  // `stack.read` retains the member-number payload so GitHub can locate the
+  // stack, but a stack-number target still must name the recorded stack.
+  if (request.operation === 'stack.read' && request.target.kind === 'stack'
+    && (record.stack === undefined || request.target.number !== record.stack.number)) {
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
+  return undefined;
 }
 
 /** Ownership context used by the GitHub TrackerClient's structured requests. */
@@ -138,6 +174,34 @@ function payloadField(request: GithubOperationRequest, field: 'body' | 'label' |
   return value;
 }
 
+function payloadNumber(request: GithubOperationRequest, field: 'pullRequest'): number {
+  const payload = request.payload;
+  const value = payload && (payload as unknown as Record<string, unknown>)[field];
+  if (typeof value !== 'number') {
+    throw new Error(`GitHub operation '${request.operation}' is missing its registered '${field}' payload.`);
+  }
+  return value;
+}
+
+function stackMembersPayload(request: GithubOperationRequest): readonly number[] {
+  const payload = request.payload;
+  if (!payload
+    || !('pullRequests' in payload)
+    || !Array.isArray(payload.pullRequests)
+    || payload.pullRequests.length === 0
+    || !payload.pullRequests.every((number) => typeof number === 'number' && Number.isSafeInteger(number) && number > 0)) {
+    throw new Error(`GitHub operation '${request.operation}' is missing its registered stack members payload.`);
+  }
+  return payload.pullRequests;
+}
+
+function stackNumber(request: GithubOperationRequest): string {
+  if (request.target.kind !== 'stack') {
+    throw new Error(`GitHub operation '${request.operation}' requires a stack target.`);
+  }
+  return String(request.target.number);
+}
+
 function commitStatusPayload(request: GithubOperationRequest): {
   readonly sha: string;
   readonly state: 'success' | 'failure';
@@ -168,6 +232,8 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
       return ['pr', 'view', issueNumber(request), '-R', repository];
     case 'repository.read':
       return ['api', `repos/${repository}`];
+    case 'stack.read':
+      return ['api', `repos/${repository}/stacks?pull_request=${payloadNumber(request, 'pullRequest')}`];
     case 'issue.comment.create':
     case 'intake.issue.comment.create':
       return ['issue', 'comment', issueNumber(request), '-R', repository, '--body', payloadField(request, 'body')];
@@ -227,6 +293,8 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
       if (request.payload && 'body' in request.payload && typeof request.payload.body === 'string') args.push('--body', request.payload.body);
       return args;
     }
+    case 'pull-request.retarget':
+      return ['pr', 'edit', issueNumber(request), '-R', repository, '--base', payloadField(request, 'base')];
     case 'pull-request.ready':
       return ['pr', 'ready', issueNumber(request), '-R', repository];
     case 'pull-request.draft':
@@ -249,6 +317,16 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
         '-f', `state=${payload.state}`, '-f', `context=${payload.context}`, '-f', `description=${payload.description}`,
       ];
     }
+    case 'stack.create':
+      return [
+        'api', '--method', 'POST', `repos/${repository}/stacks`,
+        ...stackMembersPayload(request).flatMap((number) => ['-F', `pull_requests[]=${number}`]),
+      ];
+    case 'stack.add':
+      return [
+        'api', '--method', 'POST', `repos/${repository}/stacks/${stackNumber(request)}/add`,
+        ...stackMembersPayload(request).flatMap((number) => ['-F', `pull_requests[]=${number}`]),
+      ];
     case 'label-definition.create':
     case 'label-definition.update': {
       if (request.target.kind !== 'label-definition') throw new Error('Registered label operation has an invalid target.');
@@ -285,7 +363,14 @@ export function createGuardedGithubOperationRunner(
     async run(request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> {
       if (request.access === undefined) {
         return { kind: 'refused', reason: 'missing-provenance' };
-      } else if (request.access === 'read') {
+      }
+      if (isStackPublicationOperation(request) && options.stackPublication !== undefined) {
+        const payloadRefusal = validateStackPublicationRequest(options.stackPublication.record, request);
+        if (payloadRefusal !== undefined) return payloadRefusal;
+        const tipRefusal = await options.stackPublication.guardTips();
+        if (tipRefusal !== undefined) return tipRefusal;
+      }
+      if (request.access === 'read') {
         // Discovery reads need no ownership grant.
       } else if (options.creation) {
         const decision = await options.creation.authorize(request, options.cwd);
@@ -310,7 +395,10 @@ export function createGuardedGithubOperationRunner(
       const credential = request.access === 'read' ? 'operator' : 'write';
       try {
         const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential });
-        return options.creation?.complete?.(request, response) ?? {};
+        const completed = options.creation?.complete?.(request, response) ?? {};
+        return request.operation === 'pull-request.create' && response.stdout.trim()
+          ? { ...completed, url: response.stdout.trim() }
+          : completed;
       } catch (error) {
         if (!(error instanceof GithubBotAuthRefusalError)) throw error;
         const events = options.events ?? (transport as GhRunner & { events?: GithubOperationEventEmitter }).events;
@@ -321,7 +409,10 @@ export function createGuardedGithubOperationRunner(
           throw error;
         }
         const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential: 'operator' });
-        return options.creation?.complete?.(request, response) ?? {};
+        const completed = options.creation?.complete?.(request, response) ?? {};
+        return request.operation === 'pull-request.create' && response.stdout.trim()
+          ? { ...completed, url: response.stdout.trim() }
+          : completed;
       }
     },
   };
@@ -370,12 +461,14 @@ export function makeProductionGh(dependencies: {
   execFile?: typeof execFileCb;
   readCredential?: typeof readGithubBotCredential;
   readToken?: typeof readGithubBotToken;
+  assertRealExecAllowed?: typeof assertRealExecAllowed;
 } = {}): GhRunner {
   const execFileP = promisify(dependencies.execFile ?? execFileCb);
   const readCredential = dependencies.readCredential ?? readGithubBotCredential;
   const readToken = dependencies.readToken ?? readGithubBotToken;
+  const assertAllowed = dependencies.assertRealExecAllowed ?? assertRealExecAllowed;
   return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number; credential?: 'operator' | 'write' | 'bot' }) => {
-    assertRealExecAllowed('gh');
+    assertAllowed('gh');
     let env: NodeJS.ProcessEnv | undefined;
     let botToken: string | undefined;
     if (opts.credential === 'write' || opts.credential === 'bot') {

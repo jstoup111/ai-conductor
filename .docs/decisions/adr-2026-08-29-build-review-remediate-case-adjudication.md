@@ -103,35 +103,7 @@ cannot write, broaden, or infer accepted risk. An operator disposition that beco
 the post-join path is running is re-read at every route, halt, and PASS exit, preserving the current
 late-acceptance rule.
 
-> **Amended 2026-10-19 by #3271:** Exact identity alone could not keep an operator acceptance
-> applied: drifting finding ids re-raised the same substance every lap, and a judge binding to the
-> accepted case then halted as a regression or a conflicting decision stop. A provider still never
-> writes or infers accepted risk, but the judge's existing case binding may now *extend* an
-> existing operator acceptance to a re-raised finding:
->
-> - **D2.1** When `remediate` binds a current finding through `existingCaseId` to a case holding at
->   least one source with an exact feature-scoped operator disposition, that finding is *carried*
->   operator acceptance. It counts as operator-resolved for the effective verdict and settles with no
->   action, deferral, escalation, decision stop, repeat or regression halt, or kickback charge,
->   whatever disposition the judge proposed for that case.
-> - **D2.2** Carried acceptance is derived, never copied. The operator disposition store remains the
->   only record of accepted risk and its operator-only write path is unchanged. One shared read-side
->   resolver computes carry from the case store's source links plus the disposition store, and every
->   consumer of accepted risk reads that resolver. No case field, source outcome, or disposition
->   record is added, and removing the origin disposition removes every carry derived from it.
-> - **D2.3** Carry never widens past the judge's binding. A finding of the accepting lap itself is
->   never carried, and neither is a source bound before the origin acceptance. Unbound findings,
->   findings bound to a case with no directly accepted source, and infrastructure results remain
->   blocking exactly as before. Acceptance stays scoped to the feature whose stores it reads.
-> - **D2.4** The prior-case context marks each case holding a directly accepted source as
->   operator-accepted, with origin finding ids and lap but no rationale. `remediate` binds by
->   substance only and still never asserts or creates acceptance.
-> - **D2.5** Every carry is one `build_review_disposition_carried` `ConductorEvent` naming the
->   feature, lap, finding, case, and origin finding and lap, registered with every sink (D9).
-> - **D2.6** A repeat or regression halt on an explicit `existingCaseId` binding first appends the
->   bound current sources to the reused case as links only, with no effect and no other field
->   changed, before halting. An operator who then accepts that finding has accepted a source of
->   that case, so a later re-raise bound to it carries. The halt itself is unchanged.
+> **Amended 2026-10-20 by #3271:** An existing operator acceptance may now be *extended* by the judge's `existingCaseId` binding. A finding bound in a later lap to a resolved, origin-marked or operator-resolved case settles as `carried` (adr-2026-10-20-operator-acceptance-is-durable-case-state D3). A provider still cannot write, create or infer accepted risk: only `finalize` writes acceptance origins, from exact operator dispositions (D2 there), and only the TTY-gated `resolve-case` command writes an operator resolution (D7 there).
 
 ### D3 — One existing remediate dispatch owns the semantic fan-in
 
@@ -186,6 +158,8 @@ the semantic kickback budget.
 > disposition was proposed, `advisory` included. Findings below a declared threshold never reach
 > this judgement at all (adr-2026-10-19-build-review-finding-severity-advisory-threshold D4, D6).
 
+> **Amended 2026-10-20 by #3271:** The case-store source outcome vocabulary gains `carried`. It is written only by the reconciler carry lane, never by provider output, and the provider artifact vocabulary is unchanged (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D3).
+
 ### D5 — Durable case state is shared machinery with domain-owned effects
 
 A versioned, feature-scoped `.pipeline/remediation-cases.json` store records engine-stamped cases,
@@ -201,6 +175,8 @@ Cases are not matched mechanically by summaries. `remediate` may bind a current 
 existing case; the engine validates the reference and appends the current raw source trace. When the
 current lap no longer reports an open case, the engine marks it resolved using current-lap absence
 plus mechanically available action evidence. It never deletes history.
+
+> **Amended 2026-10-20 by #3271:** The case store moves to v3. It adds case `operatorAcceptance` origins, case `operatorResolution`, the `carried` outcome and an outbox of `ConductorEvent` values, and v2 is upgraded on write (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D6). The store now holds one operator-authored field, `operatorResolution`, written only by `build-review resolve-case`, so the autonomous/operator separation holds per field. Open-case retirement, by absence or by acceptance, is decided by one shared reconciler predicate (adr-2026-10-20-operator-acceptance-is-durable-case-state D5). On a coordinator reuse halt, the halting proposal's live sources are linked to the bound case (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
 ### D6 — Effects use a reserved, idempotent outbox
 
@@ -236,6 +212,11 @@ strengthens the existing no-op escalation for the judgement case: tree movement 
 unresolved equivalent finding. A previously deferred or rejected case reuses that outcome after the
 current adjudication confirms the binding. A resolved case that reappears also halts as a regression
 of an adjudicated case rather than reopening an unbounded route.
+
+> **Amended 2026-10-19 by #3292:** The regression halt above applies only to an explicit
+> `existingCaseId` rebind with disposition `act` of a resolved case. An unbound proposal for a source that only resolved
+> cases own is admitted as a new case, and a new action is charged against the kickback budget, so
+> the cumulative cap is the bound. See the successor's D5.4–D5.7.
 
 > **Amended 2026-09-09 by #2409:** Decision 7's repeat rule assumed the judge either confirms the
 > attempted case or has nothing to say. A re-raised finding whose claim the judge concludes is
@@ -273,6 +254,8 @@ of an adjudicated case rather than reopening an unbounded route.
 >   refutation on the existing spine, registered with every sink, so the durable resolution is never
 >   a silent state change.
 
+> **Amended 2026-10-20 by #3271:** A binding to a carry-eligible case classifies as `carry` before any repeat, regression, deferral-reuse or decision-stop rule applies, including the 2026-10-19 (#3292) explicit-rebind regression halt. It settles with no halt, no effect and no charge (adr-2026-10-20-operator-acceptance-is-durable-case-state D3). An act case whose effect is `failed` or `reserved` may now retire when every source is covered or no longer raised on a mechanically healthy lap (adr-2026-10-20-operator-acceptance-is-durable-case-state D5).
+
 ### D8 — The effective verdict is derived only after required effects settle
 
 The effective result is:
@@ -295,6 +278,8 @@ and semantic-repeat halt are additive `ConductorEvent` occurrences, registered e
 sink. `.pipeline/remediation-cases.json` and the charged-effect set in the kickback ledger are durable
 control state under event-spine exception C. No second event file, timestamp protocol, or polling
 channel is added.
+
+> **Amended 2026-10-20 by #3271:** The occurrences this change adds (`build_review_acceptance_carried`, `remediation_case_operator_resolved`, and `remediation_case_reconciled` for the new retirements) are written to the case-store outbox in the same transaction as their state change. They are drained onto the existing bus with persister eventId dedup (adr-2026-10-20-operator-acceptance-is-durable-case-state D6). No second schema or reader is introduced.
 
 ### D10 — Rollout is gated and default-on after compatibility validation
 

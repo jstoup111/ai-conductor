@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:14
 import { describe, expect, it } from 'vitest';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import {
@@ -64,6 +64,7 @@ describe('classifyShippedReadiness', () => {
       { title: 'ci-pending for no checks inside the main grace period', state: state({ checksOutcome: 'none' }), observation: observation({ headFirstSeenAt: now - (29 * 60 * 1000) }), expected: 'ci-pending' },
       { title: 'no-checks for no checks after the main grace period', state: state({ checksOutcome: 'none' }), observation: observation({ headFirstSeenAt: now - (31 * 60 * 1000) }), expected: 'no-checks' },
       { title: 'ci-pending for no checks on a non-main base after the grace period', state: state({ checksOutcome: 'none', baseRefName: 'feat/c1/x' }), observation: observation({ headFirstSeenAt: now - (31 * 60 * 1000) }), expected: 'ci-pending' },
+      { title: 'ci-pending for a retargeted leaf with no checks after the grace period', state: state({ checksOutcome: 'none', baseRefName: 'feat/c3/demo' }), observation: observation({ headFirstSeenAt: now - (31 * 60 * 1000) }), expected: 'ci-pending' },
       { title: 'ready for BLOCKED merge state with green checks', state: state({ mergeStateStatus: 'BLOCKED' }), expected: 'ready' },
       { title: 'ready for BEHIND merge state with green checks', state: state({ mergeStateStatus: 'BEHIND' }), expected: 'ready' },
       { title: 'ready for CLEAN merge state with green checks', state: state({ mergeStateStatus: 'CLEAN' }), expected: 'ready' },

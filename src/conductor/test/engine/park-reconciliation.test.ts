@@ -1,5 +1,5 @@
-// Covers: task:1, task:2, task:3, task:4, task:5
-import { describe, expect, it, vi } from 'vitest';
+// Covers: task:1, task:2, task:3, task:4, task:5, task:29, task:rem-prd-audit-R12, task:rem-prd-audit-R12-2, task:rem-as-built-rem-v3-park-reclaim-order
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +24,21 @@ import {
 import { TEARDOWN_SCRIPT } from '../../src/engine/worktree-prepare.js';
 import * as daemonParkCli from '../../src/engine/daemon-park-cli.js';
 import { encodeClaimKey, featureSlugs, InMemoryWorkClaims } from '../../src/engine/work-claims.js';
+
+const publicationSeams = vi.hoisted(() => ({
+  activePublicationRecord: vi.fn(),
+  writePublicationRecord: vi.fn(),
+}));
+
+vi.mock('../../src/engine/stack-publication-record.js', () => ({
+  activePublicationRecord: publicationSeams.activePublicationRecord,
+  writePublicationRecord: publicationSeams.writePublicationRecord,
+}));
+
+afterEach(() => {
+  publicationSeams.activePublicationRecord.mockReset();
+  publicationSeams.writePublicationRecord.mockReset();
+});
 
 // Reconciliation normally constructs its GitHub runner at the production
 // boundary. Keep these unit tests isolated while making an unspecified merged
@@ -194,6 +209,8 @@ interface GitWorld {
   statusPorcelainFails?: boolean;
   /** Assertion seam for ordering a real project teardown before git removal. */
   onWorktreeRemove?: () => void | Promise<void>;
+  /** Raw `for-each-ref` rows when a fixture needs object IDs too. */
+  refLines?: string[];
 }
 
 function gitFailure(code: number, message: string): Error {
@@ -208,6 +225,7 @@ function makeGit(world: GitWorld = {}): {
 } {
   const shipped = world.shipped ?? [];
   const branches = world.branches ?? [];
+  const refLines = world.refLines ?? branches;
   const merged = world.merged ?? [];
   const deleted: string[] = [];
   const deleteArgv: string[][] = [];
@@ -241,7 +259,7 @@ function makeGit(world: GitWorld = {}): {
     }
     if (verb === 'for-each-ref') {
       if (world.refsUnavailable) throw gitFailure(128, 'fatal: not a git repository');
-      return { stdout: `${branches.join('\n')}\n` };
+      return { stdout: `${refLines.join('\n')}\n` };
     }
     if (verb === 'merge-base') {
       const ref = args[2];
@@ -517,6 +535,57 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     } finally {
       await rm(withRoot, { recursive: true, force: true });
       await rm(withoutRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('marks a retained stacked record torn down without deleting its positions or publication refs', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-stack-'));
+    const slug = 'demo';
+    const leaf = 'feat/daemon-demo';
+    const child = 'feat/c1/demo';
+    const stored = {
+      kind: 'record' as const,
+      slug,
+      blob: 'a'.repeat(40),
+      record: {
+        version: 1 as const,
+        members: [
+          { position: 1, branch: child, pr: 101 },
+          { position: 3, branch: leaf, pr: 500 },
+        ],
+      },
+    };
+    const { run, deleteArgv } = makeGit({
+      shipped: [slug],
+      branches: [leaf, child],
+      refLines: [`${leaf} deadbeef`, `${child} deadbeef`],
+      merged: [leaf, child],
+    });
+    try {
+      await mkdir(join(projectRoot, '.worktrees', slug), { recursive: true });
+      publicationSeams.activePublicationRecord.mockResolvedValue(stored);
+      publicationSeams.writePublicationRecord.mockResolvedValue({ kind: 'updated' });
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, branch: leaf, runGit: run });
+      const deletedRefs = run.mock.calls
+        .map(([args]) => args)
+        .filter((args) => args[0] === 'update-ref')
+        .flatMap((args) => args);
+
+      expect({ outcome, childDeletes: deleteArgv.filter((args) => args.includes(child)), deletedRefs, write: publicationSeams.writePublicationRecord.mock.calls }).toEqual({
+        outcome: { slug, steps: ['worktree-removed', 'branch-deleted'] },
+        childDeletes: [],
+        deletedRefs: [],
+        write: [[
+          projectRoot,
+          slug,
+          stored,
+          { ...stored.record, tornDown: true },
+          { git: expect.any(Function) },
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
     }
   });
 

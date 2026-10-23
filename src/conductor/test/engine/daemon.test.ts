@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4
+// Covers: task:1, task:2, task:4, task:26, task:27, task:rem-as-built-rem-vg-5
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1507,10 +1507,10 @@ describe('engine/daemon — runDaemon', () => {
     });
   });
 
-  // ── Dispatch-boundary rebuild + restart (Gap A/B: fire before next task) ────
+  // ── Natural-idle stale restart (pinned children adopt busy rebuilds) ────────
 
-  describe('stale-engine rebuild + restart at the dispatch boundary', () => {
-    it('stale after rebuild: rebuilds, requests restart with identities, and does NOT dispatch the pending feature', async () => {
+  describe('natural-idle stale restart', () => {
+    it('requests restart before the next claim without rebuilding on the dispatch path', async () => {
       const rebuildEngine = vi.fn(async () => {});
       const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
@@ -1532,14 +1532,14 @@ describe('engine/daemon — runDaemon', () => {
         isSelfHost: true,
         autoRestartOnStaleEngine: true,
       });
-      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).toHaveBeenCalledTimes(1);
       expect(requestRestart).toHaveBeenCalledWith({ fromIdentity: 'old-hash', targetIdentity: 'new-hash' });
       expect(runFeature).not.toHaveBeenCalled(); // restarted BEFORE dispatching anything
       expect(res.stoppedReason).toBe('engine_restart');
     });
 
-    it('current after rebuild: rebuilds before each dispatch, dispatches every feature, never restarts', async () => {
+    it('a current supervisor dispatches every feature without rebuilding per claim', async () => {
       const rebuildEngine = vi.fn(async () => {});
       const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
@@ -1558,13 +1558,13 @@ describe('engine/daemon — runDaemon', () => {
         autoRestartOnStaleEngine: true,
         maxIdlePolls: 1,
       });
-      expect(rebuildEngine).toHaveBeenCalledTimes(2); // once per dispatch, not on idle polls
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).not.toHaveBeenCalled();
       expect(runFeature).toHaveBeenCalledTimes(2);
       expect(res.processed.map((o) => o.slug).sort()).toEqual(['f0', 'f1']);
     });
 
-    it('rebuild failure is swallowed: logs, still evaluates the checker, and dispatches when current', async () => {
+    it('does not run a rebuild on the dispatch path when the supervisor is current', async () => {
       const logs: string[] = [];
       const rebuildEngine = vi.fn(async () => {
         throw new Error('tsup boom');
@@ -1587,10 +1587,10 @@ describe('engine/daemon — runDaemon', () => {
         autoRestartOnStaleEngine: true,
         maxIdlePolls: 0,
       });
-      expect(rebuildEngine).toHaveBeenCalled();
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(runFeature).toHaveBeenCalledTimes(1); // degraded to current engine, dispatched
       expect(requestRestart).not.toHaveBeenCalled();
-      expect(logs.some((m) => m.includes('engine rebuild failed'))).toBe(true);
+      expect(logs.some((m) => m.includes('engine rebuild failed'))).toBe(false);
     });
 
     it('gate off (not self-host): rebuildEngine is never called and dispatch proceeds normally', async () => {
@@ -1614,7 +1614,7 @@ describe('engine/daemon — runDaemon', () => {
       expect(runFeature).toHaveBeenCalledTimes(1);
     });
 
-    it('suppressed identity: stale after rebuild but suppressed → no restart, feature dispatches', async () => {
+    it('suppressed stale identity does not restart and still dispatches', async () => {
       const rebuildEngine = vi.fn(async () => {});
       const requestRestart = vi.fn(async () => ({ fired: true }));
       const runFeature = vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const }));
@@ -1638,7 +1638,7 @@ describe('engine/daemon — runDaemon', () => {
         autoRestartOnStaleEngine: true,
         maxIdlePolls: 1,
       });
-      expect(rebuildEngine).toHaveBeenCalled();
+      expect(rebuildEngine).not.toHaveBeenCalled();
       expect(requestRestart).not.toHaveBeenCalled();
       expect(runFeature).toHaveBeenCalledTimes(1); // suppressed → dispatched normally
     });
@@ -3186,6 +3186,220 @@ describe('engine/daemon — runDaemon', () => {
       expect(deps.runFeature).toHaveBeenCalledTimes(1);
       expect(res.processed).toHaveLength(1);
       expect(res.processed[0].status).toBe('done');
+    });
+  });
+
+  describe('protocol-mismatch restart boundaries (ADR D7)', () => {
+    // Covers: task:rem-as-built-rem-vg-5
+    it('restarts at the idle boundary for a recorded mismatch even when the current staleness sample is current', async () => {
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const result = await runDaemon({
+        discoverBacklog: async () => [],
+        runFeature: async () => {
+          throw new Error('an empty backlog must not dispatch');
+        },
+        staleEngineChecker: {
+          check: () => 'current',
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        protocolMismatchPending: () => true,
+        requestRestart,
+      }, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      expect({
+        stopReason: result.stoppedReason,
+        requestRestartCalls: requestRestart.mock.calls.length,
+      }).toEqual({
+        stopReason: 'engine_restart',
+        requestRestartCalls: 1,
+      });
+    });
+
+    // Covers: task:rem-as-built-rem-vg-5
+    it('restarts at the drained boundary for a mismatch recorded after the busy observation and before the current staleness sample', async () => {
+      let mismatchPending = false;
+      let releaseFirst!: () => void;
+      let signalFirstDispatch!: () => void;
+      const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstDispatched = new Promise<void>((resolve) => { signalFirstDispatch = resolve; });
+      const started: string[] = [];
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const daemon = runDaemon({
+        discoverBacklog: staticBacklog([{ slug: 'first' }, { slug: 'must-not-claim' }]),
+        runFeature: async (item) => {
+          started.push(item.slug);
+          if (item.slug === 'first') {
+            signalFirstDispatch();
+            await firstReleased;
+          }
+          return { slug: item.slug, status: 'done' as const };
+        },
+        staleEngineChecker: {
+          check: () => 'current',
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        protocolMismatchPending: () => mismatchPending,
+        requestRestart,
+        sleep: async () => {
+          await firstReleased;
+        },
+      }, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      await firstDispatched;
+      mismatchPending = true;
+      releaseFirst();
+      const result = await daemon;
+
+      expect({
+        started,
+        stopReason: result.stoppedReason,
+        requestRestartCalls: requestRestart.mock.calls.length,
+      }).toEqual({
+        started: ['first'],
+        stopReason: 'engine_restart',
+        requestRestartCalls: 1,
+      });
+    });
+
+    // Covers: task:rem-as-built-rem-vg-5
+    it('starts a claim-stop drain when a fallback child settles before busy observation, blocking the next claim', async () => {
+      let mismatchPending = false;
+      const started: string[] = [];
+      const logs: string[] = [];
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const result = await runDaemon({
+        discoverBacklog: staticBacklog([{ slug: 'fallback-child' }, { slug: 'must-not-claim' }]),
+        runFeature: async (item) => {
+          started.push(item.slug);
+          if (item.slug === 'fallback-child') {
+            await Promise.resolve();
+            mismatchPending = true;
+          }
+          return { slug: item.slug, status: 'done' as const };
+        },
+        staleEngineChecker: {
+          check: () => 'current',
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        protocolMismatchPending: () => mismatchPending,
+        requestRestart,
+        log: (line) => logs.push(line),
+      }, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      expect({
+        started,
+        stopReason: result.stoppedReason,
+        requestRestartCalls: requestRestart.mock.calls.length,
+        drainLogs: logs.filter((line) => line === '[daemon] drain started: stale-engine'),
+      }).toEqual({
+        started: ['fallback-child'],
+        stopReason: 'engine_restart',
+        requestRestartCalls: 1,
+        drainLogs: ['[daemon] drain started: stale-engine'],
+      });
+    });
+
+    // A width-two pool where a fallback child settles while another executor
+    // is still alive. Whichever collection path picks it up, the mismatch it
+    // recorded must start the claim-stop drain before its slot can reopen.
+    async function runFallbackSettlesWhileSiblingAlive(path: 'busy-poll' | 'direct-collect') {
+      let mismatchPending = false;
+      const started: string[] = [];
+      const logs: string[] = [];
+      let releaseLong!: () => void;
+      const longReleased = new Promise<void>((resolve) => { releaseLong = resolve; });
+      let releaseFallback!: () => void;
+      const fallbackReleased = new Promise<void>((resolve) => { releaseFallback = resolve; });
+      let sleeps = 0;
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+
+      const result = await runDaemon({
+        discoverBacklog: staticBacklog([{ slug: 'long' }, { slug: 'fallback-child' }, { slug: 'must-not-claim' }]),
+        runFeature: async (item) => {
+          started.push(item.slug);
+          if (item.slug === 'must-not-claim') releaseLong();
+          if (item.slug === 'long') await longReleased;
+          if (item.slug === 'fallback-child') {
+            if (path === 'busy-poll') await fallbackReleased;
+            else await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            mismatchPending = true;
+          }
+          return { slug: item.slug, status: 'done' as const };
+        },
+        staleEngineChecker: {
+          check: () => 'current',
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        protocolMismatchPending: () => mismatchPending,
+        requestRestart,
+        sleep: async () => {
+          sleeps += 1;
+          if (sleeps === 1) releaseFallback();
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        },
+        log: (line) => {
+          logs.push(line);
+          if (line === '[daemon] drain started: stale-engine') releaseLong();
+        },
+      }, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: path === 'busy-poll' ? 1 : 0,
+      });
+
+      return {
+        started,
+        stopReason: result.stoppedReason,
+        requestRestartCalls: requestRestart.mock.calls.length,
+        drainLogs: logs.filter((line) => line === '[daemon] drain started: stale-engine'),
+      };
+    }
+
+    // Covers: task:rem-as-built-R2
+    it('drains before reopening a slot when a fallback child settles during the busy poll while a sibling is alive', async () => {
+      expect(await runFallbackSettlesWhileSiblingAlive('busy-poll')).toEqual({
+        started: ['long', 'fallback-child'],
+        stopReason: 'engine_restart',
+        requestRestartCalls: 1,
+        drainLogs: ['[daemon] drain started: stale-engine'],
+      });
+    });
+
+    // Covers: task:rem-as-built-R2
+    it('drains before reopening a slot when a fallback child settles during a direct collection while a sibling is alive', async () => {
+      expect(await runFallbackSettlesWhileSiblingAlive('direct-collect')).toEqual({
+        started: ['long', 'fallback-child'],
+        stopReason: 'engine_restart',
+        requestRestartCalls: 1,
+        drainLogs: ['[daemon] drain started: stale-engine'],
+      });
     });
   });
 });

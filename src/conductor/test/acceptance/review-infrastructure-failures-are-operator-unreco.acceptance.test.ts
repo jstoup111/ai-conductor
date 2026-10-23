@@ -101,6 +101,8 @@ function identityDeps(fixture: Fixture) {
   return {
     resolveMainRoot: async () => fixture.root,
     realpath: async (path: string) => path,
+    child: undefined,
+    adjudicationEnabled: true,
   };
 }
 

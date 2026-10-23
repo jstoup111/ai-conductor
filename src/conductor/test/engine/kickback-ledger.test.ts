@@ -36,6 +36,7 @@ import {
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   recordGrowth,
   readGrowthAccounting,
+  projectPendingGrowth,
   recordPendingRepair,
   discardPendingRepair,
   settlePendingRepair,
@@ -86,6 +87,74 @@ describe('kickback-ledger', () => {
 
   it('returns an empty ledger when the ledger file is absent', async () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it.each([
+    ['projects charged growth in stored gate order and identifies the gate that crosses the cap', 0, {
+      prd_audit: { laps: 1, growth: 3 },
+      architecture_review_as_built: { laps: 1, growth: 8 },
+    }, 10, {
+      total: 11,
+      byGate: { prd_audit: 3, architecture_review_as_built: 8 },
+      projected: 11,
+      minimumRaise: 1,
+      exceedingGate: 'architecture_review_as_built',
+    }],
+    ['includes settled growth when calculating the required raise', 9, {
+      prd_audit: { laps: 1, growth: 3 },
+      architecture_review_as_built: { laps: 1, growth: 2 },
+    }, 13, {
+      total: 5,
+      byGate: { prd_audit: 3, architecture_review_as_built: 2 },
+      projected: 14,
+      minimumRaise: 1,
+      exceedingGate: 'architecture_review_as_built',
+    }],
+    ['reports the first charged gate when settled growth is already at the cap', 10, {
+      prd_audit: { laps: 1, growth: 2 },
+    }, 10, {
+      total: 2,
+      byGate: { prd_audit: 2 },
+      projected: 12,
+      minimumRaise: 2,
+      exceedingGate: 'prd_audit',
+    }],
+    ['keeps a zero raise and no exceeding gate when projected growth fits', 2, {
+      prd_audit: { laps: 1, growth: 3 },
+    }, 10, {
+      total: 3,
+      byGate: { prd_audit: 3 },
+      projected: 5,
+      minimumRaise: 0,
+    }],
+    ['omits laps-only charges from pending growth below the cap', 2, {
+      prd_audit: { laps: 1, growth: 0 },
+      architecture_review_as_built: { laps: 1, growth: 0 },
+    }, 10, {
+      total: 0,
+      byGate: {},
+      projected: 2,
+      minimumRaise: 0,
+    }],
+    ['identifies a laps-only gate when settled growth already exceeds the cap', 11, {
+      prd_audit: { laps: 1, growth: 0 },
+    }, 10, {
+      total: 0,
+      byGate: {},
+      projected: 11,
+      minimumRaise: 1,
+      exceedingGate: 'prd_audit',
+    }],
+    ['returns undefined without a pending repair', 2, undefined, 10, undefined],
+    ['does not calculate a minimum raise without a cap', 2, {
+      prd_audit: { laps: 1, growth: 3 },
+    }, null, {
+      total: 3,
+      byGate: { prd_audit: 3 },
+      projected: 5,
+    }],
+  ] as const)('projectPendingGrowth %s', (_description, added, charges, cap, expected) => {
+    expect(projectPendingGrowth(added, charges, cap)).toEqual(expected);
   });
 
   it('round-trips an optional pending repair with its per-gate charges and task ids', async () => {
@@ -214,6 +283,132 @@ describe('kickback-ledger', () => {
       settled: { kind: 'settled' },
       replay: { kind: 'none' },
       emitted: [{ type: 'plan_growth', authored: 8, added: 4, byGate: { prd_audit: 3, architecture_review_as_built: 1 }, remaining: 1 }],
+    });
+  });
+
+  it('settles pending growth after the operator raises the cap by its projected minimum', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-raised-cap',
+      charges: {
+        prd_audit: { laps: 1, growth: 3 },
+        architecture_review_as_built: { laps: 1, growth: 8 },
+      },
+      taskIds: ['rem-prd-1', 'rem-as-built-1'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+        architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 40, added: 0, byGate: {} },
+      pendingRepair,
+    });
+    const emitted: unknown[] = [];
+
+    const result = await settlePendingRepair(dir, [
+      { gate: 'prd_audit', lapCap: 3, growthCap: 11, authoredSource: 'plan', growth: { authored: 40, added: 0, byGate: {}, remaining: 11 } },
+      { gate: 'architecture_review_as_built', lapCap: 3, growthCap: 11, authoredSource: 'plan', growth: { authored: 40, added: 0, byGate: {}, remaining: 11 } },
+    ], { events: { emit: (event) => { emitted.push(event); } } });
+    const ledger = await readKickbackLedger(dir);
+
+    expect({ result, pendingRepair: ledger.pendingRepair, laps: { prdAudit: ledger.gates.prd_audit?.laps, asBuilt: ledger.gates.architecture_review_as_built?.laps }, growth: ledger.growth, emitted }).toEqual({
+      result: { kind: 'settled' },
+      pendingRepair: undefined,
+      laps: { prdAudit: 1, asBuilt: 1 },
+      growth: { authored: 40, added: 11, byGate: { prd_audit: 3, architecture_review_as_built: 8 } },
+      emitted: [{ type: 'plan_growth', authored: 40, added: 11, byGate: { prd_audit: 3, architecture_review_as_built: 8 }, remaining: 0 }],
+    });
+  });
+
+  it('refuses a pending repair at the projected growth gate without changing its ledger', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-over-cap',
+      charges: {
+        prd_audit: { laps: 1, growth: 3 },
+        architecture_review_as_built: { laps: 1, growth: 8 },
+      },
+      taskIds: ['rem-prd-1', 'rem-as-built-1'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+        architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 40, added: 0, byGate: {} },
+      pendingRepair,
+    });
+    const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    const before = await readFile(ledgerPath, 'utf8');
+
+    const result = await settlePendingRepair(dir, [
+      { gate: 'prd_audit', lapCap: 3, growthCap: 10, authoredSource: 'plan', growth: { authored: 40, added: 0, byGate: {}, remaining: 10 } },
+      { gate: 'architecture_review_as_built', lapCap: 3, growthCap: 10, authoredSource: 'plan', growth: { authored: 40, added: 0, byGate: {}, remaining: 10 } },
+    ]);
+
+    expect({ result, after: await readFile(ledgerPath, 'utf8') }).toEqual({
+      result: { kind: 'exhausted', gate: 'architecture_review_as_built', allowance: 'growth' },
+      after: before,
+    });
+  });
+
+  it('keeps a one-short repair pending and reports its remaining projected raise', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-one-short',
+      charges: {
+        prd_audit: { laps: 1, growth: 3 },
+        architecture_review_as_built: { laps: 1, growth: 9 },
+      },
+      taskIds: ['rem-prd-1', 'rem-as-built-1'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+        architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+      },
+      growth: { authored: 40, added: 0, byGate: {} },
+      pendingRepair,
+    });
+    const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    const before = await readFile(ledgerPath, 'utf8');
+
+    const result = await settlePendingRepair(dir, [
+      { gate: 'prd_audit', lapCap: 3, growthCap: 11, authoredSource: 'plan', growth: { authored: 40, added: 0, byGate: {}, remaining: 11 } },
+      { gate: 'architecture_review_as_built', lapCap: 3, growthCap: 11, authoredSource: 'plan', growth: { authored: 40, added: 0, byGate: {}, remaining: 11 } },
+    ]);
+    const ledger = await readKickbackLedger(dir);
+
+    expect({ result, projection: projectPendingGrowth(ledger.growth?.added ?? 0, ledger.pendingRepair?.charges, 11), after: await readFile(ledgerPath, 'utf8') }).toEqual({
+      result: { kind: 'exhausted', gate: 'architecture_review_as_built', allowance: 'growth' },
+      projection: { total: 12, byGate: { prd_audit: 3, architecture_review_as_built: 9 }, projected: 12, minimumRaise: 1, exceedingGate: 'architecture_review_as_built' },
+      after: before,
+    });
+  });
+
+  it('refuses laps-only pending work when settled growth already exceeds the cap', async () => {
+    const pendingRepair: PendingRepair = {
+      receiptId: 'repair-round-laps-only-over-cap',
+      charges: { prd_audit: { laps: 1, growth: 0 } },
+      taskIds: ['rem-prd-1'],
+    };
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: { prd_audit: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+      growth: { authored: 40, added: 11, byGate: { prd_audit: 11 } },
+      pendingRepair,
+    });
+    const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    const before = await readFile(ledgerPath, 'utf8');
+
+    const result = await settlePendingRepair(dir, [{
+      gate: 'prd_audit', lapCap: 3, growthCap: 10, authoredSource: 'plan', growth: { authored: 40, added: 11, byGate: { prd_audit: 11 }, remaining: -1 },
+    }]);
+
+    expect({ result, after: await readFile(ledgerPath, 'utf8') }).toEqual({
+      result: { kind: 'exhausted', gate: 'prd_audit', allowance: 'growth' },
+      after: before,
     });
   });
 

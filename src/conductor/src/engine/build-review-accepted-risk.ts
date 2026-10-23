@@ -2,6 +2,7 @@ import {
   rehydrateBuildReviewAcceptedRiskFinding,
   type BuildReviewDispositionRecord,
 } from './build-review-dispositions.js';
+import type { RemediationCaseRecord, RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { maskProjectOwnedRegions } from './pr-body-regions.js';
 import {
   HALT_PR_BANNER_SENTINEL,
@@ -48,11 +49,38 @@ function validRecord(value: BuildReviewDispositionRecord): boolean {
  * operator identity, and timestamps stay in the local disposition store and MUST NOT be
  * rendered here.
  */
-export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskRenderResult {
+function carriedRiskRows(cases: readonly RemediationCaseRecord[]): readonly string[] {
+  return cases.flatMap((caseRecord) => caseRecord.sources
+    .filter((source) => source.outcome === 'carried')
+    .flatMap((source) => (caseRecord.operatorAcceptance?.origins ?? []).map((origin) => {
+      const separator = source.sourceId.indexOf(':');
+      const rubric = separator < 0 ? 'unknown' : source.sourceId.slice(0, separator);
+      const findingId = separator < 0 ? source.sourceId : source.sourceId.slice(separator + 1);
+      return `- Carried finding: \`${findingId}\` — rubric: ${rubric}; carried from: \`${origin.sourceId}\` (lap ${origin.lapId})`;
+    })));
+}
+
+function operatorResolvedRiskRows(cases: readonly RemediationCaseRecord[]): readonly string[] {
+  return cases.flatMap((caseRecord) => caseRecord.operatorResolution === undefined
+    ? []
+    : [`- Operator-resolved case: \`${caseRecord.id}\` — source ids: ${caseRecord.sources.map((source) => `\`${source.sourceId}\``).join(', ') || 'none'}`]);
+}
+
+function caseRiskRows(caseRead: RemediationCaseStoreReadResult | undefined): readonly string[] {
+  if (caseRead === undefined) return [];
+  if (!caseRead.ok) return ['- Remediation case store: unreadable.'];
+  return [...carriedRiskRows(caseRead.state.cases), ...operatorResolvedRiskRows(caseRead.state.cases)];
+}
+
+export function renderBuildReviewAcceptedRisk(
+  records: readonly BuildReviewDispositionRecord[],
+  caseRead?: RemediationCaseStoreReadResult,
+): BuildReviewAcceptedRiskRenderResult {
   if (records.some((record) => !validRecord(record))) {
     return { ok: false, message: 'accepted build-review risk contains an unrenderable record' };
   }
   const entries = [...records].sort((left, right) => left.finding.id.localeCompare(right.finding.id));
+  const caseRows = caseRiskRows(caseRead);
   const lines = [
     BUILD_REVIEW_ACCEPTED_RISK_START,
     SECTION,
@@ -60,6 +88,7 @@ export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispo
     `Accepted findings: ${entries.length}`,
     '',
     ...entries.map((record) => `- Finding: \`${record.finding.id}\` — rubric: ${record.finding.canonicalPayload.rubric}`),
+    ...(caseRows.length === 0 ? [] : ['', ...caseRows]),
     '',
     POINTER,
     BUILD_REVIEW_ACCEPTED_RISK_END,
@@ -86,15 +115,20 @@ function existingSectionBounds(body: string): { readonly start: number; readonly
  * that body, so record_outcome's upsert staled the judgment the coordinator had
  * just accepted, re-selected judge_pr_prose, and halted FINISH as non-advancing.
  */
-export function upsertBuildReviewAcceptedRisk(body: string, records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskUpsertResult {
+export function upsertBuildReviewAcceptedRisk(
+  body: string,
+  records: readonly BuildReviewDispositionRecord[],
+  caseRead?: RemediationCaseStoreReadResult,
+): BuildReviewAcceptedRiskUpsertResult {
   const bounds = existingSectionBounds(body);
   if (bounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
-  if (records.length === 0) {
+  const caseRows = caseRiskRows(caseRead);
+  if (records.length === 0 && caseRows.length === 0) {
     if (bounds === null) return { ok: true, body, changed: false };
     const next = `${body.slice(0, bounds.start).trimEnd()}${body.slice(bounds.after).trimStart() ? '\n\n' : ''}${body.slice(bounds.after).trimStart()}`.trimEnd();
     return { ok: true, body: next, changed: next !== body };
   }
-  const rendered = renderBuildReviewAcceptedRisk(records);
+  const rendered = renderBuildReviewAcceptedRisk(records, caseRead);
   if (!rendered.ok) return rendered;
   const next = bounds !== null
     ? `${body.slice(0, bounds.start)}${rendered.section}${body.slice(bounds.after)}`

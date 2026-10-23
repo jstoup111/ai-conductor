@@ -100,6 +100,7 @@ function resourceTarget(resource: unknown, repository: string): GithubOperationT
   switch (candidate.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       if (typeof candidate.number !== 'number' || !Number.isSafeInteger(candidate.number) || candidate.number < 1) {
         return undefined;
       }
@@ -202,6 +203,7 @@ export function githubTargetsMatch(left: GithubOperationTarget, right: GithubOpe
   switch (left.kind) {
     case 'issue':
     case 'pull-request':
+    case 'stack':
       return right.kind === left.kind && right.number === left.number;
     case 'label-definition':
       return right.kind === 'label-definition' && right.name === left.name;

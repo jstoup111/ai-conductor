@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:8, task:9, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -37,6 +37,26 @@ const ACTIVE_STALL_EVENT: ConductorEvent = {
   resolvedAfter: 2,
 };
 
+it('declares one persistent sink row for each stack event', () => {
+  const stackEventTypes = [
+    'stack_member_published',
+    'stack_member_redrafted',
+    'stack_assembled',
+    'stack_member_lifecycle',
+    'stack_members_unreachable',
+    'stack_tip_diverged',
+  ] as const;
+
+  for (const type of stackEventTypes) {
+    expect(EVENT_SINKS).toHaveProperty(type, {
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  }
+});
+
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
   (<Value>() => Value extends Right ? 1 : 2)
@@ -64,26 +84,35 @@ const maintenancePhaseContract: MaintenancePhaseIsClosed & MaintenancePhaseOutco
 void maintenancePhaseContract;
 const maintenancePhaseFixtures = [
   { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed' },
-  { type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: 1, outcome: 'skipped-unchanged' },
+  { type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: 1, outcome: 'completed' },
   { type: 'daemon_maintenance_phase', phase: 'rekick', durationMs: 1, outcome: 'failed' },
-  { type: 'daemon_maintenance_phase', phase: 'startup-dashboard', durationMs: 1, outcome: 'deferred' },
+  { type: 'daemon_maintenance_phase', phase: 'startup-dashboard', durationMs: 1, outcome: 'failed' },
   { type: 'daemon_maintenance_phase', phase: 'halt-pr-reconcile', durationMs: 1, outcome: 'completed' },
-  { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'completed' },
+  { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'skipped-unchanged' },
   { type: 'daemon_maintenance_phase', phase: 'provider-scratch', durationMs: 1, outcome: 'completed' },
   { type: 'daemon_maintenance_phase', phase: 'mergeable-sweep', durationMs: 1, outcome: 'completed' },
-  { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'completed', prUrl: 'https://example.test/pr/1', slug: 'repair-slug' },
+  { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'deferred', prUrl: 'https://example.test/pr/1', slug: 'repair-slug' },
 ] satisfies ConductorEvent[];
 void maintenancePhaseFixtures;
 // @ts-expect-error repairs always identify their PR.
 const repairWithoutPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'completed' };
 // @ts-expect-error non-repair phases cannot carry repair identity.
 const refreshWithPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', prUrl: 'https://example.test/pr/1' };
+// @ts-expect-error only repairs are deferred.
+const deferredRefresh: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'deferred' };
+// @ts-expect-error only parked reconciliation skips unchanged inputs.
+const skippedRepair: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'skipped-unchanged', prUrl: 'https://example.test/pr/1' };
+// @ts-expect-error parked reconciliation is never deferred.
+const deferredParkedReconcile: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'deferred' };
 // @ts-expect-error parked reconciliation summaries have a closed vocabulary.
 const parkedSummaryWithUnknownKey: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'completed', summary: { retained: 1 } };
 // @ts-expect-error summaries are only meaningful for the reconciliation phase.
 const refreshWithSummary: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', summary: { reconciled: 1 } };
 void repairWithoutPrUrl;
 void refreshWithPrUrl;
+void deferredRefresh;
+void skippedRepair;
+void deferredParkedReconcile;
 void parkedSummaryWithUnknownKey;
 void refreshWithSummary;
 type GithubWriteCredentialFallbackEvent = Extract<
@@ -197,6 +226,8 @@ const REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES = [
   'remediation_adjudication_started',
   'remediation_adjudication_completed',
   'remediation_adjudication_failed',
+  'build_review_acceptance_carried',
+  'remediation_case_operator_resolved',
   'remediation_case_reconciled',
   'remediation_effect_reserved',
   'remediation_effect_applied',
@@ -265,12 +296,15 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 // This is deliberately an exact set rather than a volume count: a newly-persisted
 // non-halt event must update this contract explicitly.
 const PINNED_PERSISTED_EVENT_TYPES = [
+  'decide_artifacts_pruned',
   'otel_spool_drop',
   'otel_spool_backlog',
   'daemon_backlog_snapshot',
   'daemon_memory_sample',
   'daemon_heap_dump_written',
   'daemon_exited',
+  'executor_started',
+  'executor_protocol_mismatch',
   'feature_dispatch_started',
   'feature_dispatch_ended',
   'feature_shipped',
@@ -329,6 +363,12 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'self_host_dispatch_admission',
   'self_host_containment_verdict',
   'self_host_boundary_fingerprint',
+  'provider_transcripts_captured',
+  'provider_transcripts_evicted',
+  'provider_transcripts_harvest_failed',
+  'provider_transcripts_pruned',
+  'provider_transcripts_retained',
+  'provider_transcripts_retention_failed',
   'over_scope_decision',
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
   'remediation_case_refuted',
@@ -349,6 +389,12 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'child_started',
   'child_closed',
   'child_switched',
+  'stack_member_published',
+  'stack_member_redrafted',
+  'stack_assembled',
+  'stack_member_lifecycle',
+  'stack_members_unreachable',
+  'stack_tip_diverged',
   'rebase_skipped_for_stack',
   'restack_planned',
   'restack_applied',
@@ -1778,6 +1824,7 @@ describe('event sink subscriptions', () => {
   it('derives the audited set without changing prior routing', () => {
     expect(new Set(auditedEventTypes())).toEqual(new Set([
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
+      'decide_artifacts_pruned',
       'verdict_freshness',
       'halt_marker_write_failed',
       'halt_record_written',
@@ -1796,6 +1843,8 @@ describe('event sink subscriptions', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
       'build_active_stall',
+      'executor_started',
+      'executor_protocol_mismatch',
       'tracker_backend_unavailable',
       'halt_marker_write_failed',
       'halt_record_written',

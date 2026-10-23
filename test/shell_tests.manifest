@@ -107,6 +107,7 @@ test_install_worktree_guard.sh shell-runner verifies installer worktree-root gua
 test_bin_update.sh shell-runner verifies standalone update flow behavior
 # triage: test_bin_setup_failure_propagation.sh kept — isolated runner PASS
 test_bin_setup_failure_propagation.sh shell-runner verifies setup failure propagation and worktree isolation
+test_conductor_npm_no_audit.sh shell-runner verifies install paths skip npm audit and fund lookups
 
 # Triage: Codex and documentation acceptance runners and their children.
 # triage: run_first_class_codex_harness_parity_904_acceptance.sh deleted — obsolete: duplicate runner; child shell scripts are classified below and its Vitest acceptance file is in the default suite
@@ -115,6 +116,7 @@ test_codex_guidance_contract.sh shell-runner verifies Codex-facing bootstrap gui
 # triage: test_codex_skill_installation.sh fixed — isolated runner PASS after removing retired Unreleased changelog-migration assertions
 test_codex_skill_installation.sh shell-runner verifies isolated Codex catalog installation, update, check, and uninstall behavior
 test_install_skill_names.sh shell-runner verifies frontmatter-keyed installer skill links
+test_dependabot_npm_coverage.sh shell-runner verifies Dependabot watches every tracked npm root
 # triage: run_browsable_documentation_site_acceptance.sh deleted — obsolete: duplicate runner; test_docs_navigation.sh and test_docs_pages_smoke.sh retain integrity ownership
 
 # Triage: launcher, hook, and release orphan scripts verified through the isolated shell runner.

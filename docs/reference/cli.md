@@ -157,7 +157,7 @@ self-host candidates — both providers, invoke and interactive paths) carries
 run — printing `ai-conductor may not be invoked from inside a daemon-managed session; the engine owns
 all conductor operations for this run (blocked subcommand: <name>).` and exiting 1 — before any
 subcommand parsing. `<name>` is a bounded identity: a recognized subcommand (`daemon`, `config`,
-`test-suite`, `build-review`, `finish-record`, or a sanctioned one), `unknown` for any other text, or
+`test-suite`, `build-review`, `finish-record`, `docs-prune`, or a sanctioned one), `unknown` for any other text, or
 `<none>`. Unrecognized argv is never echoed. When the engine supplied a managed-session context, the
 refusal also records a [`session_command_refused`](artifacts.md#managed-session-occurrence-events)
 event; without that context the command prints `session refusal telemetry unavailable` and still
@@ -176,8 +176,9 @@ keeps engine prompts and shipped skills from directing a managed session to a re
 ## `ai-conductor build-review`
 
 ```bash
-ai-conductor build-review findings --feature <slug> [--json]
+ai-conductor build-review findings --feature <slug> [--child <child>] [--json]
 ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <id> --rationale <text>
 ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
@@ -186,7 +187,12 @@ autonomous remediation-case outcomes; `--json` includes those cases under `cases
 autonomous outcomes separate from operator dispositions and includes each case's disposition, resolution,
 source ids, effect state, rationale, and, for a refutation, its claim and assertion verdicts. A missing
 case store is a successful listing with no autonomous cases. An unreadable or unsupported case store makes
-`findings` name the store and exit 1 rather than silently omitting its cases. `accept` changes state only from an interactive terminal with
+`findings` name the store and exit 1 rather than silently omitting its cases. `--child` reads that
+child's case store instead of the feature's. `findings` also lists each carried source (its case,
+origin source ids, origin laps, and the origin dispositions' operators and rationales), each
+operator-resolved case (operator, rationale, and time), and each case-store outbox entry the engine has
+not yet delivered; `--json` reports them under `carriedSources`, `operatorResolvedCases`, and
+`pendingOutbox`, each omitted when empty. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
@@ -200,6 +206,18 @@ It records a decision only when that rubric currently has an exhausted mechanica
 fault, or a current `projection-oversized` fault (which halts without consuming that allowance).
 Judged, skipped, duplicate, unknown-rubric, allowance-remaining for every other cause, and stale-review
 requests are refused without changing the decision state.
+
+`resolve-case` resolves one open remediation case in the feature's case store, or in the child's with
+`--child`. It has the same interactive-terminal and local-operator-identity gate as `accept` and
+requires a non-empty rationale. It records the operator resolution, turns a `reserved` effect into
+`failed`, keeps every source link and the effect history, and queues one
+`remediation_case_operator_resolved` event that the engine delivers at its next pass. It prints
+`build-review resolve-case: resolved <id>.` and exits 0. An unknown case, an already resolved case, an
+empty rationale, an invalid child id, a non-interactive session, an unresolved identity, or a feature
+mismatch is refused without changing the store and exits 1. A resolved case can carry acceptance to
+later same-substance findings; see
+[post-join build-review adjudication](../explanation/gates.md#post-join-build-review-adjudication).
+Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case).
 
 ## `ai-conductor scope-check`
 
@@ -473,8 +491,13 @@ so far (broken down by the gate that added them, when any), and how many remain 
 The authored count comes from the feature's resolved plan — the same selection the daemon uses — so
 the line reports the budget remediation enforces. When no plan resolves and the ledger records no
 authored count, the line reads `plan unresolved; added <n>` instead of a zero authored count and
-zero cap, appending `remaining <r>/<cap>` only when the cap was raised. The line never rewrites the
-ledger.
+zero cap, appending `remaining <r>/<cap>` only when the cap was raised. While an appended
+[pending repair](../explanation/gates.md#remediation-caps-settle-at-the-build-transition) carries plan
+growth, `remaining` subtracts it and the line appends `; pending <total> (<gate> <n>, ...)`, plus
+`, minimum raise <k>` when settling it would exceed the cap — for example
+`PLAN GROWTH [<slug>]: authored 40; added 0; remaining 0/10; pending 11 (prd_audit 3, architecture_review_as_built 8), minimum raise 1`.
+For an unresolved plan the pending segment replaces `remaining` and carries no minimum raise. The line
+never rewrites the ledger.
 When the growth accounting cannot be read, the line reads `PLAN GROWTH [<slug>]: unavailable (<error>)`
 and the budget lines still print.
 
@@ -500,6 +523,16 @@ in an in-progress feature's `.pipeline/events.jsonl` that has a `step_started` e
 step event (`step_completed`, `step_failed`, `step_interrupted`, or `step_refused`). Events pair by
 execution id (by step name for ledgers without execution context); a `step_retry` keeps the original
 start time. Rows for a daemon that is not running omit these lines.
+
+A running daemon also prints its engine versions when it has a pidfile, executor records, or
+dispatch events:
+
+| Line | Source |
+| --- | --- |
+| `EXECUTOR ENGINE CURRENT: <id>` | The installed engine's `dist` target; `unknown` when unreadable. |
+| `SUPERVISOR ENGINE: <id>` | The supervisor's pidfile engine dir. Suffixed `(older than current)` when stale. |
+| `EXECUTOR [<slug>]: <id>` | A running child executor's `.daemon/executors/<slug>.json` pin, suffixed `(older than current)` when stale. An unreadable record prints `version unknown — record unreadable`. |
+| `DISPATCH [<slug>]: engine <id>` | Each `feature_dispatch_started` in `.daemon/events.jsonl`; dispatches from before per-dispatch pinning print `engine unknown`. |
 
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.
@@ -648,6 +681,11 @@ never races a live build.
 Otherwise it prints `Reclaiming retained worktree: <path>`, removes the worktree, then prints
 `Removed retained worktree '<slug>': <path>` and exits 0. A removal failure prints `Could not
 reclaim-worktree '<slug>': <error message>` and exits 1, leaving the worktree in place.
+
+For a [published stack](configuration.md#stacked-publication), after removing the worktree it
+deletes the child branches under the same proof as the mergeable sweep, when the shipped record is
+on `origin/main` and every member is reachable. Otherwise it keeps the children and marks
+`refs/conductor/<slug>/publication` torn down. Either way it exits 0.
 
 Like `park`/`unpark`/`reconcile-parked`, it resolves the main repo root via `git rev-parse
 --git-common-dir` before doing any other work, so it works from inside any worktree.
@@ -1055,6 +1093,71 @@ Every other failure exits **0** with one warning and no record written, so the e
 used to detect success. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
 
+## `ai-conductor docs-prune`
+
+```bash
+ai-conductor docs-prune
+```
+
+Opens one reviewed, docs-only PR that deletes the transient DECIDE artifacts of shipped features from
+`main`. Operator-run only: no daemon sweep, finish step, or CI job runs it, and it refuses inside a
+[daemon-managed session](#daemon-session-refusal). It takes no flags; any argument prints
+`conduct docs-prune` to stderr and exits 1.
+
+1. Runs `git fetch origin main` and reads `.docs` from `origin/main` only. Local branches are ignored.
+2. Selects every stem with a committed `.docs/shipped/<stem>.md` and collects that stem's files in the
+   [prunable families](artifacts.md#retention). Plans without a shipped record are reported as skipped
+   (`no-shipped-record`). A date-stripped match shared by more than one plan stem is excluded rather
+   than guessed.
+3. Reads every open PR's changed files. A stem is deferred whole (`open-pr-modifies`) when any open PR,
+   other than the operator's own `docs-prune/*` PR, changes one of its prunable files.
+4. Commits the deletions in a detached temporary worktree off `origin/main`, refusing any staged
+   change that is not an expected deletion, then removes the worktree.
+5. Pushes `docs-prune/<YYYY-MM-DD>` and opens a PR titled `docs: prune shipped DECIDE artifacts`
+   against `main`, with the report as its body. When the operator already owns an open `docs-prune/*`
+   PR, it replaces that branch (`--force-with-lease` against its fetched tip) and edits the PR body
+   instead.
+
+Every remote write — the push, `pull-request.create`, `pull-request.edit` — needs an exact interactive
+terminal approval; a declined or non-interactive confirmation refuses it. The command never pushes
+`main`, merges, or enables auto-merge. A human reviews and merges the PR.
+
+It exits 1 when another operator owns an open `docs-prune/*` PR, when repository resolution fails, or
+when any approval, push, or PR operation is refused. With nothing removable it publishes nothing.
+
+On success it prints the report (`### Removed` and `### Deferred` lists) to stdout, persists one
+`decide_artifacts_pruned` event (`removed`, `deferred`, `skipped`, `excluded`, optional
+`pullRequestUrl`) to `<repo root>/.pipeline/events.jsonl`, and exits 0.
+
+Pruning never changes `spec_hash`, shipment evidence, or the protected-artifact seal. Shipment repair
+and the shipment audit recover a pruned plan from its deleting commit's parent — see
+[shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#a-plan-was-pruned-after-it-shipped).
+
+## `ai-conductor transcripts`
+
+```bash
+ai-conductor transcripts <slug> [--show <capture>]
+```
+
+A read-only command that inspects the self-host provider transcripts retained for a feature. See
+[self-hosting: provider transcripts](../guides/self-hosting.md#provider-transcripts). It resolves
+`<main repo root>/.worktrees/<slug>`, then folds `.pipeline/events.jsonl`. It lists only captures
+whose latest state is retained and whose directory still exists, newest first.
+
+| Form | Output (stdout) |
+| --- | --- |
+| `transcripts <slug>` | One line per capture: `step=<step> attempt=<n> member=<member\|-> provider=<id> interrupted=<bool> path=<path>`, or `no retained transcripts for <slug>`. |
+| `transcripts <slug> --show <capture>` | The final assistant message from the capture's most recently modified top-level session file (Claude subagent sessions are excluded), sanitized again. `<capture>` is a full capture path or its trailing path segment(s). |
+
+Exit codes: 0 on success, including an empty list. 1 when:
+
+- the arguments are malformed (prints the usage guide);
+- the slug contains `/` or `\` or is `.`/`..`, or no worktree exists for it (`no feature worktree for <slug>`);
+- the capture is ambiguous (`ambiguous capture «<capture>»: <paths>`);
+- the capture is missing or has no assistant message (`no assistant message in <capture>`).
+
+All errors go to stderr.
+
 ## `ai-conductor kpi`
 
 ```bash
@@ -1212,6 +1315,15 @@ that `build` has not yet charged, so it reads `0` as soon as the next `build` di
 the cap. `consumed` and `laps` count only charged laps. Human output adds
 `Pending charge: <n> lap(s) (charged when build dispatches)` while a charge is pending; JSON reports
 `pendingLaps` (`0` when none) on both remediation gates.
+
+Plan growth follows the same rule: the plan-growth `remaining` also subtracts a pending repair's growth
+(floored at `0`). Human output prints, directly after the `Plan growth:` line,
+`Pending growth: <total> (<gate> <n>, ...); would reach <projected>/<cap> when build dispatches`,
+appending `; minimum raise <k>` when the pending growth would exceed the cap; `<k>` is the smallest
+plan-growth `raise --by` that lets `build` settle the repair. Without a resolved cap only
+`Pending growth: <total> (<gate> <n>, ...)` prints. JSON adds
+`planGrowth.pendingGrowth: { total, byGate, projected, minimumRaise? }`. A pending repair that charges
+laps but no growth adds neither.
 
 Inspect reports each gate's resume authorization against the live halt generation. Human output
 prints one `Resume authorization:` line per gate:

@@ -28,7 +28,7 @@ receive hooks matching the engine version and never execute stale dist code.
   `.pipeline/session-hooks/post-dispatch.sh` exist in the worktree with
   executable permission (0755).
 - Given the emitted hook scripts, when their content is inspected, then they
-  use only bash, `node -e`, and POSIX tools.
+  use only bash, `node -e`, POSIX tools, and `git rev-parse` to read HEAD.
 
 #### Negative Paths
 - Given the emitted hook scripts, when grepped for `dist/`, `conduct-ts`, or

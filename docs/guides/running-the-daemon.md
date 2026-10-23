@@ -760,6 +760,12 @@ proof-gated cleanup paths.
   and does not stop the removal attempt. Do not treat that hook log as proof that Git removal failed;
   `daemon reclaim-worktree` and parked reconciliation surface their actual Git removal failures and
   retain the worktree for recovery.
+- **Published stack.** For a [stacked publication](../reference/configuration.md#stacked-publication),
+  the sweep then deletes each child's local branch by name, only when that child's PR is merged, its
+  merge commit is on `origin/main`, and the local tip equals the merged head. A child PR that is
+  open or closed unmerged, or whose merge is not on `origin/main`, is kept and the watch entry is
+  retained; an unreachable member emits `stack_members_unreachable` once and logs `retained <slug> —
+  reason: stack-members-unreachable`.
 
 `ai-conductor daemon status`'s startup dashboard groups every retained worktree under
 `RETAINED WORKTREES (<n>)`. A retained row includes an evidence-derived reason and a `remedy:`
@@ -784,9 +790,9 @@ ai-conductor daemon reclaim-worktree <slug>
 ```
 
 It refuses a slug with a resume in progress, refuses anything but a single plain slug (no globs, no
-paths, no lists), and is a no-op when the worktree is already gone. It never touches the branch —
-both manual reclaim and the automatic sweep remove only the worktree. The automatic sweep never
-deletes the feature branch, and its reap gate is shipped-record presence on `origin/main`, not
+paths, no lists), and is a no-op when the worktree is already gone. It never touches the feature
+branch — both manual reclaim and the automatic sweep remove only the worktree, plus the proven
+child branches of a published stack. The automatic sweep never deletes the feature branch, and its reap gate is shipped-record presence on `origin/main`, not
 branch ancestry.
 
 ## Operator safety rules
@@ -832,6 +838,11 @@ rely on it. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
 
 ## Restart after an engine change
+
+With the default [`executor_isolation: child`](../reference/configuration.md#executor_isolation),
+each claimed feature already runs the engine build `dist` names at claim time, so a published engine
+change reaches new dispatches without a restart. Restart to update the supervisor itself, or when
+running with `executor_isolation: in-process`.
 
 ```bash
 ai-conductor daemon restart
@@ -1042,6 +1053,8 @@ Both refusals block `finish` and issue no push. For recovery, see
 
 A stacked feature does not use this path: the re-kick and finish-time rebases run a whole-stack
 [restack](../reference/configuration.md#restack), and autoresolve escalates with `published-stack`.
+Once the stack is [published](../reference/configuration.md#stacked-publication), the re-kick
+leaves it on its current base and emits `restack_refused` with reason `published-stack`.
 
 ## How a halted feature resumes
 

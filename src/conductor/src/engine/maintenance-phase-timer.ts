@@ -1,13 +1,14 @@
 import type {
   ConductorEvent,
-  MaintenancePhaseOutcome,
+  MaintenancePhase,
 } from '../types/events.js';
 
 type MaintenancePhaseEvent = Extract<ConductorEvent, { type: 'daemon_maintenance_phase' }>;
-export type MaintenancePhaseResult = {
-  outcome: MaintenancePhaseOutcome;
-  summary?: Extract<MaintenancePhaseEvent, { phase: 'parked-reconcile' }>['summary'];
-};
+/** The event variant that owns `Phase`, and with it that phase's outcome and summary vocabulary. */
+type PhaseEvent<Phase extends MaintenancePhase> = MaintenancePhaseEvent extends infer Event
+  ? Event extends { phase: infer Owned } ? Phase extends Owned ? Event : never : never
+  : never;
+export type MaintenancePhaseResult<Phase extends MaintenancePhase> = Pick<PhaseEvent<Phase>, 'outcome' | 'summary'>;
 export type MaintenancePhaseInput = MaintenancePhaseEvent extends infer Event
   ? Event extends MaintenancePhaseEvent
     ? Omit<Event, 'type' | 'durationMs' | 'outcome'>
@@ -20,7 +21,7 @@ export interface MaintenancePhaseTimerOptions {
 }
 
 /** Times one maintenance phase and records its terminal outcome on the event spine. */
-export async function timeMaintenancePhase<T extends MaintenancePhaseOutcome | MaintenancePhaseResult | void, P extends MaintenancePhaseInput>(
+export async function timeMaintenancePhase<P extends MaintenancePhaseInput, T extends PhaseEvent<P['phase']>['outcome'] | MaintenancePhaseResult<P['phase']> | void>(
   phase: P,
   run: () => Promise<T>,
   { now, emit }: MaintenancePhaseTimerOptions,

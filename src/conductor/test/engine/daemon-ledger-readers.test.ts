@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:7, task:10
 import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -28,6 +28,31 @@ describe('daemon ledger readers', () => {
     expect(timeline).toMatchObject({ event: expect.any(Array), skipped: 0 });
     const { event } = timeline as Extract<typeof timeline, { event: unknown }>;
     expect(event!.at(-1)).toEqual(latest);
+  });
+
+  it('retains a legacy feature dispatch without an engine pin', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-ledger-readers-'));
+    roots.push(root);
+    await mkdir(join(root, '.daemon'));
+    await writeFile(
+      join(root, '.daemon', 'events.jsonl'),
+      [
+        { type: 'feature_dispatch_started', slug: 'pinned-feature', kind: 'initial', engineVersionId: 'v2', pinFallbackReason: 'publish-incomplete' },
+        { type: 'feature_dispatch_started', slug: 'legacy-feature', kind: 'initial' },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf8',
+    );
+
+    const timeline = await readDaemonTimeline(root);
+    expect(timeline).toEqual({
+      event: [
+        { type: 'feature_dispatch_started', slug: 'pinned-feature', kind: 'initial', engineVersionId: 'v2', pinFallbackReason: 'publish-incomplete' },
+        { type: 'feature_dispatch_started', slug: 'legacy-feature', kind: 'initial' },
+      ],
+      skipped: 0,
+    });
+    if (!('event' in timeline) || timeline.event === null) throw new Error('daemon timeline was unavailable');
+    expect(timeline.event[1]?.engineVersionId).toBeUndefined();
   });
 
   it('returns only the newest exit record for the requested pid', async () => {

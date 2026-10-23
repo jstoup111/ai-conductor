@@ -1,4 +1,4 @@
-// Covers: task:6, task:7, task:11
+// Covers: task:6, task:7, task:11, task:24
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,12 +8,23 @@ import { acquire, readPidRecord, type KillProbe } from '../../src/engine/daemon-
 import { openDaemonLog } from '../../src/engine/daemon-log.js';
 import {
   computeStatusRow,
+  renderExecutorVersionsSection,
   runDaemonStatus,
   runDaemonLogs,
   detectDaemonObserveCommand,
 } from '../../src/engine/daemon-observe-cli.js';
+import { writeExecutorRecord } from '../../src/engine/executor-records.js';
 import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
+
+const executorVersionSeam = vi.hoisted(() => ({ currentTarget: vi.fn() }));
+vi.mock('../../src/engine/engine-store.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/engine-store.js')>(),
+  currentTarget: executorVersionSeam.currentTarget,
+}));
+
+const ENGINE_V1 = '20261019T120000Z-aaaaaaaaaaaa';
+const ENGINE_V2 = '20261020T120000Z-bbbbbbbbbbbb';
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
 const ALIVE: KillProbe = () => {};
@@ -91,6 +102,7 @@ describe('engine/daemon-observe-cli', () => {
   let root: string;
 
   beforeEach(async () => {
+    executorVersionSeam.currentTarget.mockReset().mockResolvedValue(ENGINE_V2);
     root = await mkdtemp(join(tmpdir(), 'daemon-observe-'));
   });
 
@@ -199,6 +211,66 @@ describe('engine/daemon-observe-cli', () => {
       const out: string[] = [];
       await runDaemonStatus({ registryPath, kill: ALIVE, out: (l) => out.push(l) });
       expect(out.join('\n')).toContain('version:version-unknown');
+    });
+  });
+
+  describe('executor engine versions (Task 24)', () => {
+    async function writeExecutor(repo: string, slug: string, engineVersionId: string): Promise<void> {
+      await writeExecutorRecord(repo, slug, {
+        pid: 99,
+        engineDir: `/engine-store/dist-versions/${engineVersionId}`,
+        engineVersionId,
+        startedAt: '2026-10-20T12:00:00.000Z',
+      });
+    }
+
+    it('renders live executor pins and an older stale supervisor against current v2', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      await writePidfile(repo, { pid: 42, engineDir: `/engine-store/dist-versions/${ENGINE_V1}` });
+      await writeExecutor(repo, 'v1-feature', ENGINE_V1);
+      await writeExecutor(repo, 'v2-feature', ENGINE_V2);
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toEqual([
+        `  EXECUTOR ENGINE CURRENT: ${ENGINE_V2}`,
+        `  SUPERVISOR ENGINE: ${ENGINE_V1} (older than current)`,
+        `  EXECUTOR [v1-feature]: ${ENGINE_V1} (older than current)`,
+        `  EXECUTOR [v2-feature]: ${ENGINE_V2}`,
+      ]);
+    });
+
+    it('keeps readable executor rows when another executor record is unreadable', async () => {
+      const repo = join(root, 'repo');
+      await writeExecutor(repo, 'healthy', ENGINE_V2);
+      await mkdir(join(repo, '.daemon', 'executors'), { recursive: true });
+      await writeFile(join(repo, '.daemon', 'executors', 'broken.json'), '{not json', 'utf8');
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toContain('  EXECUTOR [broken]: version unknown — record unreadable');
+      expect(out).toContain(`  EXECUTOR [healthy]: ${ENGINE_V2}`);
+    });
+
+    it('renders an unresolvable current engine and legacy dispatches as unknown without older markers', async () => {
+      executorVersionSeam.currentTarget.mockRejectedValueOnce(new Error('dist unavailable'));
+      const repo = join(root, 'repo');
+      await writeExecutor(repo, 'supervisor-fallback', ENGINE_V2);
+      await mkdir(join(repo, '.daemon'), { recursive: true });
+      await writeFile(join(repo, '.daemon', 'events.jsonl'), JSON.stringify({
+        type: 'feature_dispatch_started', slug: 'legacy-feature', kind: 'initial',
+      }) + '\n', 'utf8');
+      const out: string[] = [];
+
+      await renderExecutorVersionsSection(repo, (line) => out.push(line));
+
+      expect(out).toContain('  EXECUTOR ENGINE CURRENT: unknown');
+      expect(out).toContain(`  EXECUTOR [supervisor-fallback]: ${ENGINE_V2}`);
+      expect(out).toContain('  DISPATCH [legacy-feature]: engine unknown');
+      expect(out.join('\n')).not.toContain('older than current');
     });
   });
 
@@ -660,7 +732,9 @@ describe('engine/daemon-observe-cli', () => {
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
       // One status line plus capability, GATED, BLOCKED, and SHIPPED PRS section lines per repo
       // repo whose path exists (path-missing repos skip snapshot reads entirely).
-      expect(out.length).toBe(11);
+      // Each live supervisor now has an explicit engine row in addition to
+      // its status line, so a stale version can be compared to current.
+      expect(out.length).toBe(13);
     });
 
     it('prints a friendly message for an empty registry', async () => {
@@ -1140,6 +1214,93 @@ describe('engine/daemon-observe-cli', () => {
 
         expect(out).toContain('  PLAN GROWTH [unresolved-feature]: plan unresolved; added 0');
         expect(out.some((line) => line.includes('remaining 0/0'))).toBe(false);
+      });
+
+      // Covers: task:7
+      it('renders unresolved flat pending growth without inventing a cap or recovery raise', async () => {
+        const repo = join(root, 'repo-unresolved-pending-plan');
+        const slug = 'unresolved-pending-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 3), {
+          planName: 'first-other.md',
+          otherPlan: { name: 'also-other.md', content: tasks('', 5) },
+        });
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          pendingRepair: {
+            receiptId: 'unresolved-pending', taskIds: ['rem-1'],
+            charges: { prd_audit: { laps: 1, growth: 4 } },
+          },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-unresolved-pending-plan', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [unresolved-pending-feature]: plan unresolved; added 0; pending 4 (prd_audit 4)');
+      });
+
+      // Covers: task:7
+      it('renders flat pending growth through daemon status and preserves its projection details', async () => {
+        const repo = join(root, 'repo-pending-growth');
+        const slug = 'pending-growth-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 40), tasks('rem-', 11)].join('\n'));
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          growth: { authored: 40, added: 0, byGate: {} },
+          pendingRepair: {
+            receiptId: 'pending-growth',
+            taskIds: Array.from({ length: 11 }, (_, index) => `rem-${index + 1}`),
+            charges: {
+              prd_audit: { laps: 1, growth: 3 },
+              architecture_review_as_built: { laps: 1, growth: 8 },
+            },
+          },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-pending-growth', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain(
+          '  PLAN GROWTH [pending-growth-feature]: authored 40; added 0; remaining 0/10; pending 11 (prd_audit 3, architecture_review_as_built 8), minimum raise 1',
+        );
+      });
+
+      // Covers: task:7
+      it('shows pending growth only when it is chargeable, and leaves ordinary status lines unchanged', async () => {
+        const repo = join(root, 'repo-status-growth-variants');
+        const pendingRoot = await writeDaemonPlan(repo, 'partial-pending', [tasks('', 40), tasks('rem-', 3)].join('\n'));
+        const baseLedger = { version: 1, gates: {}, growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } } };
+        await mkdir(join(pendingRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(pendingRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(pendingRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          ...baseLedger,
+          pendingRepair: {
+            receiptId: 'partial', taskIds: ['rem-1', 'rem-2', 'rem-3'],
+            charges: { prd_audit: { laps: 1, growth: 3 } },
+          },
+        }), 'utf8');
+        const lapsRoot = await writeDaemonPlan(repo, 'laps-only', [tasks('', 40), tasks('rem-', 1)].join('\n'));
+        await writeFile(join(lapsRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          ...baseLedger,
+          growth: { authored: 39, added: 2, byGate: { prd_audit: 2 } },
+          pendingRepair: {
+            receiptId: 'laps-only', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 0 } },
+          },
+        }), 'utf8');
+        // A settled flat ledger's active plan includes its two charged tasks.
+        const ordinaryRoot = await writeDaemonPlan(repo, 'ordinary', tasks('', 42));
+        await writeFile(join(ordinaryRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify(baseLedger), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-status-growth-variants', repo)]), out: (line) => out.push(line) });
+
+        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 5/10; pending 3 (prd_audit 3)');
+        expect(out.find((line) => line.startsWith('  PLAN GROWTH [partial-pending]:'))).not.toContain('minimum raise');
+        expect(out).toContain('  PLAN GROWTH [laps-only]: authored 39; added 2 (prd_audit: 2); remaining 3/5');
+        expect(out).toContain('  PLAN GROWTH [ordinary]: authored 40; added 2 (prd_audit: 2); remaining 3/5');
       });
 
       // Covers: task:7

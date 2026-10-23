@@ -38,7 +38,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
-import { PRESEEDED_DONE } from '../../src/daemon-cli.js';
+import { PRESEEDED_DONE } from '../../src/engine/daemon-state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 
 const ENGINE_RESOLVED_DECIDE = ALL_STEPS

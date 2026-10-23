@@ -110,6 +110,7 @@ export type DaemonSessionSubcommand =
   | 'test-suite'
   | 'build-review'
   | 'finish-record'
+  | 'docs-prune'
   | 'unknown'
   | 'none';
 
@@ -119,6 +120,7 @@ const KNOWN_BLOCKED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'test-suite',
   'build-review',
   'finish-record',
+  'docs-prune',
 ]);
 
 export type DaemonSessionGuardVerdict =

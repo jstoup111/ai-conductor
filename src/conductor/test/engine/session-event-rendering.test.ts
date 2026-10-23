@@ -67,13 +67,14 @@ describe('session event daemon rendering', () => {
     const delivered: string[] = [];
     const subscriber = new TerminalSubscriber(events);
     subscriber.start([{ name: 'capture', handle: async (event) => {
-      if ('eventId' in event) delivered.push(event.eventId);
+      const eventId = (event as { eventId?: unknown }).eventId;
+      if (typeof eventId === 'string') delivered.push(eventId);
     }, stop: async () => {} }]);
 
     for (const event of occurrences) await events.emit(event);
     await subscriber.stop();
 
-    expect(delivered).toEqual(occurrences.map((event) => event.eventId));
+    expect(delivered).toEqual(occurrences.map((event) => event.eventId!));
   });
 
   it('never renders supplied raw arguments, payloads, credentials, or transport diagnostics', () => {

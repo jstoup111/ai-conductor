@@ -217,6 +217,7 @@ As an operator, I want each startup and maintenance phase to report its duration
 - Given a maintenance step throws, when its event is emitted, then the outcome is failed and durationMs covers the time until the throw.
 - Given a parked run is skipped, when its event is emitted, then the outcome is skipped-unchanged.
 - Given a repair is queued but blocked by pause, when the sweep ends, then the repair phase event outcome is deferred.
+- Given a maintenance event whose outcome its phase never produces, such as startup-refresh with deferred, repair with skipped-unchanged, or a summary on any phase but parked-reconcile, when the daemon is compiled, then the type check rejects it, because only repair may be deferred and only parked-reconcile may be skipped-unchanged or carry a summary.
 - Given the new variant is added, when the event-sink registry is compiled, then its declaration is persist true, render false, audit false, and otel false and the pinned persisted-type test lists it.
 
 ### Done When

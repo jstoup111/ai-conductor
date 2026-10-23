@@ -29,10 +29,13 @@ import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import {
   buildReviewConfidenceFloors,
+  isBuildReviewLapHealthyForAbsenceRetirement,
   rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   applyBuildReviewOutcome,
@@ -48,7 +51,7 @@ import {
   readBuildReviewWorkOrder,
   readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
-import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { appendRemediationCaseOutbox, drainRemediationCaseOutbox, prdWideningCasesForState, readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
@@ -68,7 +71,8 @@ import {
   type RefusalReworkAllowanceBlocker,
   type RefusalRoundOutcome,
 } from './prd-widening-refusal-rework.js';
-import { reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
 import {
   buildRemediationProjection,
   type RemediationProjectionLimits,
@@ -89,7 +93,7 @@ import type {
   SelfHostAuthContext,
   SelfHostInvocation,
 } from '../execution/llm-provider.js';
-import type { ConductState, ConductorEvent, ExecutionContext } from '../types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext, TranscriptOwner } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -183,9 +187,12 @@ import { createRoutedConductStateStore, readConductStateOverlay } from './conduc
 import {
   isRegionStep,
   CHILD_REGION_STEPS,
+  listExistingChildren,
   pipelinePathFor,
   type ChildId,
 } from './child-context.js';
+import { activePublicationRecord } from './stack-publication-record.js';
+import { publishedStackRefusal } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
@@ -322,7 +329,7 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
-  FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
+  publicationProgressAllowance,
   nonRetryablePublicationReason,
   renderProseHumanRequiredDetail,
   routeFinishPublicationDisposition,
@@ -353,7 +360,7 @@ import {
   type chargeBuildReviewEffectInLedger,
   type PlanGrowth,
 } from './kickback-ledger.js';
-import { renderKickbackBudgetView, renderKickbackRecoveryHint } from './kickback-budget-view.js';
+import { renderKickbackBudgetView, renderKickbackRecoveryHint, withPendingGrowth } from './kickback-budget-view.js';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
@@ -401,6 +408,14 @@ import {
   wrapForContainment,
 } from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
+import {
+  asTranscriptCaptureDispatchIdentity,
+  TranscriptRetention,
+  transcriptOwnerKey,
+  type TranscriptCaptureDispatchIdentity,
+  type TranscriptRetentionOutcome,
+} from './self-host/transcript-retention.js';
+import { transcriptTerminalOutcome } from './self-host/transcript-terminal-outcome.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
 import { classifyRebaseOperation } from './gate-code-validity.js';
@@ -690,6 +705,10 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  /** Best-effort evidence retention; it must never alter a step verdict. */
+  private readonly transcriptRetention: TranscriptRetention;
+  /** Capture identity advances for every admitted self-host dispatch, independently of retries. */
+  private readonly transcriptCaptureDispatches = new Map<string, TranscriptCaptureDispatchIdentity>();
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
@@ -698,6 +717,35 @@ export class Conductor {
   /** Session-local loop counters must not carry a prior child's failures forward. */
   private childScopedStepKey(step: StepName, child: ChildId | undefined): StepName {
     return `${step}#${child === undefined ? 'feature' : child}` as StepName;
+  }
+
+  /**
+   * Capture directories are evidence, not escalation state.  In particular,
+   * non-consuming retries decrement the retry-budget attempt before their next
+   * dispatch, so that value is not a safe capture identity.
+   */
+  private transcriptOwner(step: StepName, executionContext?: ExecutionContext): TranscriptOwner {
+    const subject = executionContext?.subject;
+    if (subject?.kind === 'configured-member') {
+      return { kind: 'configured-group-member', parentGroup: subject.parentGroup, member: subject.member };
+    }
+    return { kind: 'registered-step', step };
+  }
+
+  private nextTranscriptCaptureAttempt(owner: TranscriptOwner, runId: string): TranscriptCaptureDispatchIdentity {
+    const key = `${runId}\u0000${transcriptOwnerKey(owner)}`;
+    const next = asTranscriptCaptureDispatchIdentity(
+      (this.transcriptCaptureDispatches.get(key) ?? 0) + 1,
+    );
+    this.transcriptCaptureDispatches.set(key, next);
+    return next;
+  }
+
+  private currentTranscriptCaptureAttempt(
+    owner: TranscriptOwner,
+  ): TranscriptCaptureDispatchIdentity | undefined {
+    const runId = this.stepRunner.selfHostRunId?.();
+    return runId === undefined ? undefined : this.transcriptCaptureDispatches.get(`${runId}\u0000${transcriptOwnerKey(owner)}`);
   }
 
   /** Child-local suite selection has the same authoritative base as review. */
@@ -861,6 +909,44 @@ export class Conductor {
   /** Close every execution this conductor observed, without exposing step selection to callers. */
   private async closeOpenExecutions(): Promise<void> {
     await this.executionLifecycle.closeOpen();
+  }
+
+  /** Settle one harvested self-host attempt without touching another retry. */
+  private async settleTranscriptAttempt(
+    owner: TranscriptOwner,
+    captureAttempt: TranscriptCaptureDispatchIdentity | undefined,
+    outcome: TranscriptRetentionOutcome,
+    auxiliaryMember?: string,
+  ): Promise<void> {
+    const runId = this.stepRunner.selfHostRunId?.();
+    if (runId === undefined || captureAttempt === undefined) {
+      await this.transcriptRetention.settle(owner, outcome);
+      return;
+    }
+    await this.transcriptRetention.settleAttempt({
+      owner,
+      runId,
+      attempt: captureAttempt,
+      ...(auxiliaryMember === undefined ? {} : { auxiliaryMember }),
+    }, outcome);
+  }
+
+  /**
+   * A terminal lifecycle event closes every captured auxiliary member using
+   * the exact identities recorded at capture time.  The ordinary dispatch
+   * identity is still settled explicitly first, so an event with no retained
+   * capture index preserves the legacy path.
+   */
+  private async settleTranscriptTerminal(
+    event: Extract<ConductorEvent,
+      { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' }>,
+    owner = this.transcriptOwner(event.step, event.executionContext),
+    captureAttempt = this.currentTranscriptCaptureAttempt(owner),
+  ): Promise<void> {
+    const outcome = transcriptTerminalOutcome(event);
+    await this.settleTranscriptAttempt(owner, captureAttempt, outcome);
+    const runId = this.stepRunner.selfHostRunId?.();
+    if (runId !== undefined) await this.transcriptRetention.settleStepRun(owner, runId, outcome);
   }
 
   /**
@@ -1134,6 +1220,9 @@ export class Conductor {
    */
   private currentRunId: string | undefined;
 
+  /** Step whose admitted attempt currently owns any terminal halt. */
+  private dispatchingStep: StepName | undefined;
+
   /**
    * Set when a recorded prd-audit finding could not be projected into the
    * verdict artifact (D8). Consumed once by `routeCurrentPrdAudit`, which
@@ -1307,6 +1396,20 @@ export class Conductor {
   ): Promise<void> {
     const log = this.log ?? console.warn;
     try {
+      // The normal retained draft has no halt presentation. Probe that common
+      // case before deriving remote publication authority: a branch lookup is
+      // a read path, so an N=1 lookup must not reach Git merely to discover
+      // that there is nothing to repair.
+      const initial = await makeRetainedPrPresentable({
+        gh: this.gh,
+        cwd: this.projectRoot,
+        prUrl,
+        featureDesc: state.feature_desc,
+        branch: state.worktree_branch,
+        log,
+      });
+      if (initial === 'not-halt-pr' || initial === 'gh-unavailable') return;
+
       let planPath: string | undefined;
       try {
         planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc);
@@ -2444,6 +2547,76 @@ export class Conductor {
       opts.effectiveDaemonConcurrency ?? resolveDaemonConcurrency(this.config);
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
+    this.transcriptRetention = new TranscriptRetention(this.projectRoot, this.events);
+    if (this.providerExecution) {
+      const previousAuxiliaryFailure = this.providerExecution.onAuxiliaryAttemptFailed;
+      this.providerExecution.onAuxiliaryAttemptFailed = async (identity, executionContext) => {
+        await previousAuxiliaryFailure?.(identity, executionContext);
+        const owner = this.transcriptOwner(identity.step, executionContext);
+        await this.transcriptRetention.settleAttempt({
+          owner,
+          runId: identity.runId,
+          attempt: asTranscriptCaptureDispatchIdentity(identity.attempt),
+          ...(identity.auxiliaryMember === undefined ? {} : { auxiliaryMember: identity.auxiliaryMember }),
+        }, 'failed');
+      };
+    }
+    // Transcript capture completes in provider teardown before these terminal
+    // lifecycle events.  Keeping settlement on the existing event spine makes
+    // every ordinary terminal route (including configured steps) share it.
+    this.events.on('step_failed', (event) => {
+      if (event.type === 'step_failed') {
+        return this.settleTranscriptTerminal(event);
+      }
+    });
+    this.events.on('build_stall', (event) => {
+      if (event.type === 'build_stall') {
+        const owner = this.transcriptOwner(event.step);
+        return this.settleTranscriptAttempt(
+          owner,
+          this.currentTranscriptCaptureAttempt(owner),
+          'stalled',
+        );
+      }
+    });
+    this.events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt' && event.step !== undefined) {
+        const owner = this.transcriptOwner(event.step);
+        return this.settleTranscriptAttempt(
+          owner,
+          this.currentTranscriptCaptureAttempt(owner),
+          'halted',
+        );
+      }
+    });
+    this.events.on('step_retry', (event) => {
+      if (event.type !== 'step_retry') return;
+      // Configured groups report their parent as the lifecycle step. Their
+      // transcript owner is the member, carried in the execution context.
+      // Without that context, retain all earlier members for the event step.
+      const owner = this.transcriptOwner(event.step, event.executionContext);
+      const runId = this.stepRunner.selfHostRunId?.();
+      return this.transcriptRetention.settleBeforeRetry({
+        owner,
+        step: event.step,
+        ...(runId === undefined ? {} : { runId }),
+      });
+    });
+    this.events.on('step_refused', (event) => {
+      if (event.type === 'step_refused' && event.kind === 'needs-human') {
+        return this.settleTranscriptTerminal(event);
+      }
+    });
+    this.events.on('step_interrupted', (event) => {
+      if (event.type === 'step_interrupted') return this.settleTranscriptTerminal(event);
+    });
+    this.events.on('step_completed', (event) => {
+      if (event.type !== 'step_completed' || event.step === 'build') return;
+      // A configured branch reports its parent group as the lifecycle step;
+      // transcriptOwner derives the member owner from its execution context,
+      // so one settlement closes exactly the captures that member dispatched.
+      return this.settleTranscriptTerminal(event);
+    });
     this.log = opts.log;
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
@@ -3309,7 +3482,7 @@ export class Conductor {
       await this.emitPrdWideningRejections('persistence-failed', visible.map(prdWideningSourceId));
       return renderPrdWideningRecovery('persistence-failed', visible.map((finding) => finding.criterion));
     }
-    let prdCases = storedCases.state.version === 'v2' ? storedCases.state.prdWideningCases : [];
+    let prdCases = prdWideningCasesForState(storedCases.state);
     // Only the first observed source opens an authority offer. Once this
     // feature has history, every unmatched source (including a renumbered NC)
     // enters the semantic coordinator instead of minting report-local authority.
@@ -3334,7 +3507,7 @@ export class Conductor {
         await this.emitPrdWideningRejections('persistence-failed', newFindings.map(prdWideningSourceId));
         return renderPrdWideningRecovery('persistence-failed', newFindings.map((finding) => finding.criterion));
       }
-      prdCases = refreshedCases.state.version === 'v2' ? refreshedCases.state.prdWideningCases : [];
+      prdCases = prdWideningCasesForState(refreshedCases.state);
     }
     const context = buildPrdWideningContext(report, prdCases,
       storedDecisions.kind === 'valid' ? storedDecisions.state.decisions : [], relations);
@@ -3524,7 +3697,7 @@ export class Conductor {
       typed.report,
       typed.relations,
       decisions.kind === 'valid' ? decisions.state.decisions : [],
-      cases.state.version === 'v2' ? cases.state.prdWideningCases : [],
+      prdWideningCasesForState(cases.state),
     );
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the
@@ -4220,6 +4393,7 @@ export class Conductor {
     let activePlanTaskIds: ReadonlySet<string> | undefined;
     const admittedAsBuiltFindingCounts = new Map<string, number>();
     const unexpectedAsBuiltGapIds = new Set<string>();
+    const escalatedAsBuiltGaps: RemediationGap[] = [];
     const gateAdmissions = (gapId: string) => ({
       prdAuditAdmits: prdAuditValidated && prdAuditFindings.has(gapId.toUpperCase()),
       asBuiltAdmits: asBuiltValidated && asBuiltFindings.has(gapId),
@@ -4322,6 +4496,13 @@ export class Conductor {
         }
         continue;
       }
+      // A task-free step disposition is the planner escalating the finding to
+      // that step (#3320): credit it, then halt with it below.
+      if (remediationDispositionAppendsToPlan(gap.disposition) && gap.tasks.length === 0 && asBuiltFindings.has(gap.id)) {
+        escalatedAsBuiltGaps.push(gap);
+        admittedAsBuiltFindingCounts.set(gap.id, (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1);
+        continue;
+      }
       if (
         !sealedArtifactGapIds.has(gap.id) &&
         remediationDispositionAppendsToPlan(gap.disposition) &&
@@ -4385,7 +4566,8 @@ export class Conductor {
       const duplicate = [...admittedAsBuiltFindingCounts]
         .filter(([, count]) => count !== 1)
         .map(([id]) => id);
-      if (missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0) {
+      const mismatched = missing.length > 0 || duplicate.length > 0 || unexpectedAsBuiltGapIds.size > 0;
+      if (mismatched || escalatedAsBuiltGaps.length > 0) {
         // A halt disposition is credited above by finding id, so a planner that
         // keyed one by anything else — its governing clause, in every observed
         // case — misses that credit and lands here instead. This exit then
@@ -4401,7 +4583,11 @@ export class Conductor {
         // unchanged; only the operator's copy of the reason is restored.
         const plannerHalts = gaps.filter((gap) => gap.disposition === 'halt');
         const detail = [
-          'As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.',
+          ...(escalatedAsBuiltGaps.length > 0
+            ? ['As-built review remediation planner escalated findings to a non-build step: ' +
+                escalatedAsBuiltGaps.map((gap) => `${gap.id}→${gap.disposition} (${gap.rationale})`).join('; ') + '.']
+            : []),
+          ...(mismatched ? ['As-built review remediation planner findings do not exactly match parsed REMEDIABLE findings.'] : []),
           ...(missing.length > 0 ? [`Missing: ${missing.join(', ')}.`] : []),
           ...(duplicate.length > 0 ? [`Duplicate: ${duplicate.join(', ')}.`] : []),
           ...(unexpectedAsBuiltGapIds.size > 0
@@ -4683,6 +4869,10 @@ export class Conductor {
           const declaredPositions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
             .filter((position) => Number.isSafeInteger(position) && position > 0).sort((a, b) => a - b) as ChildId[];
           if (declaredPositions.length > 1) {
+            if (await publishedStackRefusal(this.projectRoot, this.featureSlug)) {
+              await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+              return { kind: 'halt', haltClass: 'needs-human', detail: 'routing admission refused: published-stack' };
+            }
             const roundId = await import('./routing/route-record-store.js').then(({ nextRoundId }) => nextRoundId(this.projectRoot, this.featureSlug!));
             if (typeof roundId !== 'string') return { kind: 'halt', haltClass: 'needs-human', detail: roundId.kind === 'round-limit' ? 'routing round limit r999 reached' : 'routing round allocation unavailable' };
             const planText = activePlanText || await readFile(planPath, 'utf8');
@@ -5190,35 +5380,61 @@ export class Conductor {
     const store = new RemediationCaseStore(this.projectRoot, feature, {
       ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
     });
+    const drainOutbox = async (): Promise<void> => {
+      await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    };
+    await drainOutbox();
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
-    const missingAttemptEvidence = classifyBuildReviewDurableRead(attemptEvidence) === 'absent';
-    if (missingAttemptEvidence) {
-      const state = await store.read();
-      if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
-      // Shared effect-status obligation: an applied action awaiting its work
-      // order, or ANY reserved/failed effect (action or deferral), is durable
-      // unfinished evidence — settling around it would turn it into a
-      // terminal PASS.
-      const obligationCase = state.state.cases.find(isBuildReviewSettlementObligationCase);
-      if (obligationCase && obligationCase.effect.kind !== 'none') {
-        return {
-          kind: 'invalid',
-          reason: `work order attempt missing-work-order with open ${obligationCase.effect.kind} case ${obligationCase.id} (${obligationCase.effect.status})`,
-        };
-      }
-    }
     if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
       return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     }
+    const dispositions = await new BuildReviewDispositionStore(this.projectRoot).list(feature);
+    if (!dispositions.ok) return { kind: 'invalid', reason: `build-review disposition state ${dispositions.message}` };
+    const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
+    const acceptedSourceIds = new Set(dispositions.records
+      .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
+        record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
+      .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
     // A clean PASS is the evidence that the content set is empty, whether or
     // not an earlier lap left a work order on disk: absent non-action history
     // settles benignly here too, while the reconciler's shared effect-status
     // test keeps any reserved or failed effect open.
+    const retirement = await store.mutate(async (state) => {
+      const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
+        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+        allowAppliedByAbsence: attemptEvidence.ok,
+        resolveAbsentOpenNonActionCases: true,
+        referenced: false,
+      }));
+      if (retired.length === 0) return { value: undefined };
+      const events = retired.map((record) => {
+        const eventId = randomUUID();
+        return { eventId, occurredAt: new Date().toISOString(), event: {
+          type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+          lapId: aggregate.lapId, caseId: record.id, resolution: 'resolved' as const,
+        } };
+      });
+      const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+      const ids = new Set(retired.map((record) => record.id));
+      return {
+        value: undefined,
+        nextState: {
+          ...upgraded,
+          cases: upgraded.cases.map((record) => ids.has(record.id) ? retireOpenBuildReviewCase(record) : record),
+          outbox: [...upgraded.outbox, ...events.slice(1)],
+        },
+      };
+    });
+    if (!retirement.ok) return { kind: 'invalid', reason: `case settlement ${retirement.reason}` };
+    await drainOutbox();
     const reconciled = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: new Date().toISOString(),
       generateId: randomUUID,
       attemptedCaseIds: attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [],
+      lapId: aggregate.lapId,
+      effectiveAcceptedSourceIds: acceptedSourceIds,
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
       resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {
@@ -5229,26 +5445,25 @@ export class Conductor {
         }`,
       };
     }
-    for (const caseId of reconciled.resolvedAbsentCaseIds) {
-      await this.events.emit({
-        type: 'remediation_case_reconciled',
-        domain: 'build_review',
-        lapId: aggregate.lapId,
-        caseId,
-        resolution: 'resolved',
-      });
-    }
+    await drainOutbox();
     // The obligation test runs on what SURVIVED reconciliation, regardless of
     // whether attempt evidence existed. A stale work order used to skip this
     // guard entirely, so a deferral whose intake create failed (effect still
     // reserved) settled into a terminal PASS with its intake unfiled.
     const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
+    // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
+      const actionResolution = survivingObligation.effect.kind === 'action'
+        ? `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`
+        : '';
+      await drainOutbox();
       return {
         kind: 'invalid',
-        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})`,
+        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${actionResolution}`,
       };
     }
+    // /ai-conductor:session-command-context
+    await drainOutbox();
     return { kind: 'settled' };
   }
 
@@ -5394,7 +5609,7 @@ export class Conductor {
     // While the loop is active, the breadcrumb identifies the step that is
     // actually halting. Persisted state can still name the previously settled
     // step, so use it only when no active breadcrumb is available.
-    const candidate = this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
+    const candidate = this.dispatchingStep ?? this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
     const step =
       ALL_STEPS.some(({ name }) => name === candidate) ||
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
@@ -5584,6 +5799,8 @@ export class Conductor {
   private async runSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    /** Compatibility-only retry budget; capture identity must not consume it. */
+    attempt: number,
     retryHint: string | undefined,
     verdictRunId?: string,
     /** The serial lifecycle scope that owns this provider invocation. */
@@ -5594,7 +5811,7 @@ export class Conductor {
     abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
+      return this.runAdmittedSelfBuildDispatch(name, state, attempt, retryHint, verdictRunId, undefined, executionContext, settlePendingRepair, abortSignal);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -5604,13 +5821,15 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
+      return this.runAdmittedSelfBuildDispatch(name, state, attempt, retryHint, verdictRunId, openWindow, executionContext, settlePendingRepair, abortSignal);
     });
   }
 
   private async runAdmittedSelfBuildDispatch(
     name: StepName,
     state: ConductState,
+    /** Compatibility-only retry budget; capture identity must not consume it. */
+    attempt: number,
     retryHint: string | undefined,
     /**
      * This dispatch's engine-minted verdict identity, for a SHIP-tail verdict
@@ -5626,6 +5845,7 @@ export class Conductor {
     /** Cancels the provider invocation when this daemon attempt ends. */
     abortSignal?: AbortSignal,
   ): Promise<StepRunResult> {
+    void attempt;
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const executionContextOption = executionContext ? { executionContext } : {};
     const selfHostConfig = resolveSelfHostConfig(this.config);
@@ -5718,6 +5938,20 @@ export class Conductor {
       }
     }
 
+    const transcriptOwner = this.transcriptOwner(name, executionContext);
+    const transcriptRunId = this.stepRunner.selfHostRunId?.() ?? this.featureSlug ?? state.feature_desc ?? 'unknown-run';
+    const captureAttempt = this.nextTranscriptCaptureAttempt(
+      transcriptOwner,
+      transcriptRunId,
+    );
+    // A newly admitted dispatch is conclusive evidence that the preceding
+    // capture did not produce this result. This also covers non-consuming
+    // provider retries, which do not emit a retry-budget transition.
+    await this.transcriptRetention.settleBeforeRetry({
+      owner: transcriptOwner,
+      runId: transcriptRunId,
+    });
+
     // Compatibility seam for injected/legacy runners which do not route via
     // ProviderExecutionContext. Real entrypoints always take the candidate
     // path below; this retains the existing isolated behavior for that narrow
@@ -5729,6 +5963,9 @@ export class Conductor {
       if (usesProviderHome) {
         await this.discardOwnedStepRegionCapture(state, name);
         return this.stepRunner.run(name, state, {
+          attempt: 1,
+          captureAttempt,
+          escalate: false,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -5748,8 +5985,11 @@ export class Conductor {
         harnessRoot,
         repository: this.projectRoot,
         featureSlug,
-        runId,
-        attempt: 1,
+        // Capture identity, not retry state: captures must never collide when
+        // a legacy runner dispatches more than once in the same lifecycle.
+        captureIdentity: { owner: transcriptOwner, runId, attempt: captureAttempt },
+        events: this.events,
+        injectedToken: daemonToken,
       });
       const priorConfig = process.env.CLAUDE_CONFIG_DIR;
       const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -5760,6 +6000,9 @@ export class Conductor {
       try {
         await this.discardOwnedStepRegionCapture(state, name);
         return await this.stepRunner.run(name, state, {
+          attempt: 1,
+          captureAttempt,
+          escalate: false,
           retryReason: retryHint,
           ...identityOption,
           ...executionContextOption,
@@ -5922,9 +6165,13 @@ export class Conductor {
               worktreeRoot: this.projectRoot,
               repository: this.projectRoot,
               featureSlug,
-              runId: identity.runId,
-              attempt: identity.attempt,
-              member: identity.member,
+              captureIdentity: {
+                owner: transcriptOwner,
+                runId: identity.runId,
+                attempt: identity.attempt,
+                ...(identity.auxiliaryMember === undefined ? {} : { auxiliaryMember: identity.auxiliaryMember }),
+              },
+              events: this.events,
             });
             ownershipTransferred = true;
             return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), originalCatalogHome: providerHome, scratchRoot: this.projectRoot, teardown:async () => { try { await verify(); } finally { await home.teardown(); } } });
@@ -5934,9 +6181,14 @@ export class Conductor {
             harnessRoot: liveCheckout,
             repository: this.projectRoot,
             featureSlug,
-            runId: identity.runId,
-            attempt: identity.attempt,
-            member: identity.member,
+            captureIdentity: {
+              owner: transcriptOwner,
+              runId: identity.runId,
+              attempt: identity.attempt,
+              ...(identity.auxiliaryMember === undefined ? {} : { auxiliaryMember: identity.auxiliaryMember }),
+            },
+            events: this.events,
+            injectedToken: daemonToken,
           });
           ownershipTransferred = true;
           return prepareInvocation({
@@ -5954,6 +6206,9 @@ export class Conductor {
     }
     try {
       return await this.stepRunner.run(name, state, {
+        attempt: 1,
+        captureAttempt,
+        escalate: false,
         retryReason: retryHint,
         ...identityOption,
         ...executionContextOption,
@@ -6132,41 +6387,77 @@ export class Conductor {
     if (!head || head === 'HEAD' || !this.baseBranch) return undefined;
 
     try {
-      const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
-          'pr', 'list',
-          '--head', head,
-          '--base', this.baseBranch,
-          '--state', 'open',
-          '--json', 'url,state',
-          '--limit', '10',
-        ]);
-      const rows: unknown = JSON.parse(stdout);
-      if (!Array.isArray(rows)) return undefined;
-      const match = rows.find(
-        (row): row is { url: string; state: string } =>
-          typeof row === 'object' &&
-          row !== null &&
-          (row as { state?: unknown }).state === 'OPEN' &&
-          typeof (row as { url?: unknown }).url === 'string' &&
-          (row as { url: string }).url.length > 0,
-      );
-      if (!match) return undefined;
+      let prUrl = await this.findOpenRetainedShipDraftPrUrl(head, this.baseBranch);
+      if (!prUrl && (await listExistingChildren(this.projectRoot)).length > 0) {
+        const slug = this.featureSlug ?? this.featureDesc;
+        const record = slug === undefined
+          ? undefined
+          : await activePublicationRecord(this.projectRoot, slug, { git: this.publicationRecordGit() });
+        const retarget = record?.record.retarget;
+        if (retarget?.phase === 'observed') {
+          prUrl = await this.findOpenRetainedShipDraftPrUrl(head, retarget.to);
+        }
+      }
+      if (!prUrl) return undefined;
       await this.makeRetainedShipPrPresentable(
-        match.url,
+        prUrl,
         { worktree_branch: head, feature_desc: this.featureDesc },
         undefined,
       );
-      this.shipDraftPrUrl = match.url;
+      this.shipDraftPrUrl = prUrl;
       (this.log ?? console.warn)(
-        `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${match.url}`,
+        `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${prUrl}`,
       );
-      return match.url;
+      return prUrl;
     } catch (err) {
       (this.log ?? console.warn)(
         `[ship-draft-pr] branch lookup for ${head} could not resolve a retained draft PR: ${err}`,
       );
       return undefined;
     }
+  }
+
+  /** Adapts the injected production Git seam to ref-backed publication reads. */
+  private publicationRecordGit(): RebaseGitRunner {
+    return async (args, options) => {
+      try {
+        const result = await this.git(args, {
+          cwd: this.projectRoot,
+          ...(options?.credential === undefined ? {} : { credential: options.credential }),
+          ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        });
+        const observed = result as { stdout: string; exitCode?: unknown; stderr?: unknown };
+        return {
+          exitCode: typeof observed.exitCode === 'number' ? observed.exitCode : 0,
+          stdout: observed.stdout,
+          stderr: typeof observed.stderr === 'string' ? observed.stderr : '',
+        };
+      } catch (error) {
+        return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+      }
+    };
+  }
+
+  /** Match a retained draft only on one explicitly-authorized base branch. */
+  private async findOpenRetainedShipDraftPrUrl(head: string, base: string): Promise<string | undefined> {
+    const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
+      'pr', 'list',
+      '--head', head,
+      '--base', base,
+      '--state', 'open',
+      '--json', 'url,state',
+      '--limit', '10',
+    ]);
+    const rows: unknown = JSON.parse(stdout);
+    if (!Array.isArray(rows)) return undefined;
+    return rows.find(
+      (row): row is { url: string; state: string } =>
+        typeof row === 'object' &&
+        row !== null &&
+        (row as { state?: unknown }).state === 'OPEN' &&
+        typeof (row as { url?: unknown }).url === 'string' &&
+        (row as { url: string }).url.length > 0,
+    )?.url;
   }
 
   /**
@@ -6179,24 +6470,7 @@ export class Conductor {
     let prUrl = state.pr_url;
     if (!prUrl && state.worktree_branch && this.baseBranch) {
       try {
-        const stdout = await runTrackerAmbientRead(this.runGh, this.projectRoot, 'ambient.pull-request.read', [
-            'pr', 'list',
-            '--head', state.worktree_branch,
-            '--base', this.baseBranch,
-            '--state', 'open',
-            '--json', 'url,state',
-            '--limit', '10',
-          ]);
-        const rows: unknown = JSON.parse(stdout);
-        if (Array.isArray(rows)) {
-          prUrl = rows.find(
-            (row): row is { url: string; state: string } =>
-              typeof row === 'object' &&
-              row !== null &&
-              (row as { state?: unknown }).state === 'OPEN' &&
-              typeof (row as { url?: unknown }).url === 'string',
-          )?.url;
-        }
+        prUrl = await this.resolveRetainedShipDraftPrUrl(state.worktree_branch);
       } catch (err) {
         (this.log ?? console.warn)(`[halt-pr-rehab] resume clear branch lookup failed: ${err}`);
       }
@@ -6326,6 +6600,7 @@ export class Conductor {
 
   async run(): Promise<OperatorParkedTermination | undefined> {
     this.shutdownRequested = false;
+    await this.transcriptRetention.ready();
     // #788 regression guard: the phase-active marker creates `.pipeline/`
     // via `mkdirSync` as a side effect ahead of any real init (worktree-
     // prepare provisioning session-hooks/, task-status.json, etc). Recorded
@@ -9885,11 +10160,24 @@ export class Conductor {
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
             const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
             const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
-            const findings = prdAuditCriteria.length > 0
-              ? `Findings: ${prdAuditCriteria.join(', ')}`
+            const asBuiltFindingIds = pendingAsBuiltFindings.map((finding) => finding.finding);
+            const haltingFindings = gate === 'architecture_review_as_built'
+              ? asBuiltFindingIds
+              : prdAuditCriteria;
+            const otherGate = gate === 'architecture_review_as_built'
+              ? 'prd_audit'
+              : 'architecture_review_as_built';
+            const otherFindings = gate === 'architecture_review_as_built'
+              ? prdAuditCriteria
+              : asBuiltFindingIds;
+            const findings = haltingFindings.length > 0
+              ? `Findings (${gate}): ${haltingFindings.join(', ')}`
               : pendingTasks.length > 0
               ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
               : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const alsoPending = otherFindings.length > 0
+              ? `Also pending (${otherGate}): ${otherFindings.join(', ')}`
+              : '';
             const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
               ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
                   `${finding.finding} (${finding.class}; ${finding.reference === undefined
@@ -9902,14 +10190,14 @@ export class Conductor {
             const fallbackLapCap = remediationLapCapForGate(gate, this.config);
             const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
               ? undefined
-              : {
+              : withPendingGrowth({
                   ...settlementGrowth,
                   cap: growthCap,
                   capSource: settlementLedger?.effectiveGrowthCap === undefined
                     ? 'config-derived' as const
                     : 'raised' as const,
                   authoredSource: settlementAuthoredSource,
-                };
+                }, settlementLedger?.pendingRepair);
             const detail = settlementFailure === undefined
               ? renderKickbackBudgetView(
                   settlementLedger?.gates[gate],
@@ -9939,11 +10227,14 @@ export class Conductor {
             }
             const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
-              `${detail}\n${findings}${asBuiltFindingDetail}\n` +
+              `${detail}\n${findings}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,
                 allowance,
+                ...(allowance === 'growth' && settlementFailure === undefined && growthView?.pendingGrowth?.minimumRaise !== undefined && growthView.pendingGrowth.minimumRaise > 0
+                  ? { by: growthView.pendingGrowth.minimumRaise }
+                  : {}),
               }),
             );
             await this.writeHaltMarker(
@@ -10087,6 +10378,7 @@ export class Conductor {
         // halted just because the fixed retry budget ran out.
         let progressAttempts = 0;
         let publicationProgressAttempts = 0;
+        let stackPublicationProgress = false;
         let lastPublicationTransition: PublicationTransition | undefined;
         let lastPublicationRetryDetail: string | undefined;
         const consumeFinishPublicationProgress = async (
@@ -10094,7 +10386,16 @@ export class Conductor {
         ): Promise<boolean> => {
           publicationProgressAttempts++;
           lastPublicationTransition = transition;
-          if (publicationProgressAttempts < FINISH_PUBLICATION_PROGRESS_ALLOWANCE) return true;
+          stackPublicationProgress ||= transition === 'establish_child_prs' || transition === 'assemble_stack';
+          // A stack always crosses establish_child_prs before any other
+          // stacked-only publication progress, so its observed transition is
+          // sufficient to select the sealed feature's nine-transition budget.
+          const allowance = publicationProgressAllowance({
+            stack: stackPublicationProgress
+              ? 'members-missing'
+              : 'not-applicable',
+          } as Parameters<typeof publicationProgressAllowance>[0]);
+          if (publicationProgressAttempts < allowance) return true;
 
           const baseReason =
             `FINISH publication progress allowance exhausted after ` +
@@ -10346,6 +10647,7 @@ export class Conductor {
         if (!bypassesAcceptanceDispatch(acceptancePreDispatch))
         while (attempt < stepMaxRetries) {
           attempt++;
+          this.dispatchingStep = step.name;
           const isAuthorizedRecoveryTrial = authorizedRecoveryTrial;
           authorizedRecoveryTrial = false;
           const recoveryProbeFailure = authorizedRecoveryProbeFailure;
@@ -10736,6 +11038,7 @@ export class Conductor {
                           ? await this.runSelfBuildDispatch(
                               step.name,
                               state,
+                              attempt,
                               retryHint,
                               // D1 scope, self-host path: the verdict gate's
                               // lifecycle `attempt.id` and its sidecar stamp
@@ -10790,6 +11093,8 @@ export class Conductor {
                             }
                           })());
           } finally {
+            // A later loop-level halt is no longer owned by this settled attempt.
+            this.dispatchingStep = undefined;
             buildAttemptSettled = true;
             buildWatcher?.stop();
             stepInFlightTicker?.stop();
@@ -11364,7 +11669,7 @@ export class Conductor {
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await this.haltSerialExecution({
                 reason: route.reason,
-                haltClass: 'needs-human',
+                haltClass: route.haltClass ?? 'needs-human',
                 persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
               });
               process.off('SIGINT', sigintHandler);
@@ -13190,6 +13495,8 @@ export class Conductor {
                     {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      child: this.activeRegionChild,
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     },
                   );
                   // Old raw aggregate fixtures (and pre-adjudication callers)
@@ -13234,6 +13541,10 @@ export class Conductor {
                   const mechanical = uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0
                     ? 'healthy'
                     : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
+                  // Covered faults can release retry routing, but they never
+                  // prove that a case source was absent. Keep that evidence
+                  // boundary distinct from the retry/halt mechanical lane.
+                  const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,
@@ -13241,10 +13552,24 @@ export class Conductor {
                       {
                         emit: async (event) => { await this.events.emit(event); },
                         minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                        child: this.activeRegionChild,
+                        adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                       },
                     );
                     if (!latest.ok) throw new Error(latest.reason);
                     return new Set(latest.effective.acceptedFindingIds);
+                  };
+                  // Carry authority is the feature's current disposition
+                  // ledger, not merely the current lap's accepted ids.  The
+                  // origin necessarily belongs to an earlier finding id.
+                  const resolveEffectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> => {
+                    const listed = await new BuildReviewDispositionStore(this.projectRoot).list(effective.feature);
+                    if (!listed.ok) throw new Error(listed.message);
+                    return new Set(listed.records
+                      .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
+                        record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
+                      .map((record) =>
+                      `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
                   // A deferred issue is creation, not an existing-resource
@@ -13294,7 +13619,9 @@ export class Conductor {
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     suppressions,
                     resolveOperatorResolvedFindingIds,
+                    resolveEffectiveAcceptedSourceIds,
                     mechanical,
+                    absenceRetirementMechanicallyHealthy,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
                       resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),
@@ -13336,6 +13663,7 @@ export class Conductor {
                       } }),
                     }),
                     emit: async (event) => { await this.events.emit(event); },
+                    emitOrThrow: async (event) => this.events.emitOrThrow(event),
                     },
                   });
                   if (outcome.kind === 'decision-stop' || (outcome.kind === 'infrastructure' && outcome.status === 'halt')) {
@@ -13447,6 +13775,8 @@ export class Conductor {
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
                       minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                      child: this.activeRegionChild,
+                      adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {
@@ -14557,6 +14887,7 @@ export class Conductor {
           lastSettledUnit = { kind: 'step', name: step.name };
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
           let completedBuildTreeAfter: string | null | undefined;
+          let completedBuildMadeProgress = false;
           if (step.name === 'build') {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
@@ -14565,6 +14896,7 @@ export class Conductor {
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             completedBuildTreeAfter = treeAfter;
+            completedBuildMadeProgress = resolvedAfter > resolvedTasksBefore;
             const gate = await pendingBuildKickbackGate();
             await writeBuildOutcomeBestEffort(this.projectRoot, {
               ...outcomeStore,
@@ -14600,6 +14932,14 @@ export class Conductor {
                 { test_suite: 'stale' },
               );
             }
+          }
+          if (step.name === 'build') {
+            const owner = this.transcriptOwner(step.name);
+            await this.settleTranscriptAttempt(
+              owner,
+              this.currentTranscriptCaptureAttempt(owner),
+              completedBuildMadeProgress ? 'succeeded-with-progress' : 'succeeded-without-progress',
+            );
           }
           await emitTracked({
             type: 'step_completed',
@@ -14834,6 +15174,7 @@ export class Conductor {
       // and live-boundary paths. Existing terminals win; only still-open
       // admitted scopes receive the truthful interruption terminal.
       await this.closeOpenExecutions();
+      this.transcriptRetention.stop();
       this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
@@ -15036,6 +15377,10 @@ export class Conductor {
       if (preflight.kind !== 'available') return preflight;
     }
 
+    if (await publishedStackRefusal(this.projectRoot, slug)) {
+      await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+      return { kind: 'halted', reason: 'routing admission refused: published-stack' };
+    }
     const roundId = await nextRoundId(this.projectRoot, slug);
     if (typeof roundId !== 'string') return { kind: 'halted', reason: `routing round allocation failed: ${roundId.kind}` };
 
@@ -16048,6 +16393,10 @@ export class Conductor {
     // rebase observation for that whole-stack operation.
     const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
+      if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
+        await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+        return { success: true };
+      }
       const preflight = await runStackPreflight({
         worktree: this.projectRoot,
         slug: stackSlug,
@@ -16434,19 +16783,28 @@ export class Conductor {
    */
   /**
    * Resolve the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location). Prefers `state.track` (daemon-seeded);
-   * otherwise reads the committed `.docs/track/<slug>.md` marker that `/explore`
-   * wrote in the interactive flow (newest file wins — one feature per worktree),
-   * caches it into `state.track`, and persists. Defaults to `product` when no
-   * usable marker exists, so PRD / prd-audit run unless the work was explicitly
-   * classified `technical`. Best-effort: any fs error falls back to `product`.
+   * otherwise reads the `.docs/track/<slug>.md` marker that `/explore` wrote in
+   * the interactive flow, caches it into `state.track`, and persists. Only this
+   * feature's own marker counts (#3334): one named by a feature identity, else
+   * the single marker this branch changed — never another feature's marker
+   * inherited from the base branch. Defaults to `product` when no own marker
+   * exists, so PRD / prd-audit run unless the work was explicitly classified
+   * `technical`. Best-effort: any fs error falls back to `product`.
    */
   private async resolveTrack(state: ConductState): Promise<Track> {
     if (state.track) return state.track;
     try {
       const dir = join(this.projectRoot, '.docs', 'track');
-      const entries = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
-      if (entries.length > 0) {
-        const content = await readFile(join(dir, entries[entries.length - 1]), 'utf-8');
+      const markers = (await readdir(dir)).filter((f) => f.endsWith('.md'));
+      const { featureIdentities, changedPaths } = await buildArtifactResolutionContext(this.projectRoot, {
+        featureDesc: state.feature_desc ?? this.featureSlug ?? this.featureDesc,
+        git: this.prdAuditGit(),
+      });
+      const changed = markers.filter((f) => changedPaths.has(`.docs/track/${f}`));
+      const own = featureIdentities.map((id) => `${id}.md`).find((f) => markers.includes(f))
+        ?? (changed.length === 1 ? changed[0] : undefined);
+      if (own) {
+        const content = await readFile(join(dir, own), 'utf-8');
         const parsed = parseTrack(content);
         if (parsed) {
           const persisted = await this.currentStateForMutation();

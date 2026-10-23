@@ -128,7 +128,7 @@ exit 0
 EOF
 chmod +x "$ignored_destination_generator"
 set +e
-ignored_destination_output=$(HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR="$ignored_destination_generator" \
+ignored_destination_output=$(TMPDIR="$fixture_dir" HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR="$ignored_destination_generator" \
   HARNESS_INTEGRITY_TEST_TRACKED_HOOK="$HOOK" "$BASH_BIN" "$CHECKER" 2>&1)
 ignored_destination_code=$?
 set -e

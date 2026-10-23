@@ -143,10 +143,35 @@ export async function hasDurableChildState(
     const identity = parseFeatureRef(ref.trim());
     return identity.kind === 'child' && identity.slug === slug;
   })) return true;
-  const closures = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/closed/`]);
-  if (!closures || closures.exitCode !== 0) return 'git-error';
-  if (closures.stdout.trim() !== '') return true;
-  return false;
+  // The feature-owned conductor namespace is durable across worktree
+  // recreation.  Do not restrict this probe to closure receipts: a published
+  // positions/publication receipt is itself enough to keep the stack guard on.
+  // Push receipts are durable stack state only for child branches.  The leaf
+  // receipt is ordinary N=1 publication evidence and must retain the flat
+  // FINISH path.
+  const conductorRefs = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/`]);
+  if (!conductorRefs || conductorRefs.exitCode !== 0) return 'git-error';
+  const prefix = `refs/conductor/${slug}/`;
+  return conductorRefs.stdout.split('\n').some((line) => {
+    const ref = line.trim();
+    return ref.startsWith(prefix) && isStackOwnedConductorRef(ref.slice(prefix.length), slug);
+  });
+}
+
+/** Stack-owned names under `refs/conductor/<slug>/`: exact refs and ref directories. */
+const STACK_OWNED_CONDUCTOR_REFS = ['positions', 'publication', 'leaf-moved', 'cascades'] as const;
+const STACK_OWNED_CONDUCTOR_REF_DIRS = ['closed/', 'restack/'] as const;
+const STACK_PUSH_RECEIPT_DIRS = ['pushed/', 'push-intent/'] as const;
+
+function isStackOwnedConductorRef(name: string, slug: string): boolean {
+  const receiptBranch = STACK_PUSH_RECEIPT_DIRS
+    .find((dir) => name.startsWith(dir));
+  if (receiptBranch !== undefined) {
+    const identity = parseFeatureBranch(name.slice(receiptBranch.length));
+    return identity.kind === 'child' && identity.slug === slug;
+  }
+  return (STACK_OWNED_CONDUCTOR_REFS as readonly string[]).includes(name) ||
+    STACK_OWNED_CONDUCTOR_REF_DIRS.some((dir) => name.startsWith(dir));
 }
 
 async function closedChildren(slug: string, positions: readonly ChildId[], git: GitRunner): Promise<ClosedChild[] | 'git-error'> {
@@ -277,19 +302,10 @@ export async function resolveActiveChild(
   dependencies: ActiveChildDependencies = {},
 ): Promise<ActiveChildResolution> {
   const git = dependencies.git ?? makeGitRunner(worktree);
-  // Unit fixtures and legacy N=1 callers may not be Git worktrees. With no
-  // child directory, they cannot contain child refs either, so retain the flat
-  // path without treating the deliberately absent Git boundary as corruption.
-  if (!existsSync(join(worktree, '.git'))) {
-    try {
-      if ((await readdir(join(worktree, '.pipeline', 'children'))).length === 0) {
-        return { kind: 'no-child' };
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'no-child' };
-      return { kind: 'git-error' };
-    }
-  }
+  // Durable ref detection runs whether or not disposable metadata (child
+  // directory, envelope) survives: a recreated worktree keeps its child refs
+  // (ADR 2026-10-17 D1 amendment). hasDurableChildState preserves the flat path
+  // for fixtures without a Git boundary.
   const artifacts = await hasDurableChildState(worktree, slug, { git });
   if (artifacts === 'git-error') return { kind: 'git-error' };
 

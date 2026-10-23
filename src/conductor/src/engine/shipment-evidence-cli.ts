@@ -33,6 +33,7 @@ import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
 import { runTrackerRead } from './tracker-client.js';
 import { GhRunnerError } from './tracker-client.js';
 import { specHash } from './shipped-record.js';
+import { readPlanOrPruned } from './pruned-plan.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import {
   createGuardedGithubOperationRunner,
@@ -70,6 +71,7 @@ export interface PullRequestEvidenceMetadata {
   url: string;
   body: string;
   changedPaths: string[];
+  headRef: string;
   headRefOid: string;
 }
 
@@ -141,12 +143,17 @@ export async function dispatchShipmentEvidence(
     const association = classifyShipmentAssociation({
       planStems,
       pr: {
+        headRef: metadata.headRef,
         metadataPlanStems: cmd.kind === 'check'
           ? extractShipmentPlanDeclarations(metadata.body)
           : extractPlanStems(metadata.body),
         changedPaths: metadata.changedPaths,
       },
     });
+    if (cmd.kind === 'reconcile' && !metadata.headRef) {
+      report('shipped-record: unclassified (head ref unavailable)');
+      return 0;
+    }
     if (association.kind === 'not-applicable') {
       report(`shipped-record: not applicable (${association.classification})`);
       return 0;
@@ -164,6 +171,7 @@ export async function dispatchShipmentEvidence(
         runGh,
         runGit,
         evaluateEvidence: runners.evaluateEvidence ?? evaluateShipmentEvidence,
+        specCommit: candidateCommit,
       });
       report(`shipped-record: ${result.kind}`);
       return result.kind === 'unresolved' ? 1 : 0;
@@ -234,6 +242,7 @@ async function publishRecordOnlyRepair(input: {
       : (path) => readFile(join(input.cwd, path)).catch(() => null),
     input.slug,
     input.shipped,
+    input.specCommit ? { runGit: input.runGit, cwd: input.cwd, commit: input.specCommit } : undefined,
   );
   const evidence = await evaluateAtCandidateHead(
     input.implementationPr,
@@ -328,10 +337,15 @@ export function makeRecordRepairRequester(
       const association = classifyShipmentAssociation({
         planStems,
         pr: {
+          headRef: metadata.headRef,
           metadataPlanStems: extractPlanStems(metadata.body),
           changedPaths: metadata.changedPaths,
         },
       });
+      if (!metadata.headRef) {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} is unclassified (head ref unavailable); no repair requested`);
+        return;
+      }
       if (association.kind !== 'implementation') {
         log(`[shipped-record-repair] ${slug}: ${prUrl} is ${association.classification}; no repair requested`);
         return;
@@ -442,14 +456,34 @@ async function resolveRepairRepository(
   return typeof nameWithOwner === 'string' && nameWithOwner ? nameWithOwner : undefined;
 }
 
-async function expectedReconciledRecord(
+export async function expectedReconciledRecord(
   readSpec: (path: string) => Promise<Buffer | null>,
   slug: string,
   shipped: string,
+  history?: { runGit: GitRunner; cwd: string; commit: string },
 ): Promise<{ specHash: string; shipped: string }> {
   const planPath = `.docs/plans/${slug}.md`;
-  const plan = await readSpec(planPath);
-  if (plan === null) throw new Error(`plan ${planPath} is unavailable`);
+  const resolved = history
+    ? await readPlanOrPruned(
+      async (commit, path) => readCommittedFile(history.runGit, history.cwd, commit, path)
+        .then((content) => content === null ? null : Buffer.from(content, 'utf8')),
+      async (args) => {
+        try {
+          const result = await history.runGit(args, { cwd: history.cwd });
+          return { stdout: result.stdout, stderr: '', exitCode: result.exitCode ?? 0 };
+        } catch (error) {
+          return { stdout: '', stderr: error instanceof Error ? error.message : String(error), exitCode: 1 };
+        }
+      },
+      history.commit,
+      planPath,
+    )
+    : await readSpec(planPath);
+  if (resolved === null || (typeof resolved === 'object' && 'kind' in resolved)) {
+    const detail = resolved && typeof resolved === 'object' && 'detail' in resolved ? `: ${resolved.detail}` : '';
+    throw new Error(`shipment-plan-pruned: ${planPath}${detail}`);
+  }
+  const plan = resolved;
   const planContent = plan.toString('utf8');
   const reference = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
   let stories: Buffer | null = null;
@@ -460,6 +494,7 @@ async function expectedReconciledRecord(
   }
   return { specHash: specHash(plan, stories).digest, shipped };
 }
+
 
 function implementationPrNumber(pr: string): number {
   const value = /\/pull\/(\d+)(?:$|[/?#])/.exec(pr)?.[1];
@@ -683,7 +718,7 @@ async function readPullRequestEvidenceMetadata(
   try {
     stdout = await runTrackerRead(
       runGh, cwd, 'pull-request.read', repositoryForPullRequest(pr), { kind: 'repository' },
-      ['pr', 'view', pr, '--json', 'url,body,files,headRefOid'],
+      ['pr', 'view', pr, '--json', 'url,body,files,headRefOid,headRefName'],
     );
   } catch (error) {
     // Preserve the caller's established error wording while the read itself
@@ -696,6 +731,7 @@ async function readPullRequestEvidenceMetadata(
     body?: unknown;
     files?: unknown;
     headRefOid?: unknown;
+    headRefName?: unknown;
   };
   return {
     url: typeof value.url === 'string' ? value.url : '',
@@ -706,6 +742,7 @@ async function readPullRequestEvidenceMetadata(
         return typeof path === 'string' ? [path] : [];
       })
       : [],
+    headRef: typeof value.headRefName === 'string' ? value.headRefName.trim() : '',
     headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : '',
   };
 }
@@ -731,13 +768,17 @@ async function readPullRequestEventMetadata(
       html_url?: unknown;
       body?: unknown;
       base?: { sha?: unknown };
-      head?: { sha?: unknown };
+      head?: { ref?: unknown; sha?: unknown };
     };
   };
   const pullRequest = event.pull_request;
   const url = typeof pullRequest?.html_url === 'string' ? pullRequest.html_url : '';
   const baseSha = typeof pullRequest?.base?.sha === 'string' ? pullRequest.base.sha : '';
+  const headRef = typeof pullRequest?.head?.ref === 'string' ? pullRequest.head.ref : '';
   const headRefOid = typeof pullRequest?.head?.sha === 'string' ? pullRequest.head.sha : '';
+  if (!headRef) {
+    throw new Error(`pull-request event lacks head ref: ${eventPath}`);
+  }
   if (!url || !baseSha || !headRefOid) {
     throw new Error(`pull-request event lacks URL or commit identity: ${eventPath}`);
   }
@@ -748,6 +789,7 @@ async function readPullRequestEventMetadata(
     url,
     body: typeof pullRequest?.body === 'string' ? pullRequest.body : '',
     changedPaths,
+    headRef,
     headRefOid,
   };
 }

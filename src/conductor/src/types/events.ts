@@ -38,6 +38,24 @@ import type { HostState, RoundId, RouteKind } from '../engine/routing/route-type
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Legacy leases written before a conductor step was recorded own this bucket. */
+export const LEGACY_TRANSCRIPT_OWNER_STEP = 'unknown-step' as const;
+/** @deprecated Use TranscriptOwner for newly captured transcripts. */
+export type TranscriptOwnerStep = StepName | typeof LEGACY_TRANSCRIPT_OWNER_STEP;
+
+/**
+ * A transcript belongs either to a registered lifecycle step, a configured
+ * member executing under its registered parent group, or an old lease whose
+ * owner could not be reconstructed.  Do not represent configured members as
+ * StepName: their names are deliberately outside that registry.
+ */
+export type TranscriptOwner =
+  | { readonly kind: 'registered-step'; readonly step: StepName }
+  // Configured group names are operator-defined (e.g. `quality/audit`), not
+  // registered lifecycle steps, so parentGroup is deliberately a plain string.
+  | { readonly kind: 'configured-group-member'; readonly parentGroup: string; readonly member: string }
+  | { readonly kind: 'legacy-unknown-step' };
+
 /** Closed disposition of pull-request publication for a completed run. */
 export type RunPrDisposition = 'opened' | 'none' | 'unrecorded';
 
@@ -117,27 +135,27 @@ export interface ParkedReconcileMaintenanceSummary {
   skipped: number;
 }
 
-type DaemonMaintenancePhaseBase = {
+type DaemonMaintenancePhaseBase<Outcome extends MaintenancePhaseOutcome> = {
   type: 'daemon_maintenance_phase';
   durationMs: number;
-  outcome: MaintenancePhaseOutcome;
+  outcome: Outcome;
 };
 
-/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data. */
+/** Phase-specific telemetry prevents unrelated maintenance work from carrying repair or sweep data or another phase's outcome. */
 export type DaemonMaintenancePhaseEvent =
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed' | 'deferred'> & {
       phase: 'repair';
       prUrl: string;
       slug?: string;
       summary?: never;
     })
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'skipped-unchanged' | 'failed'> & {
       phase: 'parked-reconcile';
       summary?: ParkedReconcileMaintenanceSummary;
       prUrl?: never;
       slug?: never;
     })
-  | (DaemonMaintenancePhaseBase & {
+  | (DaemonMaintenancePhaseBase<'completed' | 'failed'> & {
       phase: Exclude<MaintenancePhase, 'repair' | 'parked-reconcile'>;
       prUrl?: never;
       slug?: never;
@@ -171,10 +189,12 @@ type ScratchCleanupAttempt = number | 'unknown';
 /** Closed, credential-safe FINISH publication observability vocabulary. */
 export type FinishPublicationTransition =
   | 'establish_pr'
+  | 'establish_child_prs'
   | 'verify_release_readiness'
   | 'author_pr_prose'
   | 'judge_pr_prose'
   | 'write_shipped_record'
+  | 'assemble_stack'
   | 'ready_pr'
   | 'record_outcome';
 
@@ -209,6 +229,22 @@ export type FinishPublicationEvent =
       type: 'finish_publication_disposition';
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
     };
+
+/** Stack-publication occurrences remain on the canonical conductor event spine. */
+export type StackPublicationEvent =
+  | { type: 'stack_member_published'; child: ChildId; pr: number }
+  | { type: 'stack_member_redrafted'; child: ChildId; pr: number }
+  | { type: 'stack_assembled'; prs: readonly number[] }
+  | {
+      type: 'stack_member_lifecycle';
+      child: ChildId;
+      pr: number;
+      state: 'merged' | 'closed' | 'reverted';
+      /** Deterministic identity makes at-least-once sweep delivery replay-safe. */
+      eventId: string;
+    }
+  | { type: 'stack_members_unreachable'; child: ChildId; pr: number }
+  | { type: 'stack_tip_diverged'; prs: readonly number[] };
 
 /** Closed, non-diagnostic context for credential-park progress telemetry. */
 export type CredentialParkProgressDegradation =
@@ -460,6 +496,15 @@ export interface SessionEventDeliveryDiagnosticEvent {
 }
 
 type ConductorEventBody =
+  | {
+      /** Operator-run cleanup of transient DECIDE artifacts for shipped work. */
+      type: 'decide_artifacts_pruned';
+      removed: string[];
+      deferred: { stem: string; paths: string[]; reason: 'open-pr-modifies'; pullRequests: string[] }[];
+      skipped: { stem: string; reason: 'no-shipped-record' }[];
+      excluded: string[];
+      pullRequestUrl?: string;
+    }
   | BotCoAuthorSkippedEvent
   | SessionCommandRefusedEvent
   | GithubBypassAttemptEvent
@@ -523,7 +568,34 @@ type ConductorEventBody =
     }
   /** Duration and result of a daemon maintenance occurrence on the canonical event spine. */
   | DaemonMaintenancePhaseEvent
-  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
+  | {
+      type: 'feature_dispatch_started';
+      slug: string;
+      kind: DispatchKind;
+      tier?: ComplexityTier;
+      /** Immutable executor build selected at claim time (absent in legacy ledgers). */
+      engineVersionId?: string;
+      /** Why this dispatch used the supervisor build rather than `dist`. */
+      pinFallbackReason?: string;
+    }
+  | {
+      type: 'executor_started';
+      slug: string;
+      engineVersionId: string;
+      protocolVersion: number;
+      supervisorEngineVersionId: string;
+    }
+  | {
+      /** A child was rejected before receiving a work order. */
+      type: 'executor_protocol_mismatch';
+      slug: string;
+      engineVersionId: string;
+      expectedProtocolVersion: number;
+      actualProtocolVersion?: number;
+      reason: string;
+      /** D7's drain fallback was requested through the armed supervisor seam. */
+      restartRequested: boolean;
+    }
   | {
       type: 'feature_dispatch_ended';
       slug: string;
@@ -918,8 +990,29 @@ type ConductorEventBody =
       };
     }
   | {
+      /** A new source was carried from a prior operator-accepted remediation case. */
+      type: 'build_review_acceptance_carried';
+      eventId: string;
+      feature: string;
+      lapId: string;
+      sourceId: string;
+      caseId: string;
+      originSourceIds: readonly string[];
+      originLapIds: readonly string[];
+    }
+  | {
+      /** An operator resolved a remediation case outside the adjudication judgement. */
+      type: 'remediation_case_operator_resolved';
+      eventId: string;
+      feature: string;
+      caseId: string;
+      sourceIds: readonly string[];
+    }
+  | {
       /** One canonical remediation case was reconciled against the current lap. */
       type: 'remediation_case_reconciled';
+      /** Makes outbox delivery of a retirement occurrence replay-safe. */
+      eventId?: string;
       domain: 'build_review';
       lapId: string;
       caseId: string;
@@ -1096,6 +1189,63 @@ type ConductorEventBody =
       path: string;
       reason: string;
     }
+  | ({
+      /** Allowlisted provider transcripts were captured before a scratch home was retired. */
+      type: 'provider_transcripts_captured';
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      files: number;
+      bytes: number;
+      interrupted: boolean;
+      skipped: number;
+      omittedLines: number;
+    } & (
+      /** Current captures retain their owner and project its display step. */
+      | { readonly owner: TranscriptOwner; readonly step: string }
+      /** Rows persisted before owner identities were introduced. */
+      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+    ))
+  | ({
+      /** Provider transcript capture failed, but scratch-home retirement continued. */
+      type: 'provider_transcripts_harvest_failed';
+      runId: string;
+      attempt: number;
+      member?: string;
+      provider: string;
+      path: string;
+      error: string;
+    } & (
+      /** Current captures retain their owner and project its display step. */
+      | { readonly owner: TranscriptOwner; readonly step: string }
+      /** Rows persisted before owner identities were introduced. */
+      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+    ))
+  | {
+      /** A captured provider transcript was retained after its step verdict settled. */
+      type: 'provider_transcripts_retained';
+      path: string;
+    }
+  | {
+      /** A captured provider transcript was pruned after successful step progress. */
+      type: 'provider_transcripts_pruned';
+      path: string;
+    }
+  | {
+      /** A retained provider transcript was evicted to satisfy a retention cap. */
+      type: 'provider_transcripts_evicted';
+      path: string;
+      reason: 'count' | 'size';
+    }
+  | {
+      /** A provider transcript retention cleanup action failed. */
+      type: 'provider_transcripts_retention_failed';
+      path: string;
+      action: 'prune' | 'evict';
+      error: string;
+    }
   | {
       /**
        * Whole-feature provider usage, emitted once when `finish` completes.
@@ -1245,6 +1395,7 @@ type ConductorEventBody =
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
+  | StackPublicationEvent
   | {
       type: 'feature_complete';
       prUrl?: string;
@@ -1708,7 +1859,7 @@ type ConductorEventBody =
       type: 'halt_record_written';
       path: string;
       slug: string;
-      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap';
+      haltClass: 'needs-human' | 'mechanical' | 'protected-artifact' | 'plan-gap' | 'stack-tip-diverged';
     }
   | {
       /** Writing or committing a durable halt record failed. */

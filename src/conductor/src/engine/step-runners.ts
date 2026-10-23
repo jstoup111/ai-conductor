@@ -1094,6 +1094,8 @@ export class DefaultStepRunner implements StepRunner {
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
+  /** Capture identity is local evidence sequencing, never retry escalation state. */
+  private readonly auxiliaryTranscriptCaptureAttempts = new Map<StepName, number>();
   /** Bounded per-run evidence cache; failed preflights never enter it. */
   private readonly tautologyPreflightCache = new Map<string, import('./build-review-test-quality-preflight.js').TautologyCompletedPreflight>();
   private readonly worktreeLifecycle: WorktreeLifecycleQueue | undefined;
@@ -1103,6 +1105,12 @@ export class DefaultStepRunner implements StepRunner {
   /** Route a shared-`.git` worktree mutation through the dispatcher queue when one is injected. */
   private mutateWorktree<T>(work: () => Promise<T>): Promise<T> {
     return this.worktreeLifecycle ? this.worktreeLifecycle.run(work) : work();
+  }
+
+  private nextAuxiliaryTranscriptCaptureAttempt(step: StepName): number {
+    const next = (this.auxiliaryTranscriptCaptureAttempts.get(step) ?? 0) + 1;
+    this.auxiliaryTranscriptCaptureAttempts.set(step, next);
+    return next;
   }
 
   constructor(
@@ -1901,6 +1909,7 @@ export class DefaultStepRunner implements StepRunner {
             config: this.config,
             tier: state.complexity_tier,
             attempt: opts?.attempt ?? 1,
+            captureAttempt: opts?.captureAttempt,
             runId: this.runId,
             nativeSchemaScratch: {
               worktreeRoot: this.projectDir,
@@ -2011,6 +2020,7 @@ export class DefaultStepRunner implements StepRunner {
           config: this.config,
           tier: request.tier,
           attempt: request.dispatch?.attempt ?? 1,
+          captureAttempt: request.dispatch?.captureAttempt,
           runId: this.runId,
           nativeSchemaScratch: {
             worktreeRoot: this.projectDir,
@@ -2709,9 +2719,10 @@ export class DefaultStepRunner implements StepRunner {
           step: 'rebase', memberId: REBASE_REGRADE_SKILL, policy,
           runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`${REBASE_REGRADE_SKILL}:judge`),
           config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+          nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('rebase'),
           providerAvailability: this.providerExecutionContext?.providerAvailability,
           withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
-          onAttempt: this.providerAttempt, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn,
+          onAttempt: this.providerAttempt, onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn,
           options,
           optionsForCandidate: (providerKey) => ({ ...options, prompt: `${renderAuxiliarySkillInvocation(rebaseRegradeSkillName, providerKey)}\n\n${prompt}` }),
         }),
@@ -2769,9 +2780,10 @@ export class DefaultStepRunner implements StepRunner {
           step: 'remediate', memberId: RESIDUE_ROUTING_CALL_MEMBER, policy,
           runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`${RESIDUE_ROUTING_CALL_MEMBER}:judge`),
           config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+          nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('remediate'),
           providerAvailability: this.providerExecutionContext?.providerAvailability,
           withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
-          onAttempt: this.providerAttempt, warn: this.providerWarn,
+          onAttempt: this.providerAttempt, onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed, warn: this.providerWarn,
           options,
           optionsForCandidate: () => options,
         }),
@@ -3310,7 +3322,7 @@ export class DefaultStepRunner implements StepRunner {
         customEntries.length,
         async (_id, entry) => {
           try {
-            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir);
+            return await this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier, lapGate, readOnlyReviewCapabilityFor, effectivePipelineDir, executionContext);
           } finally {
             lapGate?.arrive(entry.id);
           }
@@ -3645,6 +3657,7 @@ export class DefaultStepRunner implements StepRunner {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
+      ...(inputs.securitySourceSnapshot === undefined ? {} : { securitySnapshotDigest: inputs.securitySourceSnapshot.digest }),
       results: validResults,
       declaredReplicationSuppressions,
       ...(customResults === undefined ? {} : {
@@ -3656,6 +3669,8 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(config),
+      child,
+      adjudicationEnabled: config.adjudication.enabled,
     });
     const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
       ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }
@@ -3730,6 +3745,7 @@ export class DefaultStepRunner implements StepRunner {
     lapGate?: BuildReviewLapGate,
     readOnlyReviewCapabilityFor?: (provider: string) => Promise<ReadOnlyReviewCapability | undefined>,
     pipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline'),
+    executionContext?: ExecutionContext,
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
     const declaration = {
       version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
@@ -3791,9 +3807,10 @@ export class DefaultStepRunner implements StepRunner {
     let result: ProviderExecutionResult;
     try {
       result = await executeAuxiliaryProviderCandidates({
-      step: 'build_review', memberId: entry.id, policy: entry.policy,
+      step: 'build_review', executionContext, memberId: entry.id, policy: entry.policy,
       runtimes: this.providerRuntimes, sessions: this.sessionStore.beginBranch(`build-review:${entry.id}`),
       config: this.config, runId: this.runId, tier,
+      nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build_review'),
       nativeSchemaScratch: {
         worktreeRoot: this.projectDir,
         repository: this.projectDir,
@@ -3804,7 +3821,7 @@ export class DefaultStepRunner implements StepRunner {
       withCandidateSafety: this.candidateSafetyFor('build_review')?.wrapper ?? this.withCandidateSafety,
       prepareCandidateSelfHost: this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
-      onAttempt: this.providerAttempt, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn, options,
+      onAttempt: this.providerAttempt, onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed, onCandidateStart: this.providerCandidateStart, warn: this.providerWarn, options,
       abortSignal: controller.signal, deadlineAt,
       ...(Array.isArray(entry.policy.llm_provider) && entry.policy.llm_provider.length > 1 ? { prepareCandidateBaseline: async ({ candidate, prepared }) => {
         if (lapGate?.hasOpened) return;
@@ -4394,6 +4411,8 @@ export class DefaultStepRunner implements StepRunner {
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: buildReviewConfidenceFloors(input.config),
+      child: input.child,
+      adjudicationEnabled: input.config.adjudication.enabled,
     });
     const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
       ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }
@@ -4627,6 +4646,7 @@ export class DefaultStepRunner implements StepRunner {
             sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
             config: this.config,
             runId: this.runId,
+            nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build_review'),
             nativeSchemaScratch: {
               worktreeRoot: this.projectDir,
               repository: this.projectDir,
@@ -4640,6 +4660,7 @@ export class DefaultStepRunner implements StepRunner {
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
             prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
+            onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed,
             onCandidateStart: this.providerCandidateStart,
             warn: this.providerWarn,
             abortSignal: controller.signal,
@@ -5042,6 +5063,8 @@ export class DefaultStepRunner implements StepRunner {
       createCheckout: async (path, headSha) => {
         const result = await this.mutateWorktree(() => this.gitRunner(['worktree', 'add', '--detach', path, headSha]));
         if (result.exitCode !== 0) throw new Error(result.stderr);
+      },
+      prepareDependencies: async (path) => {
         // A detached worktree contains tracked files only.  The source
         // worktree's dependency installation is deliberately ignored by git,
         // so expose it by reference rather than copying or tracking it.

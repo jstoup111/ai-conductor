@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4, task:24
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -23,6 +23,7 @@ import type { GithubOperationRunner } from '../../src/engine/github-operations.j
 import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
+import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 const commandResult = { stdout: '' };
 
@@ -2084,8 +2085,30 @@ describe('production FINISH publication composition', () => {
       })!;
       const accepted: BuildReviewDispositionRecord = {
         version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,
-        summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+        summary: 'DIRECT-SUMMARY-MUST-NOT-PUBLISH', rationale: 'DIRECT-RATIONALE-MUST-NOT-PUBLISH',
+        operator: 'DIRECT-OPERATOR-MUST-NOT-PUBLISH', acceptedAt: '2026-08-14T12:00:00.000Z',
       };
+      const carried = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+        anchor: { rubric: 'testQuality', locus: { path: 'test/carried.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'carried' } },
+      })!;
+      const caseState = {
+        version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+        cases: [{
+          id: 'case-carried', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'CARRIED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+          sources: [
+            { sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' },
+            { sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T11:00:00.000Z' },
+          ],
+          effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'order-carried' },
+          operatorAcceptance: { origins: [{ sourceId: `testQuality:${finding.id}`, lapId: 'lap-7' }] },
+        }, {
+          id: 'case-operator-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
+          sources: [{ sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' }],
+          effect: { id: 'effect-resolved', kind: 'action', status: 'failed', diagnostic: 'resolved by operator' },
+          operatorResolution: { operator: 'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', rationale: 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH', resolvedAt: '2026-10-22T12:00:00.000Z' },
+        }],
+      } satisfies RemediationCaseStoreState;
       const coverage = {
         kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
         identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
@@ -2118,6 +2141,7 @@ describe('production FINISH publication composition', () => {
           list: async () => ({ ok: true, records: Object.freeze([accepted]) }),
           listReducedCoverage: async () => ({ ok: true as const, records: [coverage] }),
         }),
+        createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }),
       });
       const state = {
         feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
@@ -2143,8 +2167,17 @@ describe('production FINISH publication composition', () => {
       expect(publishedBody.indexOf('## Accepted build-review risk', regionEnd)).toBeGreaterThan(regionEnd);
       expect(publishedBody).toContain('Current diagnostic: provider unavailable');
       expect(publishedBody).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
+      expect(publishedBody).toContain(`- Carried finding: \`${carried.id}\` — rubric: testQuality; carried from: \`testQuality:${finding.id}\` (lap lap-7)`);
+      expect(publishedBody).toContain(`- Operator-resolved case: \`case-operator-resolved\` — source ids: \`testQuality:${finding.id}\``);
       expect(publishedBody).not.toContain('**Rationale:**');
-      expect(publishedBody).not.toContain('reason');
+      for (const privateValue of [
+        accepted.summary, accepted.rationale, accepted.operator, accepted.acceptedAt,
+        // Every case-source timestamp remains private, including the carried source.
+        ...caseState.cases.flatMap(({ sources }) => sources.map(({ recordedAt }) => recordedAt)),
+        'CARRIED-RATIONALE-MUST-NOT-PUBLISH', 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH',
+        'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
+        '2026-10-22T12:00:00.000Z',
+      ]) expect(publishedBody).not.toContain(privateValue);
       expect(publishedBody).toContain('Operator: james');
       expect(publishedBody).toContain('Decision time: 2026-08-20T00:00:00.000Z');
       expect(maskProjectOwnedRegions(publishedBody).match(/## Reduced build-review coverage/g)).toHaveLength(1);

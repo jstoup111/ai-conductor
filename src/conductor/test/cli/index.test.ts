@@ -15,6 +15,7 @@ import {
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
   detectBuildReviewRecordReducedCoverageCommand,
+  detectBuildReviewResolveCaseCommand,
 } from '../../src/cli.js';
 import { DAEMON_RUN_FLAGS } from '../../src/engine/daemon-command.js';
 import { detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
@@ -24,12 +25,14 @@ import { renderCanonicalFullHelp } from '../../src/index.js';
 
 const OPERATOR_FACING_COMMANDS = [
   'shipped-record',
+  'docs-prune',
   'kpi',
   'memory',
   'brain',
   'intake-loop',
   'render-diagrams',
   'build-auth-status',
+  'transcripts',
   'shipment-evidence',
 ] as const;
 
@@ -68,6 +71,8 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'intake-loop',
   'brain',
   'shipped-record',
+  'docs-prune',
+  'transcripts',
   'shipment-evidence',
   'task',
   'evidence',
@@ -131,6 +136,11 @@ describe('CLI', () => {
     expect(detectBuildReviewRecordReducedCoverageCommand([
       'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'unknown', '--rationale', 'risk',
     ])).toMatchObject({ kind: 'record-reduced-coverage', rubric: 'unknown' });
+  });
+  it('accepts the child-scoped resolve-case command rendered in build-review halts', () => {
+    expect(detectBuildReviewResolveCaseCommand([
+      'node', 'conduct', 'build-review', 'resolve-case', '--feature', 'review-rubrics', '--child', '2', '--case', 'case-open', '--rationale', 'known risk',
+    ])).toEqual({ kind: 'resolve-case', feature: 'review-rubrics', child: '2', caseId: 'case-open', rationale: 'known risk' });
   });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);
@@ -405,12 +415,14 @@ describe('CLI', () => {
       const help = renderCanonicalFullHelp();
       const commandOptions: Record<(typeof OPERATOR_FACING_COMMANDS)[number], string[]> = {
         'shipped-record': ['--slug', '--pr'],
+        'docs-prune': [],
         kpi: [],
         memory: ['setup'],
         brain: ['start', 'stop', 'status'],
         'intake-loop': ['--continuous', '--once', '--interval-ms'],
         'render-diagrams': ['--check'],
         'build-auth-status': [],
+        transcripts: ['--show'],
         'shipment-evidence': ['--pr', '--event', 'reconcile', 'audit'],
       };
       for (const [command, options] of Object.entries(commandOptions)) {

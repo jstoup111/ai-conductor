@@ -16,7 +16,19 @@ export interface DaemonMemorySample {
   [field: string]: unknown;
 }
 
-export type DaemonTimelineRecord = DaemonExitRecord | DaemonMemorySample;
+/** A dispatch record is kept in the diagnostic timeline so legacy ledgers
+ * remain readable after engine pins were added. */
+export interface DaemonFeatureDispatch {
+  type: 'feature_dispatch_started';
+  slug: string;
+  kind: string;
+  engineVersionId?: string;
+  pinFallbackReason?: string;
+  ts?: string;
+  [field: string]: unknown;
+}
+
+export type DaemonTimelineRecord = DaemonExitRecord | DaemonMemorySample | DaemonFeatureDispatch;
 
 export type DaemonLedgerReadResult<T> =
   | { event: T | null; skipped: number }
@@ -85,7 +97,7 @@ async function readTimelineLedger(path: string): Promise<DaemonLedgerReadResult<
       if (!isRecord(parsed)) {
         skipped += 1;
       } else {
-        const record = daemonExitRecord(parsed) ?? daemonMemorySample(parsed);
+        const record = daemonExitRecord(parsed) ?? daemonMemorySample(parsed) ?? daemonFeatureDispatch(parsed);
         if (record) event.push(record);
       }
     } catch {
@@ -108,6 +120,15 @@ function daemonExitRecord(event: Record<string, unknown>): DaemonExitRecord | un
 
 function daemonMemorySample(event: Record<string, unknown>): DaemonMemorySample | undefined {
   return event.type === 'daemon_memory_sample' ? event as DaemonMemorySample : undefined;
+}
+
+function daemonFeatureDispatch(event: Record<string, unknown>): DaemonFeatureDispatch | undefined {
+  if (event.type === 'feature_dispatch_started'
+    && typeof event.slug === 'string'
+    && typeof event.kind === 'string') {
+    return event as DaemonFeatureDispatch;
+  }
+  return undefined;
 }
 
 export function readLastExit(root: string, pid: number): Promise<DaemonLedgerReadResult<DaemonExitRecord>> {

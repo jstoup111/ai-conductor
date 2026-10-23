@@ -12,6 +12,7 @@ import type {
   RemediationCaseStoreMutationResult,
   RemediationCaseStoreState,
 } from './remediation-case-store.js';
+import { prdWideningCasesForState, withPrdWideningCases } from './remediation-case-store.js';
 
 export interface PrdWideningCoordinatorStore {
   mutate(operation: (state: RemediationCaseStoreState) => Promise<RemediationCaseStoreMutation<PrdWideningCoordinatorResult>>): Promise<RemediationCaseStoreMutationResult<PrdWideningCoordinatorResult>>;
@@ -62,7 +63,7 @@ const digest = (value: unknown): string => createHash('sha256').update(JSON.stri
 type PrdWideningJudge = (context: PrdWideningContext) => Promise<unknown>;
 
 function currentCases(state: RemediationCaseStoreState): readonly RemediationCasePrdWideningRecord[] {
-  return state.version === 'v2' ? state.prdWideningCases : [];
+  return prdWideningCasesForState(state);
 }
 
 function hasCurrentSnapshot(state: RemediationCaseStoreState, context: PrdWideningContext): boolean {
@@ -343,7 +344,7 @@ export async function coordinatePrdWidening(input: {
     }
     return additions.length === 0 && replacements.size === 0
       ? { value: { kind: 'published', result: validated.value, reused: true } }
-      : { value: { kind: 'published', result: validated.value, reused: false }, nextState: { version: 'v2', feature: state.feature, cases: state.cases, suppressions: state.suppressions ?? [], prdWideningCases: [...cases.map((item) => replacements.get(item.id) ?? item), ...additions] } };
+      : { value: { kind: 'published', result: validated.value, reused: false }, nextState: withPrdWideningCases(state, [...cases.map((item) => replacements.get(item.id) ?? item), ...additions]) };
   });
   return mutation.ok ? mutation.value : { kind: 'failed', reason: 'store-failed' };
 }

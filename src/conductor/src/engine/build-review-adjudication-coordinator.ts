@@ -19,10 +19,10 @@ import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from '.
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, resolveAbsentFailedBuildReviewCases, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
-import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
-import { finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
+import { appendRemediationCaseOutbox, currentBuildReviewSourceLinks, drainRemediationCaseOutbox, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
@@ -42,7 +42,7 @@ type OperatorRetirementTransition = {
   readonly retiredEffect?: {
     readonly effectId: string;
     readonly effectKind: 'action' | 'deferral';
-    readonly reason: 'retired by operator acceptance';
+    readonly reason: 'retired: every source operator-accepted or no longer raised';
   };
 };
 
@@ -133,7 +133,16 @@ export interface BuildReviewAdjudicationCoordinatorInput {
   readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
   /** Re-reads the separate operator authority before every provider boundary. */
   readonly resolveOperatorResolvedFindingIds?: () => Promise<ReadonlySet<string>>;
+  /**
+   * The current disposition view is deliberately separate from current-lap
+   * acceptance.  Origins normally belong to an earlier finding id, so asking
+   * only whether today's findings are accepted would revoke a still-valid
+   * acceptance on every re-raise.
+   */
+  readonly resolveEffectiveAcceptedSourceIds?: () => Promise<ReadonlySet<string>>;
   readonly mechanical: BuildReviewMechanicalState;
+  /** A covered review fault is not evidence that absent sources disappeared. */
+  readonly absenceRetirementMechanicallyHealthy?: boolean;
   readonly judge: (context: unknown) => Promise<RemediationCaseJudgement>;
   readonly chargeInput: BumpKickbackGateInput;
   /** Injectable only at the charge boundary; production retains the ledger adapter. */
@@ -146,6 +155,8 @@ export interface BuildReviewAdjudicationCoordinatorInput {
   readonly readTaskStatus?: () => Promise<BuildReviewAdjudicationTaskStatus>;
   readonly generateId?: () => string;
   readonly emit?: (event: RemediationCaseLifecycleEvent) => void | Promise<void>;
+  /** Canonical event-spine delivery for durable outbox occurrences. */
+  readonly emitOrThrow?: (event: ConductorEvent) => Promise<unknown>;
 }
 
 /**
@@ -159,10 +170,31 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
 }
 
 export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudicationCoordinatorInput): Promise<BuildReviewAdjudicationCoordinatorResult> {
+  // Legacy direct coordinator callers did not carry the distinct signal. The
+  // conductor always supplies it; retain the historical value for those tests
+  // and integrations until they adopt the new boundary input.
+  const absenceRetirementMechanicallyHealthy = input.absenceRetirementMechanicallyHealthy ?? input.mechanical === 'healthy';
+  const store = new RemediationCaseStore(input.projectRoot, input.feature, {
+    ...(input.child === undefined ? {} : { child: input.child }),
+  });
+  const drainOutbox = async (): Promise<void> => {
+    if (input.emitOrThrow) await drainRemediationCaseOutbox(store, input.emitOrThrow);
+    else if (input.emit) await drainRemediationCaseOutbox(store, async (event) => input.emit!(event as RemediationCaseLifecycleEvent));
+  };
+  await drainOutbox();
   const sources = projectBuildReviewAggregateSources(input.aggregate);
-  if (!sources) return { ok: false, detail: 'invalid raw aggregate source projection' };
+  if (!sources) {
+    await drainOutbox();
+    return { ok: false, detail: 'invalid raw aggregate source projection' };
+  }
   const operatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> =>
     input.resolveOperatorResolvedFindingIds ? input.resolveOperatorResolvedFindingIds() : input.operatorResolvedFindingIds;
+  const effectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> =>
+    input.resolveEffectiveAcceptedSourceIds
+      ? input.resolveEffectiveAcceptedSourceIds()
+      : new Set(sources
+        .filter((source) => input.operatorResolvedFindingIds.has(source.findingId))
+        .map(buildReviewAdjudicationSourceId));
   /**
    * Whether operator authority now covers every current source.
    *
@@ -181,10 +213,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     detail: string,
     rejectedTransition?: RemediationCaseTransitionViolation,
   ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
+    await drainOutbox();
     await input.emit?.({
       type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail,
       ...(rejectedTransition === undefined ? {} : { rejectedTransition }),
     });
+    await drainOutbox();
     return { ok: false, detail };
   };
   const failStore = async (
@@ -207,9 +241,6 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     }
     return fail(`${prefix} ${failure.reason}`);
   };
-  const store = new RemediationCaseStore(input.projectRoot, input.feature, {
-    ...(input.child === undefined ? {} : { child: input.child }),
-  });
   const suppressionStore = new RemediationCaseStore(input.projectRoot, input.feature);
   // Not a second writer: the same seam the effective-verdict path already ran
   // for this lap. Its upsert is keyed by finding id, so re-running it here is a
@@ -235,6 +266,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const strandedSettlement = await settleStrandedBuildReviewActionReservations({
       store,
       liveSourceIds: strandedLiveSourceIds,
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+      effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
+      lapId: input.aggregate.lapId,
       readPublishedCaseIds: async (actionEffectIds) => {
         const order = await readBuildReviewWorkOrder(input.projectRoot, input.feature, actionEffectIds);
         if (order.ok) return new Set(order.workOrder.cases.map((row) => row.caseId));
@@ -242,31 +276,23 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       },
     });
     if (!strandedSettlement.ok) return failStore('case store', strandedSettlement);
+    await drainOutbox();
     for (const { caseId, effectId } of strandedSettlement.settled) {
-      await input.emit?.({
-        type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
-        caseId, resolution: 'resolved',
-      });
       await input.emit?.({
         type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId, effectId, effectKind: 'action', reason: STRANDED_ACTION_RESERVATION_DIAGNOSTIC,
       });
     }
-    const absentFailed = await resolveAbsentFailedBuildReviewCases({ store, liveSourceIds: strandedLiveSourceIds });
+    const absentFailed = await resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: strandedLiveSourceIds, lapId: input.aggregate.lapId,
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+    });
     if (!absentFailed.ok) return failStore('case store', absentFailed);
-    for (const { caseId } of absentFailed.settled) {
-      await input.emit?.({
-        type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
-        caseId, resolution: 'resolved',
-      });
-    }
-    const strandedDeferrals = await settleStrandedBuildReviewDeferralReservations({ store, liveSourceIds: strandedLiveSourceIds });
+    await drainOutbox();
+    const strandedDeferrals = await settleStrandedBuildReviewDeferralReservations({ store, liveSourceIds: strandedLiveSourceIds, lapId: input.aggregate.lapId });
     if (!strandedDeferrals.ok) return failStore('case store', strandedDeferrals);
+    await drainOutbox();
     for (const { caseId, effectId } of strandedDeferrals.settled) {
-      await input.emit?.({
-        type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
-        caseId, resolution: 'resolved',
-      });
       await input.emit?.({
         type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId, effectId, effectKind: 'deferral', reason: STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC,
@@ -327,22 +353,19 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         graph: { sourceOutcomes: [], cases: [] }, recordedAt: new Date().toISOString(),
         generateId: input.generateId ?? randomUUID,
         attemptedCaseIds: exitAttemptEvidence.ok ? exitAttemptEvidence.attemptedCaseIds : [],
-        // Same semantics as clean-PASS settlement: absent non-action history
-        // resolves benignly, while the reconciler's shared effect-status test
-        // keeps any reserved or failed effect open as a blocker.
+        lapId: input.aggregate.lapId,
+        effectiveAcceptedSourceIds: new Set(),
+        mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+        liveSourceIds: new Set(sources.map(buildReviewAdjudicationSourceId)),
         resolveAbsentOpenNonActionCases: true,
+        allowAppliedByAbsence: true,
       });
       if (!absentSettled.ok) {
         return absentSettled.reason === 'store-failure'
           ? failStore('case store', { reason: absentSettled.storeReason, violation: absentSettled.violation })
           : fail(`case reconciliation ${absentSettled.reason}`);
       }
-      for (const caseId of absentSettled.resolvedAbsentCaseIds) {
-        await input.emit?.({
-          type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
-          caseId, resolution: 'resolved',
-        });
-      }
+      await drainOutbox();
     }
     const settled = await store.read();
     if (!settled.ok) return failStore('case store', settled);
@@ -369,7 +392,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     for (;;) {
     settleRounds += 1;
     const acceptedSourceIds = new Set(sources
-      .filter((source) => exitResolved.has(source.findingId))
+      .filter((source) => exitResolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId))
       .map(buildReviewAdjudicationSourceId));
     // Operator disposition remains its own authority. This leased mutation only
     // retires autonomous rows it covers, then keeps the published order bound to
@@ -383,30 +406,46 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       | { readonly ok: false; readonly reason: string }
     >(async (state) => {
       const retirementTransitions: OperatorRetirementTransition[] = [];
+      const retirementOutbox: RemediationCaseOutboxEntry[] = [];
       const cases = state.cases.map((record) => {
-        if (record.resolution !== 'open' || record.sources.length === 0 ||
-          !record.sources.every((source) => acceptedSourceIds.has(source.sourceId))) return record;
-        // An accepted source never completed this reserved effect. Preserve the
-        // durable row as a retired failure rather than falsely recording work as
-        // applied; the reducer ignores resolved rows through the shared open-case
-        // vocabulary.
-        let retiredEffect: OperatorRetirementTransition['retiredEffect'];
-        const effect = record.effect.kind !== 'none' && record.effect.status === 'reserved'
-          ? (() => {
-            retiredEffect = {
-              effectId: record.effect.id,
-              effectKind: record.effect.kind,
-              reason: 'retired by operator acceptance',
-            };
-            return { id: record.effect.id, kind: record.effect.kind, status: 'failed' as const, diagnostic: retiredEffect.reason };
-          })()
-          : record.effect;
-        retirementTransitions.push({ caseId: record.id, ...(retiredEffect ? { retiredEffect } : {}) });
-        return { ...record, resolution: 'resolved' as const, effect };
+        const newOrigins = record.sources
+          .filter((source) => acceptedSourceIds.has(source.sourceId) && source.outcome !== 'carried')
+          .filter((source) => !record.operatorAcceptance?.origins.some((origin) => origin.sourceId === source.sourceId))
+          .map((source) => ({ sourceId: source.sourceId, lapId: input.aggregate.lapId }));
+        const withOrigins = newOrigins.length === 0
+          ? record
+          : {
+            ...record,
+            operatorAcceptance: {
+              origins: [...(record.operatorAcceptance?.origins ?? []), ...newOrigins],
+            },
+          };
+        if (!retiresOpenBuildReviewCase(withOrigins, {
+          liveSourceIds: new Set(sources.map(buildReviewAdjudicationSourceId)),
+          effectiveAcceptedSourceIds: acceptedSourceIds,
+          mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+        })) return withOrigins;
+        const retired = retireOpenBuildReviewCase(withOrigins);
+        const retiredEffect = retired.effect.kind !== 'none' && retired.effect.status === 'failed'
+          && withOrigins.effect.kind !== 'none' && withOrigins.effect.status === 'reserved'
+          ? { effectId: retired.effect.id, effectKind: retired.effect.kind, reason: 'retired: every source operator-accepted or no longer raised' as const }
+          : undefined;
+        retirementTransitions.push({ caseId: withOrigins.id, ...(retiredEffect ? { retiredEffect } : {}) });
+        const eventId = randomUUID();
+        retirementOutbox.push({ eventId, occurredAt: new Date().toISOString(), event: {
+          type: 'remediation_case_reconciled', eventId, domain: 'build_review', lapId: input.aggregate.lapId,
+          caseId: withOrigins.id, resolution: 'resolved',
+        } });
+        return retired;
       });
+      const nextState = (): import('./remediation-case-store.js').RemediationCaseStoreState => {
+        if (retirementOutbox.length === 0) return { ...state, cases };
+        const upgraded = appendRemediationCaseOutbox(state, retirementOutbox[0]!);
+        return { ...upgraded, cases, outbox: [...upgraded.outbox, ...retirementOutbox.slice(1)] };
+      };
       const eligible = cases.filter(isBuildEligibleActionCase);
       if (eligible.length === 0 || !options.republishWorkOrder) {
-        return { value: { ok: true as const, cases, retirementTransitions }, nextState: { ...state, cases } };
+        return { value: { ok: true as const, cases, retirementTransitions }, nextState: nextState() };
       }
       const workOrderCases = [] as Array<{ caseId: string; priority: 'critical' | 'high' | 'medium' | 'low'; tasks: readonly { readonly title: string }[] }>;
       for (const record of eligible) {
@@ -422,17 +461,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         version: 'v1', domain: 'build_review', feature: input.feature, effectId: primary.effect.id, cases: orderedCases,
       });
       if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
-      return { value: { ok: true as const, cases, retirementTransitions }, nextState: { ...state, cases } };
+      return { value: { ok: true as const, cases, retirementTransitions }, nextState: nextState() };
     });
     if (!neutralized.ok) return failStore('case store', neutralized);
     if (!neutralized.value.ok) return fail(neutralized.value.reason);
+    await drainOutbox();
     settledCases.splice(0, settledCases.length, ...neutralized.value.cases);
     for (const retirement of neutralized.value.retirementTransitions) {
       settledRetirements.push(retirement);
-      await input.emit?.({
-        type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
-        caseId: retirement.caseId, resolution: 'resolved',
-      });
       // This retirement is itself a durable reserved->failed transition, so it
       // emits unconditionally: operator acceptance changes who owns the
       // follow-up, never whether the durable failure occurred.
@@ -454,7 +490,13 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       // the read the route is taken from, so it can never predate the
       // authority the round just settled under.
       const exitSourceIds = [...liveSourceIdsFor(exitResolved)];
-      const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settledCases, mechanical: input.mechanical });
+      const transition = reduceBuildReviewAdjudication({
+        currentSourceIds: exitSourceIds,
+        feature: input.feature.feature,
+        child: input.child,
+        cases: settledCases,
+        mechanical: input.mechanical,
+      });
       const currentSourceSet = new Set(exitSourceIds);
       const durable = {
         repairCaseIds: transition.route === 'build'
@@ -488,6 +530,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         exitResolved = new Set([...exitResolved, ...atExit]);
         continue;
       }
+      await drainOutbox();
       return {
         ok: true, route: transition.route, detail: transition.reason,
         trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(settledCases)}`,
@@ -544,10 +587,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         terminalFailureEmitted: true,
       });
     }
+    await drainOutbox();
     return failed;
   };
   let resolved: ReadonlySet<string>;
-  try { resolved = await operatorResolvedFindingIds(); } catch { return { ok: false, detail: 'operator disposition state is unavailable' }; }
+  try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
   // Operator authority is terminal for an all-resolved content lap, but it is
   // not evidence that nothing is outstanding: an earlier lap's case can still
   // be open with a live work order. Settle durable state and route from what
@@ -592,8 +636,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate, input.feature)))();
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
   const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
+  // Context must expose the same carry-eligible cases that the later
+  // classifier consumes; invalidated dispositions are excluded by the source.
+  const carryInput = {
+    currentLapId: input.aggregate.lapId,
+    effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
+  };
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, operatorResolvedFindingIds: resolved, carryInput, ...contextEvidence,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
@@ -603,7 +653,25 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (allOperatorResolved(resolved)) {
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
-  const settledSourceIds = finalizedSourceIds(prior.state.cases);
+  // A decision stop has no settled semantic answer: its source must remain
+  // eligible for a later judgement to converge on that owner, or to surface a
+  // different-owner conflict. `finalizedBuildReviewSourceIds` deliberately
+  // serves broader terminal dispositions, so narrow it at this coordinator
+  // boundary for the stop re-evaluation lane.
+  const decisionStopSourceIds = new Set(prior.state.cases
+    .filter(isBuildReviewDecisionStop)
+    .flatMap((record) => record.sources.map((source) => source.sourceId)));
+  // An operator resolution settles the effective verdict immediately, but its
+  // next raised source still has to pass through the sole carry writer so the
+  // durable link and occurrence explain why the finding was accepted. Other
+  // finalized links remain outside the judge's source set as before.
+  const authoritativeLinks = currentBuildReviewSourceLinks(prior.state.cases);
+  const settledSourceIds = new Set([...finalizedSourceIds(prior.state.cases)]
+    .filter((sourceId) => {
+      const current = authoritativeLinks.get(sourceId);
+      return !decisionStopSourceIds.has(sourceId) &&
+        (current?.record.operatorResolution === undefined || current.link.outcome === 'carried');
+    }));
   currentSources = sources.filter((source) =>
     !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
     !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
@@ -627,7 +695,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
-    operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
+    operatorResolvedFindingIds: resolved, carryInput, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
@@ -658,46 +726,107 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
   // The v2 consistency/escalation gate is an effect authority, not advisory
   // context: no partial action set survives a blocked or escalated judgement.
-  const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({ judgement, validation: graph }));
-  for (const proposed of graph.graph.cases) {
-    if (proposed.case.disposition !== 'refute') continue;
-    const evidence = await resolveRefutationEvidence({ projectRoot: input.projectRoot, refutation: proposed.case.refutation! });
-    if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
-  }
   const liveSourceIds = liveSourceIdsFor(resolved);
-  // A resolved case whose action effect failed was never built (for example
-  // it was charged past the kickback budget, then resolved once its finding
-  // vanished). A later lap that re-raises it and binds it there is not a
-  // regression of delivered work: admit the proposal as a new case so the
-  // repair is actually attempted, leaving the old case's history intact.
-  const priorById = new Map(prior.state.cases.map((record) => [record.id, record]));
-  const neverBuilt = (caseId: string | undefined): boolean => {
-    const record = caseId === undefined ? undefined : priorById.get(caseId);
-    return record !== undefined && record.resolution === 'resolved' && record.disposition === 'act'
-      && record.effect.kind === 'action' && record.effect.status === 'failed';
-  };
-  const admitted = graph.graph.cases.filter((proposed) =>
-    proposed.sources.some((source) => liveSourceIds.has(source.sourceId)) &&
-    (proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef)),
-  ).map((proposed) => {
-    if (proposed.case.disposition !== 'act' || !neverBuilt(proposed.case.existingCaseId)) return proposed;
-    const { existingCaseId: _neverBuilt, ...unbound } = proposed.case;
-    return { ...proposed, case: unbound as typeof proposed.case };
-  });
+  const liveProposals = graph.graph.cases.filter((proposed) =>
+    proposed.sources.some((source) => liveSourceIds.has(source.sourceId)));
   // Escalations have no effect id and use Task 31's dedicated durable owner
   // stop writer. The general reconciler owns ordinary case/effect transitions;
   // routing a stop through it would manufacture a deferral-shaped effect.
-  const ordinaryCases = admitted.filter((proposed) => proposed.case.disposition !== 'escalate');
-  const escalationCases = admitted.filter((proposed) => proposed.case.disposition === 'escalate');
-  const blockedConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
+  // Carry is decided only by an explicit existingCaseId binding.  Classify it
+  // before *any* disposition-specific split, otherwise an escalation reaches
+  // the decision-stop writer and a deferral reserves an effect before the
+  // carry lane gets a chance to settle it.
+  const priorCasesBeforeReconcile = new Map(prior.state.cases.map((record) => [record.id, record]));
+  const carriedCaseRefs = new Set(liveProposals.flatMap((proposed) => {
+    const existing = proposed.case.existingCaseId
+      ? priorCasesBeforeReconcile.get(proposed.case.existingCaseId)
+      : undefined;
+    return existing && classifyRemediationCaseReuse(existing, attempted, carryInput) === 'carry'
+      ? [proposed.case.caseRef]
+      : [];
+  }));
+  const carriedSourceIds = new Set(liveProposals
+    .filter((proposed) => carriedCaseRefs.has(proposed.case.caseRef))
+    .flatMap((proposed) => proposed.sources.map((source) => source.sourceId)));
+  // Carry is a durable operator-owned lane. Derive the one remaining
+  // consistency authority after removing it, then use that exact value for
+  // both action authorization and any persisted stop. A carried-only block is
+  // therefore consistent for this lap rather than a phantom stop.
+  const effectiveConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
+    ? (() => {
+        const sourceIds = judgement.consistency.sourceIds.filter((sourceId) => !carriedSourceIds.has(sourceId));
+        const caseRefs = judgement.consistency.caseRefs.filter((caseRef) => !carriedCaseRefs.has(caseRef));
+        return sourceIds.length === 0
+          ? { ...judgement.consistency, verdict: 'consistent' as const, sourceIds: [], caseRefs: [] }
+          : { ...judgement.consistency, sourceIds, caseRefs };
+      })()
+    : judgement.mode === 'case-v2'
+      ? judgement.consistency
+      : undefined;
+  const actionEffectJudgement = judgement.mode === 'case-v2'
     ? {
-      sourceIds: judgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
-      rationale: judgement.consistency.rationale,
+      ...judgement,
+      sourceOutcomes: judgement.sourceOutcomes.filter((source) => !carriedSourceIds.has(source.sourceId)),
+      cases: judgement.cases.filter((caseRow) => !carriedCaseRefs.has(caseRow.caseRef)),
+      consistency: effectiveConsistency!,
+    }
+    : {
+      ...judgement,
+      sourceOutcomes: judgement.sourceOutcomes.filter((source) => !carriedSourceIds.has(source.sourceId)),
+      cases: judgement.cases.filter((caseRow) => !carriedCaseRefs.has(caseRow.caseRef)),
+    };
+  const actionEffectGraph = {
+    ...graph.graph,
+    sourceOutcomes: graph.graph.sourceOutcomes.filter((source) => !carriedSourceIds.has(source.sourceId)),
+    cases: graph.graph.cases.filter((proposed) => !carriedCaseRefs.has(proposed.case.caseRef)),
+  };
+  const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({
+    judgement: actionEffectJudgement,
+    validation: { ...graph, graph: actionEffectGraph },
+  }));
+  const admitted = liveProposals.filter((proposed) =>
+    carriedCaseRefs.has(proposed.case.caseRef) || proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef),
+  );
+  for (const proposed of admitted) {
+    if (carriedCaseRefs.has(proposed.case.caseRef) || proposed.case.disposition !== 'refute') continue;
+    const evidence = await resolveRefutationEvidence({ projectRoot: input.projectRoot, refutation: proposed.case.refutation! });
+    if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
+  }
+  const ordinaryCases = admitted.filter((proposed) =>
+    proposed.case.disposition !== 'escalate' || carriedCaseRefs.has(proposed.case.caseRef));
+  const escalationCases = admitted.filter((proposed) =>
+    proposed.case.disposition === 'escalate' && !carriedCaseRefs.has(proposed.case.caseRef));
+  // A reuse halt is still durable evidence: the newly bound source must be
+  // attached to the named case so an operator can accept that precise halt and
+  // a later explicit binding has an origin to carry from.  Reconciliation is
+  // the sole source-link writer; this helper deliberately makes no routing or
+  // eligibility decision.
+  const recordHaltingBinding = async (proposed: typeof admitted[number]): Promise<BuildReviewAdjudicationCoordinatorResult | undefined> => {
+    const linked = await reconcileRemediationCases(store, {
+      graph: {
+        sourceOutcomes: graph.graph.sourceOutcomes.filter((source) => source.caseRef === proposed.case.caseRef),
+        cases: [proposed],
+      },
+      recordedAt: new Date().toISOString(),
+      generateId: input.generateId ?? randomUUID,
+      attemptedCaseIds: [],
+    });
+    if (linked.ok) return undefined;
+    return linked.reason === 'store-failure'
+      ? failStore('case store', { reason: linked.storeReason, violation: linked.violation })
+      : fail(`case reconciliation ${linked.reason}`);
+  };
+  // Carry removes a case from every autonomous effect and escalation lane.
+  // The action authority above already derives consistency from that filtered
+  // judgement; use the same projection for the stop writer so a consistency
+  // verdict concerning only carried sources cannot manufacture a new owner
+  // stop after the action lane correctly proceeds.
+  const blockedConsistency = effectiveConsistency?.verdict === 'blocked'
+    ? {
+      sourceIds: effectiveConsistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
+      rationale: effectiveConsistency.rationale,
     }
     : undefined;
-  if (blockedConsistency && blockedConsistency.sourceIds.length === 0) {
-    return fail('blocked consistency stop has no live sources');
-  }
   // A judgement that explicitly reuses a prior case the classifier halts on
   // must stop BEFORE reconciliation: reconciliation reserves sibling action
   // effects, and a halt between reservation and application strands them as
@@ -707,14 +836,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // to reach a regression; a converged repeat is still caught after reconciling.
   // Only an `act` proposal repeats an action: any other disposition transforms
   // the reused case (a refutation settles it) and reconciliation owns that.
-  const priorCasesBeforeReconcile = new Map(prior.state.cases.map((record) => [record.id, record]));
   for (const proposed of admitted) {
     if (proposed.case.disposition !== 'act') continue;
     if (proposed.sources.every((source) => !liveSourceIds.has(source.sourceId))) continue;
     const record = proposed.case.existingCaseId ? priorCasesBeforeReconcile.get(proposed.case.existingCaseId) : undefined;
     if (!record) continue;
-    const reuse = classifyRemediationCaseReuse(record, attempted);
+    const reuse = classifyRemediationCaseReuse(record, attempted, carryInput);
     if (reuse === 'halt-regression' || reuse === 'halt-repeat') {
+      const linkFailure = await recordHaltingBinding(proposed);
+      if (linkFailure) return linkFailure;
       await input.emit?.({
         type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId: record.id, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
@@ -736,12 +866,20 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const reconciled = await reconcileRemediationCases(store, {
     graph: { ...graph.graph, cases: ordinaryCases }, recordedAt, generateId,
     attemptedCaseIds,
+    lapId: input.aggregate.lapId,
+    ...(carriedCaseRefs.size === 0 ? {} : { carry: { caseRefs: [...carriedCaseRefs], lapId: input.aggregate.lapId } }),
     // A mechanically complete lap saw every finding this join could report, so a
     // prior open non-action case absent from it is decided by that absence — the
     // same evidence the exit paths settle on. Leaving it open let stale history
     // feed a later adjudication as an unresolved prior. A mechanically incomplete
     // lap proves nothing by absence, so it still leaves that history open.
-    resolveAbsentOpenNonActionCases: input.mechanical === 'healthy',
+    // An escalation is the explicit re-evaluation lane for an existing owner
+    // stop. Do not ask reconciliation to settle that stop by absence before
+    // its durable replay/persistence path sees the proposed escalation.
+    effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
+    mechanicallyHealthy: absenceRetirementMechanicallyHealthy && escalationCases.length === 0,
+    resolveAbsentOpenNonActionCases: absenceRetirementMechanicallyHealthy && escalationCases.length === 0,
+    allowAppliedByAbsence: true,
   });
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific
@@ -760,6 +898,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // map itself. Deriving it here from array positions could not see a replayed
   // judgement converging on an already-stamped case.
   const caseIdsByRef = new Map(reconciled.caseIdsByRef);
+  await drainOutbox();
   let persistedConsistencyStop = false;
   for (const proposed of escalationCases) {
     const caseId = proposed.case.existingCaseId ?? generateId();
@@ -793,23 +932,23 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     });
     if (!persistedStop.ok) return failStore('blocked consistency stop', persistedStop);
   }
+  await drainOutbox();
   const durableState = await store.read();
   if (!durableState.ok) return failStore('case store', durableState);
   const reconciledCasesById = new Map(durableState.state.cases.map((record) => [record.id, record]));
   const priorCasesById = new Map(prior.state.cases.map((record) => [record.id, record]));
-  const emittedCaseIds = new Set<string>();
-  // Every persisted transition gets exactly one occurrence. A prior attempted
-  // case absent from this lap's admitted graph is resolved by reconciliation
-  // and named by no `caseRef`, so iterating the ref map alone changed durable
-  // state with nothing on the event spine.
-  for (const caseId of [...caseIdsByRef.values(), ...reconciled.resolvedAbsentCaseIds]) {
-    if (emittedCaseIds.has(caseId)) continue;
-    emittedCaseIds.add(caseId);
+  // Reconciler retirement entries are appended in its mutation and delivered
+  // by the drain above.  Do not emit a second, non-idempotent lifecycle event
+  // from this read-side projection.
+  for (const caseId of caseIdsByRef.values()) {
     const record = reconciledCasesById.get(caseId);
     if (!record) return fail(`reconciled case ${caseId} is unavailable`);
-    await input.emit?.({
+    // Opening a case is the coordinator's existing lifecycle signal. Resolved
+    // transitions are deliberately omitted here: their event-id'd outbox entry
+    // was committed with the retirement and drained above.
+    if (record.resolution === 'open') await input.emit?.({
       type: 'remediation_case_reconciled', domain: 'build_review', lapId: input.aggregate.lapId,
-      caseId, resolution: record.resolution,
+      caseId, resolution: 'open',
     });
     const priorEffect = priorCasesById.get(caseId)?.effect;
     const wasReserved = priorEffect?.kind !== 'none' && priorEffect?.status === 'reserved';
@@ -821,7 +960,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     }
   }
   for (const proposed of admitted) {
-    if (proposed.case.disposition !== 'refute') continue;
+    if (proposed.case.disposition !== 'refute' || carriedCaseRefs.has(proposed.case.caseRef)) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     const record = caseId ? reconciledCasesById.get(caseId) : undefined;
     if (!caseId || !record) return fail('refuted case identity was not reconciled');
@@ -849,8 +988,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       continue;
     }
     if (!priorCasesById.has(caseId)) continue;
-    const reuse = classifyRemediationCaseReuse(record, attempted);
+    const reuse = classifyRemediationCaseReuse(record, attempted, carryInput);
     if (reuse === 'halt-regression' || reuse === 'halt-repeat') {
+      const linkFailure = await recordHaltingBinding(proposed);
+      if (linkFailure) return linkFailure;
       await input.emit?.({
         type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
@@ -884,6 +1025,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const tasksByCaseId = new Map<string, readonly { readonly title: string }[]>();
   for (const proposed of admitted) {
     if (proposed.case.disposition !== 'act') continue;
+    // A carried action was reconciled as settled history.  It has no newly
+    // reserved effect, so it must never enter the irreversible charge/order
+    // boundary merely because its provider proposal happened to say `act`.
+    if (carriedCaseRefs.has(proposed.case.caseRef)) continue;
     if (proposed.sources.every((source) => !liveSourceIdsBeforeAction.has(source.sourceId))) continue;
     const caseId = caseIdsByRef.get(proposed.case.caseRef);
     if (!caseId || proposed.case.effect.kind !== 'action') return fail('action case identity was not reconciled');
@@ -952,6 +1097,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (input.tracker && input.repo && input.fileIssue) {
     let deferredFailureRetiredByAcceptance = false;
     for (const proposed of admitted) {
+      if (carriedCaseRefs.has(proposed.case.caseRef)) continue;
       if (
         (proposed.case.disposition !== 'defer' && proposed.case.disposition !== 'refute') ||
         proposed.case.effect.kind !== 'deferral'

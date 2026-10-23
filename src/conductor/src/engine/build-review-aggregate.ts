@@ -47,6 +47,12 @@ export interface BuildReviewAggregate {
   readonly aggregateVersion: typeof AGGREGATE_VERSION | typeof CUSTOM_AGGREGATE_VERSION;
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
+  /**
+   * A stacked leaf child reviews security against the whole-feature snapshot
+   * while its other rubrics judge the child snapshot; absent means security
+   * shares `snapshotDigest`.
+   */
+  readonly securitySnapshotDigest?: string;
   readonly results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>;
   /** Derived from persisted, validated judged scope resolutions. */
   readonly scopeIncomplete: readonly BuildReviewScopeIncompleteFault[];
@@ -69,6 +75,7 @@ export interface BuildReviewAggregate {
 export interface BuildReviewAggregateInput {
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
+  readonly securitySnapshotDigest?: string;
   /**
    * Construction compatibility: callers written before the default-off
    * security rubric may omit it. The join seals that omission as the explicit
@@ -114,6 +121,8 @@ export interface BuildReviewEffectiveVerdict {
   readonly uncoveredScopeIncompleteRubrics?: readonly BuildReviewRubricId[];
   /** Present from the live reducer; optional for existing injected resolver fakes. */
   readonly scopeIncompleteRubrics?: readonly BuildReviewRubricId[];
+  /** Operator-reduced coverage releases retries but is not absence evidence. */
+  readonly hasRecordedReducedCoverage?: boolean;
 }
 
 /** Raw, registry-neutral content preserved by the mechanical aggregate join. */
@@ -262,6 +271,7 @@ function parseResults(
   value: unknown,
   lapId: BuildReviewLapId,
   snapshotDigest: string,
+  securitySnapshotDigest: string = snapshotDigest,
 ): Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>> | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, RUBRICS)) return undefined;
@@ -271,7 +281,8 @@ function parseResults(
     if (envelope.kind === 'invalid') return undefined;
     const result = envelope.kind === 'mechanical-fault' ? envelope.fault : envelope.result;
     if (envelope.kind === 'valid' && result.rubric !== rubric) return undefined;
-    if (result.kind === 'judged' && (result.lapId !== lapId || result.snapshotDigest !== snapshotDigest)) return undefined;
+    const expectedDigest = rubric === 'security' ? securitySnapshotDigest : snapshotDigest;
+    if (result.kind === 'judged' && (result.lapId !== lapId || result.snapshotDigest !== expectedDigest)) return undefined;
     results[rubric] = result;
   }
   return results;
@@ -348,6 +359,7 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
   if (hasCustom && !custom) throw new Error('build-review aggregate requires valid self-describing custom evidence');
   const aggregate: BuildReviewAggregate = {
     aggregateVersion: hasCustom ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
+    ...(input.securitySnapshotDigest === undefined || input.securitySnapshotDigest === input.snapshotDigest ? {} : { securitySnapshotDigest: input.securitySnapshotDigest }),
     results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(results, custom),
     rubric, findings, reasons,
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
@@ -390,11 +402,13 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   const isV2 = source?.aggregateVersion === CUSTOM_AGGREGATE_VERSION;
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'scopeIncomplete', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
+    ...(source.securitySnapshotDigest === undefined ? [] : ['securitySnapshotDigest']),
     ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
     ...(source.declaredReplicationSuppressions === undefined ? [] : ['declaredReplicationSuppressions']),
     ...(isV2 ? ['customResults', 'currentCustomRubrics'] : []),
   ]) || (!isV1 && !isV2) || !isNonEmptyString(source.snapshotDigest) ||
+    (source.securitySnapshotDigest !== undefined && !isNonEmptyString(source.securitySnapshotDigest)) ||
     (source.reducedCoverageEvidence !== undefined && !isNonEmptyString(source.reducedCoverageEvidence)) ||
     (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp)) ||
     (source.declaredReplicationSuppressions !== undefined && (!Array.isArray(source.declaredReplicationSuppressions) || source.declaredReplicationSuppressions.some((entry) => {
@@ -403,7 +417,8 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     })))) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   if (!lapId) return undefined;
-  const results = parseResults(source.results, lapId, source.snapshotDigest);
+  const securitySnapshotDigest = source.securitySnapshotDigest as string | undefined;
+  const results = parseResults(source.results, lapId, source.snapshotDigest, securitySnapshotDigest);
   const custom = isV2 ? parseCustomResults(source.customResults, source.currentCustomRubrics) : undefined;
   const coverage = record(source.coverage);
   const rubric = record(source.rubric);
@@ -437,7 +452,8 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     JSON.stringify(source.scopeIncomplete) !== JSON.stringify(expectedScopeIncomplete) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;
   return {
-    aggregateVersion: isV2 ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, scopeIncomplete: Object.freeze(expectedScopeIncomplete), coverage: expectedCoverage,
+    aggregateVersion: isV2 ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest,
+    ...(securitySnapshotDigest === undefined ? {} : { securitySnapshotDigest }), results, scopeIncomplete: Object.freeze(expectedScopeIncomplete), coverage: expectedCoverage,
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
     ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
@@ -556,6 +572,7 @@ export function deriveEffectiveBuildReviewVerdict(
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
     uncoveredScopeIncompleteRubrics: Object.freeze(uncoveredScopeIncomplete),
     ...(scopeIncomplete.length > 0 ? { scopeIncompleteRubrics: Object.freeze(scopeIncomplete) } : {}),
+    ...(reducedCoverage.length === 0 ? {} : { hasRecordedReducedCoverage: true }),
   });
 }
 

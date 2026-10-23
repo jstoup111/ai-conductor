@@ -1,4 +1,4 @@
-// Covers: task:11, task:12, task:14
+// Covers: task:3, task:11, task:12, task:14
 import { describe, expect, it, vi } from 'vitest';
 import {
   DaemonMaintenance,
@@ -8,8 +8,10 @@ import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import { rekickSweep } from '../../src/engine/daemon-rekick.js';
 import type { WorkClaims } from '../../src/engine/work-claims.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
+import type { EngineVersionId } from '../../src/engine/engine-version-id.js';
 
 const maintenanceTrace = vi.hoisted(() => ({ operations: [] as DaemonMaintenanceOperation[] }));
+const ENGINE_VERSION_ID = '20261019T120000Z-aaaaaaaaaaaa' as EngineVersionId;
 
 function trackedClaims(attempts: string[]): WorkClaims {
   const active = new Set<string>();
@@ -149,6 +151,8 @@ describe('engine/daemon-maintenance', () => {
       repository: 'owner/repo',
       slug: item.slug,
       baseSha: rootBase,
+      engineVersionId: ENGINE_VERSION_ID,
+      schemaVersion: 1,
       manifest: [],
     });
 
@@ -289,7 +293,7 @@ describe('engine/daemon-maintenance', () => {
     expect(result.processed.map((outcome) => outcome.slug).sort()).toEqual(['first', 'second']);
   });
 
-  it('drains two stale-engine workers before rebuilding and restarting exactly once', async () => {
+  it('keeps claiming on ordinary staleness and restarts once at natural idle', async () => {
     const claimAttempts: string[] = [];
     const started: string[] = [];
     const logs: string[] = [];
@@ -355,12 +359,12 @@ describe('engine/daemon-maintenance', () => {
       stopReason: result.stoppedReason,
       drainLogs: logs.filter((line) => line.startsWith('[daemon] drain started:')),
     }).toEqual({
-      started: ['first', 'second'],
+      started: ['first', 'second', 'later'],
       restarts: 1,
       stopReason: 'engine_restart',
-      claimAttempts: ['first', 'second'],
-      events: ['finished:first', 'finished:second', 'rebuild', 'restart'],
-      drainLogs: ['[daemon] drain started: stale-engine'],
+      claimAttempts: ['first', 'second', 'later'],
+      events: ['finished:first', 'finished:second', 'restart'],
+      drainLogs: [],
     });
   });
 
@@ -432,6 +436,7 @@ describe('engine/daemon-maintenance', () => {
     let observeDrain: (() => void) | undefined;
     let observeBusyPoll: (() => void) | undefined;
     let staleChecks = 0;
+    let protocolMismatchPending = false;
     const drainObserved = new Promise<void>((resolve) => {
       observeDrain = resolve;
     });
@@ -450,6 +455,10 @@ describe('engine/daemon-maintenance', () => {
       {
         discoverBacklog: async () => [{ slug: 'first' }, { slug: 'second' }],
         runFeature: async (item) => {
+          // An already-known mismatch restarts at the natural idle boundary
+          // before a claim. Surface it only after the second worker starts so
+          // this fixture exercises the busy-pool drain boundary.
+          if (item.slug === 'second') protocolMismatchPending = true;
           await workersReleased;
           return { slug: item.slug, status: 'done' as const };
         },
@@ -469,6 +478,7 @@ describe('engine/daemon-maintenance', () => {
           recordRootMutation('restart');
           return { fired: true };
         },
+        protocolMismatchPending: () => protocolMismatchPending,
         log: (line) => {
           logs.push(line);
           if (line === '[daemon] drain started: stale-engine') {
@@ -505,9 +515,74 @@ describe('engine/daemon-maintenance', () => {
     }
 
     expect({ rootMutationsAfterDrain, logs }).toEqual({
-      rootMutationsAfterDrain: ['refresh', 'rebuild', 'relink', 'restart'],
+      rootMutationsAfterDrain: ['relink', 'restart'],
       logs: expect.arrayContaining(['[daemon] drain started: stale-engine']),
     });
+  });
+
+  it('drains a width-one pool once its busy worker outlives the stale-age cap', async () => {
+    let clock = 0;
+    let restarts = 0;
+    let releaseWorker: (() => void) | undefined;
+    let observeDrain: (() => void) | undefined;
+    let observeBusyPoll: (() => void) | undefined;
+    const workerReleased = new Promise<void>((resolve) => {
+      releaseWorker = resolve;
+    });
+    const drainObserved = new Promise<void>((resolve) => {
+      observeDrain = resolve;
+    });
+    const busyPollObserved = new Promise<void>((resolve) => {
+      observeBusyPoll = resolve;
+    });
+    const logs: string[] = [];
+
+    const run = runDaemon(
+      {
+        discoverBacklog: async () => [{ slug: 'long-running' }],
+        runFeature: async (item) => {
+          // The claim boundary recorded staleness at t=0; the worker now
+          // runs past the one-hour cap.
+          clock = 2 * 3_600_000;
+          await workerReleased;
+          return { slug: item.slug, status: 'done' as const };
+        },
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'engine-before',
+          targetIdentity: () => 'engine-after',
+        },
+        // The predispatch handoff declines, so the feature is claimed on the
+        // stale engine; the drained-boundary handoff then fires.
+        requestRestart: async () => ({ fired: restarts++ > 0 }),
+        now: () => clock,
+        log: (line) => {
+          logs.push(line);
+          if (line === '[daemon] drain started: stale-engine') observeDrain?.();
+        },
+        sleep: async () => {
+          observeBusyPoll?.();
+          await workerReleased;
+        },
+      },
+      {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        supervisorMaxStaleHours: 1,
+        idlePollMs: 0,
+        maxIdlePolls: 0,
+      },
+    );
+
+    const firstBoundary = await Promise.race([
+      drainObserved.then(() => 'drain-started' as const),
+      busyPollObserved.then(() => 'busy-poll' as const),
+    ]);
+    releaseWorker?.();
+    await run;
+    expect(firstBoundary).toBe('drain-started');
   });
 
   it('refuses a feature that becomes eligible during drain, then lets the restarted daemon claim it', async () => {

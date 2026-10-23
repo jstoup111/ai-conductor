@@ -207,7 +207,7 @@ afterEach(async () => {
 
 async function dispatchWithSessionId(
   sessionId?: string | 'unreadable',
-  config: HarnessConfig = { otel: { exporter: 'file' } },
+  config: HarnessConfig = { otel: { exporter: 'file' }, executor_isolation: 'in-process' },
   sourceRef?: string,
 ): Promise<{ repo: string; pipelineDir: string }> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-wiring-'));
@@ -215,7 +215,12 @@ async function dispatchWithSessionId(
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
   const pipelineDir = join(fixture.worktreePath, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
-  loadMergedConfig.mockResolvedValue({ ok: true, config, warnings: [], deprecatedKeys: [] });
+  loadMergedConfig.mockResolvedValue({
+    ok: true,
+    config: { ...config, executor_isolation: config.executor_isolation ?? 'in-process' },
+    warnings: [],
+    deprecatedKeys: [],
+  });
   if (sessionId === 'unreadable') {
     await mkdir(join(pipelineDir, 'conduct-session-id'));
   } else if (sessionId) {

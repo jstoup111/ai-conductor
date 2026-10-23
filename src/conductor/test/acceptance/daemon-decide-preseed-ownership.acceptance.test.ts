@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRESEEDED_DONE } from '../../src/daemon-cli.js';
+import { PRESEEDED_DONE } from '../../src/engine/daemon-state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 
 // Replacement contract from APPROVED ADR

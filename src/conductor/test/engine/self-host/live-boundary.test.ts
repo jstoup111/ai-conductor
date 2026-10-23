@@ -128,7 +128,9 @@ describe('live self-host boundary', () => {
         'paste-cache', 'skills/synced/**/.last-complete-round',
         'plugins/plugin-*-cache*.json', 'plugins/.last_inuse_sweep', 'plugins/synced/.bucket-*',
         'plugins/synced/**/.marketplaces.json', 'plugins/synced/**/.last-complete-round',
-        'policy-limits.json.stamp.json', 'remote-settings.json.synced-at',
+        'policy-limits.json.stamp.json', 'policy-limits.json.stamp.json.tmp.*',
+        'policy-limits.json.signature.json', 'policy-limits.json.signature-iat.json',
+        'remote-settings.json.synced-at',
       ],
       codex: [
         'history.jsonl', 'sessions', 'shell_snapshots', 'cache', 'plugins/cache',
@@ -422,6 +424,27 @@ describe('live self-host boundary', () => {
     try {
       const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
       await writeFile(join(provider, 'policy-limits.json.stamp.json'), '{"fetchedAt":2}\n');
+      expect(await verify(baseline)).toEqual({ ok: true });
+      await writeFile(join(provider, 'policy-limits.json'), '{"limits":2}\n');
+      const result = await verify(baseline);
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).toContain('policy-limits.json');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('ignores the policy-limits signature sidecars and temp stamps but still halts on policy-limits.json (#3323)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-policy-signature-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'policy-limits.json'), '{"limits":1}\n');
+    await writeFile(join(provider, 'policy-limits.json.signature.json'), '{"sig":1}\n');
+    const verify = (b: Awaited<ReturnType<typeof fingerprintLiveBoundary>>) =>
+      verifyLiveBoundary(b, { contained: false, reason: 'per-step verification' });
+    try {
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(provider, 'policy-limits.json.signature.json'), '{"sig":2}\n');
+      await writeFile(join(provider, 'policy-limits.json.signature-iat.json'), '{"iat":2}\n');
+      await writeFile(join(provider, 'policy-limits.json.stamp.json.tmp.556d7b68'), '{"fetchedAt":2}\n');
       expect(await verify(baseline)).toEqual({ ok: true });
       await writeFile(join(provider, 'policy-limits.json'), '{"limits":2}\n');
       const result = await verify(baseline);

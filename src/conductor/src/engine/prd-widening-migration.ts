@@ -14,6 +14,8 @@ import {
 } from './accepted-widenings.js';
 import {
   RemediationCaseStore,
+  prdWideningCasesForState,
+  withPrdWideningCases,
   type RemediationCaseFeatureIdentity,
   type RemediationCasePrdWideningRecord,
   type RemediationCaseStoreMutation,
@@ -210,7 +212,7 @@ async function materializeSources(
   projection: MigrationProjection,
 ): Promise<boolean> {
   const result = await store.mutate(async (state) => {
-    const existing = state.version === 'v2' ? state.prdWideningCases : [];
+    const existing = prdWideningCasesForState(state);
     const additions: RemediationCasePrdWideningRecord[] = [];
     for (const record of projection.cases) {
       const found = existing.find((candidate) => candidate.id === record.id);
@@ -221,13 +223,7 @@ async function materializeSources(
     if (!additions.length) return { value: true };
     return {
       value: true,
-      nextState: {
-        version: 'v2',
-        feature: state.feature,
-        cases: state.cases,
-        prdWideningCases: [...existing, ...additions],
-        suppressions: state.suppressions ?? [],
-      },
+      nextState: withPrdWideningCases(state, [...existing, ...additions]),
     };
   });
   return result.ok && result.value;

@@ -175,6 +175,17 @@ Option B, with engine-rendered child bodies and the leaf draft opened at SHIP en
      The Time block keeps its structure; per umbrella decision 14 its timings are not golden-tested.
    - The N=1 golden suite (umbrella decision 14) is extended to the FINISH transition-event sequence
      and the gh and git argv list.
+
+   > **Amended 2026-10-20 by #2945 (operator decision):** "Byte-identical git argv" covers git
+   > commands that reach a remote or mutate refs, the index or the working tree. Local read-only
+   > probes of conductor refs under `refs/conductor/<slug>/` are excluded from that parity: for
+   > example `rev-parse --verify` of the positions ref or the publication ref, and `for-each-ref`
+   > over `refs/conductor/<slug>/`. They are how a non-stacked feature returns `not-applicable`
+   > "from local refs alone". The decision 11 guard, and build-region decision 2's durable-child
+   > detection, run those probes on every push and resume, whether or not feature-local metadata
+   > (child directory, envelope) is present. Absent disposable metadata never counts as proof that
+   > there is no stack. The N=1 golden records the probes in a separate list and pins the remote
+   > and mutating argv unchanged.
    - **Allowance.** The allowance stays twice the number of publication transitions the feature
      can select (`adr-2026-08-06-bounded-progress-allowance-for-finish-publication` D1). That is 2 × 7
      for a non-stacked feature and 2 × 9 for a stacked one, because each transition processes every

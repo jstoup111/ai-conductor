@@ -257,7 +257,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         },
         sleep: async () => {},
         log: (msg) => {
-          if (/stale engine detected/.test(msg)) callOrder.push('verdict-log');
+          if (/stale supervisor at idle/.test(msg)) callOrder.push('verdict-log');
           log.push(msg);
         },
         staleEngineChecker: checker,
@@ -272,7 +272,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         autoRestartOnStaleEngine: true,
       });
 
-      const verdictLines = log.filter((l) => /stale engine detected/.test(l));
+      const verdictLines = log.filter((l) => /stale supervisor at idle/.test(l));
       expect(verdictLines).toHaveLength(1);
       expect(verdictLines[0]).toContain(captured);
       expect(verdictLines[0]).toContain(target);
@@ -315,7 +315,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       });
 
       expect(requestRestart).not.toHaveBeenCalled();
-      expect(log.filter((l) => /stale engine detected/.test(l))).toHaveLength(0);
+      expect(log.filter((l) => /stale supervisor at idle/.test(l))).toHaveLength(0);
       const result = await readRestartMarkerWithStatus(repoPath);
       expect(result.kind).toBe('absent');
       await rm(workDir, { recursive: true, force: true });
@@ -404,8 +404,8 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
     });
   });
 
-  // ── #369 Story 2: rebuild-path verdict logs carry both identities ─────────
-  it('rebuild-path stale verdict ("engine stale after rebuild"): the log line carries both identities', async () => {
+  // Natural-idle restart logs retain the identity pair for the operator.
+  it('natural-idle stale verdict carries both identities', async () => {
     await withLockedRepo(async () => {
       let dispatched = false;
       const log: string[] = [];
@@ -436,14 +436,14 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
       });
 
       expect(dispatched).toBe(false);
-      const rebuildVerdictLines = log.filter((l) => /engine stale after rebuild/.test(l));
+      const rebuildVerdictLines = log.filter((l) => /stale supervisor at idle/.test(l));
       expect(rebuildVerdictLines).toHaveLength(1);
       expect(rebuildVerdictLines[0]).toContain('captured-hash');
       expect(rebuildVerdictLines[0]).toContain('target-hash');
     });
   });
 
-  it('rebuild-path stale verdict with a null identity: the log line renders "null" and never throws', async () => {
+  it('natural-idle stale verdict with a null identity renders "null" and never throws', async () => {
     await withLockedRepo(async () => {
       const log: string[] = [];
       const requestRestart = vi.fn(async () => ({ fired: true }));
@@ -471,7 +471,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         }),
       ).resolves.not.toThrow();
 
-      const rebuildVerdictLines = log.filter((l) => /engine stale after rebuild/.test(l));
+      const rebuildVerdictLines = log.filter((l) => /stale supervisor at idle/.test(l));
       expect(rebuildVerdictLines).toHaveLength(1);
       expect(rebuildVerdictLines[0]).toContain('null');
     });

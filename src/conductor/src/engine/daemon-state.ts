@@ -1,8 +1,22 @@
-import type { ConductState, StepStatus } from '../types/index.js';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { ConductState, StepName, StepStatus } from '../types/index.js';
 import type { BacklogItem } from './daemon.js';
 import type { ConductStateStore } from './conduct-state-store.js';
+import { preparePipelineForDaemonDispatch } from './daemon-dispatch-preparation.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
-import { applyStateChanges, requireStateMutation } from './state.js';
+import { applyStateChanges, readState, requireStateMutation } from './state.js';
+
+// These are the only mechanical daemon bootstrap steps. DECIDE satisfaction
+// belongs to Conductor's artifact-backed entry policy, never this preseed.
+export const PRESEEDED_DONE: StepName[] = ['worktree', 'memory'];
+
+/** Mark only the mechanical daemon bootstrap steps as durable. */
+export function preseedStepStatuses(): Record<string, StepStatus> {
+  return Object.fromEntries(PRESEEDED_DONE.map((name) => [name, 'done']));
+}
+
+type DaemonSeedItem = Parameters<typeof deriveDaemonBaseState>[1];
 
 /** Derive daemon-owned defaults without mutating the caller's observed snapshot. */
 export function deriveDaemonBaseState(
@@ -58,4 +72,32 @@ export async function persistDaemonBaseState(
     store,
   );
   requireStateMutation(result, 'Daemon base-state update');
+}
+
+/**
+ * Prepare a worktree's `.pipeline/` for a daemon dispatch and seed the
+ * daemon-owned base state (tier, track, preseeded steps, applicability) from
+ * the claimed item. Every daemon executor MUST call this before its Conductor
+ * runs: without it the Conductor defaults the track to `product` and walks a
+ * technical spec into a PRD it never had.
+ *
+ * On re-dispatch of a halted feature the observed state is preserved so
+ * resume picks up from its real next step. Returns the seeded state.
+ */
+export async function seedDaemonDispatchState(
+  pipelineDir: string,
+  item: DaemonSeedItem,
+  store?: ConductStateStore<ConductState>,
+): Promise<ConductState> {
+  // A kept worktree still carries the previous run's `session-created`
+  // marker; without this sweep the first step would `--resume` a session id
+  // that was never created.
+  await mkdir(pipelineDir, { recursive: true });
+  await preparePipelineForDaemonDispatch(pipelineDir);
+  const stateFilePath = join(pipelineDir, 'conduct-state.json');
+  const existing = await readState(stateFilePath);
+  const observedState = existing.ok ? existing.value : {};
+  const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
+  await persistDaemonBaseState(stateFilePath, observedState, baseState, store);
+  return baseState;
 }

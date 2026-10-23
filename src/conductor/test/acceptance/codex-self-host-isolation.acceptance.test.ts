@@ -234,7 +234,9 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
 
       expect(readiness).toHaveBeenCalledTimes(2);
       expect(buildCalls).toHaveLength(2);
-      expect(buildCalls.map((options) => options?.attempt)).toEqual([undefined, undefined]);
+      // These are engine-owned lifecycle identities for the transcript
+      // capture, not provider retry-rung overrides.
+      expect(buildCalls.map((options) => options?.attempt)).toEqual([1, 1]);
       expect(vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'build')).toHaveLength(2);
     },
   );

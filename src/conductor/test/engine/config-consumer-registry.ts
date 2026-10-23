@@ -85,6 +85,8 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   model_fallback_ladder: consumer('src/conductor/src/engine/provider-execution.ts'),
   auto_restart_on_stale_engine: consumer('src/conductor/src/engine/stale-engine-init.ts'),
   engine_refresh_min_interval_seconds: consumer(DAEMON_CLI),
+  executor_isolation: consumer(DAEMON_CLI),
+  supervisor_max_stale_hours: consumer(DAEMON_CLI),
   codex_doctor_timeout_seconds: consumer('src/conductor/src/engine/plugin-loader.ts'),
   mergeable_autoresolve: consumer(AUTORESOLVE),
   stacked_prs: consumer([

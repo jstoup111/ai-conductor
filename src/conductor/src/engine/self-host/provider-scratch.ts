@@ -1,9 +1,23 @@
 import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import type { StepName } from '../../types/steps.js';
 import type { SelfHostProviderId } from './provider-home.js';
-import type { ConductorEvent } from '../../types/events.js';
+import { BUILT_IN_PROVIDERS, isBuiltInProviderId, providerDescriptor } from '../../execution/provider-catalog.js';
+import { isStepName } from '../execution-identity.js';
+import { LEGACY_TRANSCRIPT_OWNER_STEP, type ConductorEvent, type TranscriptOwnerStep } from '../../types/events.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
+import {
+  emitTranscriptHarvest as emitTranscriptHarvestEvent,
+  harvestProviderHome,
+  harvestThenRemove,
+  harvestTranscripts,
+  transcriptCapture,
+  type HarvestTranscriptsOptions,
+  type TranscriptHarvestResult,
+} from './transcript-harvest.js';
+import { sanitizeProviderMember } from './provider-member.js';
+import { TranscriptRetention } from './transcript-retention.js';
 
 const OWNER_LEASE_FILE = 'owner.json';
 const LEGACY_SCRATCH_PREFIXES = ['self-host-', 'harness-selfbuild-'] as const;
@@ -13,6 +27,8 @@ export interface ResolveScratchHomeOptions {
   readonly worktreeRoot: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Owning conductor step, retained for post-interruption transcript capture. */
+  readonly step?: StepName;
   readonly provider: SelfHostProviderId;
   /**
    * Concurrent auxiliary member (e.g. a build_review rubric) sharing this run
@@ -76,6 +92,10 @@ export interface ScratchLease {
   readonly featureSlug: string;
   readonly runId: string;
   readonly attempt: number;
+  /** Optional so leases written before transcript retention remain readable. */
+  readonly step?: StepName;
+  readonly provider?: SelfHostProviderId;
+  readonly member?: string;
   readonly ownerPid: number;
   readonly startedAt: string;
 }
@@ -109,6 +129,10 @@ export interface SweepScratchOptions {
   readonly fs?: ScratchFs;
   readonly ownerLiveness?: (ownerPid: number) => ScratchOwnerLiveness;
   readonly events?: ConductorEventEmitter;
+  /** Daemon-owned build token, included only when it reached the interrupted child. */
+  readonly daemonBuildToken?: string;
+  /** Injectable harvest boundary for isolated reclaim tests. */
+  readonly harvest?: (options: HarvestTranscriptsOptions) => Promise<TranscriptHarvestResult>;
 }
 
 /**
@@ -120,6 +144,8 @@ export async function sweepFeatureWorktreeScratch(options: {
   readonly worktreeBase: string;
   readonly events: ConductorEventEmitter;
   readonly log: (message: string) => void;
+  /** Daemon build token that was made available to self-host children, if any. */
+  readonly daemonBuildToken?: string;
   /**
    * The daemon supplies a per-worktree scope so each cleanup decision reaches
    * that feature's ledger before it is forwarded to daemon-wide rendering.
@@ -138,11 +164,21 @@ export async function sweepFeatureWorktreeScratch(options: {
   for (const slug of entries) {
     const worktreePath = join(options.worktreeBase, slug);
     const scope = options.startFeatureEventScope?.(worktreePath, slug);
+    // This listener must see only captures recovered by this sweep. Reconciling
+    // the ledger here would mistake another live worker's pending capture for
+    // an abandoned one and settle it before that worker receives a verdict.
+    const retention = new TranscriptRetention(worktreePath, scope?.events ?? options.events, { reconcile: false });
     try {
-      await sweepScratch({ worktreeRoot: worktreePath, events: scope?.events ?? options.events });
+      await retention.ready();
+      await sweepScratch({
+        worktreeRoot: worktreePath,
+        events: scope?.events ?? options.events,
+        daemonBuildToken: options.daemonBuildToken,
+      });
     } catch (error) {
       options.log(`provider scratch sweep failed for ${slug}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      retention.stop();
       scope?.stop();
     }
   }
@@ -308,6 +344,9 @@ export async function acquireScratchHome(options: AcquireScratchHomeOptions): Pr
     featureSlug: options.featureSlug,
     runId: options.runId,
     attempt: options.attempt,
+    ...(options.step === undefined ? {} : { step: options.step }),
+    provider: options.provider,
+    ...(options.member === undefined ? {} : { member: options.member }),
     ownerPid: options.ownerPid ?? process.pid,
     startedAt: (options.now ?? (() => new Date()))().toISOString(),
   };
@@ -372,7 +411,23 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
       switch (ownerLiveness(lease.lease.ownerPid)) {
         case 'dead':
           try {
-            await fs.rm(home, { recursive: true, force: true });
+            await harvestThenRemove({
+              harvest: () => harvestInterruptedHome({
+                home,
+                attemptDirectory: attempt,
+                lease: lease.lease,
+                worktreeRoot: options.worktreeRoot,
+                daemonBuildToken: options.daemonBuildToken,
+                harvest: options.harvest,
+                useProductionFilesystem: options.fs === undefined,
+              }),
+              report: async (results) => {
+                for (const result of results) {
+                  await emitTranscriptHarvest(options.events, result);
+                }
+              },
+              remove: () => fs.rm(home, { recursive: true, force: true }),
+            });
             decisions.push({ kind: 'reclaimed', home });
             await emitScratchCleanup(options.events, {
               type: 'scratch_cleanup_reclaimed',
@@ -427,6 +482,113 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
   return decisions;
 }
 
+type InterruptedHarvest = {
+  readonly result: TranscriptHarvestResult;
+  readonly step: TranscriptOwnerStep;
+  readonly runId: string;
+  readonly attempt: number;
+  readonly member?: string;
+  readonly provider: SelfHostProviderId;
+  readonly path: string;
+};
+
+async function harvestInterruptedHome(options: {
+  readonly home: string;
+  readonly attemptDirectory: string;
+  readonly lease: ScratchLease;
+  readonly worktreeRoot: string;
+  readonly daemonBuildToken?: string;
+  readonly harvest?: (options: HarvestTranscriptsOptions) => Promise<TranscriptHarvestResult>;
+  readonly useProductionFilesystem: boolean;
+}): Promise<readonly InterruptedHarvest[]> {
+  // Injected ScratchFs fixtures model only leases and removal. They do not model
+  // provider-home contents, so preserve their existing cleanup-only boundary.
+  if (!options.useProductionFilesystem && options.harvest === undefined) return [];
+
+  const provider = options.lease.provider ?? providerFromAttemptDirectory(options.attemptDirectory, options.lease.attempt);
+  if (provider === undefined) return [];
+  const descriptor = providerDescriptor(provider);
+  const step: TranscriptOwnerStep = options.lease.step ?? LEGACY_TRANSCRIPT_OWNER_STEP;
+  const capture = transcriptCapture({ worktreeRoot: options.worktreeRoot, step, runId: options.lease.runId, attempt: options.lease.attempt, ...(options.lease.member === undefined ? {} : { auxiliaryMember: options.lease.member }), provider });
+  const childPrefixes = descriptor.selfHostShape.isolation === 'claude-config-sandbox'
+    ? ['harness-selfbuild-', `self-host-${provider}-`]
+    : [`self-host-${provider}-`];
+  const children = (await fsp.readdir(options.home, { withFileTypes: true }).catch(() => []))
+    .filter((entry) => entry.isDirectory() && childPrefixes.some((prefix) => entry.name.startsWith(prefix)));
+  const harvest = options.harvest ?? harvestTranscripts;
+
+  if (children.length === 0) return [];
+
+  let files = 0;
+  let bytes = 0;
+  let omittedLines = 0;
+  const skipped: string[] = [];
+  for (const child of children) {
+    const childHome = join(options.home, child.name);
+    const result = await harvestProviderHome({
+      home: childHome,
+      selectedAuthPath: descriptor.selfHostShape.selectedAuthPath,
+      globs: descriptor.selfHostShape.transcripts.globs,
+      destination: capture.destination,
+      extraSecrets: options.daemonBuildToken === undefined ? [] : [options.daemonBuildToken],
+      harvest,
+    });
+    if (result.kind === 'failed') {
+      return [{
+        result,
+        step,
+        runId: options.lease.runId,
+        attempt: options.lease.attempt,
+        ...(options.lease.member === undefined ? {} : { member: options.lease.member }),
+        provider,
+        path: capture.path,
+      }];
+    }
+    files += result.files;
+    bytes += result.bytes;
+    omittedLines += result.omittedLines;
+    skipped.push(...result.skipped);
+  }
+
+  return [{
+    result: { kind: 'captured', files, bytes, skipped, omittedLines },
+    step,
+    runId: options.lease.runId,
+    attempt: options.lease.attempt,
+    ...(options.lease.member === undefined ? {} : { member: options.lease.member }),
+    provider,
+    path: capture.path,
+  }];
+}
+
+/** Inverse of resolveScratchHome's `<attempt>-<provider>[-<member>]` leaf. */
+function providerFromAttemptDirectory(attemptDirectory: string, attempt: number): SelfHostProviderId | undefined {
+  const prefix = `${attempt}-`;
+  if (!attemptDirectory.startsWith(prefix)) return undefined;
+  const remainder = attemptDirectory.slice(prefix.length);
+  return BUILT_IN_PROVIDERS
+    .filter((provider): provider is typeof provider & { readonly selfHostShape: NonNullable<typeof provider.selfHostShape> } => provider.selfHostShape !== undefined)
+    .map((provider) => provider.id as SelfHostProviderId)
+    .find((provider) => remainder === provider || remainder.startsWith(`${provider}-`));
+}
+
+function isSelfHostProviderId(value: unknown): value is SelfHostProviderId {
+  return typeof value === 'string'
+    && isBuiltInProviderId(value)
+    && providerDescriptor(value).capabilities.selfHost === true;
+}
+
+async function emitTranscriptHarvest(
+  events: ConductorEventEmitter | undefined,
+  harvest: InterruptedHarvest,
+): Promise<void> {
+  await emitTranscriptHarvestEvent(events, {
+    step: harvest.step, runId: harvest.runId, attempt: harvest.attempt,
+    ...(harvest.member === undefined ? {} : { auxiliaryMember: harvest.member }),
+    provider: harvest.provider, path: harvest.path, interrupted: true,
+  }, harvest.result);
+}
+
 function scratchCleanupIdentity(lease: ScratchLease | undefined): {
   repository: string | 'unknown';
   featureSlug: string | 'unknown';
@@ -468,6 +630,9 @@ function serializeScratchLease(lease: ScratchLease): string {
     featureSlug: lease.featureSlug,
     runId: lease.runId,
     attempt: lease.attempt,
+    ...(lease.step === undefined ? {} : { step: lease.step }),
+    ...(lease.provider === undefined ? {} : { provider: lease.provider }),
+    ...(lease.member === undefined ? {} : { member: lease.member }),
     ownerPid: lease.ownerPid,
     startedAt: lease.startedAt,
   });
@@ -499,6 +664,9 @@ function isScratchLease(value: unknown): value is ScratchLease {
     typeof lease.featureSlug === 'string' &&
     typeof lease.runId === 'string' &&
     typeof lease.attempt === 'number' &&
+    (lease.step === undefined || isStepName(lease.step)) &&
+    (lease.provider === undefined || isSelfHostProviderId(lease.provider)) &&
+    (lease.member === undefined || typeof lease.member === 'string') &&
     typeof lease.ownerPid === 'number' &&
     typeof lease.startedAt === 'string';
 }
@@ -548,6 +716,6 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
 
   const leaf = member === undefined
     ? `${attempt}-${provider}`
-    : `${attempt}-${provider}-${member.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+    : `${attempt}-${provider}-${sanitizeProviderMember(member)}`;
   return join(normalize(worktreeRoot), '.daemon', 'scratch', runId, leaf);
 }

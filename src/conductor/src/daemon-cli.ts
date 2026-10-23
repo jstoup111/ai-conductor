@@ -4,12 +4,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { access, mkdir, readFile, readlink, unlink as unlinkFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
 import { formatHeartbeatAge } from './engine/step-heartbeat.js';
+import { FULL_SUITE_OUTPUT_LOG } from './engine/full-suite-evidence.js';
 import {
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
@@ -136,7 +137,7 @@ import {
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import type { ConductorEvent, StepName, StepStatus } from './types/index.js';
+import type { ConductorEvent } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import {
   createDaemonTeardown,
@@ -169,7 +170,12 @@ import {
 } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
+import { createChildProcessFeatureExecutor } from './engine/child-feature-executor.js';
+import { createExecutorBroker } from './engine/executor-broker.js';
+import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
 import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
+import { resolveEnginePin } from './engine/engine-pin.js';
+import { resolveEngineStoreRoot } from './engine/engine-store.js';
 import { createDaemonOrderingReaders } from './engine/daemon-ordering-readers.js';
 import { cleanupHaltPresentation, parseIssueRef, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { createStaleEngineChecker } from './engine/engine-identity.js';
@@ -204,13 +210,9 @@ import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
 } from './engine/conductor-deps.js';
-import {
-  deriveDaemonBaseState,
-  persistDaemonBaseState,
-} from './engine/daemon-state.js';
+import { seedDaemonDispatchState } from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
-import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
 import { runSetupFailureTriage, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
@@ -458,6 +460,17 @@ async function rebuildEngineFromSource(conductorRoot: string): Promise<void> {
  */
 export function engineEntryPathForRepo(projectRoot: string): string {
   return join(projectRoot, 'src', 'conductor', 'dist', 'index.js');
+}
+
+/**
+ * Development engines run from `<conductor>/dist`; installed engines run from
+ * `<conductor>/dist-versions/<id>`. Only the latter needs the extra parent
+ * traversal to find the package-owned floating `dist` link.
+ */
+export function conductorRootForModuleDir(moduleDir: string): string {
+  return basename(dirname(moduleDir)) === 'dist-versions'
+    ? dirname(dirname(moduleDir))
+    : dirname(moduleDir);
 }
 
 /** Sidecar filename stamped by `publish-engine.mjs` at finalize (Task 4). */
@@ -716,15 +729,6 @@ async function runOwnedHaltClassMigration(
   await deps.ensureWorktreeBase(worktreeBase);
   await deps.migrateHaltClasses(projectRoot, worktreeBase, deps.log);
   return worktreeBase;
-}
-
-// These are the only mechanical daemon bootstrap steps. DECIDE satisfaction
-// belongs to Conductor's artifact-backed entry policy, never this preseed.
-export const PRESEEDED_DONE: StepName[] = ['worktree', 'memory'];
-
-/** Mark only the mechanical daemon bootstrap steps as durable. */
-export function preseedStepStatuses(): Record<string, StepStatus> {
-  return Object.fromEntries(PRESEEDED_DONE.map((name) => [name, 'done']));
 }
 
 /**
@@ -1414,6 +1418,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // every live worker through the one dispatch seam.
   let activeExecutorCount = 0;
   let shutdownRequested = false;
+  // Assigned when child isolation is selected below.  Keep the signal handler
+  // independent from adapter construction order while still stopping children
+  // before the scheduler begins its drain and before the daemon lock releases.
+  let stopChildExecutors: (() => Promise<void>) | undefined;
+  let abortChildBroker: (() => void) | undefined;
 
   // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
   // lock is released — force-exiting on SIGTERM (the old behavior) let a
@@ -1450,6 +1459,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     for (const controller of allWaitSignals) {
       controller.abort();
     }
+    abortChildBroker?.();
+    await stopChildExecutors?.();
     // Daemon conductors intentionally have no per-conductor SIGTERM listener.
     // Close their real lifecycle ledgers before the scheduler drain can release
     // this process; each closure joins an in-flight terminal if one exists.
@@ -1743,6 +1754,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     }
     return featureLog;
   };
+  /**
+   * The same slug-aware renderer serves in-process feature buses and the
+   * supervisor's child-executor proxy buses. Persistence is intentionally not
+   * included: an executor child is the only writer of its feature ledger.
+   */
+  const attachFeatureEventRenderer = (slug: string, featureEvents: ConductorEventEmitter): (() => void) => {
+    const featureLog = featureLogFor(slug);
+    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
+    const renderableEvents = renderedEventTypes();
+    for (const type of renderableEvents) featureEvents.on(type, renderEvent);
+    return () => {
+      for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+    };
+  };
   const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
     const sessionId = createSessionEventIdentity();
     const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
@@ -1786,9 +1811,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
       : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     if (visualizer) activeDispatchVisualizers.add(visualizer);
-    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
-    const renderableEvents = renderedEventTypes();
-    for (const type of renderableEvents) featureEvents.on(type, renderEvent);
+    const detachFeatureEventRenderer = attachFeatureEventRenderer(item.slug, featureEvents);
     let stopPromise: Promise<void> | undefined;
     const stop = (): Promise<void> => {
       if (stopPromise) return stopPromise;
@@ -1804,7 +1827,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             await daemonOtel?.flush();
           } finally {
             if (visualizer) activeDispatchVisualizers.delete(visualizer);
-            for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+            detachFeatureEventRenderer();
             persistence.stop();
           }
         }
@@ -1831,6 +1854,32 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       stop,
     };
   };
+  // Child feature events arrive on a proxy bus rather than beginFeatureRun's
+  // in-process bus. Attach the same visualizer there, but use the immutable
+  // WorkOrder pin rather than this supervisor's loaded engine version.
+  const attachChildFeatureOtelVisualizer = (
+    slug: string,
+    engineVersionId: string,
+    featureEvents: ConductorEventEmitter,
+  ): (() => void) => {
+    const visualizer = daemonOtel?.spoolRuntime
+      ? wireOtelVisualizer(config ?? {}, {
+          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
+          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
+          metrics: false, harnessVersion: 'unknown',
+        }, featureEvents, daemonOtel.spoolRuntime)
+      : wireOtelVisualizer(config ?? {}, {
+          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
+          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
+          metrics: false, harnessVersion: 'unknown',
+        }, featureEvents);
+    if (visualizer) activeDispatchVisualizers.add(visualizer);
+    return () => {
+      if (!visualizer) return;
+      activeDispatchVisualizers.delete(visualizer);
+      void visualizer.stop();
+    };
+  };
   // Resolve the active memory provider once at run start so all steps see the
   // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
   // bounded and no module-level state is mutated (resolver is pure over config).
@@ -1854,37 +1903,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       providerExecution.configuredProviders[0],
     );
 
-    // Sweep stale session markers before constructing the runner. A KEPT
-    // worktree (reused on a later daemon cycle after a prior halt/error —
-    // createWorktree is idempotent) still carries the previous run's
-    // `session-created` marker. Without this sweep the new
-    // runner inherits `sessionStarted = true` (lazy-init reads the marker) and
-    // its FIRST step would `--resume` a brand-new session id that was never
-    // created → "No conversation found" → "session unavailable (expired or in
-    // use)" → the feature errors out. The durable `conduct-session-id` is the
-    // feature run identity and survives restart/re-dispatch. The conductor
-    // also resets per step before every step, but sweeping here guarantees a
-    // clean provider start.
-    await preparePipelineForDaemonDispatch(pipelineDir);
-
-    // Pre-seed only mechanical bootstrap state. The engine checks DECIDE
-    // artifacts before it can advance into BUILD. On re-dispatch of a halted
-    // feature, preserve any recorded progress so resume picks up from its real
-    // next step (see `resume: true`).
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
-    const existingResult = await readState(stateFilePath);
-    const observedState = existingResult.ok ? existingResult.value : {};
-    // Seed the complexity tier only when the engineer supplied one. An
-    // unresolved tier remains unresolved here; Conductor alone resolves it
-    // conservatively to L when it evaluates step eligibility.
-    const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
-
     const stateStore = resolveConductorStateStore(
       stateFilePath,
       undefined,
       createStepStatusWriteRefusalDiagnostics(featureEvents),
     );
-    await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);
+    const baseState = await seedDaemonDispatchState(pipelineDir, item, stateStore);
 
     const stepRunner = new DefaultStepRunner(
       selectedRuntime.provider,
@@ -2233,11 +2258,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
+    const conductorRoot = conductorRootForModuleDir(__dirname);
+    const enginePin = await resolveEnginePin({
+      conductorRoot,
+      storeRoot: resolveEngineStoreRoot({ conductorRoot }),
+      // A versioned install has its forkable index.js directly in __dirname.
+      ownEngineDir: __dirname,
+    });
     return buildWorkOrder(
       {
         repository: basename(projectRoot),
         slug: item.slug,
         baseSha,
+        enginePin,
+        effectiveConcurrency: daemonConcurrency.concurrency,
+        selfHost: isSelfHost,
         documentRefs: [
           item.storiesPath ?? `.docs/stories/${item.slug}.md`,
           item.planPath ?? `.docs/plans/${item.slug}.md`,
@@ -2254,7 +2289,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       workOrderGit,
     );
   };
-  const executor = createInProcessFeatureExecutor({
+  const inProcessExecutor = createInProcessFeatureExecutor({
     withFeatureOwnership: withDaemonLogFeatureOwnership,
     run: async (order) => {
       const item = workOrderToBacklogItem(order);
@@ -2282,6 +2317,51 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       })(item);
     },
   });
+  const conductorRoot = conductorRootForModuleDir(__dirname);
+  const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot });
+  let protocolMismatchPending = false;
+  const executorBroker = createExecutorBroker({
+    rateLimitEpisode,
+    providerAvailability,
+    liveBoundaryCoordinator,
+    worktreeLifecycle,
+    rootEvents: events,
+    featureLogFor,
+    attachFeatureEventRenderer,
+    attachFeatureOtelVisualizer: attachChildFeatureOtelVisualizer,
+    log,
+  });
+  const childExecutor = createChildProcessFeatureExecutor({
+    projectRoot,
+    // The order carries only a stable version id. Resolve it from the immutable
+    // store at fork time, never through the floating dist link.
+    engineDirForOrder: (order, useSupervisorBuild) => useSupervisorBuild
+      ? __dirname
+      : realpathSync(join(engineStoreRoot, order.engineVersionId)),
+    supervisorEngineVersionId: resolveEngineVersion(__dirname),
+    rootEvents: events,
+    attachBroker: executorBroker.attach,
+    dispatchStartTimeoutMs: resolveDispatchStartTimeoutSeconds(config) * 1_000,
+    teardownTimeoutMs: resolveTeardownTimeoutSeconds(config) * 1_000,
+    onProtocolMismatch: () => {
+      log('[daemon] executor protocol mismatch; supervisor-build failover requested');
+      protocolMismatchPending ||= isArmed;
+      return isArmed;
+    },
+    log,
+  });
+  const childMode = (config?.executor_isolation ?? 'child') === 'child';
+  const executor = childMode ? childExecutor : inProcessExecutor;
+  if (childMode) {
+    stopChildExecutors = () => childExecutor.stopAll();
+    abortChildBroker = () => executorBroker.abortAll();
+  } else {
+    log('[daemon] executor isolation: in-process; per-dispatch engine pinning is disabled');
+  }
+  // Reap a predecessor's durable child references before the scheduler can
+  // claim work. This makes successor takeover deterministic rather than
+  // allowing a new claim to overlap a still-running old executor.
+  await sweepExecutorRecordsOnBoot(projectRoot);
   const executeFeature = opts.runFeature ?? makeRunFeature(deps);
   const runFeature = (item: BacklogItem): Promise<FeatureOutcome> => executeFeature(item);
 
@@ -2607,12 +2687,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),
-      sweepProviderScratch: () => sweepFeatureWorktreeScratch({
-        worktreeBase,
-        events,
-        log,
-        startFeatureEventScope: (worktreePath, featureSlug) => startFeatureEventPersistence(worktreePath, events, featureSlug),
-      }),
+      sweepProviderScratch: async () => {
+        const { buildAuthTokenPath } = resolveSelfHostConfig(config);
+        const token = await readDaemonBuildToken(buildAuthTokenPath);
+        await sweepFeatureWorktreeScratch({
+          worktreeBase,
+          events,
+          log,
+          ...(token.state === 'ok' ? { daemonBuildToken: token.token } : {}),
+          startFeatureEventScope: (worktreePath, featureSlug) => startFeatureEventPersistence(worktreePath, events, featureSlug),
+        });
+      },
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
       // back to polling alone. Otherwise, the daemon uses event-driven re-kick
@@ -2761,6 +2846,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       log: daemonCoreLog,
       staleEngineChecker,
       requestRestart,
+      protocolMismatchPending: () => protocolMismatchPending,
       // Rebuild the engine from source before each dispatch (self-host only) so
       // the stale-engine checker sees merge-driven drift the untracked `dist`
       // (#309) hides. projectRoot is the harness root under self-host, so
@@ -2788,7 +2874,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             recordEngineSourceRefresh = () => throttle.markRan();
             const warner = createStalenessWarner(log);
             return async (refreshOpts?: { force?: boolean }) => {
-              if (!refreshOpts?.force && !throttle.shouldRun()) return;
+              // This outcome gates the entire maintenance sequence in
+              // runDaemon. Returning undefined looked like a successful
+              // refresh and rebuilt on every idle poll inside the interval.
+              if (!refreshOpts?.force && !throttle.shouldRun()) return { status: 'skipped' as const };
               throttle.markRan();
               const outcome = await coordinatedRootMutation(
                 () => fastForwardRoot(projectRoot, log),
@@ -3278,6 +3367,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // Task 12: wire stale-engine detection gate inputs
       isSelfHost,
       autoRestartOnStaleEngine: config?.auto_restart_on_stale_engine ?? false,
+      supervisorMaxStaleHours: config?.supervisor_max_stale_hours ?? 24,
     },
   );
 
@@ -3390,6 +3480,12 @@ function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): st
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'executor_protocol_mismatch':
+      log(`${dot} executor ${event.slug} protocol mismatch: ${event.reason}${event.restartRequested ? ' (restart requested)' : ''}`);
+      break;
+    case 'executor_started':
+      log(`${dot} executor ${event.slug} started on ${event.engineVersionId} (protocol ${event.protocolVersion}; supervisor ${event.supervisorEngineVersionId})`);
+      break;
     case 'test_suite_verification':
       if (event.executionSummary) {
         log(`${dot} test suite ${event.executionSummary.attemptedEntryCount}/${event.executionSummary.plannedEntryCount}: ${event.executionSummary.entries.map((entry) => `#${entry.index + 1} ${entry.result} (${entry.durationMs}ms)`).join(', ')}`);
@@ -3529,11 +3625,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.dim(`⊘ ${event.step} skipped: ${event.expression}${undefinedNote}`)}`);
       break;
     }
-    case 'step_failed':
+    case 'step_failed': {
+      // A failed suite's error carries raw suite output; keep only its summary
+      // line here, since the complete output is persisted beside the evidence.
+      const [summary = '', ...omitted] = event.step === 'test_suite' ? event.error.split('\n') : [event.error];
+      const error = omitted.length > 0
+        ? `${summary} (+${omitted.length} more lines omitted; full output in ${FULL_SUITE_OUTPUT_LOG})`
+        : summary;
       log(
-        `${dot} ${chalk.red('✗')} ${chalk.red(`${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${event.error}`)}`,
+        `${dot} ${chalk.red('✗')} ${chalk.red(`${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${error}`)}`,
       );
       break;
+    }
     case 'step_interrupted':
       log(`${dot} ${chalk.yellow('⏸')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} interrupted: ${event.reason}`)}`);
       break;

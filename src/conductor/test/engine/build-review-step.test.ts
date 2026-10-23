@@ -1182,6 +1182,75 @@ describe('build_review structured rubric dispatch', () => {
     }
   });
 
+  it('settles a failed installed custom-policy capture under the caller execution owner', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-custom-failed-owner-'));
+    const invoke = vi.fn(async (_options: InvokeOptions) => ({ success: false, output: 'provider failed', exitCode: 1 }));
+    const runtimeProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const failed = vi.fn();
+    const entry: ResolvedBuildReviewCustomCatalogEntry = {
+      id: 'custom-policy', kind: 'custom', skill: 'custom-policy', question: 'Review the fixture.', resources: [],
+      policy: { ...branch.policy, llm_provider: ['claude'] }, contract: BUILD_REVIEW_CUSTOM_V1_CONTRACT,
+    };
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'claude', provider: runtimeProvider, lifecycleCapability: runtimeProvider.lifecycleCapability,
+      nativeSchemaCapability: runtimeProvider.nativeSchemaCapability,
+      policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const sessions = new ProviderSessionStore();
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'custom-failed-owner', projectDir, {
+      gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      config: { llm_provider: ['claude'] } as HarnessConfig,
+      providerRuntimes: runtimes,
+      sessionStore: sessions,
+      configuredProviders: ['claude'],
+      providerExecution: { configuredProviders: ['claude'], runtimes, sessions, onAuxiliaryAttemptFailed: failed },
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'custom-policy', source: 'project', installationOrigin: '/fixture/policy',
+        canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
+        metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256-v1:${'a'.repeat(64)}`,
+      }),
+    });
+    const owner = {
+      executionId: 'execution-owner',
+      subject: { kind: 'configured-member' as const, parentGroup: 'prd_audit', member: 'build_review' },
+    };
+    try {
+      await (runner as unknown as {
+        dispatchInstalledBuildReviewPolicy: (
+          entry: ResolvedBuildReviewCustomCatalogEntry,
+          inputs: unknown,
+          lapId: string,
+          tier?: unknown,
+          lapGate?: unknown,
+          readOnlyReviewCapabilityFor?: (provider: string) => Promise<unknown>,
+          pipelineDir?: string,
+          executionContext?: unknown,
+        ) => Promise<unknown>;
+      }).dispatchInstalledBuildReviewPolicy(entry, {
+        sourceSnapshot: { contentDigest: 'sha256:source', mergeBase: 'base', headSha: 'head', digest: 'sha256:snapshot', sourceChanges: [] },
+      }, 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', undefined, undefined, async (provider) => ({
+        provider, platform: process.platform, status: 'available' as const,
+      }), join(projectDir, '.pipeline'), owner);
+
+      expect(invoke).toHaveBeenCalled();
+      expect(failed).toHaveBeenCalledWith(
+        expect.objectContaining({ step: 'build_review', auxiliaryMember: 'custom-policy' }),
+        owner,
+      );
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('skips a registered external candidate without a built-in descriptor and invokes the next custom-policy candidate', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-external-custom-candidate-'));
     const externalInvoke = vi.fn();
