@@ -3,6 +3,7 @@ import type {
   RemediationCaseRow,
   RemediationCaseSourceRow,
 } from './remediation-case-artifact.js';
+import { isBelowSeverityThreshold } from './build-review-domain.js';
 
 export type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 
@@ -157,15 +158,15 @@ function outcomeMatchesDisposition(
     || (outcome === 'advisory' && disposition === 'advisory');
 }
 
-function hasDeclaredAdvisoryThreshold(
+function advisoryThresholdForSource(
   sourceId: string,
   references: RemediationCaseValidationReferences,
-): boolean {
+): import('./build-review-domain.js').BuildReviewSeverity | undefined {
   const rubric = references.sourceRubrics?.[sourceId];
   const threshold = rubric === undefined
     ? undefined
     : references.declaredSeverityThresholds?.[rubric];
-  return threshold !== undefined && threshold !== 'nit';
+  return threshold !== 'nit' ? threshold : undefined;
 }
 
 function validateConsistency(
@@ -220,6 +221,9 @@ export function validateRemediationCaseGraph(
       !(references.existingCaseIds ?? []).includes(caseRow.existingCaseId)) {
       return { ok: false, reason: 'unknown-existing-case' };
     }
+    if (caseRow.disposition === 'advisory' && !nonEmptyString(caseRow.rationale)) {
+      return { ok: false, reason: 'invalid-advisory-threshold' };
+    }
     const effectError = validateEffect(caseRow, judgement, references);
     if (effectError) return { ok: false, reason: effectError };
 
@@ -251,8 +255,12 @@ export function validateRemediationCaseGraph(
     } else if (!outcomeMatchesDisposition(source.outcome, caseRow.disposition)) {
       return { ok: false, reason: 'contradictory-source-outcome' };
     }
-    if (caseRow.disposition === 'advisory' && !hasDeclaredAdvisoryThreshold(source.sourceId, references)) {
-      return { ok: false, reason: 'invalid-advisory-threshold' };
+    if (caseRow.disposition === 'advisory') {
+      const threshold = advisoryThresholdForSource(source.sourceId, references);
+      if (threshold === undefined || caseRow.adjudicatedSeverity === undefined ||
+        !isBelowSeverityThreshold(caseRow.adjudicatedSeverity, threshold)) {
+        return { ok: false, reason: 'invalid-advisory-threshold' };
+      }
     }
 
     seenSources.add(source.sourceId);

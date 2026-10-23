@@ -1,4 +1,4 @@
-// Covers: task:2, task:30, task:rem-prd-audit-r18-1
+// Covers: task:2, task:30, task:rem-prd-audit-r18-1, task:rem-prd-audit-r18-3
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -207,6 +207,65 @@ describe('remediation case graph validator', () => {
     expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement,
       advisoryReferences(judgement.mode, { security: 'major' }),
     )).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement whose adjudicated severity reaches its source threshold', (_mode, judgement) => {
+    const invalid = {
+      ...judgement,
+      cases: [{ ...judgement.cases[0], adjudicatedSeverity: 'major' }, ...judgement.cases.slice(1)],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, invalid,
+      advisoryReferences(invalid.mode, { testQuality: 'major' }),
+    )).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement with no adjudicated severity', (_mode, judgement) => {
+    const invalid = {
+      ...judgement,
+      cases: [{ ...judgement.cases[0], adjudicatedSeverity: undefined }, ...judgement.cases.slice(1)],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, invalid,
+      advisoryReferences(invalid.mode, { testQuality: 'major' }),
+    )).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement with an empty rationale', (_mode, judgement) => {
+    const invalid = {
+      ...judgement,
+      cases: [{ ...judgement.cases[0], rationale: '' }, ...judgement.cases.slice(1)],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, invalid,
+      advisoryReferences(invalid.mode, { testQuality: 'major' }),
+    )).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement with an action effect', (_mode, judgement) => {
+    const invalid = {
+      ...judgement,
+      cases: [{
+        ...judgement.cases[0],
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'Do not route advisory work.' }] },
+      }, ...judgement.cases.slice(1)],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, invalid,
+      advisoryReferences(invalid.mode, { testQuality: 'major' }),
+    )).toEqual({ ok: false, reason: 'invalid-reject-effect' });
   });
 
   it('reconstructs every current source through exactly one canonical case', () => {
