@@ -1,9 +1,9 @@
-// Covers: task:2, task:19, task:27
+// Covers: task:2, task:16, task:19, task:27, task:rem-prd-audit-r16-1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { joinBuildReviewRubricOutcomes, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
+import { joinBuildReviewRubricOutcomes, parseBuildReviewAggregate, type BuildReviewAggregateInput } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
@@ -1155,13 +1155,15 @@ describe('build-review findings with current custom rubrics', () => {
   };
   const passingBuiltin = { testQuality: { kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3' as const, findings: [], verdict: 'PASS' as const } };
 
-  function customJudgedAggregate(confidence?: number) {
+  function customJudgedAggregate(input: { readonly confidence?: number; readonly severity?: 'critical' | 'major' | 'minor' | 'nit' } = {}) {
+    const finding = {
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
+      ...(input.severity === undefined ? {} : { severity: input.severity }),
+      ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+    };
     const judged = stampBuildReviewCustomJudgedResult({
-      kind: 'custom-findings', version: 'v2', findings: [{
-        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', severity: 'minor',
-        evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
-        ...(confidence === undefined ? {} : { confidence }),
-      }],
+      kind: 'custom-findings', version: 'v2', findings: [{ ...finding, severity: input.severity ?? 'minor' }],
     }, stamp, references)!;
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: passingBuiltin,
@@ -1198,7 +1200,7 @@ describe('build-review findings with current custom rubrics', () => {
   }
 
   it('fails the effective verdict on an unresolved custom finding while built-in rubrics pass', async () => {
-    const { aggregate, identity } = customJudgedAggregate();
+    const { aggregate, identity } = customJudgedAggregate({ severity: 'minor' });
 
     const output = await jsonFindings(findingsDeps(aggregate));
 
@@ -1224,7 +1226,7 @@ describe('build-review findings with current custom rubrics', () => {
   });
 
   it('suppresses a custom finding below the floor its own catalog entry declares', async () => {
-    const { aggregate, identity } = customJudgedAggregate(60);
+    const { aggregate, identity } = customJudgedAggregate({ confidence: 60, severity: 'minor' });
     const loadConfig = async () => ({
       ok: true as const, warnings: [],
       config: { build_review: { custom_rubrics: { portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_confidence: 70 } } } },
@@ -1233,6 +1235,71 @@ describe('build-review findings with current custom rubrics', () => {
     const output = await jsonFindings(findingsDeps(aggregate, { loadConfig }));
 
     expect(output).toMatchObject({ verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [identity.id] });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-r16-1
+  it('projects threshold and adjudicated advisory findings with their source metadata', async () => {
+    const adjudicated = customJudgedAggregate({ severity: 'critical' });
+    const thresholdFinding = {
+      concernKind: 'test-insensitive', summary: 'The minor finding is below the configured threshold.', severity: 'minor' as const,
+      evidenceLocations: ['test/a.test.ts:1'], anchor: finding.anchor,
+    };
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: {
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v4', findings: [thresholdFinding], verdict: 'FAIL' },
+      },
+      customResults: adjudicated.aggregate.customResults,
+      currentCustomRubrics: ['portablePolicy'],
+    });
+    const thresholdId = canonicalizeBuildReviewFindingIdentity({ ...thresholdFinding, rubric: 'testQuality', contractVersion: 'v4' })!.id;
+    const adjudicatedId = adjudicated.identity.id;
+    const state: RemediationCaseStoreState = {
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low',
+        rationale: 'The reviewer downgraded this finding.', confidence: 'high', resolution: 'resolved',
+        sources: [{ sourceId: `portablePolicy:${adjudicatedId}`, outcome: 'advisory', recordedAt: '2026-10-23T00:00:00.000Z' }],
+        effect: { kind: 'none' }, adjudicatedSeverity: 'nit',
+      }],
+    };
+    const output = await jsonFindings(findingsDeps(aggregate, {
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state }) }),
+      loadConfig: async () => ({
+        ok: true as const, warnings: [],
+        config: { build_review: { custom_rubrics: {
+          portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_severity: 'minor' },
+        }, rubrics: { testQuality: { min_severity: 'major' } } } },
+      }),
+    }));
+
+    expect(output).toMatchObject({
+      advisoryFindings: [
+        { id: thresholdId, rubric: 'testQuality', severity: 'minor', threshold: 'major', origin: 'threshold' },
+        { id: adjudicatedId, rubric: 'portablePolicy', severity: 'nit', threshold: 'minor', origin: 'adjudicated' },
+      ],
+    });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-r16-1
+  it('reads persisted v3 and custom-v1 findings with no severity without creating advisories', async () => {
+    const builtin = {
+      concernKind: 'test-insensitive', summary: 'The legacy finding has no severity.', evidenceLocations: ['test/a.test.ts:1'],
+      anchor: finding.anchor,
+    };
+    const custom = customJudgedAggregate({ severity: 'minor' }).aggregate;
+    const persisted = structuredClone(joinBuildReviewRubricOutcomes({
+      ...custom,
+      results: {
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [builtin], verdict: 'FAIL' },
+      },
+    }));
+    delete persisted.customResults!.portablePolicy!.result.findings[0]!.severity;
+    const aggregate = parseBuildReviewAggregate(persisted)!;
+
+    const output = await jsonFindings(findingsDeps(aggregate));
+
+    expect([output.verdict, Object.hasOwn(output, 'advisoryFindingIds'), Object.hasOwn(output, 'advisoryFindings')]).toEqual(['FAIL', false, false]);
   });
 
   it('reports an exhausted custom infrastructure failure and fails the effective verdict', async () => {
