@@ -198,6 +198,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'mode_skip',
   'build_done_when_unverified',
   'done_when_citation_judged',
+  'remediation_closure_judged',
   'done_when_citation_accepted',
   'build_progress',
   'unattributed_progress',

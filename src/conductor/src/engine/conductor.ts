@@ -12171,7 +12171,7 @@ export class Conductor {
               // Closure judgement is independent of citation support.  It
               // must also never judge a mixed worktree, because the provider
               // would otherwise inspect changes not represented by a close.
-              if (step.name === 'build' && this.stepRunner.dispatchRemediationClosureJudgement &&
+              if (step.name === 'build' &&
                 (await uncommittedPathsOrNull(await this.completionCtx(state))) === null) {
                 const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
                 if (planPath) {
@@ -12193,7 +12193,11 @@ export class Conductor {
                         scopeTaskIds: taskIds,
                         ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
                         ...(childBranch?.ok ? { branch: childBranch.branch } : {}),
-                        dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
+                        attemptsExhausted: attempt >= stepMaxRetries,
+                        ...(this.stepRunner.dispatchRemediationClosureJudgement === undefined ? {} : {
+                          dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
+                        }),
+                        onJudged: (pass) => emitTracked({ type: 'remediation_closure_judged', ...pass }),
                       });
                       if (reopened.length > 0) remediationClosureReason = reopened.map(({ reason }) => reason).join('\n');
                     } catch (error) {

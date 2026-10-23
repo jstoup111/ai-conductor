@@ -48,7 +48,8 @@ export function isNoTaskProgressBuildStall(input: {
     // deliberately admitted after task resolution.  Treating either as a
     // no-progress stall would prevent its one permitted follow-up lap.
     !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:') &&
-    !input.completionReason?.startsWith('Done-when citation refused:');
+    !input.completionReason?.startsWith('Done-when citation refused:') &&
+    !input.completionReason?.startsWith('Remediation closure reopened:');
 }
 
 /**

@@ -98,6 +98,17 @@ export interface RemediationClosureReopen {
   readonly reason: string;
 }
 
+export interface RemediationClosureJudgedPass {
+  readonly outcome: 'judged' | 'unjudged';
+  readonly attempts: number;
+  readonly candidates: readonly {
+    readonly taskId: string;
+    readonly verdict: RemediationClosureVerdict | 'unjudged';
+    readonly rationale: string;
+    readonly disposition: 'reopened' | 'left-closed' | 'bound-exhausted';
+  }[];
+}
+
 async function applyRemediationClosureReopen(input: {
   readonly projectRoot: string;
   readonly planPath: string;
@@ -177,8 +188,18 @@ export async function applyRemediationClosureVerdicts(input: {
   readonly verdicts: readonly RemediationClosureVerdictResult[];
   /** A routed child obligation must bind its host branch at admission. */
   readonly branch?: string;
+  /** A final BUILD attempt has no lap left in which to repair a reopen. */
+  readonly attemptsExhausted?: boolean;
 }): Promise<readonly RemediationClosureReopen[]> {
   const candidates = new Map(input.candidates.map((candidate) => [candidate.taskId, candidate]));
+  const closureState = await readRemediationClosureState(input.projectRoot);
+  if (closureState.kind === 'incompatible') throw new Error(closureState.message);
+  const planIdentity = repairPlanIdentity(input.projectRoot, input.planPath);
+  const taskState = closureState.state.plans[planIdentity]?.tasks ?? {};
+  const dispositionFor = (verdict: RemediationClosureVerdictResult) =>
+    verdict.verdict === 'resolved' ? 'left-closed' as const :
+      (input.attemptsExhausted || (taskState[verdict.taskId]?.reopenCount ?? 0) >= 2)
+        ? 'bound-exhausted' as const : 'reopened' as const;
   await recordRemediationClosureVerdicts(input.projectRoot, input.planPath, input.verdicts.map((verdict) => {
     const candidate = candidates.get(verdict.taskId);
     if (!candidate) throw new Error(`remediation closure verdict has no candidate for ${verdict.taskId}`);
@@ -187,13 +208,13 @@ export async function applyRemediationClosureVerdicts(input: {
       closeIdentity: candidate.closeIdentity,
       verdict: verdict.verdict,
       rationale: verdict.rationale,
-      disposition: verdict.verdict === 'resolved' ? 'left-closed' : 'reopened',
+      disposition: dispositionFor(verdict),
     };
   }));
 
   const reopened: RemediationClosureReopen[] = [];
   for (const verdict of input.verdicts) {
-    if (verdict.verdict === 'resolved') continue;
+    if (verdict.verdict === 'resolved' || dispositionFor(verdict) === 'bound-exhausted') continue;
     const candidate = candidates.get(verdict.taskId)!;
     reopened.push(await applyRemediationClosureReopen({
       projectRoot: input.projectRoot, planPath: input.planPath, candidate, rationale: verdict.rationale,
@@ -201,6 +222,21 @@ export async function applyRemediationClosureVerdicts(input: {
     }));
   }
   return reopened;
+}
+
+async function recordUnjudgedRemediationClosureCandidates(input: {
+  readonly projectRoot: string;
+  readonly planPath: string;
+  readonly candidates: readonly RemediationClosureCandidate[];
+  readonly cause: string;
+}): Promise<void> {
+  await recordRemediationClosureVerdicts(input.projectRoot, input.planPath, input.candidates.map((candidate) => ({
+    taskId: candidate.taskId,
+    closeIdentity: candidate.closeIdentity,
+    verdict: 'unjudged' as const,
+    rationale: `Remediation closure judgement unavailable: ${input.cause}`,
+    disposition: 'left-closed' as const,
+  })));
 }
 
 export type RemediationClosureValidation =
@@ -414,10 +450,12 @@ export async function runRemediationClosurePass(input: {
   scopeTaskIds: readonly string[];
   activeChild?: ChildId;
   branch?: string;
-  dispatch: (input: RemediationClosureInput) => Promise<
-    | { readonly kind: 'valid'; readonly verdicts: readonly RemediationClosureVerdictResult[] }
-    | { readonly kind: 'unavailable'; readonly cause: string }
+  attemptsExhausted?: boolean;
+  dispatch?: (input: RemediationClosureInput) => Promise<
+    | { readonly kind: 'valid'; readonly verdicts: readonly RemediationClosureVerdictResult[]; readonly attempts?: number }
+    | { readonly kind: 'unavailable'; readonly cause: string; readonly attempts?: number }
   >;
+  onJudged?: (pass: RemediationClosureJudgedPass) => void | Promise<void>;
 }): Promise<readonly RemediationClosureReopen[]> {
   let scopeTaskIds = input.scopeTaskIds;
   if (input.activeChild !== undefined) {
@@ -456,6 +494,21 @@ export async function runRemediationClosurePass(input: {
   });
   if (candidates.length === 0) return replayed;
 
+  if (!input.dispatch) {
+    await recordUnjudgedRemediationClosureCandidates({
+      projectRoot: input.projectRoot,
+      planPath: input.planPath,
+      candidates,
+      cause: 'step runner does not support remediation-closure judgement',
+    });
+    await input.onJudged?.({ outcome: 'unjudged', attempts: 0, candidates: candidates.map((candidate) => ({
+      taskId: candidate.taskId, verdict: 'unjudged',
+      rationale: 'Remediation closure judgement unavailable: step runner does not support remediation-closure judgement',
+      disposition: 'left-closed',
+    })) });
+    return replayed;
+  }
+
   const titles = parsePlanTaskTitles(input.planText);
   const titledCandidates = candidates.map((candidate) => ({ ...candidate, title: titles.get(candidate.taskId) ?? candidate.title }));
   const judgementInput = await buildRemediationClosureInput(
@@ -464,8 +517,28 @@ export async function runRemediationClosurePass(input: {
     parsePlanTaskBodies(input.planText),
   );
   const judgement = await input.dispatch(judgementInput);
-  if (judgement.kind !== 'valid') return replayed;
-  return [...replayed, ...await applyRemediationClosureVerdicts({
-    projectRoot: input.projectRoot, planPath: input.planPath, candidates: titledCandidates, verdicts: judgement.verdicts, branch: input.branch,
-  })];
+  if (judgement.kind !== 'valid') {
+    await recordUnjudgedRemediationClosureCandidates({
+      projectRoot: input.projectRoot,
+      planPath: input.planPath,
+      candidates: titledCandidates,
+      cause: judgement.cause,
+    });
+    await input.onJudged?.({ outcome: 'unjudged', attempts: judgement.attempts ?? 0, candidates: titledCandidates.map((candidate) => ({
+      taskId: candidate.taskId, verdict: 'unjudged',
+      rationale: `Remediation closure judgement unavailable: ${judgement.cause}`,
+      disposition: 'left-closed',
+    })) });
+    return replayed;
+  }
+  const dispositionFor = (verdict: RemediationClosureVerdictResult) => verdict.verdict === 'resolved' ? 'left-closed' as const :
+    (input.attemptsExhausted || (state[verdict.taskId]?.reopenCount ?? 0) >= 2) ? 'bound-exhausted' as const : 'reopened' as const;
+  const reopened = await applyRemediationClosureVerdicts({
+    projectRoot: input.projectRoot, planPath: input.planPath, candidates: titledCandidates, verdicts: judgement.verdicts,
+    branch: input.branch, attemptsExhausted: input.attemptsExhausted,
+  });
+  await input.onJudged?.({ outcome: 'judged', attempts: judgement.attempts ?? 1, candidates: judgement.verdicts.map((verdict) => ({
+    ...verdict, disposition: dispositionFor(verdict),
+  })) });
+  return [...replayed, ...reopened];
 }

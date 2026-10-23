@@ -1563,6 +1563,18 @@ type ConductorEventBody =
       }[];
     }
   | {
+      /** One remediation-close judgement pass, including its unavailable fallback. */
+      type: 'remediation_closure_judged';
+      outcome: 'judged' | 'unjudged';
+      attempts: number;
+      candidates: readonly {
+        readonly taskId: string;
+        readonly verdict: 'resolved' | 'persists' | 'partial' | 'unjudged';
+        readonly rationale: string;
+        readonly disposition: 'reopened' | 'left-closed' | 'bound-exhausted';
+      }[];
+    }
+  | {
       /** An operator accepted one previously refused Done-when citation. */
       type: 'done_when_citation_accepted';
       taskId: string;

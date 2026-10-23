@@ -278,6 +278,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_done_when_unverified: 'not-audited-by-design',
   decide_artifacts_pruned: 'not-audited-by-design',
   done_when_citation_judged: 'not-audited-by-design',
+  remediation_closure_judged: 'not-audited-by-design',
   done_when_citation_accepted: 'not-audited-by-design',
   remediation_routed: 'not-audited-by-design',
   remediation_rerouted: 'not-audited-by-design',
@@ -1025,6 +1026,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   done_when_citation_judged: {
     type: 'done_when_citation_judged',
     citations: [],
+  },
+  remediation_closure_judged: {
+    type: 'remediation_closure_judged', outcome: 'judged', attempts: 1,
+    candidates: [{ taskId: 'rem-as-built-R1', verdict: 'resolved', rationale: 'present', disposition: 'left-closed' }],
   },
   done_when_citation_accepted: {
     type: 'done_when_citation_accepted',
