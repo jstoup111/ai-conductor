@@ -1,4 +1,4 @@
-// Covers: task:2, task:30, task:rem-prd-audit-r18-1, task:rem-prd-audit-r18-3, task:rem-prd-audit-r18-4
+// Covers: task:2, task:30, task:rem-prd-audit-r18-1, task:rem-prd-audit-r18-3, task:rem-prd-audit-r18-4, task:rem-as-built-r18-5
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -241,6 +241,26 @@ describe('remediation case graph validator', () => {
       sourceReviewerSeverities: {
         ...SOURCE_REVIEWER_SEVERITIES,
         [CURRENT_SOURCE_IDS[1]]: 'nit',
+      },
+    })).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
+  });
+
+  it.each([
+    ['case-v1', advisoryJudgement('case-v1')],
+    ['case-v2', advisoryJudgement('case-v2')],
+  ] as const)('rejects an advisory %s judgement when a merged source lacks its own threshold', (_mode, judgement) => {
+    const invalid = {
+      ...judgement,
+      sourceOutcomes: judgement.sourceOutcomes.map((source, index) => index < 2
+        ? { ...source, outcome: 'merged' as const }
+        : source),
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, invalid, {
+      ...advisoryReferences(invalid.mode, { testQuality: 'major' }),
+      sourceRubrics: {
+        ...SOURCE_RUBRICS,
+        [CURRENT_SOURCE_IDS[1]]: 'security',
       },
     })).toEqual({ ok: false, reason: 'invalid-advisory-threshold' });
   });
