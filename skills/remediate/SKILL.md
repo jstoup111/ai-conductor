@@ -128,6 +128,11 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   closed: `high` | `medium` | `low`.
 - An `act` effect is exactly `{ "kind": "action", "route": "build", "tasks": [{ "title": "..." }] }`.
   It contains one or more concrete, ordered, file-scoped task titles.
+- An unbound `act` row (one without `existingCaseId`) may add `distinctFrom`: one or more
+  `{ "caseId": "...", "reason": "..." }` entries declaring it distinct from resolved action
+  owners of its sources. A reason must be non-empty. A re-raise over a resolved action case is
+  a recurrence unless declared distinct with a reason; its lineage gets three applied attempts.
+  A malformed `distinctFrom` shape rejects the artifact. An entry not naming a resolved action owner of a row source is ignored.
 - A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
   "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
   the work.

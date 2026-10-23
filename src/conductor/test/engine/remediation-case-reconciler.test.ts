@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:5, task:6, task:7, task:10
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:10
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -257,6 +257,7 @@ describe('remediation case reconciler', () => {
     });
   });
 
+  // Covers: task:4
   it('stamps a resolved action owner as the recurrence of an unbound action case', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
