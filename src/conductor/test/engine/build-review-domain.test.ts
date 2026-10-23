@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:2, task:3
 // Covers: task:5, task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -267,6 +267,35 @@ describe('build-review domain', () => {
     }
   });
 
+  it('retains each reviewer-assigned severity on a fresh v4 finding', () => {
+    const result = parseBuildReviewJudgedResult(judged(
+      ['critical', 'major', 'minor', 'nit'].map((severity, index) => finding({
+        severity,
+        anchor: {
+          rubric: 'testQuality',
+          locus: { ...locus, path: `test/widget-${index}.test.ts` },
+        },
+      })),
+      { contractVersion: 'v4' },
+    ));
+
+    expect(result?.findings.map((entry) => entry.severity)).toEqual(['critical', 'major', 'minor', 'nit']);
+  });
+
+  it('keeps a v4 finding severity independent from its confidence', () => {
+    const result = parseBuildReviewJudgedResult(judged([finding({ severity: 'major', confidence: 40 })], {
+      contractVersion: 'v4',
+    }));
+
+    expect(result?.findings[0]).toMatchObject({ severity: 'major', confidence: 40 });
+  });
+
+  it('reads persisted v3 findings without adding severity', () => {
+    const result = parseBuildReviewJudgedResult(judged([finding()]));
+
+    expect(result?.findings[0]).not.toHaveProperty('severity');
+  });
+
   it('parses only the four closed build-review severities', () => {
     for (const severity of ['critical', 'major', 'minor', 'nit']) {
       expect(parseBuildReviewSeverity(severity)).toBe(severity);
@@ -295,11 +324,11 @@ describe('build-review domain', () => {
     expect(parseBuildReviewLapId(1)).toBeUndefined();
   });
 
-  it('accepts only the three known rubric-contract versions', () => {
+  it('accepts only the four known rubric-contract versions', () => {
     expect(parseBuildReviewRubricContractVersion('v1')).toBe('v1');
     expect(parseBuildReviewRubricContractVersion('v2')).toBe('v2');
     expect(parseBuildReviewRubricContractVersion('v3')).toBe('v3');
-    expect(parseBuildReviewRubricContractVersion('v4')).toBeUndefined();
+    expect(parseBuildReviewRubricContractVersion('v4')).toBe('v4');
     expect(parseBuildReviewRubricContractVersion('V3')).toBeUndefined();
     expect(parseBuildReviewRubricContractVersion(3)).toBeUndefined();
   });
@@ -411,11 +440,11 @@ describe('build-review domain', () => {
       'top-level "kind" must be exactly the string "judged" (got "result")',
       '"rubric" must be "testQuality"',
       '"lapId" must echo the projection\'s lapId "lap-1" verbatim',
-      '"contractVersion" must be "v3"',
+      '"contractVersion" must be "v4"',
       '"snapshotDigest" must echo the projection\'s snapshotDigest verbatim',
       '"findings" must be an array (empty when no concern was found)',
     ].join('; '));
-    const envelope = (findings: unknown[]) => ({ kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', findings, ...expected });
+    const envelope = (findings: unknown[]) => ({ kind: 'judged', rubric: 'testQuality', contractVersion: 'v4', findings, ...expected });
     expect(describe(envelope([{ kind: 'test-insensitive', summary: '', evidenceLocations: [], rubric: 'testQuality', locus }]))).toBe([
       'findings[0].concernKind must be a non-empty string (never "kind")',
       'findings[0].summary must be a non-empty string',
@@ -448,22 +477,22 @@ describe('build-review domain', () => {
       value, 'testQuality', expected, references,
     );
 
-    const unlistedHash = diagnose(judged([finding({ anchor: { rubric: 'testQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } })]));
+    const unlistedHash = diagnose(judged([finding({ anchor: { rubric: 'testQuality', locus: { ...locus, contentHash: `sha256:${'b'.repeat(64)}` } } })], { contractVersion: 'v4' }));
     expect(unlistedHash).toMatchObject({
       kind: 'explained',
       problems: [{ field: 'findings[0].anchor.locus.contentHash', required: 'must equal a contentHash listed by the projected in-scope content regions' }],
     });
 
-    const outOfEnum = diagnose(judged([finding({ concernKind: 'invented-kind' })]));
+    const outOfEnum = diagnose(judged([finding({ concernKind: 'invented-kind' })], { contractVersion: 'v4' }));
     expect(outOfEnum).toMatchObject({
       kind: 'explained',
       problems: [{ field: 'findings[0].concernKind', required: 'must be one of "test-insensitive" (got "invented-kind")' }],
     });
 
-    const duplicate = judged([finding(), finding({ summary: 'Same identity, different wording.' })]);
+    const duplicate = judged([finding(), finding({ summary: 'Same identity, different wording.' })], { contractVersion: 'v4' });
     const duplicateRejection = diagnose(duplicate);
     const duplicateIdentity = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus },
+      rubric: 'testQuality', contractVersion: 'v4', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus },
     })!.id;
     expect(parseBuildReviewJudgedResult(duplicate, references)).toBeUndefined();
     expect(duplicateRejection).toMatchObject({
@@ -477,7 +506,7 @@ describe('build-review domain', () => {
     });
 
     const unexplained = diagnoseBuildReviewJudgedResultRejection(
-      judged([], { lapId: 'invalid lap id' }), 'testQuality',
+      judged([], { lapId: 'invalid lap id', contractVersion: 'v4' }), 'testQuality',
       { lapId: 'invalid lap id', snapshotDigest: 'sha256:abc' }, references,
     );
     expect(unexplained).toEqual({ kind: 'unexplained', problems: [] });
@@ -585,7 +614,7 @@ describe('build-review domain', () => {
     expect(parseBuildReviewJudgedResult(judged([], { rubric: 'tautology' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult(judged([], { lapId: 'lap with spaces' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult(judged([], { snapshotDigest: ' ' }))).toBeUndefined();
-    expect(parseBuildReviewJudgedResult(judged([], { contractVersion: 'v4' }))).toBeUndefined();
+    expect(parseBuildReviewJudgedResult(judged([], { contractVersion: 'v5' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult(judged([], { kind: 'skipped' }))).toBeUndefined();
     expect(parseBuildReviewJudgedResult({ ...judged([]), findings: 'none' })).toBeUndefined();
   });

@@ -11,8 +11,8 @@ import {
 import {
   BUILD_REVIEW_CUSTOM_V1_SCHEMA,
   BUILD_REVIEW_FINDING_VOCABULARIES,
-  BUILD_REVIEW_JUDGED_V3_SCHEMA,
-  BUILD_REVIEW_JUDGED_V3_SCHEMAS,
+  BUILD_REVIEW_JUDGED_V4_SCHEMA,
+  BUILD_REVIEW_JUDGED_V4_SCHEMAS,
   parseBuildReviewCustomReviewerPayload,
   parseBuildReviewJudgedResult,
 } from '../../src/engine/build-review-domain.js';
@@ -75,7 +75,7 @@ function renderedShapeTokens(shape: string): string[] {
   return [...new Set([...shape.matchAll(/`([^`]+)`/g)].map((match) => match[1]!))].sort();
 }
 
-function expectClosedJudgedV3TopLevel(schema: unknown): void {
+function expectClosedJudgedV4TopLevel(schema: unknown): void {
   expect(Object.keys(properties(schema))).toEqual([
     'findings',
     'relocationAudit',
@@ -270,19 +270,32 @@ describe('engine/build-review-contract', () => {
     ])).toThrow(/boundaryPolicy.*output\.jsonSchema/i);
   });
 
-  it('closes judged-v3 output to the four provider-owned fields', () => {
-    expectClosedJudgedV3TopLevel(BUILD_REVIEW_JUDGED_V3_SCHEMA);
+  it('closes judged-v4 output to the four provider-owned fields', () => {
+    expectClosedJudgedV4TopLevel(BUILD_REVIEW_JUDGED_V4_SCHEMA);
 
-    expect(() => expectClosedJudgedV3TopLevel({
-      ...BUILD_REVIEW_JUDGED_V3_SCHEMA,
-      properties: { ...properties(BUILD_REVIEW_JUDGED_V3_SCHEMA), extra: { type: 'string' } },
+    expect(() => expectClosedJudgedV4TopLevel({
+      ...BUILD_REVIEW_JUDGED_V4_SCHEMA,
+      properties: { ...properties(BUILD_REVIEW_JUDGED_V4_SCHEMA), extra: { type: 'string' } },
     })).toThrow();
   });
+
+  it.each(['testQuality', 'security'] as const)(
+    'requires the closed severity enum in the %s native schema',
+    (rubric) => {
+      const finding = record(properties(BUILD_REVIEW_JUDGED_V4_SCHEMAS[rubric]).findings);
+      const item = record(finding.items);
+
+      expect(record(item).required).toContain('severity');
+      expect(properties(item).severity).toEqual({
+        type: 'string', enum: ['critical', 'major', 'minor', 'nit'],
+      });
+    },
+  );
 
   describe('scopeResolutions per-status required fields', () => {
     const region = { path: 'test/a.test.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'a'.repeat(64)}`, display: 'test/a.test.ts:1-2' };
     const validate = new Ajv().compile({
-      ...BUILD_REVIEW_JUDGED_V3_SCHEMA,
+      ...BUILD_REVIEW_JUDGED_V4_SCHEMA,
       required: [],
     });
     const accepts = (entry: Record<string, unknown>) => validate({ findings: [], scopeResolutions: [entry] });
@@ -365,7 +378,7 @@ describe('engine/build-review-contract', () => {
     }
 
     it('keeps every descriptor schema inside the native provider keyword subset', () => {
-      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V3_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
+      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V4_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
         for (const { path, keyword, value } of schemaKeywords(schema)) {
           expect(NATIVE_SCHEMA_KEYWORDS.has(keyword), `${path} uses unsupported keyword ${keyword}`).toBe(true);
           if (keyword === 'minItems') expect([0, 1], `${path} minItems`).toContain(value);
@@ -374,7 +387,7 @@ describe('engine/build-review-contract', () => {
     });
 
     it('declares a plain object root on every descriptor schema, as the Claude tool input_schema requires', () => {
-      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V3_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
+      for (const schema of [...Object.values(BUILD_REVIEW_JUDGED_V4_SCHEMAS), BUILD_REVIEW_CUSTOM_V1_SCHEMA]) {
         expect(record(schema).type).toBe('object');
         for (const combinator of ['oneOf', 'anyOf', 'allOf']) {
           expect(record(schema)[combinator], `root ${combinator}`).toBeUndefined();
@@ -383,15 +396,16 @@ describe('engine/build-review-contract', () => {
     });
 
     it.each(['testQuality', 'security'] as const)('states the %s built-in grammar the parser enforces', (rubric) => {
-      const schema = BUILD_REVIEW_JUDGED_V3_SCHEMAS[rubric];
+      const schema = BUILD_REVIEW_JUDGED_V4_SCHEMAS[rubric];
       const valid = {
         concernKind: BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds[0]!,
         summary: 'A concern.',
         evidenceLocations: ['src/a.ts:1'],
+        severity: 'minor',
         anchor: { rubric, locus: { path: 'src/a.ts', contentHash: sha, display: 'a' } },
       };
       const parses = (finding: unknown) => parseBuildReviewJudgedResult({
-        kind: 'judged', rubric, lapId: 'lap-1', snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [finding],
+        kind: 'judged', rubric, lapId: 'lap-1', snapshotDigest: 'sha256:snapshot', contractVersion: 'v4', findings: [finding],
       }) !== undefined;
       const admits = (finding: unknown) => schemaAccepts(schema, { findings: [finding] });
 
