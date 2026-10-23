@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, pi-per-step-model-selection-via-wrapped-providers:task:5
+// Covers: task:1, task:2, task:4, task:8, pi-per-step-model-selection-via-wrapped-providers:task:5
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -270,6 +270,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.min_confidence': consumer(RESOLVED_CONFIG),
+  'build_review.rubrics.min_severity': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.timeout_seconds': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.skill': consumer(RESOLVED_CONFIG),
@@ -284,6 +285,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.min_severity': consumer(RESOLVED_CONFIG),
 
   // ── coverage_binding ────────────────────────────────────────────────────
   // Retired judge keys: validated for compatibility, read by nothing.

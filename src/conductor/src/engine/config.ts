@@ -35,6 +35,7 @@ import { parsePrTemplateRegions } from './pr-body-regions.js';
 import { buildStepRegistry } from './steps.js';
 import { BUILT_IN_PROVIDERS } from '../execution/provider-catalog.js';
 import { collectProviderModelSelections } from './provider-model-config.js';
+import { BUILD_REVIEW_SEVERITIES, parseBuildReviewSeverity } from './build-review-domain.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -137,8 +138,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
-  'build_review.rubrics': ['timeout_seconds', 'enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
-  'build_review.custom_rubrics': ['timeout_seconds', 'skill', 'question', 'source', 'resources', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
+  'build_review.rubrics': ['timeout_seconds', 'enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence', 'min_severity'],
+  'build_review.custom_rubrics': ['timeout_seconds', 'skill', 'question', 'source', 'resources', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence', 'min_severity'],
   build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics', 'custom_rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
@@ -316,6 +317,9 @@ function validateBuildReviewRubrics(
     if (policy.min_confidence !== undefined && (typeof policy.min_confidence !== 'number' || !Number.isInteger(policy.min_confidence) || policy.min_confidence < 0 || policy.min_confidence > 100)) {
       return { type: 'validation_error', message: `${path}.min_confidence must be an integer between 0 and 100` };
     }
+    if (policy.min_severity !== undefined && parseBuildReviewSeverity(policy.min_severity) === undefined) {
+      return { type: 'validation_error', message: `${path}.min_severity must be ${BUILD_REVIEW_SEVERITIES.join('|')}` };
+    }
   }
   return null;
 }
@@ -436,6 +440,15 @@ function validateBuildReviewCustomRubrics(
       return {
         type: 'validation_error',
         message: `${path}.min_confidence must be an integer between 0 and 100`,
+      };
+    }
+    if (
+      declaration.min_severity !== undefined
+      && parseBuildReviewSeverity(declaration.min_severity) === undefined
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.min_severity must be ${BUILD_REVIEW_SEVERITIES.join('|')}`,
       };
     }
     if (declaration.enabled === true && !adjudicationEnabled) {
