@@ -632,3 +632,19 @@ Search hints: `dispatchDoneWhenCitationJudgement`, `admitCitationRefusals`, `set
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-rem-as-built-closure-policy-1: src/conductor/src/engine/step-runners.ts dispatchRemediationClosureJudgement: resolve every candidate's model/effort under build_review (per-candidate optionsForCandidate / step resolution) while keeping dispatchProviderWithLifecycleSupervision('build') attribution; add a RED test in the Task 6 suite with two build_review providers asserting the fallback candidate also gets build_review model/effort
+**Gate:** as-built
+**Rationale:** Verified (95%, read step-runners.ts:2925-2950): executeAuxiliaryProviderCandidates is called with step:'build' and optionsForCandidate returns the same options for every candidate, so fallback candidates resolve model/effort under BUILD policy. ADR adr-2026-10-21-remediation-closure-judgement D4 is approved and unambiguous (build_review policy, BUILD lifecycle attribution); plan Task 6 admits the repair and its existing test asserts model/effort resolved for build_review. This is conforming implementation drift, not an architectural decision.
+**Governing clause:** adr-2026-10-21-remediation-closure-judgement decision 4
+**Done when:**
+- adr-2026-10-21-remediation-closure-judgement decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-closure-policy-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-closure-obligation-2: src/conductor/src/engine/remediation-closure-judgement.ts applyRemediationClosureReopen: scope the admitOrReplay key and obligation id by canonical plan identity (planPath) alongside closeIdentity, keeping source.findingId as the close identity; add a RED test that two plans with identical task/check/evidence/reopen-count each admit and settle their own remediation-closure obligation and both tasks are restaged
+**Gate:** as-built
+**Rationale:** Verified (95%, read remediation-closure-judgement.ts:110-135): the admitOrReplay key and obligation id derive only from closeIdentity, which excludes plan identity, so identical closes in two plans collide in the shared repair-obligation store and the second plan's reopen is replayed/rejected. ADR adr-2026-09-06-reopened-task-resolution D3 already requires per-plan obligations; plan Task 9 admits the reopen-obligation repair. Fix scopes the obligation key/id by canonical plan identity while leaving remediationCloseIdentity (Task 3) unchanged, so completed close-identity behavior and coverage are preserved.
+**Governing clause:** adr-2026-09-06-reopened-task-resolution decision 3
+**Done when:**
+- adr-2026-09-06-reopened-task-resolution decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-closure-obligation-2 is committed and its targeted tests pass.
