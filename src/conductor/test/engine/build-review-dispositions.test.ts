@@ -1,4 +1,4 @@
-// Covers: task:8, task:24, task:26, task:rem-prd-audit-8-5
+// Covers: task:8, task:24, task:26, task:rem-prd-audit-8-5, task:rem-prd-audit-r17-1
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -14,7 +14,10 @@ import {
   canonicalizeBuildReviewFindingIdentity,
   stampBuildReviewCustomJudgedResult,
 } from '../../src/engine/build-review-finding-identity.js';
-import { renderBuildReviewAcceptedRisk } from '../../src/engine/build-review-accepted-risk.js';
+import {
+  renderBuildReviewAcceptedRisk,
+  type BuildReviewAdvisoryFinding,
+} from '../../src/engine/build-review-accepted-risk.js';
 import {
   BuildReviewDispositionStore,
   matchesBuildReviewDisposition,
@@ -65,6 +68,31 @@ const finding = canonicalizeBuildReviewFindingIdentity({
 })!;
 
 describe('build-review dispositions', () => {
+  it('renders advisory findings even when accepted-risk rows are absent without publishing adjudicator rationale', () => {
+    const advisory: BuildReviewAdvisoryFinding & { adjudicatorRationale: string } = {
+      id: 'sha256:advisory-finding', rubric: 'implementationQuality', severity: 'minor', origin: 'adjudicated',
+      reviewerSummary: 'The changed boundary lacks an input validation test.', adjudicatorRationale: 'ADJUDICATOR-RATIONALE-MUST-NOT-PUBLISH',
+    };
+
+    expect(renderBuildReviewAcceptedRisk([], undefined, [advisory])).toEqual({
+      ok: true,
+      section: [
+        '<!-- build-review-accepted-risk:start -->',
+        '## Accepted build-review risk',
+        '',
+        'Accepted findings: 0',
+        '',
+        '',
+        "Details are retained in the feature's local build-review disposition store.",
+        '',
+        '## Advisory build-review findings',
+        '',
+        '- Finding: `sha256:advisory-finding` — rubric: implementationQuality; severity: minor; origin: adjudicated; reviewer summary: The changed boundary lacks an input validation test.',
+        '<!-- build-review-accepted-risk:end -->',
+      ].join('\n'),
+    });
+  });
+
   // Covers: task:24
   it('renders direct, carried, and operator-resolved accepted risk without private operator decision data', () => {
     const origin = canonicalizeBuildReviewFindingIdentity({

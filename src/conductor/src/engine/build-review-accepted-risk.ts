@@ -9,6 +9,7 @@ import {
   NEEDS_REMEDIATION_BODY_MARKER,
   PR_BODY_FLOOR_MARKER,
 } from './pr-body-engine-markers.js';
+import type { BuildReviewSeverity } from './build-review-domain.js';
 
 export const BUILD_REVIEW_ACCEPTED_RISK_START = '<!-- build-review-accepted-risk:start -->';
 export const BUILD_REVIEW_ACCEPTED_RISK_END = '<!-- build-review-accepted-risk:end -->';
@@ -35,6 +36,15 @@ export type BuildReviewAcceptedRiskRenderResult =
 export type BuildReviewAcceptedRiskUpsertResult =
   | { readonly ok: true; readonly body: string; readonly changed: boolean }
   | { readonly ok: false; readonly message: string };
+
+/** The public PR-body projection of a non-blocking build-review finding. */
+export interface BuildReviewAdvisoryFinding {
+  readonly id: string;
+  readonly rubric: string;
+  readonly severity: BuildReviewSeverity;
+  readonly origin: 'threshold' | 'adjudicated';
+  readonly reviewerSummary: string;
+}
 
 function validRecord(value: BuildReviewDispositionRecord): boolean {
   const identity = rehydrateBuildReviewAcceptedRiskFinding(value.finding.canonicalPayload);
@@ -74,9 +84,24 @@ function caseRiskRows(caseRead: RemediationCaseStoreReadResult | undefined): rea
   return [...carriedRiskRows(caseRead.state.cases), ...operatorResolvedRiskRows(caseRead.state.cases)];
 }
 
+/** Renders only publication-safe reviewer evidence; adjudicator rationale stays local. */
+export function renderBuildReviewAdvisoryRegion(
+  findings: readonly BuildReviewAdvisoryFinding[],
+): readonly string[] {
+  if (findings.length === 0) return [];
+  return [
+    BUILD_REVIEW_ADVISORY_HEADING,
+    '',
+    ...[...findings]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((finding) => `- Finding: \`${finding.id}\` — rubric: ${finding.rubric}; severity: ${finding.severity}; origin: ${finding.origin}; reviewer summary: ${finding.reviewerSummary}`),
+  ];
+}
+
 export function renderBuildReviewAcceptedRisk(
   records: readonly BuildReviewDispositionRecord[],
   caseRead?: RemediationCaseStoreReadResult,
+  advisoryFindings: readonly BuildReviewAdvisoryFinding[] = [],
 ): BuildReviewAcceptedRiskRenderResult {
   if (records.some((record) => !validRecord(record))) {
     return { ok: false, message: 'accepted build-review risk contains an unrenderable record' };
@@ -93,6 +118,7 @@ export function renderBuildReviewAcceptedRisk(
     ...(caseRows.length === 0 ? [] : ['', ...caseRows]),
     '',
     POINTER,
+    ...(advisoryFindings.length === 0 ? [] : ['', ...renderBuildReviewAdvisoryRegion(advisoryFindings)]),
     BUILD_REVIEW_ACCEPTED_RISK_END,
   ];
   return { ok: true, section: lines.join('\n') };
@@ -121,16 +147,17 @@ export function upsertBuildReviewAcceptedRisk(
   body: string,
   records: readonly BuildReviewDispositionRecord[],
   caseRead?: RemediationCaseStoreReadResult,
+  advisoryFindings: readonly BuildReviewAdvisoryFinding[] = [],
 ): BuildReviewAcceptedRiskUpsertResult {
   const bounds = existingSectionBounds(body);
   if (bounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
   const caseRows = caseRiskRows(caseRead);
-  if (records.length === 0 && caseRows.length === 0) {
+  if (records.length === 0 && caseRows.length === 0 && advisoryFindings.length === 0) {
     if (bounds === null) return { ok: true, body, changed: false };
     const next = `${body.slice(0, bounds.start).trimEnd()}${body.slice(bounds.after).trimStart() ? '\n\n' : ''}${body.slice(bounds.after).trimStart()}`.trimEnd();
     return { ok: true, body: next, changed: next !== body };
   }
-  const rendered = renderBuildReviewAcceptedRisk(records, caseRead);
+  const rendered = renderBuildReviewAcceptedRisk(records, caseRead, advisoryFindings);
   if (!rendered.ok) return rendered;
   const next = bounds !== null
     ? `${body.slice(0, bounds.start)}${rendered.section}${body.slice(bounds.after)}`
