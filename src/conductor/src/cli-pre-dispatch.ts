@@ -45,6 +45,7 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectIntakeLoopCommand', commandPath: ['intake-loop'], helpOwner: 'router' },
   { detector: 'detectBrainCommand', commandPath: ['brain'], helpOwner: 'router' },
   { detector: 'detectShippedRecordCommand', commandPath: ['shipped-record'], helpOwner: 'router' },
+  { detector: 'detectDocsPruneCommand', commandPath: ['docs-prune'], helpOwner: 'router' },
   { detector: 'detectTranscriptsCommand', commandPath: ['transcripts'], helpOwner: 'router' },
   { detector: 'detectShipmentEvidenceCommand', commandPath: ['shipment-evidence'], helpOwner: 'router' },
   { detector: 'detectFinishRecordCommand', commandPath: ['finish-record'], helpOwner: 'router' },

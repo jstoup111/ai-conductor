@@ -131,7 +131,7 @@ export type ArtifactPatternContract =
       identity?: never;
     };
 
-function artifactMatchesFeatureIdentity(
+export function artifactMatchesFeatureIdentity(
   artifactPath: string,
   featureIdentity: string,
   strategy: FeatureArtifactIdentityStrategy,

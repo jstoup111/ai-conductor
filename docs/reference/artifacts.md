@@ -93,6 +93,23 @@ tried to `daemon.log`, once per slug, before the daemon applies its default — 
 the log rather than hours later as gate behavior. The relaxed stem is a lookup key only; it never keys
 state, and no other artifact gets it.
 
+### Retention
+
+`DOCS_RETENTION_POLICY` (`src/conductor/src/engine/docs-retention.ts`) is the single definition of
+which per-feature entries [`ai-conductor docs-prune`](cli.md#ai-conductor-docs-prune) may delete once a
+feature has a committed `shipped/` record.
+
+| Class | Entries |
+| --- | --- |
+| Prunable | `plans/`, `conflicts/`, `coherence/`, `coherence-waivers/`, `track/`, `complexity/`, `halted/`, `plan-review/`, `applicability/`, `retros/` |
+| Kept | `stories/`, `specs/`, `decisions/`, `architecture/`, `shipped/`, `intake/`, `release-waivers/` |
+| Never touched (repository-wide) | `audit/`, `audits/`, `baselines/`, `observation/`, top-level `.docs/*.md` |
+
+A file matches a stem by exact plan-stem identity. Every prunable entry except `plans/` also matches the
+date-stripped stem (so `2026-10-01-alpha` claims `conflicts/alpha.md` and
+`retros/2026-10-02-alpha.md`), unless more than one plan shares that undated base. `alpha` never claims
+`alpha-two` files.
+
 ### Waiver grammar
 
 Both waiver kinds share one two-line idiom:
@@ -824,7 +841,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `persist: true` in `event-sinks.ts`; common persisted types include:
 
 `land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `self_host_boundary_fingerprint`, `containment_check_unresolved`,
-`operator_rewind`,
+`operator_rewind`, `decide_artifacts_pruned`,
 `setup_repair`, `project_setup`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_cache_discarded`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,

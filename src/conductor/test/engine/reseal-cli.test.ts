@@ -9,7 +9,7 @@ import { createProgram } from '../../src/cli.js';
 import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
-import { createProtectedArtifactSeal, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { createProtectedArtifactSeal, PROTECTED_ARTIFACT_SEAL_PATH, verifyProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
@@ -1089,6 +1089,9 @@ describe('dispatchResealCommand', () => {
       }]);
       await expect(verifyProtectedArtifactSeal({ projectRoot: worktree, baseBranch: 'main' }))
         .resolves.toMatchObject({ ok: true });
+      const seal = JSON.parse(await readFile(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')) as { protectedArtifacts: { path: string }[] };
+      expect(seal.protectedArtifacts.map(({ path }) => path)).not.toContain(retired);
+      await expect(access(join(worktree, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

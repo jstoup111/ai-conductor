@@ -276,6 +276,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_inapplicable_refused: 'not-audited-by-design',
   build_active_stall: 'not-audited-by-design',
   build_done_when_unverified: 'not-audited-by-design',
+  decide_artifacts_pruned: 'not-audited-by-design',
   remediation_routed: 'not-audited-by-design',
   remediation_rerouted: 'not-audited-by-design',
   routed_repair_phase: 'not-audited-by-design',
@@ -1015,6 +1016,9 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_done_when_unverified: {
     type: 'build_done_when_unverified',
     checks: [{ taskId: '1', check: '[test] proves the outcome' }],
+  },
+  decide_artifacts_pruned: {
+    type: 'decide_artifacts_pruned', removed: [], deferred: [], skipped: [], excluded: [],
   },
   remediation_routed: {
     type: 'remediation_routed', eventId: 'route-1', occurredAt: '2030-01-01T00:00:00.000Z',

@@ -25,6 +25,7 @@ import { renderCanonicalFullHelp } from '../../src/index.js';
 
 const OPERATOR_FACING_COMMANDS = [
   'shipped-record',
+  'docs-prune',
   'kpi',
   'memory',
   'brain',
@@ -70,6 +71,7 @@ const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'intake-loop',
   'brain',
   'shipped-record',
+  'docs-prune',
   'transcripts',
   'shipment-evidence',
   'task',
@@ -413,6 +415,7 @@ describe('CLI', () => {
       const help = renderCanonicalFullHelp();
       const commandOptions: Record<(typeof OPERATOR_FACING_COMMANDS)[number], string[]> = {
         'shipped-record': ['--slug', '--pr'],
+        'docs-prune': [],
         kpi: [],
         memory: ['setup'],
         brain: ['start', 'stop', 'status'],

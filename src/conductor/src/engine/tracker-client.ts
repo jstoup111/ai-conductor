@@ -395,7 +395,10 @@ export function createGuardedGithubOperationRunner(
       const credential = request.access === 'read' ? 'operator' : 'write';
       try {
         const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential });
-        return options.creation?.complete?.(request, response) ?? {};
+        const completed = options.creation?.complete?.(request, response) ?? {};
+        return request.operation === 'pull-request.create' && response.stdout.trim()
+          ? { ...completed, url: response.stdout.trim() }
+          : completed;
       } catch (error) {
         if (!(error instanceof GithubBotAuthRefusalError)) throw error;
         const events = options.events ?? (transport as GhRunner & { events?: GithubOperationEventEmitter }).events;
@@ -406,7 +409,10 @@ export function createGuardedGithubOperationRunner(
           throw error;
         }
         const response = await transport(ghArgsFor(request), { cwd: options.cwd, credential: 'operator' });
-        return options.creation?.complete?.(request, response) ?? {};
+        const completed = options.creation?.complete?.(request, response) ?? {};
+        return request.operation === 'pull-request.create' && response.stdout.trim()
+          ? { ...completed, url: response.stdout.trim() }
+          : completed;
       }
     },
   };
