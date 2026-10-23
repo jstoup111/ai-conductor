@@ -1685,6 +1685,43 @@ until the engine's next pass. After that pass, `.pipeline/events.jsonl` holds on
 `remediation_case_operator_resolved` event for the case, and `build_review` settles or routes without
 repeating this halt.
 
+### build_review halted on a recurrence limit
+
+**Symptom:** `.pipeline/HALT` (class `needs-human`) reads:
+
+```text
+build_review adjudication halted: semantic remediation case recurrence limit <case>: lineage <cases> has 3 applied attempts (limit 3)
+```
+
+**Diagnosis:** the judgement re-raised a concern over a resolved action case without declaring it
+distinct, and that recurrence lineage already consumed three applied BUILD attempts. Another BUILD
+route is not progress. The engine bound the current source to `<case>` and emitted
+`remediation_semantic_repeat_halt` with reason `recurrence-limit` and `lineageCaseIds`.
+
+**Recovery:**
+
+1. Inspect the lineage and the re-raised finding:
+
+   ```bash
+   ai-conductor build-review findings --feature <slug> [--child <child>]
+   ```
+
+   Each recurrence case shows `recurs from <cases>; <n> of 3 applied attempts`.
+2. Leave `.pipeline/remediation-cases.json` unchanged. Do not hand-edit case history or add
+   `distinctFrom` by hand.
+3. If the finding is accepted risk, accept it from an interactive terminal:
+
+   ```bash
+   ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>"
+   ```
+
+   Otherwise, fix the finding in the feature worktree.
+4. Clear the halt with an [audited clear](#audited-clear).
+
+**Verification:** `build_review` settles or routes without repeating this halt, and
+`.pipeline/events.jsonl` holds no new `remediation_semantic_repeat_halt` with reason
+`recurrence-limit` for the lineage.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:

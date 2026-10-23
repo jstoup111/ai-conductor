@@ -185,7 +185,10 @@ ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> -
 `findings` is read-only and renders the current feature's raw and effective build-review findings plus
 autonomous remediation-case outcomes; `--json` includes those cases under `cases`. Human output keeps
 autonomous outcomes separate from operator dispositions and includes each case's disposition, resolution,
-source ids, effect state, rationale, and, for a refutation, its claim and assertion verdicts. A missing
+source ids, effect state, rationale, and, for a refutation, its claim and assertion verdicts. A recurrence
+case adds `recurs from <cases>; <n> of 3 applied attempts`; a `distinctFrom` declaration renders on the
+declaring case (`distinct from <case>: <reason>`) and on the named case (`declared distinct by <case>:
+<reason>`). A missing
 case store is a successful listing with no autonomous cases. An unreadable or unsupported case store makes
 `findings` name the store and exit 1 rather than silently omitting its cases. `--child` reads that
 child's case store instead of the feature's. `findings` also lists each carried source (its case,
