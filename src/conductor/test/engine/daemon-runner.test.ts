@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:6
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -88,7 +88,7 @@ import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.j
 import { initTestRepo } from '../fixtures/git-repo.js';
 import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
 
-// Covers: task:1
+// Covers: task:1, task:6
 
 const execFile = promisify(execFileCb);
 
@@ -156,6 +156,72 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('returns and emits the loop halt step and class', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-halt-outcome-'));
+    const events = new ConductorEventEmitter();
+    const dispatchEnded: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_ended', (event) => { dispatchEnded.push(event as Record<string, unknown>); });
+    try {
+      const featureDeps = deps({ done: false, halted: true, reason: 'plan needs revision' });
+      featureDeps.createWorktree = async (slug) => ({ path: worktreePath, branch: `feat/${slug}` });
+      featureDeps.runConductor = async (_worktree, _item, _execution, featureEvents) => {
+        await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+        await writeFile(join(worktreePath, '.pipeline', 'HALT'), 'plan needs revision', 'utf-8');
+        await writeFile(join(worktreePath, '.pipeline', 'HALT.class'), 'plan-gap', 'utf-8');
+        await featureEvents?.emit({
+          type: 'loop_halt',
+          step: 'architecture_review_as_built',
+          reason: 'plan needs revision',
+        });
+      };
+      featureDeps.beginFeatureRun = () => ({
+        events,
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+
+      expect(outcome.halt).toEqual({ step: 'architecture_review_as_built', haltClass: 'plan-gap' });
+      expect(dispatchEnded).toEqual([
+        expect.objectContaining({
+          type: 'feature_dispatch_ended',
+          outcome: 'halted',
+          step: 'architecture_review_as_built',
+          haltClass: 'plan-gap',
+        }),
+      ]);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: 'complete',
+      configure: (featureDeps: FeatureRunnerDeps) => undefined,
+      outcome: { done: true, halted: false, finishChoice: 'pr' as const, prUrl: 'https://github.com/owner/repo/pull/1' },
+    },
+    {
+      name: 'error',
+      configure: (featureDeps: FeatureRunnerDeps) => {
+        featureDeps.runConductor = async () => { throw new Error('dispatch failed'); };
+      },
+      outcome: { done: false, halted: false },
+    },
+  ])('does not return halt metadata for a $name outcome', async ({ configure, outcome }) => {
+    const featureDeps = deps(outcome);
+    configure(featureDeps);
+
+    const result = await makeRunFeature(featureDeps)(ITEM);
+
+    expect(result).not.toHaveProperty('halt');
+  });
+
   it.each([
     { item: { slug: 'feature-tiered', tier: 'M' as const }, expectedTier: 'M' },
     { item: { slug: 'feature-untiered' }, expectedTier: undefined },
