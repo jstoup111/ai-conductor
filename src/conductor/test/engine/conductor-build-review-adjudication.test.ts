@@ -772,7 +772,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(JSON.stringify(cases.cases.find((record) => record.id === 'case-R'))).toBe(JSON.stringify(resolvedR));
   });
 
-  // Covers: task:5
+  // Covers: task:5, task:9
   it('halts a re-raised action at the cumulative cap without a rejected case-store transition', async () => {
     const resolvedR = {
       id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high',

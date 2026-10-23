@@ -2563,6 +2563,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(after.state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : [])).toEqual(['effect-r', 'repeat-n-2']);
   });
 
+  // Covers: task:8
   it('rejects an unbound action that overlaps an open owner', async () => {
     const regressionRoot = await projectRoot();
     const regressionStore = new RemediationCaseStore(regressionRoot, feature);
