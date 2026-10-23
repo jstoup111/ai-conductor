@@ -36,6 +36,8 @@ import {
   writeShippedRecord,
 } from './shipped-record.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { RemediationCaseStore } from './remediation-case-store.js';
+import { listExistingChildren } from './child-context.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { computeCostRollup } from './cost-rollup.js';
@@ -202,15 +204,21 @@ export async function dispatchShippedRecord(
     // FINISH rather than silently produce an incomplete record.
     try {
       const repository = await resolveMainRepoRoot(cwd);
-      const dispositions = await new BuildReviewDispositionStore(cwd).list({
-        version: 'v1', repository, feature: identity.slug,
-      });
+      const feature = { version: 'v1' as const, repository, feature: identity.slug };
+      const dispositions = await new BuildReviewDispositionStore(cwd).list(feature);
       if (!dispositions.ok) throw new Error(dispositions.message);
-      recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
+      const caseReads = await Promise.all([
+        new RemediationCaseStore(cwd, feature).read(),
+        ...(await listExistingChildren(cwd)).map((child) => new RemediationCaseStore(cwd, feature, { child }).read()),
+      ]);
+      const unreadableCaseRead = caseReads.find((read) => !read.ok);
+      const readableCaseReads = caseReads.filter((read): read is Extract<typeof read, { ok: true }> => read.ok);
+      const caseRead = unreadableCaseRead && !unreadableCaseRead.ok
+        ? unreadableCaseRead
+        : { ok: true as const, state: { ...readableCaseReads[0]!.state, cases: readableCaseReads.flatMap((read) => read.state.cases) } };
+      recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records, caseRead);
 
-      const reducedCoverage = await new BuildReviewDispositionStore(cwd).listReducedCoverage({
-        version: 'v1', repository, feature: identity.slug,
-      });
+      const reducedCoverage = await new BuildReviewDispositionStore(cwd).listReducedCoverage(feature);
       if (!reducedCoverage.ok) {
         // Only unreadable state is absence of decision evidence. Invalid
         // identity, a lease failure, or a filesystem failure leaves the

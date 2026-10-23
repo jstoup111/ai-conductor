@@ -620,10 +620,7 @@ describe('SpoolDrainer', () => {
     const draining = drainer.drainUntilStopped();
 
     try {
-      for (let turns = 0; turns < 50 && !received; turns += 1) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect(received).toBe(true);
+      await waitFor(() => received, 'in-flight OTLP request did not start');
       const stopStartedAt = now;
       await expect(drainer.stop()).resolves.toBeUndefined();
       expect(now - stopStartedAt).toBeLessThanOrEqual(10);

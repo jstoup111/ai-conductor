@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:9
+// Covers: task:1, task:2, task:9, task:20
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -281,6 +281,21 @@ describe('remediation case store', () => {
     ])).toEqual(new Set(['testQuality:built-in-finding', 'portablePolicy:custom-finding']));
   });
 
+  it('settles the current acted link of an operator-resolved action despite its failed effect', () => {
+    const operatorResolved: RemediationCaseRecord = {
+      ...CASE_STATE.cases[0],
+      resolution: 'resolved',
+      effect: { id: 'effect-operator-resolved', kind: 'action', status: 'failed', diagnostic: 'original attempt failed' },
+      operatorResolution: {
+        operator: 'operator@example.test',
+        rationale: 'The operator accepts this remaining risk.',
+        resolvedAt: '2026-10-21T12:00:00.000Z',
+      },
+    };
+
+    expect(finalizedBuildReviewSourceIds([operatorResolved])).toEqual(new Set(['testQuality:finding-1']));
+  });
+
   it('preserves the former any-link settlement result when no source is shared', () => {
     const records: RemediationCaseRecord[] = [
       { ...CASE_STATE.cases[0], id: 'settled-rejection', disposition: 'reject', resolution: 'resolved', effect: { kind: 'none' } },
@@ -474,10 +489,6 @@ describe('remediation case store', () => {
       ...V3_STATE,
       cases: [{ ...V3_OPERATOR_CASE, operatorAcceptance: { ...V3_OPERATOR_CASE.operatorAcceptance, unexpected: true } }],
     }],
-    ['a malformed operator-acceptance origins value', {
-      ...V3_STATE,
-      cases: [{ ...V3_OPERATOR_CASE, operatorAcceptance: { origins: [] } }],
-    }],
     ['an extra acceptance-origin key', {
       ...V3_STATE,
       cases: [{
@@ -529,10 +540,6 @@ describe('remediation case store', () => {
     ['an extra carried-event key', {
       ...V3_STATE,
       outbox: [{ ...V3_OUTBOX[0], event: { ...V3_OUTBOX[0].event, unexpected: true } }],
-    }],
-    ['a malformed carried-event value', {
-      ...V3_STATE,
-      outbox: [{ ...V3_OUTBOX[0], event: { ...V3_OUTBOX[0].event, originLapIds: [] } }],
     }],
     ['an extra operator-resolution-event key', {
       ...V3_STATE,

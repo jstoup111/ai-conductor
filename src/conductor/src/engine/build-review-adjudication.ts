@@ -3,6 +3,7 @@ import { hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuil
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import type { ValidateRemediationCaseGraphResult } from './remediation-case-validator.js';
 import { currentBuildReviewSourceLinks, type RemediationCaseRecord } from './remediation-case-store.js';
+import type { ChildId } from './child-context.js';
 
 /** The only routes a post-join review is allowed to publish. */
 export type BuildReviewAdjudicationRoute = 'pass' | 'build' | 'mechanical-retry' | 'halt';
@@ -19,6 +20,17 @@ export interface BuildReviewAdjudicationTransition {
  * semantic reducer never clears it and never infers operator coverage.
  */
 export type BuildReviewMechanicalState = 'healthy' | 'retry' | 'halt';
+
+/** Render the exact operator recovery command for an open action case. */
+// ai-conductor:session-command-context=operator-only
+export function formatBuildReviewResolveCaseCommand(input: {
+  readonly feature: string;
+  readonly child: number | undefined;
+  readonly caseId: string;
+}): string {
+  return `ai-conductor build-review resolve-case --feature ${input.feature}${input.child === undefined ? '' : ` --child ${input.child}`} --case ${input.caseId} --rationale "<why>"`;
+}
+// /ai-conductor:session-command-context
 
 /**
  * The application boundary receives no actionable cases until the whole v2
@@ -67,12 +79,33 @@ function currentSourceCoverageIsConsistent(
 export function reduceBuildReviewAdjudication(input: {
   /** Exact current source identity is required to prove no stale case routes BUILD. */
   readonly currentSourceIds: readonly string[];
+  /** Scope is required so a durable action obligation gives the operator its exact command. */
+  readonly feature: string;
+  readonly child: ChildId | undefined;
   readonly cases: readonly RemediationCaseRecord[];
   readonly mechanical: BuildReviewMechanicalState;
 }): BuildReviewAdjudicationTransition {
   if (!currentSourceCoverageIsConsistent(input.currentSourceIds, input.cases)) {
     return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'current remediation source coverage is incomplete or contradictory' };
   }
+  // A failed action can be resolved by an operator only while its source is
+  // still live. Name that case and its exact scoped command before the generic
+  // unfinished-effect branch so the coordinator does not discard the
+  // actionable identity that clean-PASS settlement retains.
+  // ai-conductor:session-command-context=operator-only
+  const failedActionWithCurrentSource = input.cases.find((record) =>
+    record.disposition === 'act' && record.resolution === 'open' &&
+    record.effect.kind === 'action' && record.effect.status === 'failed' &&
+    record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)),
+  );
+  if (failedActionWithCurrentSource) {
+    return {
+      route: 'halt',
+      remainingMechanical: input.mechanical !== 'healthy',
+      reason: `open action case ${failedActionWithCurrentSource.id} has a failed effect while a current remediation source remains unaccepted; resolve with ${formatBuildReviewResolveCaseCommand({ feature: input.feature, child: input.child, caseId: failedActionWithCurrentSource.id })}`,
+    };
+  }
+  // /ai-conductor:session-command-context
   if (input.cases.some(hasUnfinishedEffect)) {
     return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'remediation effect is not finalized' };
   }

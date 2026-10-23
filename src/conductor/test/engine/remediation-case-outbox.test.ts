@@ -10,6 +10,7 @@ import {
   drainRemediationCaseOutbox,
   RemediationCaseStore,
   remediationCaseStorePath,
+  type RemediationCaseOutboxEntry,
 } from '../../src/engine/remediation-case-store.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -42,9 +43,9 @@ const OUTBOX = [
       lapId: 'lap-2', caseId: 'case-1', resolution: 'resolved',
     },
   },
-] as const;
+] satisfies readonly RemediationCaseOutboxEntry[];
 
-async function fixture(outbox: readonly (typeof OUTBOX)[number][] = OUTBOX) {
+async function fixture(outbox: readonly RemediationCaseOutboxEntry[] = OUTBOX) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'remediation-case-outbox-'));
   temporaryDirectories.push(projectRoot);
   const store = new RemediationCaseStore(projectRoot, FEATURE);

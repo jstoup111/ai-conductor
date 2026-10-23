@@ -36,6 +36,19 @@ export function buildReviewConfidenceFloors(config: Pick<ResolvedBuildReviewConf
   ]);
 }
 
+/**
+ * Absence can resolve an open action only when this lap itself is mechanically
+ * healthy.  Operator coverage records explain a prior fault; they do not make
+ * a current fault healthy, nor do they taint a later healthy lap.
+ */
+export function isBuildReviewLapHealthyForAbsenceRetirement(aggregate: BuildReviewAggregate): boolean {
+  return !Object.values(aggregate.results).some((result) => result.kind === 'infrastructure-failure') &&
+    !(aggregate.currentCustomRubrics ?? []).some((rubric) =>
+      aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
+    ) &&
+    aggregate.scopeIncomplete.length === 0;
+}
+
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
   listReducedCoverage(feature: unknown): Promise<BuildReviewReducedCoverageListResult>;
@@ -54,9 +67,9 @@ export interface BuildReviewEffectiveResolverDeps {
   /** Resolved operator floors, supplied by the live build-review runner. */
   readonly minConfidence?: Partial<Record<string, number>>;
   /** The active stacked child; settled links are never read from its sibling. */
-  readonly child?: ChildId;
+  readonly child: ChildId | undefined;
   /** Disabled adjudication has no case-store authority. */
-  readonly adjudicationEnabled?: boolean;
+  readonly adjudicationEnabled: boolean;
 }
 
 export type BuildReviewEffectiveResolution =
@@ -219,7 +232,7 @@ async function readSettledBuildReviewSourceIds(
 export async function resolveEffectiveBuildReviewVerdict(
   projectRoot: string,
   value: unknown,
-  deps: BuildReviewEffectiveResolverDeps = {},
+  deps: BuildReviewEffectiveResolverDeps,
 ): Promise<BuildReviewEffectiveResolution> {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return { ok: false, reason: 'build-review aggregate is invalid' };

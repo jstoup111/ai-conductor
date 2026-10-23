@@ -710,9 +710,32 @@ a later judgement can re-evaluate it; an escalation with the same owner and sour
 on the existing stop, and a different owner halts as a
 [rejected case transition](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-a-rejected-case-transition).
 
+An operator acceptance survives a re-raise under a new finding id. When a lap finishes, the engine
+records each current-lap source that an exact `build-review accept` disposition covers as an
+acceptance origin on its case. A case is carry-eligible when an operator resolved it with
+`build-review resolve-case`, or when it is resolved, holds an origin, every origin's disposition is
+still effective, and no origin comes from the current lap. If the judgement binds a same-substance
+finding to a carry-eligible case through `existingCaseId`, the engine links the new source as
+`carried` and emits `build_review_acceptance_carried`. A carried source counts as settled in the
+effective verdict; it reserves no effect, publishes no work order, opens no decision stop, files no
+intake, and charges no kickback. Carry is never decided by text matching: an unbound look-alike
+finding routes as usual. Carry stays within the feature and its child case store. A later
+invalidation of an origin disposition stops new carry but leaves existing carried links in place. The
+PR and shipped-record accepted-risk section lists carried findings and operator-resolved cases without
+operator names or rationales.
+
 The case store and work order survive a daemon restart. BUILD stamps the work order before it starts,
-so an already attempted case cannot receive another free route; a later clean review settles cases
-whose sources are absent. Inspect the durable state and lifecycle events in
+so an already attempted case cannot receive another free route. One settlement predicate retires
+open cases. It is used for absence resolution, for acceptance retirement when a lap finishes, and at
+clean-PASS settlement. A source counts as covered when it is accepted in the current lap, holds an
+acceptance origin, or is carried. It also counts as covered on a mechanically healthy lap when it is
+no longer raised. A lap is mechanically healthy only when no current rubric had an infrastructure
+failure or incomplete scope in that lap; a reduced-coverage decision does not make a lap healthy. An
+action case whose effect is `failed` or `reserved` also retires when every source is covered, and a
+`reserved` effect becomes `failed` with a diagnostic. A failed action whose source is still raised
+and unaccepted, a failed deferral, and an open decision stop still block; the halt names the exact
+[`resolve-case` command](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case)
+for an action case. Inspect the durable state and lifecycle events in
 [`artifacts`](../reference/artifacts.md#verdict-and-evidence-artifacts) when diagnosing a halt.
 
 Not every gate reruns on retry. For the three judged SHIP gates, a genuine fresh non-passing decision routes

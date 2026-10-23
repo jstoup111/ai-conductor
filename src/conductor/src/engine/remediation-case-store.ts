@@ -159,7 +159,9 @@ export function currentBuildReviewSourceLinks(
  */
 export function finalizedBuildReviewSourceIds(cases: readonly RemediationCaseRecord[]): ReadonlySet<string> {
   return new Set([...currentBuildReviewSourceLinks(cases)].flatMap(([sourceId, { record, link }]) =>
-    link.outcome === 'carried'
+    record.operatorResolution !== undefined
+      ? [sourceId]
+      : link.outcome === 'carried'
       ? [sourceId]
       : record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
       ? [sourceId]
@@ -264,6 +266,22 @@ export interface RemediationCaseStoreV3State {
 }
 
 export type RemediationCaseStoreState = RemediationCaseStoreV1State | RemediationCaseStoreV2State | RemediationCaseStoreV3State;
+
+/** Upgrade once at the mutation seam and atomically retain an occurrence for delivery. */
+export function appendRemediationCaseOutbox(
+  state: RemediationCaseStoreState,
+  entry: RemediationCaseOutboxEntry,
+): RemediationCaseStoreV3State {
+  if (state.version === STORE_VERSION) return { ...state, outbox: [...state.outbox, entry] };
+  return {
+    version: STORE_VERSION,
+    feature: state.feature,
+    cases: state.cases,
+    prdWideningCases: state.version === LEGACY_STORE_VERSION ? state.prdWideningCases : [],
+    suppressions: state.suppressions ?? [],
+    outbox: [entry],
+  };
+}
 
 export interface RemediationCaseStoreFilesystem {
   readFile(path: string): Promise<string>;
@@ -425,7 +443,7 @@ function parseRefutation(value: unknown): RemediationCaseRefutation | undefined 
 
 function parseOperatorAcceptance(value: unknown): RemediationCaseOperatorAcceptance | undefined {
   if (!isRecord(value) || !exactKeys(value, ['origins']) || !Array.isArray(value.origins) ||
-    value.origins.length === 0 || value.origins.length > MAX_SOURCES_PER_CASE) return undefined;
+    value.origins.length > MAX_SOURCES_PER_CASE) return undefined;
   const origins = value.origins.map((origin) => {
     if (!isRecord(origin) || !exactKeys(origin, ['sourceId', 'lapId']) ||
       !boundedString(origin.sourceId, MAX_REFERENCE_LENGTH) || !boundedString(origin.lapId, MAX_REFERENCE_LENGTH)) return undefined;
@@ -490,7 +508,8 @@ function parseCase(value: unknown):
   if (sources.some((source) => source === undefined) || effect === undefined ||
     value.disposition === 'refute' && refutation === undefined ||
     value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined ||
-    Object.hasOwn(value, 'operatorAcceptance') && operatorAcceptance === undefined ||
+    Object.hasOwn(value, 'operatorAcceptance') && (operatorAcceptance === undefined ||
+      (operatorAcceptance.origins.length === 0 && operatorResolution === undefined)) ||
     Object.hasOwn(value, 'operatorResolution') && operatorResolution === undefined) return { ok: false, reason: 'malformed-state' };
   return { ok: true, record: {
     id: value.id,
@@ -616,9 +635,9 @@ function parseOutboxEvent(value: unknown): RemediationCaseOutboxEvent | undefine
     exactKeys(value, ['type', 'eventId', 'feature', 'lapId', 'sourceId', 'caseId', 'originSourceIds', 'originLapIds']) &&
     boundedString(value.feature, MAX_REFERENCE_LENGTH) && boundedString(value.lapId, MAX_REFERENCE_LENGTH) &&
     boundedString(value.sourceId, MAX_REFERENCE_LENGTH) && boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
-    Array.isArray(value.originSourceIds) && value.originSourceIds.length > 0 && value.originSourceIds.length <= MAX_SOURCES_PER_CASE &&
+    Array.isArray(value.originSourceIds) && value.originSourceIds.length <= MAX_SOURCES_PER_CASE &&
     value.originSourceIds.every((sourceId) => boundedString(sourceId, MAX_REFERENCE_LENGTH)) &&
-    Array.isArray(value.originLapIds) && value.originLapIds.length > 0 && value.originLapIds.length <= MAX_SOURCES_PER_CASE &&
+    Array.isArray(value.originLapIds) && value.originLapIds.length <= MAX_SOURCES_PER_CASE &&
     value.originLapIds.every((lapId) => boundedString(lapId, MAX_REFERENCE_LENGTH))) {
     return {
       type: value.type,

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, persistBuildReviewDecisionStop, renderBuildReviewDeferralIssue, remediationEffectMarker, resolveAbsentFailedBuildReviewCases, settleStrandedBuildReviewActionReservations } from '../../src/engine/remediation-case-effects.js';
 import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
 import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
@@ -85,6 +85,108 @@ describe('remediation case effects', () => {
     ['resolved case carries no obligation', { id: 'e', kind: 'deferral', status: 'failed', diagnostic: 'x' }, { resolution: 'resolved' }, false],
   ] as const)('settlement obligation: %s', (_label, effect, overrides, expected) => {
     expect(isBuildReviewSettlementObligationCase(record(effect as RemediationCaseRecord['effect'], overrides as Partial<RemediationCaseRecord>))).toBe(expected);
+  });
+
+  // Covers: task:16, task:rem-as-built-R16a, task:rem-as-built-R16b, task:rem-as-built-R16d
+  it.each(['reserved', 'failed'] as const)('retires an accepted %s action with the shared transformation', async (status) => {
+    const acceptedSourceId = 'testQuality:accepted-action';
+    const original = {
+      ...openAppliedActionRecord(),
+      effect: status === 'reserved'
+        ? { id: 'effect-accepted', kind: 'action' as const, status }
+        : { id: 'effect-accepted', kind: 'action' as const, status, diagnostic: 'earlier failure' },
+      sources: [{ sourceId: acceptedSourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T00:00:00.000Z' }],
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: 'lap-old' }] },
+    };
+    const store = await storeWith({ version: 'v3', feature, cases: [original], prdWideningCases: [], suppressions: [], outbox: [] });
+
+    await expect(resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: new Set(), lapId: 'lap-current', mechanicallyHealthy: true,
+    })).resolves.toEqual({ ok: true, settled: [{ caseId: 'case-1', effectId: 'effect-accepted' }] });
+
+    const settled = await store.read();
+    expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      sources: original.sources,
+      resolution: 'resolved',
+      effect: status === 'reserved'
+        ? {
+            id: 'effect-accepted', kind: 'action', status: 'failed',
+            diagnostic: 'retired: every source operator-accepted or no longer raised',
+          }
+        : { id: 'effect-accepted', kind: 'action', status: 'failed', diagnostic: 'earlier failure' },
+    })] } });
+  });
+
+  // Covers: task:rem-as-built-R16d, task:rem-as-built-R16e
+  it('settles an accepted stranded reservation through the shared predicate and records one identified outbox event', async () => {
+    const acceptedSourceId = 'testQuality:accepted-stranded-action';
+    const original = {
+      ...openAppliedActionRecord(),
+      effect: { id: 'effect-stranded', kind: 'action' as const, status: 'reserved' as const },
+      sources: [{ sourceId: acceptedSourceId, outcome: 'acted' as const, recordedAt: '2026-10-20T00:00:00.000Z' }],
+      operatorAcceptance: { origins: [{ sourceId: acceptedSourceId, lapId: 'lap-old' }] },
+    };
+    const store = await storeWith({ version: 'v3', feature, cases: [original], prdWideningCases: [], suppressions: [], outbox: [] });
+
+    await expect(settleStrandedBuildReviewActionReservations({
+      store, liveSourceIds: new Set(), effectiveAcceptedSourceIds: new Set([acceptedSourceId]), mechanicallyHealthy: true,
+      lapId: 'lap-current', readPublishedCaseIds: async () => new Set(),
+    })).resolves.toEqual({ ok: true, settled: [{ caseId: 'case-1', effectId: 'effect-stranded' }] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }) })],
+      outbox: [expect.objectContaining({ eventId: expect.any(String), event: expect.objectContaining({
+        type: 'remediation_case_reconciled', eventId: expect.any(String), caseId: 'case-1', resolution: 'resolved',
+      }) })],
+    } });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it.each([
+    ['the lap is mechanically unhealthy', new Set<string>(), false],
+    ['the only origin was withdrawn and its source remains live', new Set(['testQuality:accepted-stranded-action']), true],
+  ] as const)('leaves a stranded reservation open when %s', async (_reason, liveSourceIds, mechanicallyHealthy) => {
+    const sourceId = 'testQuality:accepted-stranded-action';
+    const store = await storeWith({
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        ...openAppliedActionRecord(),
+        effect: { id: 'effect-stranded', kind: 'action', status: 'reserved' },
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-old' }] },
+      }],
+    });
+
+    await expect(settleStrandedBuildReviewActionReservations({
+      store, liveSourceIds, effectiveAcceptedSourceIds: new Set(), mechanicallyHealthy,
+      lapId: 'lap-current', readPublishedCaseIds: async () => new Set(),
+    })).resolves.toEqual({ ok: true, settled: [] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'reserved' }) })],
+    } });
+  });
+
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it('keeps a failed action live when its only acceptance origin was withdrawn', async () => {
+    const sourceId = 'testQuality:withdrawn-origin';
+    const store = await storeWith({
+      version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
+      cases: [{
+        ...openAppliedActionRecord(),
+        effect: { id: 'effect-withdrawn', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+        operatorAcceptance: { origins: [{ sourceId, lapId: 'lap-old' }] },
+      }],
+    });
+
+    await expect(resolveAbsentFailedBuildReviewCases({
+      store, liveSourceIds: new Set([sourceId]), lapId: 'lap-current', mechanicallyHealthy: true,
+    })).resolves.toEqual({ ok: true, settled: [] });
+
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'failed' }) })],
+    } });
   });
 
   // Covers: task:6

@@ -8,10 +8,10 @@ import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/e
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { remediationCaseStorePath, RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
+import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from '../../src/engine/build-review-cli.js';
 import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
-import { parseChildId } from '../../src/engine/child-context.js';
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/config.js')>(),
@@ -154,6 +154,91 @@ describe('build-review findings CLI', () => {
       }],
       acceptedDispositions: [expect.objectContaining({ disposition: expect.objectContaining({ rationale: 'operator risk' }) })],
     });
+  });
+
+  // Covers: task:23
+  it('renders child-scoped carried sources, operator resolutions, and pending case-store outbox entries', async () => {
+    const originOne = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const originTwo = canonicalizeBuildReviewFindingIdentity({
+      ...finding,
+      rubric: 'testQuality',
+      contractVersion: 'v3',
+      anchor: { rubric: 'testQuality', locus: { ...finding.anchor.locus, path: 'test/b.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } },
+    })!;
+    const carried = originOne;
+    const origins = [
+      { sourceId: `testQuality:${originOne.id}`, lapId: 'lap-origin-one' },
+      { sourceId: `testQuality:${originTwo.id}`, lapId: 'lap-origin-two' },
+    ];
+    const childState: RemediationCaseStoreState = {
+      version: 'v3', feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, prdWideningCases: [], suppressions: [],
+      cases: [{
+        ...refutedCaseStore.cases[0]!, id: 'case-carried', disposition: 'reject', rationale: 'Already accepted risk.',
+        sources: [{ sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T10:00:00.000Z' }],
+        operatorAcceptance: { origins },
+      }, {
+        ...refutedCaseStore.cases[0]!, id: 'case-operator-resolved', disposition: 'act', rationale: 'Original autonomous case.',
+        sources: [{ sourceId: `testQuality:${originOne.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' }],
+        effect: { id: 'effect-operator-resolved', kind: 'action', status: 'failed', diagnostic: 'Resolved by operator.' },
+        operatorResolution: { operator: 'release-operator', rationale: 'The remaining risk is accepted.', resolvedAt: '2026-10-22T11:00:00.000Z' },
+      }],
+      outbox: [{
+        eventId: 'pending-operator-resolution', occurredAt: '2026-10-22T11:00:00.000Z',
+        event: { type: 'remediation_case_operator_resolved', eventId: 'pending-operator-resolution', feature: 'review-rubrics', caseId: 'case-operator-resolved', sourceIds: [`testQuality:${originOne.id}`] },
+      }],
+    };
+    const records = [
+      { version: 'v1' as const, feature: childState.feature, finding: originOne, sourceLapId: parseBuildReviewLapId('lap-origin-one')!, summary: 'origin one', rationale: 'First accepted risk.', operator: 'first-operator', acceptedAt: '2026-10-20T10:00:00.000Z' },
+      { version: 'v1' as const, feature: childState.feature, finding: originTwo, sourceLapId: parseBuildReviewLapId('lap-origin-two')!, summary: 'origin two', rationale: 'Second accepted risk.', operator: 'second-operator', acceptedAt: '2026-10-21T10:00:00.000Z' },
+    ];
+    const createCaseStore = vi.fn((_worktree: string, _feature: unknown, child?: number) => {
+      expect(child).toBe(1);
+      return { read: async () => ({ ok: true as const, state: childState }) };
+    });
+    const human = vi.fn();
+    const json = vi.fn();
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records }), append: vi.fn() }),
+      createCaseStore, readMechanicalFaults: async () => 0,
+    };
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '1', format: 'human' }, { ...deps, print: human })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', child: '1', format: 'json' }, { ...deps, print: json })).resolves.toBe(0);
+
+    const humanOutput = human.mock.calls[0]![0] as string;
+    expect(humanOutput).toContain(`Carried source: testQuality:${carried.id}; case: case-carried; origin source ids: testQuality:${originOne.id}, testQuality:${originTwo.id}; origin laps: lap-origin-one, lap-origin-two; origin dispositions: first-operator (First accepted risk.), second-operator (Second accepted risk.)`);
+    expect(humanOutput).toContain(`Operator-resolved case: case-operator-resolved; source ids: testQuality:${originOne.id}; operator: release-operator; rationale: The remaining risk is accepted.; resolved at: 2026-10-22T11:00:00.000Z`);
+    expect(humanOutput).toContain('Pending case-store outbox entry: pending-operator-resolution');
+    expect(JSON.parse(json.mock.calls[0]![0] as string)).toMatchObject({
+      carriedSources: [{
+        sourceId: `testQuality:${carried.id}`, caseId: 'case-carried', originSourceIds: origins.map((origin) => origin.sourceId), originLapIds: origins.map((origin) => origin.lapId),
+        originDispositions: [
+          { sourceId: `testQuality:${originOne.id}`, lapId: 'lap-origin-one', operator: 'first-operator', rationale: 'First accepted risk.' },
+          { sourceId: `testQuality:${originTwo.id}`, lapId: 'lap-origin-two', operator: 'second-operator', rationale: 'Second accepted risk.' },
+        ],
+      }],
+      operatorResolvedCases: [{ caseId: 'case-operator-resolved', sourceIds: [`testQuality:${originOne.id}`], operator: 'release-operator', rationale: 'The remaining risk is accepted.', resolvedAt: '2026-10-22T11:00:00.000Z' }],
+      pendingOutbox: [{ eventId: 'pending-operator-resolution', event: { type: 'remediation_case_operator_resolved' } }],
+    });
+    expect(createCaseStore).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', childState.feature, 1);
+  });
+
+  // Covers: task:23
+  it('omits carried and operator-resolved rows when the selected store has neither', async () => {
+    const print = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
+      readMechanicalFaults: async () => 0, print,
+    })).resolves.toBe(0);
+    const output = JSON.parse(print.mock.calls[0]![0] as string);
+    expect(output).not.toHaveProperty('carriedSources');
+    expect(output).not.toHaveProperty('operatorResolvedCases');
+    expect(output).not.toHaveProperty('pendingOutbox');
   });
 
   it('passes the coordinator-equivalent unsettled set for resolved R and open N on S to the CLI verdict', async () => {
@@ -1175,8 +1260,8 @@ describe('build-review findings with current custom rubrics', () => {
 describe('build-review resolve-case', () => {
   const feature = { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' };
 
-  async function openCaseStore(root: string, child?: 1) {
-    const caseStore = new RemediationCaseStore(root, feature, { child: child === undefined ? undefined : parseChildId(child) });
+  async function openCaseStore(root: string, child?: ChildId) {
+    const caseStore = new RemediationCaseStore(root, feature, { child });
     await caseStore.mutate(async (state) => ({
       value: undefined,
       nextState: {
@@ -1233,8 +1318,9 @@ describe('build-review resolve-case', () => {
               effect: { id: 'effect-open', kind: 'action', status: 'failed', diagnostic: 'Resolved by operator.' },
             }],
             outbox: [{
+              eventId: expect.any(String),
               occurredAt: '2026-10-22T13:00:00.000Z',
-              event: { type: 'remediation_case_operator_resolved', feature: 'review-rubrics', caseId: 'case-open', sourceIds: ['testQuality:finding-1'] },
+              event: { type: 'remediation_case_operator_resolved', eventId: expect.any(String), feature: 'review-rubrics', caseId: 'case-open', sourceIds: ['testQuality:finding-1'] },
             }],
           },
         },
@@ -1249,7 +1335,7 @@ describe('build-review resolve-case', () => {
   it('writes only the requested child case store', async () => {
     const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-resolve-case-child-'));
     await openCaseStore(root);
-    const child = await openCaseStore(root, 1);
+    const child = await openCaseStore(root, parseChildId(1)!);
     const flatBefore = await readFile(remediationCaseStorePath(root), 'utf8');
 
     try {

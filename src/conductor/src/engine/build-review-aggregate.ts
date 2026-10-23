@@ -121,6 +121,8 @@ export interface BuildReviewEffectiveVerdict {
   readonly uncoveredScopeIncompleteRubrics?: readonly BuildReviewRubricId[];
   /** Present from the live reducer; optional for existing injected resolver fakes. */
   readonly scopeIncompleteRubrics?: readonly BuildReviewRubricId[];
+  /** Operator-reduced coverage releases retries but is not absence evidence. */
+  readonly hasRecordedReducedCoverage?: boolean;
 }
 
 /** Raw, registry-neutral content preserved by the mechanical aggregate join. */
@@ -570,6 +572,7 @@ export function deriveEffectiveBuildReviewVerdict(
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
     uncoveredScopeIncompleteRubrics: Object.freeze(uncoveredScopeIncomplete),
     ...(scopeIncomplete.length > 0 ? { scopeIncompleteRubrics: Object.freeze(scopeIncomplete) } : {}),
+    ...(reducedCoverage.length === 0 ? {} : { hasRecordedReducedCoverage: true }),
   });
 }
 

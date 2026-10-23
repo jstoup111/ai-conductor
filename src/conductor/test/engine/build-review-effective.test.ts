@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
-import { deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { deriveComposedBuildReviewEffectiveVerdict, isBuildReviewLapHealthyForAbsenceRetirement, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict, type BuildReviewEffectiveResolverDeps } from '../../src/engine/build-review-effective.js';
 import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
 import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
 import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
@@ -16,6 +16,14 @@ const worktree = '/repo/.worktrees/feature';
 const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
 type Rubric = 'testQuality' | 'security';
 const currentContractVersion: BuildReviewRubricContractVersion = 'v3';
+
+if (false) {
+  // @ts-expect-error child scope is mandatory at every resolver call.
+  const missingChild: BuildReviewEffectiveResolverDeps = { adjudicationEnabled: true };
+  // @ts-expect-error adjudication authority is mandatory at every resolver call.
+  const missingAdjudication: BuildReviewEffectiveResolverDeps = { child: undefined };
+  void [missingChild, missingAdjudication];
+}
 
 const testQualityFinding = { concernKind: 'test-insensitive', summary: 'Actionable finding summary', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
 const securityFinding = { concernKind: 'committed-secret', summary: 'Credential committed to source.', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security' as const, locus: { path: 'src/a.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'credential assignment' } } };
@@ -124,9 +132,34 @@ function scopeAggregate(resolution: 'indeterminate' | 'resolved', includeTestQua
   } });
 }
 
-const identityDeps = { resolveMainRoot: async () => root, realpath: async (path: string) => path };
+const identityDeps = {
+  resolveMainRoot: async () => root,
+  realpath: async (path: string) => path,
+  child: undefined,
+  adjudicationEnabled: true,
+};
 
 describe('live build-review effective resolver', () => {
+  // Covers: task:rem-prd-audit-rem-prd-audit-R17f, task:rem-as-built-rem-as-built-R17g
+  it('shares current-lap absence-retirement health for built-in, custom, scope, and healthy laps', () => {
+    const healthy = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot',
+          contractVersion: currentContractVersion, findings: [], verdict: 'PASS',
+        },
+        security: securityPass(),
+      },
+    } as never);
+
+    expect([
+      aggregate({ faults: { testQuality: 'provider-error' } }),
+      customFailureAggregate(),
+      scopeAggregate('indeterminate'),
+      healthy,
+    ].map(isBuildReviewLapHealthyForAbsenceRetirement)).toEqual([false, false, false, true]);
+  });
+
   it('keeps an above-floor implementation-quality finding unresolved and suppresses a below-floor one', () => {
     const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
       testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },

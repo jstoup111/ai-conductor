@@ -22,8 +22,9 @@ import {
   type RemediationCaseStoreState,
   type RemediationCaseTransitionViolation,
   RemediationCaseStore,
+  appendRemediationCaseOutbox,
 } from './remediation-case-store.js';
-import { retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 
 export type RemediationEffectResult =
   | { readonly ok: true; readonly status: 'applied' | 'already-applied'; readonly effectId: string }
@@ -199,17 +200,26 @@ export async function settleStrandedBuildReviewActionReservations(input: {
   readonly store: RemediationCaseStore;
   /** This lap's reported, unsuppressed rubric-namespaced source ids. */
   readonly liveSourceIds: ReadonlySet<string>;
+  /** Absence is authoritative only for a mechanically complete lap. */
+  readonly mechanicallyHealthy: boolean;
+  /** Current durable operator authority; invalidated origins are excluded. */
+  readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
   /**
    * Case ids the published work order carries, read under the store lease
    * that serializes every order writer. `undefined` (an unreadable order)
    * proves nothing, so nothing is settled.
    */
   readonly readPublishedCaseIds: (actionEffectIds: readonly string[]) => Promise<ReadonlySet<string> | undefined>;
+  readonly lapId: string;
 }): Promise<SettleStrandedActionReservationsResult> {
   const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
     const candidates = state.cases.filter((record): record is ActionCase =>
       isActionCase(record) && record.effect.status === 'reserved'
-      && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId)));
+      && retiresOpenBuildReviewCase(record, {
+        liveSourceIds: input.liveSourceIds,
+        effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds,
+        mechanicallyHealthy: input.mechanicallyHealthy,
+      }));
     if (candidates.length === 0) return { value: [] };
     const published = await input.readPublishedCaseIds(
       state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : []));
@@ -219,15 +229,23 @@ export async function settleStrandedBuildReviewActionReservations(input: {
       .map((record) => ({ caseId: record.id, effectId: record.effect.id }));
     if (settled.length === 0) return { value: [] };
     const stranded = new Set(settled.map(({ caseId }) => caseId));
+    const events = settled.map(({ caseId }) => {
+      const eventId = randomUUID();
+      return { eventId, occurredAt: new Date().toISOString(), event: {
+        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+        lapId: input.lapId, caseId, resolution: 'resolved' as const,
+      } };
+    });
+    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
     return {
       value: settled,
-      nextState: replaceCases(state, (record) => stranded.has(record.id) && record.effect.kind === 'action'
-        ? {
-          ...record,
-          resolution: 'resolved',
-          effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic: STRANDED_ACTION_RESERVATION_DIAGNOSTIC },
-        }
-        : record),
+      nextState: {
+        ...upgraded,
+        cases: upgraded.cases.map((record) => stranded.has(record.id)
+          ? retireOpenBuildReviewCase(record)
+          : record),
+        outbox: [...upgraded.outbox, ...events.slice(1)],
+      },
     };
   });
   if (mutation.ok) return { ok: true, settled: mutation.value };
@@ -246,21 +264,36 @@ export async function resolveAbsentFailedBuildReviewCases(input: {
   readonly store: RemediationCaseStore;
   /** This lap's reported, unsuppressed rubric-namespaced source ids. */
   readonly liveSourceIds: ReadonlySet<string>;
+  readonly lapId: string;
+  readonly mechanicallyHealthy: boolean;
 }): Promise<SettleStrandedActionReservationsResult> {
   const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
     const settled = state.cases.flatMap((record) =>
       record.effect.kind === 'action' && retiresOpenBuildReviewCase(record, {
         liveSourceIds: input.liveSourceIds,
         effectiveAcceptedSourceIds: new Set(),
-        mechanicallyHealthy: true,
+        mechanicallyHealthy: input.mechanicallyHealthy,
+        allowAppliedByAbsence: false,
       })
         ? [{ caseId: record.id, effectId: record.effect.id }]
         : []);
     if (settled.length === 0) return { value: [] };
-    const absent = new Set(settled.map(({ caseId }) => caseId));
+    const retired = new Set(settled.map(({ caseId }) => caseId));
+    const events = settled.map(({ caseId }) => {
+      const eventId = randomUUID();
+      return { eventId, occurredAt: new Date().toISOString(), event: {
+        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+        lapId: input.lapId, caseId, resolution: 'resolved' as const,
+      } };
+    });
+    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
     return {
       value: settled,
-      nextState: replaceCases(state, (record) => absent.has(record.id) ? { ...record, resolution: 'resolved' } : record),
+      nextState: {
+        ...upgraded,
+        cases: upgraded.cases.map((record) => retired.has(record.id) ? retireOpenBuildReviewCase(record) : record),
+        outbox: [...upgraded.outbox, ...events.slice(1)],
+      },
     };
   });
   if (mutation.ok) return { ok: true, settled: mutation.value };
@@ -279,6 +312,7 @@ export async function settleStrandedBuildReviewDeferralReservations(input: {
   readonly store: RemediationCaseStore;
   /** This lap's reported, unsuppressed rubric-namespaced source ids. */
   readonly liveSourceIds: ReadonlySet<string>;
+  readonly lapId: string;
 }): Promise<SettleStrandedActionReservationsResult> {
   const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
     const settled = state.cases.flatMap((record) =>
@@ -288,15 +322,27 @@ export async function settleStrandedBuildReviewDeferralReservations(input: {
         : []);
     if (settled.length === 0) return { value: [] };
     const stranded = new Set(settled.map(({ caseId }) => caseId));
+    const events = settled.map(({ caseId }) => {
+      const eventId = randomUUID();
+      return { eventId, occurredAt: new Date().toISOString(), event: {
+        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+        lapId: input.lapId, caseId, resolution: 'resolved' as const,
+      } };
+    });
+    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
     return {
       value: settled,
-      nextState: replaceCases(state, (record) => stranded.has(record.id) && record.effect.kind === 'deferral'
+      nextState: {
+        ...upgraded,
+        cases: upgraded.cases.map((record) => stranded.has(record.id) && record.effect.kind === 'deferral'
         ? {
           ...record,
           resolution: 'resolved',
           effect: { id: record.effect.id, kind: 'deferral', status: 'failed', diagnostic: STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC },
         }
         : record),
+        outbox: [...upgraded.outbox, ...events.slice(1)],
+      },
     };
   });
   if (mutation.ok) return { ok: true, settled: mutation.value };

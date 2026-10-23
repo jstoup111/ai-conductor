@@ -50,7 +50,10 @@ describe('live E2E linked-worktree fixture seeding', () => {
       mainCheckoutDir = seeded.mainCheckoutDir;
       const [identity, resolution] = await Promise.all([
         resolveBuildReviewFeatureIdentity(seeded.projectDir),
-        resolveEffectiveBuildReviewVerdict(seeded.projectDir, passingAggregate),
+        resolveEffectiveBuildReviewVerdict(seeded.projectDir, passingAggregate, {
+          child: undefined,
+          adjudicationEnabled: true,
+        }),
       ]);
 
       observed = {

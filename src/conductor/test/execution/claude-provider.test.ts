@@ -2,6 +2,7 @@
 // Covers: task:5
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access, readFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions, mockEnsureGitGuardForDispatch } = vi.hoisted(() => ({
   mockExeca: vi.fn(),
@@ -389,12 +390,20 @@ describe('ClaudeProvider', () => {
         return { stdout: '', stderr: '', exitCode: 0, failed: false } as any;
       });
 
-      await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
+      const originalTmpdir = process.env.TMPDIR;
+      process.env.TMPDIR = '/tmp';
+      try {
+        await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
+      } finally {
+        if (originalTmpdir === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = originalTmpdir;
+      }
 
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).not.toContain('--append-system-prompt');
       expect(args.every((arg) => Buffer.byteLength(arg) < 128 * 1024)).toBe(true);
       expect(delivered).toBe(systemPrompt);
+      expect(dirname(dirname(promptPath!))).toBe(process.env.AI_CONDUCTOR_TEST_TMP_ROOT);
       await expect(access(promptPath!)).rejects.toThrow();
     });
 

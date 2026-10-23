@@ -29,11 +29,13 @@ import { findDocumentationDelivery } from './documentation-delivery.js';
 import { renderRebaseFenceDecisionNote } from './rebase-fence-decision-note.js';
 import {
   buildReviewConfidenceFloors,
+  isBuildReviewLapHealthyForAbsenceRetirement,
   rawBuildReviewFailIsEffectivelyAccepted,
   resolveEffectiveBuildReviewVerdict,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   applyBuildReviewOutcome,
@@ -49,7 +51,7 @@ import {
   readBuildReviewWorkOrder,
   readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
-import { prdWideningCasesForState, readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { appendRemediationCaseOutbox, drainRemediationCaseOutbox, prdWideningCasesForState, readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
@@ -69,7 +71,8 @@ import {
   type RefusalReworkAllowanceBlocker,
   type RefusalRoundOutcome,
 } from './prd-widening-refusal-rework.js';
-import { reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
 import {
   buildRemediationProjection,
   type RemediationProjectionLimits,
@@ -5377,35 +5380,61 @@ export class Conductor {
     const store = new RemediationCaseStore(this.projectRoot, feature, {
       ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
     });
+    const drainOutbox = async (): Promise<void> => {
+      await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    };
+    await drainOutbox();
     const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
-    const missingAttemptEvidence = classifyBuildReviewDurableRead(attemptEvidence) === 'absent';
-    if (missingAttemptEvidence) {
-      const state = await store.read();
-      if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
-      // Shared effect-status obligation: an applied action awaiting its work
-      // order, or ANY reserved/failed effect (action or deferral), is durable
-      // unfinished evidence — settling around it would turn it into a
-      // terminal PASS.
-      const obligationCase = state.state.cases.find(isBuildReviewSettlementObligationCase);
-      if (obligationCase && obligationCase.effect.kind !== 'none') {
-        return {
-          kind: 'invalid',
-          reason: `work order attempt missing-work-order with open ${obligationCase.effect.kind} case ${obligationCase.id} (${obligationCase.effect.status})`,
-        };
-      }
-    }
     if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
       return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     }
+    const dispositions = await new BuildReviewDispositionStore(this.projectRoot).list(feature);
+    if (!dispositions.ok) return { kind: 'invalid', reason: `build-review disposition state ${dispositions.message}` };
+    const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
+    const acceptedSourceIds = new Set(dispositions.records
+      .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
+        record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
+      .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
     // A clean PASS is the evidence that the content set is empty, whether or
     // not an earlier lap left a work order on disk: absent non-action history
     // settles benignly here too, while the reconciler's shared effect-status
     // test keeps any reserved or failed effect open.
+    const retirement = await store.mutate(async (state) => {
+      const retired = state.cases.filter((record) => retiresOpenBuildReviewCase(record, {
+        liveSourceIds: new Set(), effectiveAcceptedSourceIds: acceptedSourceIds, mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
+        allowAppliedByAbsence: attemptEvidence.ok,
+        resolveAbsentOpenNonActionCases: true,
+        referenced: false,
+      }));
+      if (retired.length === 0) return { value: undefined };
+      const events = retired.map((record) => {
+        const eventId = randomUUID();
+        return { eventId, occurredAt: new Date().toISOString(), event: {
+          type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
+          lapId: aggregate.lapId, caseId: record.id, resolution: 'resolved' as const,
+        } };
+      });
+      const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+      const ids = new Set(retired.map((record) => record.id));
+      return {
+        value: undefined,
+        nextState: {
+          ...upgraded,
+          cases: upgraded.cases.map((record) => ids.has(record.id) ? retireOpenBuildReviewCase(record) : record),
+          outbox: [...upgraded.outbox, ...events.slice(1)],
+        },
+      };
+    });
+    if (!retirement.ok) return { kind: 'invalid', reason: `case settlement ${retirement.reason}` };
+    await drainOutbox();
     const reconciled = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: new Date().toISOString(),
       generateId: randomUUID,
       attemptedCaseIds: attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [],
+      lapId: aggregate.lapId,
+      effectiveAcceptedSourceIds: acceptedSourceIds,
+      mechanicallyHealthy: absenceRetirementMechanicallyHealthy,
       resolveAbsentOpenNonActionCases: true,
     });
     if (!reconciled.ok) {
@@ -5416,26 +5445,25 @@ export class Conductor {
         }`,
       };
     }
-    for (const caseId of reconciled.resolvedAbsentCaseIds) {
-      await this.events.emit({
-        type: 'remediation_case_reconciled',
-        domain: 'build_review',
-        lapId: aggregate.lapId,
-        caseId,
-        resolution: 'resolved',
-      });
-    }
+    await drainOutbox();
     // The obligation test runs on what SURVIVED reconciliation, regardless of
     // whether attempt evidence existed. A stale work order used to skip this
     // guard entirely, so a deferral whose intake create failed (effect still
     // reserved) settled into a terminal PASS with its intake unfiled.
     const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
+    // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
+      const actionResolution = survivingObligation.effect.kind === 'action'
+        ? `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`
+        : '';
+      await drainOutbox();
       return {
         kind: 'invalid',
-        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})`,
+        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${actionResolution}`,
       };
     }
+    // /ai-conductor:session-command-context
+    await drainOutbox();
     return { kind: 'settled' };
   }
 
@@ -13513,6 +13541,10 @@ export class Conductor {
                   const mechanical = uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0
                     ? 'healthy'
                     : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
+                  // Covered faults can release retry routing, but they never
+                  // prove that a case source was absent. Keep that evidence
+                  // boundary distinct from the retry/halt mechanical lane.
+                  const absenceRetirementMechanicallyHealthy = isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,
@@ -13533,7 +13565,10 @@ export class Conductor {
                   const resolveEffectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> => {
                     const listed = await new BuildReviewDispositionStore(this.projectRoot).list(effective.feature);
                     if (!listed.ok) throw new Error(listed.message);
-                    return new Set(listed.records.map((record) =>
+                    return new Set(listed.records
+                      .filter((record) => !('contractVersion' in record.finding.canonicalPayload) ||
+                        record.finding.canonicalPayload.contractVersion === CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION)
+                      .map((record) =>
                       `${record.finding.canonicalPayload.rubric}:${record.finding.id}`));
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
@@ -13586,6 +13621,7 @@ export class Conductor {
                     resolveOperatorResolvedFindingIds,
                     resolveEffectiveAcceptedSourceIds,
                     mechanical,
+                    absenceRetirementMechanicallyHealthy,
                     chargeInput: {
                       treeHash: await currentTreeHash(this.projectRoot),
                       resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),

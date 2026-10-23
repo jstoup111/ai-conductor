@@ -7,6 +7,7 @@ import { versionIdFromEngineDir } from './engine-version-id.js';
 import type { TimingRollup } from './timing-rollup.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
+import type { RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import type { BuildReviewMetrics } from './build-tail-rollup.js';
 
 /**
@@ -283,8 +284,9 @@ export function appendTimingSection(
 export function appendBuildReviewAcceptedRisk(
   existingContent: string,
   records: readonly BuildReviewDispositionRecord[],
+  caseRead?: RemediationCaseStoreReadResult,
 ): string {
-  const upserted = upsertBuildReviewAcceptedRisk(existingContent, records);
+  const upserted = upsertBuildReviewAcceptedRisk(existingContent, records, caseRead);
   if (!upserted.ok) throw new Error(upserted.message);
   return upserted.body;
 }

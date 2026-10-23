@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:5, task:6, task:7
+// Covers: task:1, task:2, task:3, task:5, task:6, task:7, task:10
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,8 @@ import {
   classifyRemediationCaseReuse,
   isCarryEligibleRemediationCase,
   reconcileRemediationCases,
+  retireOpenBuildReviewCase,
+  retiresOpenBuildReviewCase,
 } from '../../src/engine/remediation-case-reconciler.js';
 import type {
   RemediationCasePrdWideningRecord,
@@ -171,6 +173,50 @@ describe('remediation case reconciler', () => {
     ['an open action with an acceptance origin', { ...acceptedOnPriorLap, resolution: 'open' as const }, 'resume'],
   ] as const)('classifies %s bindings before ordinary reuse', (_label, record, expected) => {
     expect(classifyRemediationCaseReuse(record, new Set<string>(), carryInput)).toBe(expected);
+  });
+
+  // Covers: task:16, task:rem-prd-audit-R16c, task:rem-as-built-R16d
+  it.each([
+    ['a failed action with an effective origin', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-old' }] },
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, true],
+    ['a reserved action with every source accepted this lap', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'reserved' },
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, true],
+    ['a failed action whose source is absent on a mechanically healthy lap', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+    }), new Set<string>(), new Set<string>(), true, true],
+    ['a failed action whose source is absent on a mechanically unhealthy lap', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+    }), new Set<string>(), new Set<string>(), false, false],
+    ['an open failed deferral whose sources are accepted', durableAction({
+      disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'failed', diagnostic: 'intake failed' },
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, false],
+    ['an open reserved deferral whose sources are accepted', durableAction({
+      disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' },
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, false],
+    ['an open decision stop whose sources are accepted', durableAction({
+      disposition: 'escalate', effect: { kind: 'none' }, escalation: { owner: 'plan' },
+    }), new Set(['testQuality:finding-1']), new Set(['testQuality:finding-1']), true, false],
+    ['a failed action whose only origin was withdrawn while its source remains raised', durableAction({
+      effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'charge failed' },
+      operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-old' }] },
+    }), new Set<string>(), new Set(['testQuality:finding-1']), true, false],
+  ] as const)('retires open cases only when %s', (_label, record, effectiveAcceptedSourceIds, liveSourceIds, mechanicallyHealthy, expected) => {
+    expect(retiresOpenBuildReviewCase(record, {
+      liveSourceIds, effectiveAcceptedSourceIds, mechanicallyHealthy,
+    })).toBe(expected);
+  });
+
+  // Covers: task:rem-as-built-R16e
+  it.each([
+    ['action', durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } })],
+    ['deferral', durableAction({ disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } })],
+  ] as const)('never resolves a reserved %s effect without failing it', (_label, record) => {
+    expect(retireOpenBuildReviewCase(record)).toMatchObject({
+      resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }),
+    });
   });
 
   it('stamps engine-owned case and effect ids for a new proposed case', async () => {
@@ -338,6 +384,31 @@ describe('remediation case reconciler', () => {
         outbox: [{ eventId: 'carry-event-1' }],
       },
     });
+  });
+
+  it.each([
+    ['defer', { kind: 'deferral', title: 'Follow up', body: 'Deferred outside this feature.', exclusionRationale: 'Not owned here.' }, 'deferred'],
+    ['refute', { kind: 'none' }, 'refuted'],
+  ] as const)('routes a carried %s before its deferral or refutation transition', async (disposition, effect, outcome) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const accepted: RemediationCaseRecord = disposition === 'refute'
+      ? { ...durableAction({ id: 'case-C', resolution: 'resolved' }), disposition: 'refute', effect: { kind: 'none' }, refutation: REFUTATION,
+        operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] } }
+      : durableAction({ id: 'case-C', resolution: 'resolved', operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] } });
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [accepted] } }));
+    const caseRow = disposition === 'refute'
+      ? { ...REFUTE_CASE, caseRef: 'carried-non-action', existingCaseId: 'case-C' }
+      : { caseRef: 'carried-non-action', existingCaseId: 'case-C', disposition, priority: 'high' as const, rationale: 'Carry accepted risk.', confidence: 'high' as const, effect };
+    const result = await reconcileRemediationCases(store, {
+      graph: graph(caseRow as RemediationCaseGraph['cases'][number]['case'], [{ sourceId: 'testQuality:finding-2', outcome, caseRef: 'carried-non-action' }]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds('carry-event'),
+      carry: { caseRefs: ['carried-non-action'], lapId: 'lap-2' },
+    });
+    expect(result).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      id: 'case-C', disposition: accepted.disposition, resolution: 'resolved', effect: accepted.effect,
+      sources: expect.arrayContaining([expect.objectContaining({ sourceId: 'testQuality:finding-2', outcome: 'carried' })]),
+    })] } });
   });
 
   it('admits one attempted applied action case as a resolved refutation', async () => {
@@ -536,12 +607,15 @@ describe('remediation case reconciler', () => {
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
       attemptedCaseIds: ['case-1'],
+      mechanicallyHealthy: true,
+      allowAppliedByAbsence: true,
     });
 
     expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'resolved' }] } });
   });
 
-  it.each(['reserved', 'failed'] as const)('keeps an attempted absent action case with a %s effect open', async (status) => {
+  // Covers: task:16, task:rem-as-built-R16a
+  it.each(['reserved', 'failed'] as const)('retires an attempted absent action case with a %s effect on a healthy lap', async (status) => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
     await reconcileRemediationCases(store, {
@@ -562,16 +636,27 @@ describe('remediation case reconciler', () => {
       },
     }));
 
-    // Same shared effect-status test as the non-action branch: attempt
-    // membership alone never resolves unfinished durable evidence.
     const result = await reconcileRemediationCases(store, {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
       attemptedCaseIds: ['case-1'],
+      mechanicallyHealthy: true,
+      lapId: 'lap-settlement',
     });
 
-    expect(result).toMatchObject({ ok: true, state: { cases: [{ id: 'case-1', resolution: 'open' }] }, resolvedAbsentCaseIds: [] });
+    expect(result).toMatchObject({ ok: true, state: { cases: [{
+      id: 'case-1', resolution: 'resolved', effect: {
+        status: 'failed', diagnostic: status === 'reserved'
+          ? 'retired: every source operator-accepted or no longer raised'
+          : 'charge failed',
+      },
+    }] }, resolvedAbsentCaseIds: ['case-1'] });
+    expect(result).toMatchObject({ state: { outbox: [expect.objectContaining({
+      eventId: expect.any(String), event: expect.objectContaining({
+        type: 'remediation_case_reconciled', caseId: 'case-1', resolution: 'resolved',
+      }),
+    })] } });
   });
 
   it('keeps an absent open action case open without recorded BUILD attempt evidence', async () => {
@@ -613,6 +698,7 @@ describe('remediation case reconciler', () => {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
+      mechanicallyHealthy: true,
       resolveAbsentOpenNonActionCases: true,
     });
 
@@ -646,6 +732,7 @@ describe('remediation case reconciler', () => {
       graph: { sourceOutcomes: [], cases: [] },
       recordedAt: '2026-08-30T13:00:00.000Z',
       generateId: () => 'must-not-be-used',
+      mechanicallyHealthy: true,
       resolveAbsentOpenNonActionCases: true,
     });
 
