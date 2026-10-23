@@ -1,17 +1,124 @@
-// Covers: task:3, task:5
-import { describe, expect, it } from 'vitest';
+// Covers: task:3, task:4, task:5
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
+  buildRemediationClosureInput,
   REMEDIATION_CLOSURE_JUDGEMENT_SCHEMA,
+  REMEDIATION_CLOSURE_DIFF_CAP_BYTES,
   remediationCloseIdentity,
   selectRemediationClosureCandidates,
   validateRemediationClosureOutput,
 } from '../../src/engine/remediation-closure-judgement.js';
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function repository(): Promise<{ root: string; git: ReturnType<typeof makeGitRunner> }> {
+  const root = await mkdtemp(join(tmpdir(), 'remediation-closure-judgement-'));
+  roots.push(root);
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'fixture@example.test']);
+  await git(['config', 'user.name', 'Fixture']);
+  await writeFile(join(root, '.gitignore'), '.pipeline/\n');
+  await git(['add', '.gitignore']);
+  await git(['commit', '-q', '-m', 'chore: initial fixture']);
+  return { root, git };
+}
+
+async function commit(
+  fixture: { root: string; git: ReturnType<typeof makeGitRunner> },
+  path: string,
+  content: string,
+  message: string,
+): Promise<string> {
+  const destination = join(fixture.root, path);
+  await mkdir(join(destination, '..'), { recursive: true });
+  await writeFile(destination, content, 'utf8');
+  await fixture.git(['add', path]);
+  await fixture.git(['commit', '-q', '-m', message]);
+  return (await fixture.git(['rev-parse', 'HEAD'])).stdout.trim();
+}
 
 const candidateIds = ['rem-as-built-R5', 'rem-as-built-R11'];
 const verdicts = [
   { taskId: 'rem-as-built-R5', verdict: 'resolved', rationale: 'The named repair is present.' },
   { taskId: 'rem-as-built-R11', verdict: 'partial', rationale: 'Only part of the named repair is present.' },
 ] as const;
+
+describe('remediation closure judgement input', () => {
+  it('carries the plan block, record sources, cited evidence and Task trailer commits', async () => {
+    const fixture = await repository();
+    const evidenceSha = await commit(fixture, 'evidence.txt', 'reported repair\n', 'feat: reported repair');
+    const trailerSha = await commit(fixture, 'trailer.txt', 'trailer repair\n', 'feat: task repair\n\nTask: rem-as-built-R5');
+    const candidate = {
+      taskId: 'rem-as-built-R5',
+      title: 'Repair stale close',
+      closeIdentity: 'close-1',
+      closeRecords: [
+        { check: 'Named repair is committed.', evidence: `reported ${evidenceSha}`, source: 'reported' },
+        { check: 'Targeted tests passed.', evidence: 'tests pass', source: 'verified' },
+      ],
+    } as const;
+    const plan = new Map([['rem-as-built-R5', [
+      '**Rationale:** Close was reported without its named repair.',
+      '**Criterion:** R5',
+      '**Governing clause:** adr-example decision 3',
+      '### Done when',
+      '- [ ] Named repair is committed.',
+    ].join('\n')]]);
+
+    const input = await buildRemediationClosureInput(fixture.root, [candidate], plan);
+
+    expect(input.instruction).toContain('unverified');
+    expect(input.instruction).toContain('not by itself grounds for persists or partial');
+    expect(input.candidates).toHaveLength(1);
+    expect(input.candidates[0]).toMatchObject({
+      taskId: candidate.taskId,
+      closeIdentity: candidate.closeIdentity,
+      planBlock: { title: candidate.title, body: plan.get(candidate.taskId) },
+      closeRecords: [
+        { check: 'Named repair is committed.', source: 'reported' },
+        { check: 'Targeted tests passed.', source: 'verified' },
+      ],
+      citedCommits: [
+        { sha: evidenceSha, source: 'evidence' },
+        { sha: trailerSha, source: 'task-trailer-context' },
+      ],
+      truncated: false,
+    });
+    expect(input.candidates[0]?.diff).toContain('reported repair');
+    expect(input.candidates[0]?.diff).toContain('trailer repair');
+  });
+
+  it('omits an unresolvable SHA-shaped evidence token without failing the input', async () => {
+    const fixture = await repository();
+    const input = await buildRemediationClosureInput(fixture.root, [{
+      taskId: 'rem-as-built-R5', closeIdentity: 'close-1',
+      closeRecords: [{ check: 'Named repair is committed.', evidence: 'reported deadbee', source: 'reported' }],
+    }], new Map([['rem-as-built-R5', 'Plan block']]));
+
+    expect(input.candidates[0]).toMatchObject({ citedCommits: [], diff: '', truncated: false });
+  });
+
+  it('caps each candidate combined cited diff at 48,000 bytes', async () => {
+    const fixture = await repository();
+    const sha = await commit(fixture, 'large.txt', `${'x'.repeat(REMEDIATION_CLOSURE_DIFF_CAP_BYTES + 500)}\n`, 'feat: large repair');
+    const input = await buildRemediationClosureInput(fixture.root, [{
+      taskId: 'rem-as-built-R5', closeIdentity: 'close-1',
+      closeRecords: [{ check: 'Named repair is committed.', evidence: sha, source: 'reported' }],
+    }], new Map([['rem-as-built-R5', 'Plan block']]));
+
+    expect(Buffer.byteLength(input.candidates[0]!.diff, 'utf8')).toBe(REMEDIATION_CLOSURE_DIFF_CAP_BYTES);
+    expect(input.candidates[0]?.truncated).toBe(true);
+  });
+});
 
 describe('remediation closure judgement contract', () => {
   it('returns exactly one unchanged verdict for every candidate', () => {

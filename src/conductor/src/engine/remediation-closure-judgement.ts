@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
+import { execa } from 'execa';
+import { canonicalTaskId, listCommitsWithTrailers } from './autoheal.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+
+/** Maximum UTF-8 byte projection of a candidate's cited commit diffs. */
+export const REMEDIATION_CLOSURE_DIFF_CAP_BYTES = 48_000;
+
+const REMEDIATION_CLOSURE_INSTRUCTION =
+  'Judge whether the named change in the plan block is present. An unverified close is not by itself grounds for persists or partial.';
 
 export type RemediationClosureVerdict = 'resolved' | 'persists' | 'partial';
 
@@ -21,6 +29,28 @@ export interface RemediationClosureCandidate {
   readonly title?: string;
   readonly closeIdentity: string;
   readonly closeRecords: readonly RemediationClosureCloseRecord[];
+}
+
+export interface RemediationClosureInputCommit {
+  readonly sha: string;
+  /** Task-trailer commits are context only, never provenance or evidence. */
+  readonly source: 'evidence' | 'task-trailer-context';
+}
+
+export interface RemediationClosureInputCandidate {
+  readonly taskId: string;
+  readonly closeIdentity: string;
+  readonly planBlock: { readonly title: string; readonly body: string };
+  readonly closeRecords: readonly RemediationClosureCloseRecord[];
+  readonly citedCommits: readonly RemediationClosureInputCommit[];
+  readonly diff: string;
+  readonly truncated: boolean;
+}
+
+/** Read-only projection supplied to the remediation-closure provider. */
+export interface RemediationClosureInput {
+  readonly instruction: string;
+  readonly candidates: readonly RemediationClosureInputCandidate[];
 }
 
 export interface SelectRemediationClosureCandidatesInput {
@@ -144,6 +174,74 @@ export function selectRemediationClosureCandidates(
     });
   }
   return candidates;
+}
+
+function shaTokens(evidence: string): readonly string[] {
+  return evidence.match(/(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi) ?? [];
+}
+
+async function resolveCommit(projectRoot: string, token: string): Promise<string | undefined> {
+  const result = await execa('git', ['rev-parse', '--verify', '--quiet', `${token}^{commit}`], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  return result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : undefined;
+}
+
+function truncateUtf8(value: string): { text: string; truncated: boolean } {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length <= REMEDIATION_CLOSURE_DIFF_CAP_BYTES) return { text: value, truncated: false };
+  let end = REMEDIATION_CLOSURE_DIFF_CAP_BYTES;
+  while (end > 0 && (bytes[end] ?? 0) >= 0x80 && (bytes[end] ?? 0) <= 0xbf) end -= 1;
+  return { text: bytes.subarray(0, end).toString('utf8'), truncated: true };
+}
+
+/**
+ * Builds the bounded, read-only evidence projection for one judgement pass.
+ * Evidence-shaped SHA tokens that do not name commits are intentionally
+ * ignored: the input enriches a completed close but never refuses it.
+ */
+export async function buildRemediationClosureInput(
+  projectRoot: string,
+  candidates: readonly RemediationClosureCandidate[],
+  planBodies: ReadonlyMap<string, string>,
+): Promise<RemediationClosureInput> {
+  const trailerCommits = await listCommitsWithTrailers(projectRoot).catch(() => []);
+  const inputCandidates = await Promise.all(candidates.map(async (candidate) => {
+    const commits: RemediationClosureInputCommit[] = [];
+    const seen = new Set<string>();
+    for (const token of candidate.closeRecords.flatMap(({ evidence }) => shaTokens(evidence))) {
+      const sha = await resolveCommit(projectRoot, token).catch(() => undefined);
+      if (sha && !seen.has(sha)) {
+        seen.add(sha);
+        commits.push({ sha, source: 'evidence' });
+      }
+    }
+    for (const commit of trailerCommits) {
+      if (!(commit.trailers.Task ?? []).some((taskId) =>
+        canonicalTaskId(taskId.trim()) === canonicalTaskId(candidate.taskId))) continue;
+      const sha = await resolveCommit(projectRoot, commit.sha).catch(() => undefined);
+      if (sha && !seen.has(sha)) {
+        seen.add(sha);
+        commits.push({ sha, source: 'task-trailer-context' });
+      }
+    }
+    const diffs = await Promise.all(commits.map(async ({ sha }) => {
+      const result = await execa('git', ['show', '--format=', sha], { cwd: projectRoot, reject: false });
+      return result.exitCode === 0 ? result.stdout : '';
+    }));
+    const bounded = truncateUtf8(diffs.join(''));
+    return {
+      taskId: candidate.taskId,
+      closeIdentity: candidate.closeIdentity,
+      planBlock: { title: candidate.title ?? '', body: planBodies.get(candidate.taskId) ?? '' },
+      closeRecords: candidate.closeRecords,
+      citedCommits: commits,
+      diff: bounded.text,
+      truncated: bounded.truncated,
+    };
+  }));
+  return { instruction: REMEDIATION_CLOSURE_INSTRUCTION, candidates: inputCandidates };
 }
 
 export function validateRemediationClosureOutput(
