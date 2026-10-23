@@ -75,9 +75,9 @@ export interface ChangedFileReference {
 
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
-  readonly contractVersion: 'v3';
-  /** Versioned frozen-input shape; v3 carries typed scope and pinned evidence. */
-  readonly projectionVersion: 'v3';
+  readonly contractVersion: 'v4';
+  /** Versioned frozen-input shape; v4 carries typed scope and pinned evidence. */
+  readonly projectionVersion: 'v4';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
   /** Stable identity of the source content, independent of commit provenance. */
@@ -443,8 +443,8 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     : source.inputs.sourceSnapshot;
   return {
     rubric,
-    contractVersion: descriptor.contract.output.version as 'v3',
-    projectionVersion: descriptor.contract.projection.version as 'v3',
+    contractVersion: descriptor.contract.output.version as 'v4',
+    projectionVersion: descriptor.contract.projection.version as 'v4',
     lapId: source.lapId,
     snapshotDigest: snapshot.digest,
     contentDigest: snapshot.contentDigest,
