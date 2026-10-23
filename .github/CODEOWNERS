@@ -1,0 +1,3 @@
+# Every change needs approval from the operator or the operator's bot.
+# A pull request's author cannot approve it, so the other identity approves.
+* @jstoup111 @jamesstoup-conductor-bot
