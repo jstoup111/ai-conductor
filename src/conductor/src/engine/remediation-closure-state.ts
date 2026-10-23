@@ -60,15 +60,19 @@ function isTaskState(value: unknown): value is RemediationClosureTaskState {
     isRecord(value.verdicts) && Object.values(value.verdicts).every(isVerdictRecord);
 }
 
+function isRemediationClosureState(value: unknown): value is RemediationClosureState {
+  return isRecord(value) && hasOnlyKeys(value, ['version', 'plans']) && value.version === 1 &&
+    isRecord(value.plans) && Object.values(value.plans).every((plan) => isRecord(plan) &&
+      hasOnlyKeys(plan, ['tasks']) && isRecord(plan.tasks) && Object.values(plan.tasks).every(isTaskState));
+}
+
 function parseState(state: Readonly<EngineState>): RemediationClosureStateReadResult {
   const raw = state.remediationClosure;
   if (raw === undefined) return { kind: 'present', state: { version: 1, plans: {} } };
-  if (!isRecord(raw) || !hasOnlyKeys(raw, ['version', 'plans']) || raw.version !== 1 || !isRecord(raw.plans) ||
-    !Object.values(raw.plans).every((plan) => isRecord(plan) && hasOnlyKeys(plan, ['tasks']) &&
-      isRecord(plan.tasks) && Object.values(plan.tasks).every(isTaskState))) {
+  if (!isRemediationClosureState(raw)) {
     return { kind: 'incompatible', message: MALFORMED_RECORD_MESSAGE };
   }
-  return { kind: 'present', state: structuredClone(raw) as RemediationClosureState };
+  return { kind: 'present', state: structuredClone(raw) };
 }
 
 function engineStatePath(projectRoot: string): string {
