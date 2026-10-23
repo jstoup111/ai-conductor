@@ -574,6 +574,30 @@ attempt demotes the check to `unverified`. A judge that cannot run demotes every
 An operator can overturn a refusal with
 [`ai-conductor done-when accept`](../reference/cli.md#ai-conductor-done-when).
 
+### Remediation closure judgement
+
+A closed engine-appended remediation task (`rem-*`) is not proof that its named fix landed. At the
+end of each BUILD session with a clean worktree, the engine judges every such task that is resolved,
+has `Done when:` close records, has no `pending-judgement` citation or open citation refusal, and has
+no verdict for its current close. One schema-constrained judgement per pass:
+
+- reads the task's plan block, its close records, and the diffs of the commits its evidence names,
+  plus `Task:`-trailer commits as context only, capped at 48,000 bytes;
+- runs under `build_review` provider, model, and effort policy, attributed to BUILD, on a provider
+  that declares native output-schema support, with one retry; an attempt during which `HEAD` moves
+  is discarded;
+- returns `resolved`, `persists`, or `partial` per task and emits `remediation_closure_judged`.
+
+`resolved` leaves the task closed. `persists` or `partial` reopens it through a
+`remediation-closure` repair obligation, restages it, and withholds BUILD completion with a retry
+hint starting `Remediation closure reopened:` that names the task and rationale. That refused
+attempt is not a no-progress stall. Each task is reopened at most twice; a third adverse verdict, or
+one on the final BUILD attempt, is recorded `bound-exhausted` and leaves the task closed. A judge
+that cannot run records every candidate `unjudged` and leaves it closed. Each close is judged once:
+a re-close with different records is a new close. Verdicts persist in
+[`engine-state.json`](../reference/artifacts.md#core-state), so a reopen interrupted by a restart
+is finished before any new judgement.
+
 Criterion-bound `prd_audit` remediation tasks tag their first check `[test]`. Command syntax:
 [`ai-conductor task`](../reference/cli.md#ai-conductor-task).
 
