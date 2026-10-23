@@ -3829,6 +3829,7 @@ export class Conductor {
     detail: string,
     refused: readonly OverScopeRenderableFinding[],
     plannerFault?: string,
+    haltingStep?: StepName,
   ): Promise<string> {
     const refusedReason = renderPrdAuditScopeHalt(
       detail,
@@ -3841,7 +3842,7 @@ export class Conductor {
     const reason = plannerFault === undefined
       ? refusedReason
       : `${refusedReason}\n\nRemediation planner fault: ${plannerFault}`;
-    await this.writeHaltMarker(reason + '\n', OVER_SCOPE_HALT_CLASS);
+    await this.writeHaltMarker(reason + '\n', OVER_SCOPE_HALT_CLASS, haltingStep);
     return reason;
   }
 
@@ -3858,8 +3859,9 @@ export class Conductor {
     detail: string,
     refused: readonly OverScopeRenderableFinding[],
     blocker: RefusalReworkAllowanceBlocker,
+    haltingStep?: StepName,
   ): Promise<string> {
-    if (blocker.kind === 'unreadable') return this.writeRefusalReworkHalt(detail, refused);
+    if (blocker.kind === 'unreadable') return this.writeRefusalReworkHalt(detail, refused, undefined, haltingStep);
     const refusedBlock = renderPrdAuditScopeHalt(detail, renderOverScopeDecisionBlock(refused, refused, []));
     const findings = `Findings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
     let generation: string | undefined;
@@ -3875,7 +3877,7 @@ export class Conductor {
     } catch {
       // Without durable evidence a raise cannot bind to this halt; keep the
       // refused block actionable as today.
-      return this.writeRefusalReworkHalt(detail, refused);
+      return this.writeRefusalReworkHalt(detail, refused, undefined, haltingStep);
     }
     const reason = this.withActiveChild(
       `Refusal rework halted: prd_audit ${blocker.allowance} allowance exhausted.\n` +
@@ -3886,6 +3888,7 @@ export class Conductor {
     await this.writeHaltMarker(
       `${reason}\n${generation === undefined ? '' : `Kickback halt generation: ${generation}\n`}`,
       KICKBACK_CAP_HALT_CLASS,
+      haltingStep,
     );
     return reason;
   }
@@ -9037,10 +9040,10 @@ export class Conductor {
             if (prdAuditRoute?.kind === 'projection-halt') {
               const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.writeHaltMarker(reason + '\n', 'needs-human', 'prd_audit');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -9056,10 +9059,10 @@ export class Conductor {
                 reason,
               });
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass, 'prd_audit');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -9082,10 +9085,10 @@ export class Conductor {
                 reason,
               });
               await closeSettledMembers(outcomes);
-              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
+              await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass, 'prd_audit');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -9135,16 +9138,18 @@ export class Conductor {
                   prdAuditRoute.route.detail,
                   prdAuditRoute.route.refused,
                   blocker,
+                  'prd_audit',
                 )
                 : await this.writeRefusalReworkHalt(
                   prdAuditRoute.route.detail,
                   prdAuditRoute.route.refused,
                   refusalRoundFault(outcome),
+                  'prd_audit',
                 );
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               await closeClassifiedPassingMembers();
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.emitLoopHalt(reason, prUrl);
+              await this.emitLoopHalt(reason, prUrl, 'prd_audit');
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return true;

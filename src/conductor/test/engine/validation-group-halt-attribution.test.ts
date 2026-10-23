@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -149,6 +149,64 @@ describe('validation-group halt attribution', () => {
     return persistedEvents(await readFile(path, 'utf8'));
   }
 
+  async function runPrdAuditGroup(
+    route: Record<string, unknown>,
+    options: { incompleteAudit?: boolean; plannerFault?: boolean; spentAllowance?: boolean } = {},
+  ) {
+    const root = await mkdtemp(join(tmpdir(), 'validation-group-halt-attribution-prd-'));
+    roots.push(root);
+    await Promise.all([
+      mkdir(join(root, '.pipeline'), { recursive: true }),
+      mkdir(join(root, '.docs', 'specs'), { recursive: true }),
+      mkdir(join(root, '.docs', 'stories'), { recursive: true }),
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeState(join(root, '.pipeline/conduct-state.json'), VALIDATION_GROUP_PREREQS),
+      writeFile(join(root, '.docs/specs/validation-group-halt-attribution.md'), '## Functional Requirements\n\nFR-1\n'),
+      writeFile(join(root, '.docs/stories/validation-group-halt-attribution.md'), '## Story 1\n\n**Requirements:** FR-1\n'),
+      writeFile(join(root, '.docs/plans/validation-group-halt-attribution.md'), '### Task 1: fixture\n\nDone when: fixture\n'),
+      writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] })),
+      ...(options.spentAllowance ? [writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: { prd_audit: { count: 0, cumulative: 0, laps: 1, effectiveLapCap: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 } },
+      }))] : []),
+    ]);
+    const events = new ConductorEventEmitter();
+    const path = join(root, '.pipeline/events.jsonl');
+    const persister = new EventPersister(path, events);
+    persister.start();
+    try {
+      const conductor = new Conductor({
+        projectRoot: root, stateFilePath: join(root, '.pipeline/conduct-state.json'), events,
+        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+        stepRunner: { run: vi.fn(async (step: StepName, _state, runOptions) => {
+          if (step === 'manual_test') {
+            await writeFile(join(root, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
+          } else if (step === 'prd_audit') {
+            await persistPrdAuditVerdict(root, {
+              complete: !options.incompleteAudit,
+              judgment: { version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture', rationale: 'fixture', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [] },
+              diagnostics: options.incompleteAudit ? ['fixture gap'] : [], recordedDispositions: [],
+            }, { attemptId: runOptions?.runId ?? 'prd', codeStamp: 'fixture' });
+          } else if (step === 'architecture_review_as_built') {
+            await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, { attemptId: runOptions?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
+          }
+          return { success: true };
+        }) },
+      });
+      vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+      vi.spyOn(conductor as any, 'routeCurrentPrdAudit').mockResolvedValue(route);
+      if (options.plannerFault) {
+        vi.spyOn(conductor as any, 'planRemediation').mockResolvedValue({ kind: 'halt', detail: 'planner fault', haltClass: 'needs-human' });
+      }
+      await conductor.run();
+    } finally {
+      persister.stop();
+    }
+    return persistedEvents(await readFile(path, 'utf8'));
+  }
+
   it.each(['PLAN_GAP', 'DESIGN', 'invalid'] as const)(
     'attributes real validation-group terminal %s verdicts to as-built, including concurrent PRD gaps',
     async (kind) => {
@@ -181,6 +239,39 @@ describe('validation-group halt attribution', () => {
     expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
       expect.any(String), expect.stringContaining('as-built architecture review kickback-to-build no-op'),
       'kickback-cap', expect.anything(), undefined, 'architecture_review_as_built',
+    ]));
+  });
+
+  it.each([
+    ['projection', { kind: 'projection-halt', reason: 'projection refused' }],
+    ['plan-gap', { kind: 'plan-gap-halt', route: { detail: 'plan gap', haltClass: 'plan-gap' } }],
+    ['over-scope', { kind: 'over-scope-halt', route: { detail: 'over scope', haltClass: 'over-scope', undecided: [], refused: [] } }],
+  ])('attributes real prd_audit %s group halts to prd_audit', async (_name, route) => {
+    const persisted = await runPrdAuditGroup(route);
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'prd_audit' }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), expect.any(String), expect.anything(), undefined, 'prd_audit',
+    ]));
+    expect(persisted).not.toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'architecture_review_as_built' }));
+  });
+
+  it('attributes a real refused-over-scope planner fault group halt to prd_audit', async () => {
+    const persisted = await runPrdAuditGroup({
+      kind: 'over-scope-refusal-rework', route: { detail: 'refused scope', refused: [], refusals: [] },
+    }, { incompleteAudit: true, plannerFault: true });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'prd_audit' }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), expect.any(String), expect.anything(), undefined, 'prd_audit',
+    ]));
+  });
+
+  it('attributes a real refused-over-scope spent-allowance group halt to prd_audit', async () => {
+    const persisted = await runPrdAuditGroup({
+      kind: 'over-scope-refusal-rework', route: { detail: 'refused scope', refused: [], refusals: [] },
+    }, { incompleteAudit: true, spentAllowance: true });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'prd_audit' }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), expect.any(String), expect.anything(), undefined, 'prd_audit',
     ]));
   });
 
