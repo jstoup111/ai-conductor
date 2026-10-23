@@ -75,7 +75,10 @@ describe('validation-group halt attribution', () => {
     return { conductor, events };
   }
 
-  async function runTerminalAsBuiltGroup(kind: 'PLAN_GAP' | 'DESIGN' | 'invalid', prdGap = false) {
+  async function runTerminalAsBuiltGroup(
+    kind: 'PLAN_GAP' | 'DESIGN' | 'invalid' | 'REMEDIABLE' | 'APPROVED',
+    route: 'terminal' | 'planner-halt' | 'projection-refusal' = 'terminal',
+  ) {
     const root = await mkdtemp(join(tmpdir(), 'validation-group-halt-attribution-group-'));
     roots.push(root);
     await Promise.all([
@@ -97,19 +100,23 @@ describe('validation-group halt attribution', () => {
         projectRoot: root,
         stateFilePath: join(root, '.pipeline/conduct-state.json'),
         events,
-        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: route !== 'projection-refusal', maxRetries: 1,
         stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             await writeFile(join(root, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
           } else if (step === 'prd_audit') {
             await persistPrdAuditVerdict(root, { complete: true, judgment: {
-              version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: prdGap ? 'FIXABLE' : 'PASS', evidence: 'fixture', rationale: 'fixture', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [],
+              version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture', rationale: 'fixture', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [],
             }, diagnostics: [], recordedDispositions: [] }, { attemptId: options?.runId ?? 'prd', codeStamp: 'fixture' });
           } else if (step === 'architecture_review_as_built') {
             if (kind === 'invalid') {
               await writeFile(join(root, '.pipeline/architecture-review-as-built.json'), '{"invalid":true}');
             } else if (kind === 'PLAN_GAP') {
               await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'PLAN_GAP', reachability: [], driftNotes: [], outcomeDelivered: false, affectedOutcome: 'FR-1' }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
+            } else if (kind === 'REMEDIABLE') {
+              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [], findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the missing guard.' }], violations: 'A repair is needed.', resolution: 'Add the guard.' }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
+            } else if (kind === 'APPROVED') {
+              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
             } else {
               await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [], findings: [{ class: 'DESIGN', summary: 'Choose a boundary.' }], violations: 'A decision is required.', resolution: 'Choose a boundary.' }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
             }
@@ -118,6 +125,12 @@ describe('validation-group halt attribution', () => {
         }) },
       });
       vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+      if (route === 'planner-halt') {
+        vi.spyOn(conductor as any, 'planRemediation').mockResolvedValue({ kind: 'halt', detail: 'planner requires a decision', haltClass: 'needs-human' });
+      }
+      if (route === 'projection-refusal') {
+        vi.spyOn(conductor as any, 'projectPendingAsBuiltRemediationFindings').mockResolvedValue('projection storage refused');
+      }
       await conductor.run();
     } finally {
       persister.stop();
@@ -136,6 +149,18 @@ describe('validation-group halt attribution', () => {
       ]));
     },
   );
+
+  it.each([
+    ['remediable planner halt', 'REMEDIABLE', 'planner-halt'],
+    ['all-green findings projection refusal', 'APPROVED', 'projection-refusal'],
+  ] as const)('attributes the real %s exit to as-built', async (_name, kind, route) => {
+    const persisted = await runTerminalAsBuiltGroup(kind, route);
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'architecture_review_as_built' }));
+    expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
+      expect.any(String), expect.any(String), expect.any(String), expect.anything(), undefined,
+      'architecture_review_as_built',
+    ]));
+  });
 
   it.each([
     'terminal PLAN_GAP',
