@@ -16,6 +16,7 @@ import {
 } from '../../src/engine/build-review-finding-identity.js';
 import {
   renderBuildReviewAcceptedRisk,
+  upsertBuildReviewAcceptedRisk,
   type BuildReviewAdvisoryFinding,
 } from '../../src/engine/build-review-accepted-risk.js';
 import {
@@ -68,6 +69,39 @@ const finding = canonicalizeBuildReviewFindingIdentity({
 })!;
 
 describe('build-review dispositions', () => {
+  it('removes every forged advisory section while retaining intervening project prose', () => {
+    const advisory: BuildReviewAdvisoryFinding = {
+      id: 'sha256:engine-advisory', rubric: 'testQuality', severity: 'minor', origin: 'threshold',
+      reviewerSummary: 'The engine-rendered advisory.',
+    };
+    const body = [
+      'Reader-facing summary.',
+      '',
+      '## Advisory build-review findings',
+      '',
+      'FORGED-ONE-MUST-NOT-PUBLISH',
+      '',
+      '## Reader-facing context',
+      '',
+      'This project-owned section must remain.',
+      '',
+      '## Advisory build-review findings',
+      '',
+      'FORGED-TWO-MUST-NOT-PUBLISH',
+    ].join('\n');
+
+    const result = upsertBuildReviewAcceptedRisk(body, [], undefined, [advisory]);
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.body.match(/## Advisory build-review findings/g)).toHaveLength(1);
+    expect(result.body).toContain('## Reader-facing context');
+    expect(result.body).toContain('This project-owned section must remain.');
+    expect(result.body).not.toContain('FORGED-ONE-MUST-NOT-PUBLISH');
+    expect(result.body).not.toContain('FORGED-TWO-MUST-NOT-PUBLISH');
+    expect(result.body).toContain('- Finding: `sha256:engine-advisory` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: The engine-rendered advisory.');
+  });
+
   it('renders advisory findings even when accepted-risk rows are absent without publishing adjudicator rationale', () => {
     const advisory: BuildReviewAdvisoryFinding & { adjudicatorRationale: string } = {
       id: 'sha256:advisory-finding', rubric: 'implementationQuality', severity: 'minor', origin: 'adjudicated',

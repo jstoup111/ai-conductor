@@ -174,8 +174,17 @@ export function upsertBuildReviewAcceptedRisk(
 ): BuildReviewAcceptedRiskUpsertResult {
   const initialBounds = existingSectionBounds(body);
   if (initialBounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
-  const sanitizedBody = stripForgedAdvisorySection(body, initialBounds);
-  const bounds = existingSectionBounds(sanitizedBody);
+  let sanitizedBody = body;
+  let bounds = initialBounds;
+  while (true) {
+    const withoutForgery = stripForgedAdvisorySection(sanitizedBody, bounds);
+    if (withoutForgery === sanitizedBody) break;
+    sanitizedBody = withoutForgery;
+    const refreshedBounds = existingSectionBounds(sanitizedBody);
+    if (refreshedBounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
+    bounds = refreshedBounds;
+  }
+
   if (bounds === undefined) return { ok: false, message: 'accepted build-review risk section is malformed' };
   const caseRows = caseRiskRows(caseRead);
   if (records.length === 0 && caseRows.length === 0 && advisoryFindings.length === 0) {
