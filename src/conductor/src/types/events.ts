@@ -1551,6 +1551,23 @@ type ConductorEventBody =
       checks: readonly { readonly taskId: string; readonly check: string }[];
     }
   | {
+      /** One native citation-judgement pass, including an unavailable fallback. */
+      type: 'done_when_citation_judged';
+      citations: readonly {
+        readonly taskId: string;
+        readonly check: number;
+        readonly verdict?: 'asserts' | 'does-not-assert';
+        readonly unavailable?: string;
+      }[];
+    }
+  | {
+      /** An operator accepted one previously refused Done-when citation. */
+      type: 'done_when_citation_accepted';
+      taskId: string;
+      check: number;
+      reason: string;
+    }
+  | {
       type: 'build_stall';
       step: StepName;
       reason: 'no_task_progress' | 'halt_marker' | 'active_stall';

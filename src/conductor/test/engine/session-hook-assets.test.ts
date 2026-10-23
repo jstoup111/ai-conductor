@@ -86,6 +86,12 @@ describe('session-hook-assets', () => {
     expect(script.length).toBeGreaterThan(0);
   });
 
+  // Covers: task:2
+  it('records a task start boundary best-effort without introducing a conductor dependency', () => {
+    expect(PRE_DISPATCH_HOOK).toContain('execFileSync("git", ["rev-parse", "HEAD"]');
+    expect(PRE_DISPATCH_HOOK).toContain('row.startHead === undefined');
+  });
+
   it.each(hooks)('%s starts with a bash shebang', (_name, script) => {
     expect(script.startsWith('#!/bin/bash')).toBe(true);
   });

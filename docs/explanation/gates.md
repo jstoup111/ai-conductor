@@ -553,6 +553,27 @@ is never a plan gap. Unverified closes cost one extra BUILD pass per lap: the fi
 attempt is refused so the builder can add a test or confirm each reason, and that refusal does not
 count as a no-progress stall. A BUILD that then completes with unverified checks emits
 `build_done_when_unverified`, and `prd_audit` receives the checks and reasons as audit input.
+
+A committed test is not proof that it asserts the check. A citation closes `verified` only when the
+task added the cited title after its recorded start commit (`startHead`, stamped by `task start`). Any other
+citation closes `pending-judgement`; when the BUILD session ends, one schema-constrained judgement
+decides whether each pending test asserts its check. The judgement:
+
+- reads the task text and a bounded window of the cited file at `HEAD`;
+- runs only on a configured provider that declares native output-schema support, with one retry;
+- emits `done_when_citation_judged` for every pass.
+
+An `asserts` verdict closes the check. A `does-not-assert` verdict reopens the task through a
+`done-when-citation` repair obligation and withholds BUILD completion with a retry hint starting
+`Done-when citation refused:` that names the task, check, citation, and reason. That refused attempt
+is not a no-progress stall. The builder repairs it by citing a test it adds, or by closing the check
+`--unverified`. The refusal stays open until the refused check re-closes `verified`. A second refusal
+for the same check, an unrepaired refusal at the next session end, or a refusal on the final BUILD
+attempt demotes the check to `unverified`. A judge that cannot run demotes every pending citation to
+`unverified` with the cause as its reason. Demoted checks then follow the unverified path above.
+An operator can overturn a refusal with
+[`ai-conductor done-when accept`](../reference/cli.md#ai-conductor-done-when).
+
 Criterion-bound `prd_audit` remediation tasks tag their first check `[test]`. Command syntax:
 [`ai-conductor task`](../reference/cli.md#ai-conductor-task).
 

@@ -343,7 +343,15 @@ async function resolveTaskProjectRoot(cwd: string): Promise<string> {
  *   0 = success (row found and flipped)
  *   1 = id not found in task-status.json rows
  */
-export async function runTaskStart(projectRoot: string, id: string): Promise<number> {
+export interface TaskStartDependencies {
+  readonly resolveHead?: (projectRoot: string) => Promise<string | undefined>;
+}
+
+export async function runTaskStart(
+  projectRoot: string,
+  id: string,
+  dependencies: TaskStartDependencies = {},
+): Promise<number> {
   const statusPath = join(projectRoot, '.pipeline/task-status.json');
   const pipelineDir = join(projectRoot, '.pipeline');
   const stampPath = join(pipelineDir, 'current-task');
@@ -390,8 +398,18 @@ export async function runTaskStart(projectRoot: string, id: string): Promise<num
     return 1;
   }
 
-  // Flip status to in_progress
+  // The start boundary is best-effort: a non-git fixture or a transient git
+  // failure must not prevent the existing task transition.  Once stamped, the
+  // boundary is immutable across starts and later re-staging.
   const task = tasks[rowIndex] as Record<string, unknown>;
+  if (task.startHead === undefined) {
+    const startHead = dependencies.resolveHead
+      ? await dependencies.resolveHead(projectRoot).catch(() => undefined)
+      : await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot, reject: false })
+        .then((result) => result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : undefined)
+        .catch(() => undefined);
+    if (startHead !== undefined) task.startHead = startHead;
+  }
   task.status = 'in_progress';
 
   // Write task-status.json atomically

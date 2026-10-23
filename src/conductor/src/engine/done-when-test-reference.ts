@@ -38,6 +38,25 @@ export interface UnverifiedDoneWhenCheck {
   readonly reason: string;
 }
 
+export type DoneWhenCloseSource =
+  | 'verified' | 'reported' | 'verify-only' | 'unverified'
+  | 'pending-judgement' | 'judged' | 'operator-accepted';
+
+/** Parse persisted close sources at the trust boundary; unknown values never
+ * acquire semantics merely because a future writer serialized one. */
+export function parseDoneWhenCloseSource(value: unknown): DoneWhenCloseSource | Error {
+  switch (value) {
+    case 'verified': return value;
+    case 'reported': return value;
+    case 'verify-only': return value;
+    case 'unverified': return value;
+    case 'pending-judgement': return value;
+    case 'judged': return value;
+    case 'operator-accepted': return value;
+  }
+  return new Error(`unknown done-when close source: ${String(value)}`);
+}
+
 /**
  * Collects only explicit unverified close records from task-status content.
  * Legacy rows and malformed status data are non-authoritative and ignored.
@@ -62,8 +81,13 @@ export function collectUnverifiedDoneWhenChecks(status: unknown): UnverifiedDone
     for (const record of row.doneWhen) {
       if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
       const close = record as Record<string, unknown>;
+      // Pre-close legacy evidence had no typed source; it is not a malformed
+      // close record and remains outside the new trust boundary.
+      if (!('source' in close)) continue;
+      const source = parseDoneWhenCloseSource(close.source);
+      if (source instanceof Error) throw source;
       if (
-        close.source === 'unverified'
+        source === 'unverified'
         && typeof close.check === 'string'
         && typeof close.reason === 'string'
       ) {
@@ -86,6 +110,27 @@ export function parseDoneWhenTestReference(evidence: string): DoneWhenTestRefere
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+export type CitationProvenance = 'task-added' | 'not-task-added';
+
+/** Classify a cited title using only the task start-window diff. */
+export function classifyCitationProvenance(input: {
+  readonly path: string;
+  readonly title: string;
+  readonly diffText: string;
+}): CitationProvenance {
+  const quotedPath = input.path.replace(/\\/g, '/');
+  let current: string | undefined;
+  const added: string[] = [];
+  for (const line of input.diffText.split(/\r?\n/)) {
+    const header = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+    if (header) { current = header[2]; continue; }
+    if (current === quotedPath && line.startsWith('+') && !line.startsWith('+++')) added.push(line.slice(1));
+  }
+  return normalizeWhitespace(added.join('\n')).includes(normalizeWhitespace(input.title))
+    ? 'task-added'
+    : 'not-task-added';
 }
 
 function citedCriterionIds(taskText: string, storiesText: string): Set<string> {

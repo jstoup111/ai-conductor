@@ -24,6 +24,7 @@ export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectUpdateCommand', commandPath: ['update'], helpOwner: 'passthrough' },
   { detector: 'detectBuildReviewAcceptCommand', commandPath: ['build-review', 'accept'], helpOwner: 'router' },
   { detector: 'detectBuildReviewResolveCaseCommand', commandPath: ['build-review', 'resolve-case'], helpOwner: 'router' },
+  { detector: 'detectDoneWhenAcceptCommand', commandPath: ['done-when', 'accept'], helpOwner: 'router' },
   { detector: 'detectBuildReviewRecordReducedCoverageCommand', commandPath: ['build-review', 'record-reduced-coverage'], helpOwner: 'router' },
   { detector: 'detectBuildReviewFindingsCommand', commandPath: ['build-review', 'findings'], helpOwner: 'router' },
   { detector: 'detectBuildTailCommand', commandPath: ['build-tail'], helpOwner: 'router' },

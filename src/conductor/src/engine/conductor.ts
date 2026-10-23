@@ -119,6 +119,15 @@ import {
 import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
+import {
+  applyCitationVerdicts,
+  admitCitationRefusals,
+  buildCitationJudgementInput,
+  collectPendingCitations,
+  demoteUnavailableCitations,
+  settleCitationRefusals,
+} from './done-when-citation-judgement.js';
+import { readGitBlobs } from './git-blob-batch.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { admitAndRestageRepair } from './repair-restage.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -12059,11 +12068,100 @@ export class Conductor {
             }
             let completion = handshake;
             if (!completion) {
+              // Citation provenance is settled exactly once at the BUILD
+              // session boundary, before its task-status predicate observes
+              // the close records.  A missing runner capability is handled by
+              // the later bounded fallback task; this happy-path boundary
+              // only applies durable verdicts from a valid native dispatch.
+              let citationRefusalReason: string | undefined;
+              if (step.name === 'build' && this.stepRunner.dispatchDoneWhenCitationJudgement) {
+                try {
+                  const status = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
+                    .then((raw) => JSON.parse(raw) as unknown)
+                    .catch(() => undefined);
+                  const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
+                  // BUILD can legitimately reach this boundary before either
+                  // task status or a resolvable plan exists.  There is then no
+                  // citation authority to settle or dispatch.
+                  if (status === undefined || !planPath) {
+                    // completion below owns the ordinary missing-artifact path
+                  } else {
+                  const pending = collectPendingCitations(status);
+                  // A refusal is allowed one repair lap.  This runs even
+                  // when no new citation was re-closed in this session. It
+                  // must precede replay admission: a crash after a second
+                  // refusal verdict is already at its bound, so recovery
+                  // demotes it instead of reopening the task once more.
+                  await settleCitationRefusals(this.projectRoot, planPath, status, attempt >= stepMaxRetries);
+                  // Replay only the refusal records still eligible after
+                  // settlement. This repairs an interrupted first-refusal
+                  // admission without resurrecting a bounded disposition.
+                  await admitCitationRefusals(this.projectRoot, planPath, [], [], status);
+                  if (pending.length > 0) {
+                    const planText = planPath ? await readFile(planPath, 'utf8') : '';
+                    const blobs = await readGitBlobs(
+                      this.projectRoot,
+                      'HEAD',
+                      [...new Set(pending.map((citation) => citation.path))],
+                    ).catch(() => new Map());
+                    const input = buildCitationJudgementInput(pending, parsePlanTaskBodies(planText), blobs);
+                    const judgement = await this.stepRunner.dispatchDoneWhenCitationJudgement(input);
+                    if (judgement.kind === 'valid') {
+                      await emitTracked({ type: 'done_when_citation_judged', citations: judgement.verdicts.map((verdict) => ({ taskId: verdict.taskId, check: verdict.checkIndex, verdict: verdict.verdict })) });
+                      await applyCitationVerdicts(this.projectRoot, status, judgement.verdicts);
+                      const demoted = await settleCitationRefusals(this.projectRoot, planPath, status, attempt >= stepMaxRetries);
+                      const demotedKeys = new Set(demoted.map(({ taskId, checkIndex }) => `${taskId}\u0000${checkIndex}`));
+                      const admissions = await admitCitationRefusals(this.projectRoot, planPath, pending,
+                        judgement.verdicts.filter(({ taskId, checkIndex }) => !demotedKeys.has(`${taskId}\u0000${checkIndex}`)), status);
+                      if (admissions.length > 0) {
+                        citationRefusalReason = admissions.map(({ taskId, checks }) =>
+                          `Done-when citation refused: Task ${taskId} must repair its refused test citation(s): ` +
+                          checks.map((check) => `check ${check.checkIndex} (${check.check}; test:${check.path}::${check.title}; ${check.reason})`).join('; '),
+                        ).join('\n');
+                      }
+                    } else {
+                      const reason = `citation judgement unavailable: ${judgement.cause}`;
+                      // Unavailability is not a refusal: persist the terminal
+                      // demotion directly so crash recovery never observes a
+                      // judged does-not-assert record to replay.
+                      await demoteUnavailableCitations(this.projectRoot, status, pending, reason);
+                      await emitTracked({ type: 'done_when_citation_judged', citations: pending.map((citation) => ({ taskId: citation.taskId, check: citation.checkIndex, unavailable: judgement.cause })) });
+                    }
+                  }
+                  }
+                } catch (error) {
+                  // Never complete BUILD with a citation still awaiting a
+                  // judgement.  Native unavailability is demoted above; a
+                  // persistence or parsing failure is a named boundary error.
+                  throw new Error(`citation judgement unavailable: ${error instanceof Error ? error.message : String(error)}`);
+                }
+              }
+              // A final BUILD attempt cannot consume a future review lap.
+              // Mark its nudge spent before evaluating completion so a forced
+              // demotion remains a successful terminal disposition.
+              if (step.name === 'build' && attempt >= stepMaxRetries) {
+                // An empty or missing plan reaches BUILD before a task-status
+                // file exists.  Let the completion predicate classify that
+                // gate miss (and the daemon auto-park contradiction guard)
+                // rather than turning it into a conductor error here.
+                const status = await readFile(
+                  join(this.projectRoot, '.pipeline', 'task-status.json'),
+                  'utf8',
+                )
+                  .then((raw) => JSON.parse(raw) as unknown)
+                  .catch(() => undefined);
+                if (status !== undefined && collectUnverifiedDoneWhenChecks(status).length > 0) {
+                  await this.recordUnverifiedDoneWhenNudge(state);
+                }
+              }
               completion = await checkStepCompletion(
                 this.projectRoot,
                 step.name,
-                await this.completionCtx(state),
+                {
+                  ...(await this.completionCtx(state)),
+                },
               );
+              if (citationRefusalReason) completion = { ...completion, done: false, reason: citationRefusalReason };
             }
 
             // Task 2, session-fresh-verdict-artifacts: audit-trail event for
@@ -12332,7 +12430,10 @@ export class Conductor {
               });
             }
 
-            if (step.name === 'build' && completion.done && await this.unverifiedDoneWhenNudgeSpent(state)) {
+            // Emit once when the ordinary unverified-check nudge has reached
+            // its terminal completion evaluation.  Demoted citations use this
+            // same path; they do not publish a second event at demotion.
+            if (step.name === 'build' && (completion.done || attempt >= stepMaxRetries) && await this.unverifiedDoneWhenNudgeSpent(state)) {
               try {
                 const status = JSON.parse(await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8'));
                 const checks = collectUnverifiedDoneWhenChecks(status);

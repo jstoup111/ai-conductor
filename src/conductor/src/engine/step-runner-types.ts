@@ -13,6 +13,12 @@ import type { AcceptedWideningDecision } from './accepted-widenings.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import type { RemediationProjection } from './remediation-projection.js';
 import type { CiFailureContext, CiFailureAttempt, GitRunner as RebaseGitRunner, ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
+import type { CitationJudgementInput, CitationJudgementResult } from './done-when-citation-judgement.js';
+
+/** Terminal result of the bounded Done-when citation judgement dispatch. */
+export type CitationJudgementDispatchResult =
+  | { readonly kind: 'valid'; readonly verdicts: readonly CitationJudgementResult[] }
+  | { readonly kind: 'unavailable'; readonly cause: string };
 
 export interface StepRunResult {
   success: boolean;
@@ -412,6 +418,13 @@ export interface StepRunner {
   dispatchRebaseRegradeJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
   /** Dispatch the engine-owned, bounded residue-routing judgement. */
   dispatchResidueRoutingJudgement?(prompt: string): Promise<{ success: boolean; output?: string }>;
+  /**
+   * Dispatch the engine-owned citation judgement in a fresh, read-only,
+   * native-schema-constrained provider session.
+   */
+  dispatchDoneWhenCitationJudgement?(
+    input: CitationJudgementInput,
+  ): Promise<CitationJudgementDispatchResult>;
   /**
    * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
    * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
