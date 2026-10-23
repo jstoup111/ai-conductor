@@ -5616,7 +5616,8 @@ Task 1 → Task 2
       expect(result.reason).not.toContain('old finding');
     });
 
-    it('preserves a stamped PASS from a different HEAD when its code delta misses the gate surface', async () => {
+    // Covers: task:9
+    it('passes shared built-in and custom confidence and severity thresholds to the effective verdict', async () => {
       const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
       await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({
         ...makeAggregate('lap-A', false),
@@ -5641,7 +5642,21 @@ Task 1 → Task 2
       }));
       const result = await checkStepCompletion(dir, 'build_review', {
         sessionStartedAt: Date.now(),
-        config: { gate_code_validity: { enabled: true }, build_review: { rubrics: { testQuality: { enabled: true, min_confidence: 70 } } } },
+        config: {
+          gate_code_validity: { enabled: true },
+          build_review: {
+            rubrics: { testQuality: { enabled: true, min_confidence: 70 } },
+            custom_rubrics: {
+              eventSpine: {
+                skill: 'event-spine',
+                question: 'Does this preserve the event spine?',
+                enabled: true,
+                min_confidence: 70,
+                min_severity: 'major',
+              },
+            },
+          },
+        },
         buildReviewEffectiveResolver: effectiveResolver,
         git: async (args) => {
           if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
@@ -5660,9 +5675,22 @@ Task 1 → Task 2
       expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), {
         child: undefined,
         adjudicationEnabled: true,
-        minConfidence: { testQuality: 70, security: 0, implementationQuality: 0 },
+        minConfidence: { testQuality: 70, security: 0, implementationQuality: 0, eventSpine: 70 },
+        minSeverity: { eventSpine: 'major' },
       });
       expect(result.staleLap).toBeUndefined();
+    });
+
+    // Covers: task:9
+    it('uses the shared threshold helper at both gate-completion resolver calls', async () => {
+      const source = await readFile(join(REPOSITORY_ROOT, 'src/conductor/src/engine/artifacts.ts'), 'utf8');
+      const completionPredicate = source.slice(
+        source.indexOf('  build_review: async'),
+        source.indexOf('  test_suite: async'),
+      );
+
+      expect(completionPredicate.match(/buildReviewEffectiveResolverThresholds\(ctx\.config\)/g)).toHaveLength(2);
+      expect(completionPredicate).not.toContain('resolveBuildReviewConfig(ctx.config ?? {}).rubrics');
     });
 
     it('rejects a matching-lap FAIL whose mtime predates the session without reporting a stale lap', async () => {
