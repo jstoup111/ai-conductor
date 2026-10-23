@@ -22,7 +22,7 @@ vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
   return { ...actual, makeProductionGit: () => async () => ({ exitCode: 0, stdout: '', stderr: '' }) };
 });
 
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
@@ -32,10 +32,11 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 
 const VALIDATION_GROUP_PREREQS = {
   feature_desc: 'validation-group-halt-attribution',
+  worktree_branch: 'feat/validation-group-halt-attribution',
   worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
   stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
   architecture_diagram: 'done', architecture_review: 'done', acceptance_specs: 'done',
-  build: 'done', build_review: 'done', test_suite: 'done', rebase: 'done', finish: 'done',
+  build: 'done', coverage_binding: 'done', build_review: 'skipped', test_suite: 'done', rebase: 'done', finish: 'done',
 } as ConductState;
 
 const AS_BUILT_POLICY = {
@@ -77,7 +78,7 @@ describe('validation-group halt attribution', () => {
 
   async function runTerminalAsBuiltGroup(
     kind: 'PLAN_GAP' | 'DESIGN' | 'invalid' | 'REMEDIABLE' | 'APPROVED',
-    route: 'terminal' | 'planner-halt' | 'projection-refusal' = 'terminal',
+    route: 'terminal' | 'planner-halt' | 'projection-refusal' | 'no-op' = 'terminal',
   ) {
     const root = await mkdtemp(join(tmpdir(), 'validation-group-halt-attribution-group-'));
     roots.push(root);
@@ -85,11 +86,14 @@ describe('validation-group halt attribution', () => {
       mkdir(join(root, '.pipeline'), { recursive: true }),
       mkdir(join(root, '.docs', 'specs'), { recursive: true }),
       mkdir(join(root, '.docs', 'stories'), { recursive: true }),
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
     ]);
     await Promise.all([
       writeState(join(root, '.pipeline/conduct-state.json'), VALIDATION_GROUP_PREREQS),
       writeFile(join(root, '.docs/specs/validation-group-halt-attribution.md'), '## Functional Requirements\n\nFR-1\n'),
       writeFile(join(root, '.docs/stories/validation-group-halt-attribution.md'), '## Story 1\n\n**Requirements:** FR-1\n'),
+      writeFile(join(root, '.docs/plans/validation-group-halt-attribution.md'), '### Task 1: fixture\n\nDone when: fixture\n'),
+      writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] })),
     ]);
     const events = new ConductorEventEmitter();
     const path = join(root, '.pipeline/events.jsonl');
@@ -104,6 +108,8 @@ describe('validation-group halt attribution', () => {
         stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
           if (step === 'manual_test') {
             await writeFile(join(root, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
+          } else if (step === 'build') {
+            await writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }));
           } else if (step === 'prd_audit') {
             await persistPrdAuditVerdict(root, { complete: true, judgment: {
               version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture', rationale: 'fixture', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [],
@@ -127,6 +133,11 @@ describe('validation-group halt attribution', () => {
       vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
       if (route === 'planner-halt') {
         vi.spyOn(conductor as any, 'planRemediation').mockResolvedValue({ kind: 'halt', detail: 'planner requires a decision', haltClass: 'needs-human' });
+      }
+      if (route === 'no-op') {
+        vi.spyOn(conductor as any, 'planRemediation').mockResolvedValue({
+          kind: 'route', target: 'build', hint: 'repair the unchanged finding', evidence: 'as-built fixture',
+        });
       }
       if (route === 'projection-refusal') {
         vi.spyOn(conductor as any, 'projectPendingAsBuiltRemediationFindings').mockResolvedValue('projection storage refused');
@@ -162,37 +173,14 @@ describe('validation-group halt attribution', () => {
     ]));
   });
 
-  it.each([
-    'terminal PLAN_GAP',
-    'terminal DESIGN',
-    'terminal invalid verdict',
-    'remediation planner halt',
-    'kickback no-op escalation',
-    'findings projection refusal',
-  ])('uses the as-built member for %s', async () => {
-    const { conductor, events } = await conductorAtValidationGroupEntry();
-    const halts: Array<{ step?: string }> = [];
-    events.on('loop_halt', (event) => { halts.push(event); });
-
-    await (conductor as any).writeHaltMarker(
-      'as-built validator ended this group\n',
-      'needs-human',
-      'architecture_review_as_built',
-    );
-    await (conductor as any).emitLoopHalt(
-      'as-built validator ended this group',
-      undefined,
-      'architecture_review_as_built',
-    );
-
-    expect(halts).toEqual([expect.objectContaining({ step: 'architecture_review_as_built' })]);
+  it('attributes a real two-round as-built kickback-to-build no-op escalation to as-built', async () => {
+    const persisted = await runTerminalAsBuiltGroup('REMEDIABLE', 'no-op');
+    expect(persisted).toContainEqual(expect.objectContaining({
+      type: 'loop_halt', step: 'architecture_review_as_built',
+    }));
     expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
-      expect.any(String),
-      'as-built validator ended this group\n',
-      'needs-human',
-      expect.anything(),
-      undefined,
-      'architecture_review_as_built',
+      expect.any(String), expect.stringContaining('as-built architecture review kickback-to-build no-op'),
+      'kickback-cap', expect.anything(), undefined, 'architecture_review_as_built',
     ]));
   });
 
