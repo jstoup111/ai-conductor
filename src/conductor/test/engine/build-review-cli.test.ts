@@ -156,6 +156,7 @@ describe('build-review findings CLI', () => {
     });
   });
 
+  // Covers: task:10
   it('renders recurrence lineage and distinct-case declarations without changing unrelated case rows', async () => {
     const recurring = {
       ...refutedCaseStore.cases[0]!, id: 'N', disposition: 'act' as const, resolution: 'open' as const,
