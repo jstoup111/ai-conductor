@@ -176,8 +176,9 @@ keeps engine prompts and shipped skills from directing a managed session to a re
 ## `ai-conductor build-review`
 
 ```bash
-ai-conductor build-review findings --feature <slug> [--json]
+ai-conductor build-review findings --feature <slug> [--child <child>] [--json]
 ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <id> --rationale <text>
 ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
@@ -186,7 +187,12 @@ autonomous remediation-case outcomes; `--json` includes those cases under `cases
 autonomous outcomes separate from operator dispositions and includes each case's disposition, resolution,
 source ids, effect state, rationale, and, for a refutation, its claim and assertion verdicts. A missing
 case store is a successful listing with no autonomous cases. An unreadable or unsupported case store makes
-`findings` name the store and exit 1 rather than silently omitting its cases. `accept` changes state only from an interactive terminal with
+`findings` name the store and exit 1 rather than silently omitting its cases. `--child` reads that
+child's case store instead of the feature's. `findings` also lists each carried source (its case,
+origin source ids, origin laps, and the origin dispositions' operators and rationales), each
+operator-resolved case (operator, rationale, and time), and each case-store outbox entry the engine has
+not yet delivered; `--json` reports them under `carriedSources`, `operatorResolvedCases`, and
+`pendingOutbox`, each omitted when empty. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
@@ -200,6 +206,18 @@ It records a decision only when that rubric currently has an exhausted mechanica
 fault, or a current `projection-oversized` fault (which halts without consuming that allowance).
 Judged, skipped, duplicate, unknown-rubric, allowance-remaining for every other cause, and stale-review
 requests are refused without changing the decision state.
+
+`resolve-case` resolves one open remediation case in the feature's case store, or in the child's with
+`--child`. It has the same interactive-terminal and local-operator-identity gate as `accept` and
+requires a non-empty rationale. It records the operator resolution, turns a `reserved` effect into
+`failed`, keeps every source link and the effect history, and queues one
+`remediation_case_operator_resolved` event that the engine delivers at its next pass. It prints
+`build-review resolve-case: resolved <id>.` and exits 0. An unknown case, an already resolved case, an
+empty rationale, an invalid child id, a non-interactive session, an unresolved identity, or a feature
+mismatch is refused without changing the store and exits 1. A resolved case can carry acceptance to
+later same-substance findings; see
+[post-join build-review adjudication](../explanation/gates.md#post-join-build-review-adjudication).
+Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case).
 
 ## `ai-conductor scope-check`
 

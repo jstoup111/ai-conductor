@@ -1640,6 +1640,44 @@ not cover that case.
 repeats the same rejection. A repeat means the transition is still inadmissible. Leave the feature
 halted.
 
+### build_review halted on an open action case
+
+**Symptom:** `.pipeline/HALT` (class `needs-human`) reads one of:
+
+```text
+build_review adjudication halted: open action case <case> has a failed effect while a current remediation source remains unaccepted; resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+build_review clean-PASS durable settlement halted: clean PASS cannot settle open action case <case> (<status>); resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+```
+
+**Diagnosis:** an action case's BUILD effect failed or never finished, and the engine cannot retire it:
+at least one of its sources is still raised and not accepted, or the lap was not mechanically healthy
+enough to treat an absent source as gone. A clean-PASS settlement halt that names a `deferral` case
+carries no `resolve with` command; this section does not cover it.
+
+**Recovery:**
+
+1. Inspect the case, its sources, and its effect:
+
+   ```bash
+   ai-conductor build-review findings --feature <slug> [--child <child>]
+   ```
+
+2. Leave `.pipeline/remediation-cases.json` unchanged. Do not hand-edit case history.
+3. If the remaining finding is accepted risk or already fixed, run the command from the halt in an
+   interactive terminal:
+
+   ```bash
+   ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+   ```
+
+   Otherwise, fix the finding in the feature worktree and leave the case open.
+4. Clear the halt with an [audited clear](#audited-clear).
+
+**Verification:** `findings` lists the case as an operator-resolved case, plus a pending outbox entry
+until the engine's next pass. After that pass, `.pipeline/events.jsonl` holds one
+`remediation_case_operator_resolved` event for the case, and `build_review` settles or routes without
+repeating this halt.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:
