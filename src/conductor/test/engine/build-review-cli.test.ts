@@ -1237,7 +1237,7 @@ describe('build-review findings with current custom rubrics', () => {
     expect(output).toMatchObject({ verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [identity.id] });
   });
 
-  // Covers: task:16, task:rem-prd-audit-r16-1, task:rem-prd-audit-r16-2
+  // Covers: task:16, task:rem-prd-audit-r16-1, task:rem-prd-audit-r16-2, task:rem-as-built-r16-3
   it('projects threshold and adjudicated advisory findings with their source metadata and renders their local advisory details', async () => {
     const adjudicated = customJudgedAggregate({ severity: 'critical' });
     const thresholdFinding = {
@@ -1279,7 +1279,7 @@ describe('build-review findings with current custom rubrics', () => {
         { id: adjudicatedId, rubric: 'portablePolicy', severity: 'nit', threshold: 'minor', origin: 'adjudicated' },
       ],
     });
-    expect(JSON.stringify(output.advisoryFindings)).not.toContain('The reviewer downgraded this finding.');
+    expect(JSON.stringify(output)).not.toContain('The reviewer downgraded this finding.');
 
     const human = vi.fn();
     await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {

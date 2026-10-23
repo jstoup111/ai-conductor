@@ -214,6 +214,15 @@ function advisoryFindings(
   return Object.freeze(projected);
 }
 
+/** Adjudicator downgrades are local human evidence, never JSON output. */
+function jsonCases(cases: readonly RemediationCaseRecord[]): readonly object[] {
+  return cases.map((caseRecord) => {
+    if (caseRecord.disposition !== 'advisory') return caseRecord;
+    const { rationale: _rationale, ...projected } = caseRecord;
+    return projected;
+  });
+}
+
 /** Rehydrates the stamped custom identity rather than accepting a CLI supplied payload. */
 function currentFindings(aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>): readonly CurrentFinding[] {
   const builtin = Object.values(aggregate.results).flatMap((result) => result.kind === 'judged'
@@ -509,7 +518,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     } = effective;
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...reported, acceptedDispositions: accepted,
-      cases,
+      cases: jsonCases(cases),
       ...(carriedSources.length === 0 ? {} : { carriedSources }),
       ...(operatorResolvedCases.length === 0 ? {} : { operatorResolvedCases }),
       ...(pendingOutbox.length === 0 ? {} : { pendingOutbox }),
