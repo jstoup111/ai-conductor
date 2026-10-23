@@ -268,7 +268,10 @@ describe('kickback-budget inspect --child', () => {
       expect(human.output).toContain('Kickback budget (restack): 0/3 consumed; 3 remaining');
       expect(human.output).toContain('Latest reason: child two restack');
       expect(planGrowth.growth.added).toBe(3);
-      expect(human.output.match(new RegExp(`Plan growth: ${planGrowth.growth.added}/15 added; 12 remaining \\(raised cap\\)`, 'g'))).toHaveLength(4);
+      const expectedPlanGrowth = `Plan growth: ${planGrowth.growth.added}/15 added; ${planGrowth.growth.remaining} remaining (raised cap)`;
+      const gateBlocks = human.output.split('\n\n').filter((block) => block.startsWith('Kickback budget ('));
+      expect(gateBlocks).toHaveLength(4);
+      for (const block of gateBlocks) expect(block).toContain(expectedPlanGrowth);
 
       const json = await inspect(fixture, '2', 'json');
       expect(json.code).toBe(0);
