@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4
+// Covers: task:2, task:3, task:4, task:5
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -80,6 +80,7 @@ describe('validation-group halt attribution', () => {
     kind: 'PLAN_GAP' | 'DESIGN' | 'invalid' | 'REMEDIABLE' | 'APPROVED' | 'NO_VERDICT' | 'MECHANICAL' | 'PERMISSION' | 'AUTH_PARK' | 'CACHED_TRIAL' | 'MANUAL_NO_VERDICT',
     route: 'terminal' | 'planner-halt' | 'projection-refusal' | 'no-op' = 'terminal',
     entry: 'manual_test' | 'prd_audit' = 'manual_test',
+    options: { manualFail?: boolean; acceptPrdAudit?: boolean } = {},
   ) {
     const root = await mkdtemp(join(tmpdir(), 'validation-group-halt-attribution-group-'));
     roots.push(root);
@@ -106,16 +107,18 @@ describe('validation-group halt attribution', () => {
         stateFilePath: join(root, '.pipeline/conduct-state.json'),
         events,
         fromStep: entry, mode: 'auto', daemon: true, verifyArtifacts: route !== 'projection-refusal', maxRetries: 1,
-        stepRunner: { run: vi.fn(async (step: StepName, _state, options) => {
+        stepRunner: { run: vi.fn(async (step: StepName, _state, runOptions) => {
           if (step === 'manual_test') {
             if (kind === 'MANUAL_NO_VERDICT') return { success: false, output: 'fixture manual dispatch lost' };
-            await writeFile(join(root, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
+            await writeFile(join(root, '.pipeline/manual-test-results.md'), options.manualFail
+              ? '# Results\n\n| Story | Result |\n|--|--|\n| S1 | FAIL |\n'
+              : '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
           } else if (step === 'build') {
             await writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }));
           } else if (step === 'prd_audit') {
             await persistPrdAuditVerdict(root, { complete: true, judgment: {
               version: 'v1', criterionJudgments: [{ criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS', evidence: 'fixture', rationale: 'fixture', requirementAssociations: [], evidenceTaskIds: [] }], noOwnerObservations: [],
-            }, diagnostics: [], recordedDispositions: [] }, { attemptId: options?.runId ?? 'prd', codeStamp: 'fixture' });
+            }, diagnostics: [], recordedDispositions: [] }, { attemptId: runOptions?.runId ?? 'prd', codeStamp: 'fixture' });
           } else if (step === 'architecture_review_as_built') {
             if (kind === 'NO_VERDICT') return { success: false, output: 'fixture dispatch lost' };
             if (kind === 'MECHANICAL') {
@@ -132,19 +135,22 @@ describe('validation-group halt attribution', () => {
             if (kind === 'invalid') {
               await writeFile(join(root, '.pipeline/architecture-review-as-built.json'), '{"invalid":true}');
             } else if (kind === 'PLAN_GAP') {
-              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'PLAN_GAP', reachability: [], driftNotes: [], outcomeDelivered: false, affectedOutcome: 'FR-1' }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
+              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'PLAN_GAP', reachability: [], driftNotes: [], outcomeDelivered: false, affectedOutcome: 'FR-1' }, { attemptId: runOptions?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
             } else if (kind === 'REMEDIABLE') {
-              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [], findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the missing guard.' }], violations: 'A repair is needed.', resolution: 'Add the guard.' }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
+              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [], findings: [{ class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Add the missing guard.' }], violations: 'A repair is needed.', resolution: 'Add the guard.' }, { attemptId: runOptions?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
             } else if (kind === 'APPROVED') {
-              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
+              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] }, { attemptId: runOptions?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
             } else {
-              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [], findings: [{ class: 'DESIGN', summary: 'Choose a boundary.' }], violations: 'A decision is required.', resolution: 'Choose a boundary.' }, { attemptId: options?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
+              await persistAsBuiltVerdict(root, { version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [], findings: [{ class: 'DESIGN', summary: 'Choose a boundary.' }], violations: 'A decision is required.', resolution: 'Choose a boundary.' }, { attemptId: runOptions?.runId ?? 'as-built', codeStamp: null, policy: AS_BUILT_POLICY });
             }
           }
           return { success: true };
         }) },
       });
       vi.spyOn(conductor as any, 'verdictDispatchHandshake').mockResolvedValue(undefined);
+      if (options.acceptPrdAudit) {
+        vi.spyOn(conductor as any, 'routeCurrentPrdAudit').mockResolvedValue({ kind: 'record' });
+      }
       if (route === 'planner-halt') {
         vi.spyOn(conductor as any, 'planRemediation').mockResolvedValue({ kind: 'halt', detail: 'planner requires a decision', haltClass: 'needs-human' });
       }
@@ -176,7 +182,14 @@ describe('validation-group halt attribution', () => {
 
   async function runPrdAuditGroup(
     route: Record<string, unknown>,
-    options: { incompleteAudit?: boolean; plannerFault?: boolean; spentAllowance?: boolean; noOp?: boolean } = {},
+    options: {
+      incompleteAudit?: boolean;
+      plannerFault?: boolean;
+      spentAllowance?: boolean;
+      noOp?: boolean;
+      manualFail?: boolean;
+      daemon?: boolean;
+    } = {},
   ) {
     const root = await mkdtemp(join(tmpdir(), 'validation-group-halt-attribution-prd-'));
     roots.push(root);
@@ -204,10 +217,12 @@ describe('validation-group halt attribution', () => {
     try {
       const conductor = new Conductor({
         projectRoot: root, stateFilePath: join(root, '.pipeline/conduct-state.json'), events,
-        fromStep: 'manual_test', mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+        fromStep: 'manual_test', mode: 'auto', daemon: options.daemon ?? true, verifyArtifacts: true, maxRetries: 1,
         stepRunner: { run: vi.fn(async (step: StepName, _state, runOptions) => {
           if (step === 'manual_test') {
-            await writeFile(join(root, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
+            await writeFile(join(root, '.pipeline/manual-test-results.md'), options.manualFail
+              ? '# Results\n\n| Story | Result |\n|--|--|\n| S1 | FAIL |\n'
+              : '# Results\n\n| Story | Result |\n|--|--|\n| S1 | PASS |\n');
           } else if (step === 'prd_audit') {
             await persistPrdAuditVerdict(root, {
               complete: !options.incompleteAudit,
@@ -362,6 +377,53 @@ describe('validation-group halt attribution', () => {
     expect(haltMarkerCalls).toContainEqual(expect.arrayContaining([
       expect.any(String), expect.any(String), expect.any(String), expect.anything(), undefined, 'prd_audit',
     ]));
+  });
+
+  function validationRefusals(events: Array<Record<string, unknown>>): string[] {
+    return events
+      .filter((event) => event.type === 'step_refused' && event.kind === 'validation-verdict')
+      .map((event) => event.step as string)
+      .sort();
+  }
+
+  it('attributes a generic multi-member halt to manual_test and refuses each failing member', async () => {
+    const persisted = await runPrdAuditGroup({ kind: 'none' }, {
+      incompleteAudit: true, manualFail: true, daemon: false,
+    });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'manual_test' }));
+    expect(validationRefusals(persisted)).toEqual(['manual_test', 'prd_audit']);
+  });
+
+  it('attributes a mixed-gap planner halt to the first gap member and refuses only gap members', async () => {
+    const persisted = await runPrdAuditGroup({ kind: 'none' }, {
+      incompleteAudit: true, plannerFault: true,
+    });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'prd_audit' }));
+    expect(validationRefusals(persisted)).toEqual(['prd_audit']);
+  });
+
+  it('attributes a merged manual-test planner halt to the first gap member and refuses manual_test plus gaps', async () => {
+    const persisted = await runPrdAuditGroup({ kind: 'none' }, {
+      incompleteAudit: true, manualFail: true, plannerFault: true,
+    });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'prd_audit' }));
+    expect(validationRefusals(persisted)).toEqual(['manual_test', 'prd_audit']);
+  });
+
+  it('refuses manual_test beside a terminal as-built verdict without refusing passing siblings', async () => {
+    const persisted = await runTerminalAsBuiltGroup('DESIGN', 'terminal', 'manual_test', {
+      manualFail: true, acceptPrdAudit: true,
+    });
+    expect(persisted).toContainEqual(expect.objectContaining({
+      type: 'loop_halt', step: 'architecture_review_as_built',
+    }));
+    expect(validationRefusals(persisted)).toEqual(['architecture_review_as_built', 'manual_test']);
+  });
+
+  it('refuses exactly the single failing member', async () => {
+    const persisted = await runPrdAuditGroup({ kind: 'record' }, { manualFail: true, daemon: false });
+    expect(persisted).toContainEqual(expect.objectContaining({ type: 'loop_halt', step: 'manual_test' }));
+    expect(validationRefusals(persisted)).toEqual(['manual_test']);
   });
 
   it('keeps a non-group BUILD halt attributed to build', async () => {

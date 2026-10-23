@@ -1046,12 +1046,11 @@ export class Conductor {
       `record refused ${input.judgingStep} step`,
       changes,
     );
-    // A join can reject several admitted members.  Close every owned scope
-    // exactly once; the lifecycle resolver suppresses stale/duplicate
-    // terminals. Preserve the legacy single judging-step event when this
-    // caller has no execution-aware member context.
-    const contextSteps = [...refused].filter((step) => input.executionContexts?.has(step));
-    for (const refusedStep of contextSteps.length > 0 ? contextSteps : [input.judgingStep]) {
+    // A join can reject several members. Emit one member-scoped refusal for
+    // every rejected member, whether or not its execution context survived
+    // to this late group decision; the lifecycle resolver suppresses stale
+    // terminals for contexts that have already settled.
+    for (const refusedStep of refused) {
       const executionContext = input.executionContexts?.get(refusedStep);
       await this.emitExecutionEvent({
         type: 'step_refused',
@@ -9231,7 +9230,8 @@ export class Conductor {
                   .filter((member, idx) =>
                     outcomes[idx]?.kind !== 'verdict' ||
                     outcomes[idx]?.verdict !== 'pass' ||
-                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
+                    (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true) ||
+                    (member.name === 'manual_test' && manualTestFailRows.length > 0))
                   .map((member) => member.name as StepName);
               const prdAuditUnsatisfied = membership.dispatchable.some((member, idx) =>
                 member.name === 'prd_audit' &&
@@ -9729,9 +9729,22 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  const judgingStep = gapMemberNamesForMerge[0]!;
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    remediationOutcome.haltClass ?? 'needs-human',
+                    judgingStep,
+                  );
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep,
+                    refusedSteps: ['manual_test', ...gapMemberNamesForMerge],
+                    executionContexts: memberExecutionContexts,
+                    reason,
+                  });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, judgingStep);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -9901,9 +9914,22 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  const judgingStep = gapMemberNames[0]!;
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    remediationOutcome.haltClass ?? 'needs-human',
+                    judgingStep,
+                  );
+                  await this.recordGroupRefusal({
+                    state,
+                    groupStep: step.name,
+                    judgingStep,
+                    refusedSteps: gapMemberNames,
+                    executionContexts: memberExecutionContexts,
+                    reason,
+                  });
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
+                  await this.emitLoopHalt(reason, prUrl, judgingStep);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -9965,8 +9991,9 @@ export class Conductor {
                   (remediationNoPlanReason
                     ? ` — remediation did not route: ${remediationNoPlanReason}`
                     : '');
+            const judgingStep = (failedMembers[0]?.name as StepName | undefined) ?? step.name;
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
-              await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
+              await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human', judgingStep);
             }
             await closeClassifiedPassingMembers();
             // Attribute the refusal to the first member that actually failed
@@ -9975,12 +10002,12 @@ export class Conductor {
             await this.recordGroupRefusal({
               state,
               groupStep: step.name,
-              judgingStep: (failedMembers[0]?.name as StepName | undefined) ?? step.name,
+              judgingStep,
               refusedSteps: failedMembers.map((member) => member.name as StepName),
               executionContexts: memberExecutionContexts,
               reason: groupHaltReason,
             });
-            await this.emitLoopHalt(groupHaltReason);
+            await this.emitLoopHalt(groupHaltReason, undefined, judgingStep);
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
               process.off('SIGTERM', sigterm);
