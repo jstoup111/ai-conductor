@@ -111,6 +111,8 @@ Mechanical validation checks exhaustive source coverage, bounded fields, recogni
 
 A current requirement/plan/architecture gap cannot be converted to a non-blocking deferred issue merely to settle the lap. Existing deferral remains available only for work outside the current approved outcome and is subject to its existing durable effect contract. Escalation does not append tasks, rewrite sealed artifacts, grant risk acceptance, or spend a BUILD charge. On explicit decision resolution, recovery re-evaluates against the new approved baseline rather than editing an old verdict into PASS.
 
+> **Amended 2026-10-23 by #3291:** "Invalid output, or missing required admission evidence … produces a durable decision stop" has one exception. When a case-v2 judgement's only defect is admitting plan tasks the context listed in its index without their bodies, the engine discards that judgement and runs the single expansion round of the same-date D8 and mixed-laps D2 amendments instead of stopping. Any other invalid output, an admitted id absent from the plan, or an invalid expansion-round judgement stops as before, and no action effect is applied from a discarded judgement.
+
 > **Amended 2026-10-20 by #3271:** An `escalate` proposal bound to a carry-eligible case is classified `carry` before the escalation split. It produces no decision stop, never yields `conflicting-case-id`, and does not deny sibling action effects. An escalation bound to any other case, or unbound, is unchanged (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
 ### D10 — One authority across attended and daemon execution
