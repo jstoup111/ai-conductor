@@ -125,6 +125,7 @@ export async function writeHaltMarker(
   haltClass: HaltClass,
   events?: ConductorEventEmitter,
   recordRemote?: HaltRecordRemoteOptions,
+  haltingStep?: string,
 ): Promise<HaltMarkerWriteResult> {
   const markerPath = join(projectRoot, HALT_MARKER);
   const haltClassPath = join(projectRoot, HALT_CLASS_MARKER);
@@ -146,7 +147,7 @@ export async function writeHaltMarker(
   try {
     await writeFile(haltClassTempPath, haltClass, 'utf-8');
     await rename(haltClassTempPath, haltClassPath);
-    await writeHaltRecord(projectRoot, body, haltClass, events, {
+    await writeHaltRecord(projectRoot, body, haltClass, haltingStep, events, {
       ...recordRemote,
       events: recordRemote?.events ?? events,
     });
@@ -163,12 +164,13 @@ async function writeHaltRecord(
   projectRoot: string,
   haltBody: string,
   haltClass: HaltClass,
+  haltingStep: string | undefined,
   events?: ConductorEventEmitter,
   recordRemote?: HaltRecordRemoteOptions,
 ): Promise<void> {
   if (!isRecordableHaltClass(haltClass)) return;
 
-  const input = await haltRecordInput(projectRoot, haltBody, haltClass);
+  const input = await haltRecordInput(projectRoot, haltBody, haltClass, haltingStep);
   const path = haltRecordPath(input.slug);
 
   try {
@@ -190,6 +192,7 @@ async function haltRecordInput(
   projectRoot: string,
   haltBody: string,
   haltClass: HaltClass,
+  haltingStep?: string,
 ): Promise<HaltRecordInput> {
   const slug = basename(projectRoot);
   const [branch, headSha, phaseMarker, activeChild] = await Promise.all([
@@ -208,7 +211,7 @@ async function haltRecordInput(
   return {
     slug,
     haltClass,
-    step: fields.get('step') ?? 'unknown',
+    step: haltingStep ?? fields.get('step') ?? 'unknown',
     phase: fields.get('phase') ?? 'unknown',
     branch,
     headSha,
