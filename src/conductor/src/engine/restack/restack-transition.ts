@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import type { StepName } from '../../types/index.js';
 import { CHILD_REGION_STEPS, isRegionStep, pipelinePathFor, type ChildId } from '../child-context.js';
 import { createFilesystemConductStateStore } from '../filesystem-conduct-state-store.js';
-import { readVerdict, type RebasePreservedCandidate, type ReplayEvidence } from '../gate-verdicts.js';
+import { checkGateCompletion, readVerdict, type RebasePreservedCandidate, type ReplayEvidence } from '../gate-verdicts.js';
 import { classifyReplayGateInvalidation } from '../gate-invalidation.js';
+import type { RegionGate, RevalidationQueueEntry } from '../routing/route-types.js';
 import {
   applyRebaseVerdicts,
   emitGateInvalidationEvents,
@@ -37,12 +38,16 @@ export interface ApplyRestackTransitionOptions {
   readonly moves: readonly RestackMoveRef[];
   /** Exact replay identities retained by the executor or recovered journal. */
   readonly rewritesByChild?: ReadonlyMap<ChildId, ReadonlyMap<CommitSha, CommitSha>>;
+  /** Gate-owned freshness check for preserved closed-child verdicts. */
+  readonly isRegionGateFresh?: (gate: RegionGate, child: ChildId) => Promise<boolean>;
   readonly git: GitRunner;
   readonly events?: ConductorEventEmitter;
 }
 
 export interface RestackTransitionResult {
   readonly wouldInvalidate: ReadonlyMap<ChildId, readonly StepName[]>;
+  /** Closed children whose region gates cannot be safely retained. */
+  readonly queueInvalidation: readonly RevalidationQueueEntry[];
 }
 
 interface RestackTuple {
@@ -95,6 +100,55 @@ async function outcomeFor(worktree: string, git: GitRunner, tuple: RestackTuple)
       target: tuple.onto,
       completedHead: tuple.head,
     },
+  };
+}
+
+/**
+ * Produces one revalidation obligation for a moved closed child when replay
+ * proof cannot retain every one of its region gates. A gate verdict is the
+ * existing gate-owned freshness decision: an absent, unreadable, or
+ * unsatisfied record is therefore conservative evidence to re-run that gate.
+ */
+export async function queueInvalidation(
+  worktree: string,
+  git: GitRunner,
+  range: ChildRange,
+  move: RestackMoveRef,
+  newParent: CommitSha,
+  isRegionGateFresh: (gate: RegionGate, child: ChildId) => Promise<boolean> = async (gate, child) =>
+    (await checkGateCompletion(worktree, gate, { activeChild: child })).done,
+): Promise<RevalidationQueueEntry | undefined> {
+  const outcome = await outcomeFor(worktree, git, {
+    previous: range.oldTip,
+    base: range.oldParent,
+    onto: newParent,
+    head: move.newSha,
+  });
+  if (outcome.kind !== 'changed' || outcome.replay === undefined) return undefined;
+
+  const projection = classifyReplayGateInvalidation(
+    outcome.allChangedPaths ?? outcome.changedCodePaths,
+    outcome.featureSurface ?? [],
+    false,
+    await compareReplayTree(git, outcome.replay),
+    outcome.documentInputs,
+  );
+  const invalidated = new Set(projection.invalidated);
+  const gates = (await Promise.all(CHILD_REGION_STEPS.map(async (gate) => {
+    if (invalidated.has(gate)) return gate;
+    const verdict = await readVerdict(worktree, gate, range.child);
+    if (verdict?.satisfied !== true || !(await isRegionGateFresh(gate, range.child))) return gate;
+    return undefined;
+  }))).filter((gate): gate is RegionGate => gate !== undefined);
+  if (gates.length === 0) return undefined;
+
+  return {
+    child: range.child,
+    position: range.child,
+    closureSha: move.newSha,
+    gates,
+    replay: { oldParent: range.oldParent, newParent },
+    state: 'queued',
   };
 }
 
@@ -214,6 +268,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
     .filter((move): move is RestackMoveRef & { child: ChildId } => move.child !== undefined && move.ref.startsWith('refs/heads/') && move.oldSha !== move.newSha)
     .map((move) => move.child));
   const wouldInvalidate = new Map<ChildId, readonly StepName[]>();
+  const queuedInvalidations: RevalidationQueueEntry[] = [];
   const newParentFor = (range: ChildRange): CommitSha => {
     const index = options.ranges.indexOf(range);
     const previous = index > 0 ? moveByChild.get(options.ranges[index - 1]!.child) : undefined;
@@ -341,6 +396,15 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
         : undefined,
     ))).filter((gate) => gate !== undefined);
     wouldInvalidate.set(range.child, gates);
+    const queued = await queueInvalidation(
+      options.worktree,
+      options.git,
+      range,
+      move,
+      newParentFor(range),
+      options.isRegionGateFresh,
+    );
+    if (queued) queuedInvalidations.push(queued);
   }
-  return { wouldInvalidate };
+  return { wouldInvalidate, queueInvalidation: queuedInvalidations };
 }
