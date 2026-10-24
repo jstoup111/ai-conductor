@@ -37,6 +37,8 @@ export interface StepRunResult {
   output?: string;
   /** Bounded facts from an unclassified provider exit, forwarded to close events. */
   exitFacts?: ProviderExitFacts;
+  /** Provider that produced the bounded exit facts, when a provider was selected. */
+  provider?: string;
   /** Native-schema terminal value, retained verbatim for engine validation. */
   finalStructuredResult?: unknown;
   /** A typed refusal is an entry/environment outcome, never provider text. */

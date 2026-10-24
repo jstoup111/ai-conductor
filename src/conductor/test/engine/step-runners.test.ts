@@ -256,6 +256,36 @@ function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefine
 }
 
 describe('DefaultStepRunner', () => {
+  it('carries the provider that produced provider exit facts onto the step result', () => {
+    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project');
+    const toStepRunResult = (runner as unknown as {
+      toStepRunResult(step: StepName, result: ProviderExecutionResult): unknown;
+    }).toStepRunResult.bind(runner);
+
+    expect(toStepRunResult('remediate', {
+      success: false,
+      output: 'provider failed',
+      exitCode: 1,
+      preferredProvider: 'codex',
+      actualProvider: 'claude',
+      exitFacts: { processErrorCode: 'E2BIG' },
+      attempts: [],
+    })).toMatchObject({
+      provider: 'claude',
+      exitFacts: { processErrorCode: 'E2BIG' },
+    });
+
+    const preferredProviderResult = toStepRunResult('remediate', {
+      success: false,
+      output: 'provider unavailable',
+      exitCode: 1,
+      preferredProvider: 'codex',
+      attempts: [],
+    });
+    expect(preferredProviderResult).toMatchObject({ provider: 'codex' });
+    expect(preferredProviderResult).not.toHaveProperty('exitFacts');
+  });
+
   it('settles every shared source member after a custom-only early exit', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'build-review-materialization-settlement-'));
     const settle = vi.fn(async (_memberId: string) => {});
