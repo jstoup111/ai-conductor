@@ -201,6 +201,7 @@ describe('build-review domain', () => {
     expect(withoutConfidence.findings[0]).not.toHaveProperty('confidence');
   });
 
+  // Covers: task:14
   it('retains an optional cause hunk on built-in v4 and custom v2 findings without re-keying identity', () => {
     const causeHunk = { path: 'src/widget.ts', contentHash: HASH, display: 'new causal boundary', occurrence: 2 };
     const withoutCause = parseBuildReviewJudgedResult(judged([finding()]));
@@ -225,6 +226,7 @@ describe('build-review domain', () => {
     expect(identityWithCause).toEqual(identityWithoutCause);
   });
 
+  // Covers: task:14
   it('rejects malformed built-in cause hunks as contract-invalid', () => {
     const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
     for (const causeHunk of [
