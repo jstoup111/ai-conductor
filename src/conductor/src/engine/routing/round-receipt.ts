@@ -281,6 +281,10 @@ export async function settleRoundAtDispatch(input: SettleRoundAtDispatchInput): 
       // would otherwise bypass that evidence path.
       if (stored.kind !== 'record') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       if (currentHostOf(stored.record) !== input.dispatchingChild) return { kind: 'refused', reason: 'not-current-host' } as const;
+      // Revalidation replays an already-accounted child contribution. Its one
+      // repair credit is granted at region entry; it consumes no whole-feature
+      // receipt or additional review lap here.
+      if (stored.record.kind === 'revalidate') return { kind: 'acknowledged', settlementId: `revalidate-${input.roundId}` } as const;
       const reconciled = await reconcileReceiptLedgerUnlocked(input.projectRoot, input.slug, input.routing, git);
       if (reconciled.kind !== 'reconciled') return { kind: 'exhausted', gate: 'prd_audit', allowance: 'laps' } as const;
       const receipt = stored.record.receipt;

@@ -137,9 +137,9 @@ export function isLegalRoundPhaseTransition(from: RoundPhase, to: RoundPhase): b
   return assertNever(from);
 }
 
-/** The dark-launch setting is deliberately false unless explicitly enabled. */
+/** Routing is enabled for stacks unless an operator explicitly opts out. */
 export function routingSettingOn(config: { readonly stacked_prs?: StackedPrsConfig } | undefined): boolean {
-  return config?.stacked_prs?.route_whole_feature_fixes === true;
+  return config?.stacked_prs?.route_whole_feature_fixes !== false;
 }
 
 /** A caller supplies its cursor; flat and unsliced features are never eligible. */

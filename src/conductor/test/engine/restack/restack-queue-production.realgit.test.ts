@@ -63,6 +63,11 @@ async function fixture(routingEnabled = true) {
     await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
     await git(['add', '.ai-conductor/config.yml']);
     await git(['commit', '-qm', 'enable routed queue']);
+  } else {
+    await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: false\n');
+    await git(['add', '.ai-conductor/config.yml']);
+    await git(['commit', '-qm', 'disable routed queue']);
   }
   await git(['checkout', '-q', 'main']);
   const advanced = await commit('advance parseA', 'a.ts', 'export function parseA(value: string, radix = 10) { return Number.parseInt(value, radix); }\n');
@@ -82,6 +87,52 @@ async function fixture(routingEnabled = true) {
     rename,
   });
   return { repo, advanced, c1, c2, git: makeGitRunner(repo) };
+}
+
+async function seedQueue(subject: { readonly repo: string; readonly git: GitRunner }) {
+  const written = await subject.git(['hash-object', '-w', '--stdin'], {
+    input: JSON.stringify({ generation: 7, entries: [], outbox: [] }),
+  });
+  const blob = written.stdout.trim();
+  await subject.git(['update-ref', revalidationQueueRefFor('demo'), blob]);
+  return blob;
+}
+
+async function queueBlob(subject: { readonly repo: string; readonly git: GitRunner }) {
+  return (await subject.git(['rev-parse', revalidationQueueRefFor('demo')])).stdout.trim();
+}
+
+async function leafOnlyFixture() {
+  const repo = await mkdtemp(join(tmpdir(), 'restack-queue-leaf-only-'));
+  repositories.push(repo);
+  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'restack-queue@example.test']);
+  await git(['config', 'user.name', 'Restack queue']);
+  await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+  await writeFile(join(repo, 'base.txt'), 'base\n');
+  await git(['add', '.ai-conductor/config.yml', 'base.txt']);
+  await git(['commit', '-qm', 'base']);
+  await git(['checkout', '-qb', 'feat/daemon-demo']);
+  await writeFile(join(repo, 'leaf.ts'), 'export const leaf = true;\n');
+  await git(['add', 'leaf.ts']);
+  await git(['commit', '-qm', 'leaf']);
+  await writeCoverageBindingEnvelope(repo, {
+    version: 1,
+    slug: 'demo',
+    runId: 'leaf-only-queue-run',
+    status: 'done',
+    entries: [],
+    sliceMembership: { taskSlices: { leaf: 1 }, titles: ['leaf'] },
+    storyOwnership: { S1: 1 },
+  }, {
+    readFile: (path) => readFile(path, 'utf8'),
+    mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+    writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
+    rename,
+  });
+  return { repo, git: makeGitRunner(repo) };
 }
 
 describe('restack queue production (real local Git)', () => {
@@ -122,6 +173,7 @@ describe('restack queue production (real local Git)', () => {
   // Covers: task:31
   it('does not name the queue ref when routing is off', async () => {
     const subject = await fixture(false);
+    const queueOld = await seedQueue(subject);
     const recorded = recordingRunner(subject.git);
 
     await expect(runRestack({
@@ -133,6 +185,99 @@ describe('restack queue production (real local Git)', () => {
     })).resolves.toMatchObject({ kind: 'applied' });
 
     expect(recorded.calls.some((call) => call.args.join(' ').includes(revalidationQueueRefFor('demo')) || call.input?.includes(revalidationQueueRefFor('demo')))).toBe(false);
+    await expect(queueBlob(subject)).resolves.toBe(queueOld);
+  });
+
+  // Covers: task:31
+  it('writes equivalent queue generations for base refresh, operator feature repair, and synced recovery', async () => {
+    const baseRefresh = await fixture();
+    await expect(runRestack({
+      worktree: baseRefresh.repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: baseRefresh.advanced,
+      git: baseRefresh.git,
+    })).resolves.toMatchObject({ kind: 'applied' });
+    const baseQueue = await readRevalidationQueue(baseRefresh.repo, 'demo', { git: baseRefresh.git });
+    expect(baseQueue).toMatchObject({ kind: 'queue' });
+
+    const repair = await fixture();
+    await repair.git(['checkout', '-q', 'feat/c1/demo']);
+    await mkdir(join(repair.repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(repair.repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+    await repair.git(['add', '.ai-conductor/config.yml']);
+    await repair.git(['commit', '-qm', 'operator repair']);
+    await expect(runRestack({
+      worktree: repair.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      git: repair.git,
+    })).resolves.toMatchObject({ kind: 'applied' });
+    await expect(readRevalidationQueue(repair.repo, 'demo', { git: repair.git })).resolves.toMatchObject({
+      kind: 'queue',
+      queue: { entries: expect.arrayContaining([expect.objectContaining({ child: 2 })]) },
+    });
+
+    const recovery = await fixture();
+    let interrupted = false;
+    const crashBeforeApplied: GitRunner = async (args, options) => {
+      if (!interrupted && args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(revalidationQueueRefFor('demo'))) {
+        interrupted = true;
+        throw new Error('simulated crash after queue plan');
+      }
+      const result = await recovery.git(args, options);
+      return result;
+    };
+    await expect(runRestack({
+      worktree: recovery.repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: recovery.advanced,
+      git: crashBeforeApplied,
+    })).resolves.toMatchObject({ kind: 'unavailable' });
+    const synced = await readRestackJournal(recovery.repo, 'demo', { git: recovery.git });
+    if (synced.kind !== 'journal' || synced.journal.queueNew === undefined) throw new Error('queue plan was not journalled');
+    const queueNew = synced.journal.queueNew;
+    const dead = await writeRestackJournalBlob(recovery.repo, {
+      ...synced.journal,
+      owner: { host: 'dead-restack-owner', pid: 1, processStartTime: '0' },
+    }, { git: recovery.git });
+    await recovery.git(['update-ref', journalRefFor('demo'), dead, synced.blob]);
+    await expect(recoverRestackJournal({ worktree: recovery.repo, slug: 'demo', git: recovery.git }))
+      .resolves.toEqual({ kind: 'recovered', fromState: 'synced' });
+    await expect(queueBlob(recovery)).resolves.toBe(queueNew);
+    expect(baseQueue.kind === 'queue' && baseQueue.queue.entries.some((entry) => entry.child === 2)).toBe(true);
+  });
+
+  // Covers: task:31
+  it('retains a pre-existing queue for rollback and a leaf-only restack', async () => {
+    const rollback = await fixture();
+    const rollbackQueue = await seedQueue(rollback);
+    await rollback.git(['checkout', '-q', 'main']);
+    await writeFile(join(rollback.repo, 'two.ts'), 'export const two = 3;\n');
+    await rollback.git(['add', 'two.ts']);
+    await rollback.git(['commit', '-qm', 'conflicting default change']);
+    const conflictingDefault = (await rollback.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await rollback.git(['checkout', '-q', 'feat/daemon-demo']);
+    await expect(runRestack({
+      worktree: rollback.repo,
+      slug: 'demo',
+      cause: 'base-refresh',
+      newDefault: conflictingDefault,
+      git: rollback.git,
+    })).resolves.not.toMatchObject({ kind: 'applied' });
+    await expect(queueBlob(rollback)).resolves.toBe(rollbackQueue);
+
+    const leafOnly = await leafOnlyFixture();
+    const leafQueue = await seedQueue(leafOnly);
+    await leafOnly.git(['commit', '--allow-empty', '-qm', 'leaf-only operator repair']);
+    await expect(runRestack({
+      worktree: leafOnly.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      git: leafOnly.git,
+    })).resolves.toMatchObject({ kind: 'unavailable' });
+    await expect(queueBlob(leafOnly)).resolves.toBe(leafQueue);
   });
 
   // Covers: task:31

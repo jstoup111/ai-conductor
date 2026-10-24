@@ -40,6 +40,7 @@ import {
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
+import { routedRoundOpen } from '../routing/round-admission.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -78,6 +79,8 @@ export interface RecoverRestackJournalOptions {
    * settled work, but must not start the journal-owned base-refresh follow-on.
    */
   readonly suppressFollowOn?: boolean;
+  /** Recreates REKICK before suppressing a queued follow-on base refresh. */
+  readonly rearmRekick?: () => Promise<void>;
 }
 
 function ref(raw: string): RefName {
@@ -630,6 +633,13 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   try {
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
+        if (journal.journal.followOnCause === 'base-refresh' && await routedRoundOpen(options.worktree, options.slug, { git })) {
+          await options.rearmRekick?.();
+          await options.events?.emit({ type: 'restack_refused', reason: 'deferred-base-refresh' });
+          return await cleanJournal(options.worktree, journal, git)
+            ? { kind: 'cleaned' }
+            : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
+        }
         if (options.suppressFollowOn) {
           return await cleanJournal(options.worktree, journal, git)
             ? { kind: 'cleaned' }

@@ -78,7 +78,7 @@ export interface BuildReviewInputs {
   baseRef: string;
   /** Where the base came from — a closed parent child, origin's discovered
    * default, or the local fallback (no remote / probe failure). */
-  baseKind: 'child-parent' | 'routed-repair' | 'remote' | 'local';
+  baseKind: 'child-parent' | 'routed-repair' | 'revalidation' | 'revalidation-fix' | 'remote' | 'local';
   /** The local tracking ref's sha at resolution time, or `null` on fallback. */
   trackingRefSha: string | null;
   /** The true remote head sha reported by the freshness probe, or `null` on
@@ -854,6 +854,14 @@ export async function assembleBuildReviewInputs(
       // immutable repair range must not be replaced by a later closure ref.
       baseRef = childBase.sha;
       baseKind = 'routed-repair';
+      trackingRefSha = null;
+      remoteHeadSha = null;
+      fresh = true;
+      break;
+    case 'revalidation':
+    case 'revalidation-fix':
+      baseRef = childBase.sha;
+      baseKind = childBase.kind;
       trackingRefSha = null;
       remoteHeadSha = null;
       fresh = true;

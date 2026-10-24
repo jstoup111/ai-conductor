@@ -17,11 +17,11 @@ import type { StateMutation } from '../conduct-state-store.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
 import { resolveGitRef } from './git-ref-resolver.js';
-import { readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
+import { readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, type RoutedAcceptanceRunContract } from './red-record.js';
-import { assertNever, type RouteKind, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
+import { assertNever, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
 import type { ConductState } from '../../types/state.js';
 
 export type EnterHostRegionResult =
@@ -206,8 +206,14 @@ async function verifyOrSwitch(
     : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to host branch ${target.branch}` };
 }
 
-async function restageHostRegion(worktree: string, host: ChildId, kind: RouteKind): Promise<{ readonly kind: 'restaged' } | { readonly kind: 'refused'; readonly detail: string }> {
-  switch (kind) {
+async function restageHostRegion(
+  worktree: string,
+  slug: string,
+  host: ChildId,
+  record: RouteRecord,
+  git: GitRunner,
+): Promise<{ readonly kind: 'restaged' } | { readonly kind: 'refused'; readonly detail: string }> {
+  switch (record.kind) {
     case 'audit': {
       const state = createRoutedConductStateStore(worktree, host);
       const current = await state.read();
@@ -225,10 +231,22 @@ async function restageHostRegion(worktree: string, host: ChildId, kind: RouteKin
         ? { kind: 'refused', detail: `cannot restage host ${host} region: ${result.message}` }
         : { kind: 'restaged' };
     }
-    case 'revalidate':
-      return { kind: 'refused', detail: `revalidate host region entry is delivered by #3212` };
+    case 'revalidate': {
+      const queue = await readRevalidationQueue(worktree, slug, { git });
+      const entry = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
+      if (!entry) return { kind: 'refused', detail: `revalidate host ${host} has no queued entry` };
+      const state = createRoutedConductStateStore(worktree, host);
+      const current = await state.read();
+      if (!current.ok) return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
+      const mutations = entry.gates
+        .filter((step) => current.value[step] !== 'pending')
+        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage revalidate host ${host} ${step}` } as StateMutation<ConductState>));
+      if (mutations.length === 0) return { kind: 'restaged' };
+      const result = await state.applyBatch({ name: `restage revalidate host ${host} region`, mutations });
+      return 'message' in result ? { kind: 'refused', detail: `cannot restage revalidate host ${host}: ${result.message}` } : { kind: 'restaged' };
+    }
   }
-  return assertNever(kind);
+  return assertNever(record.kind);
 }
 
 async function bindHostObligations(
@@ -362,7 +380,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
       : { kind: 'resume', pinnedBase: pinnedBase! };
   }
 
-  const restaged = await restageHostRegion(input.worktree, input.host, stored.record.kind);
+  const restaged = await restageHostRegion(input.worktree, input.slug, input.host, stored.record, git);
   if (restaged.kind === 'refused') return restaged;
 
   const resolvedEntryHead = await resolveGitRef(git, 'HEAD');
