@@ -10,7 +10,7 @@ import {
   type PersistOutboxEvent,
   type RouteRecordStoreDependencies,
 } from './route-record-store.js';
-import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord } from './route-types.js';
+import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 
@@ -72,6 +72,8 @@ export type ReconcileRoundsResult =
   | { readonly kind: 'none' }
   | { readonly kind: 'aborted'; readonly roundId: string }
   | { readonly kind: 'navigate-leaf-to-build'; readonly roundId: string; readonly host: ChildId }
+  /** A crash occurred after the host's entry CAS and before it journaled its exit. */
+  | { readonly kind: 'resume-exit'; readonly roundId: RoundId; readonly host: ChildId }
   | { readonly kind: 'deferred' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
@@ -101,6 +103,8 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
       const deleted = await writeRoutingTransaction(worktree, slug, [{ kind: 'delete-record', previous: stored }], { git });
       return deleted.kind === 'updated' ? { kind: 'aborted', roundId: id } : { kind: 'unavailable', detail: `cannot abort prepared routing round: ${deleted.kind}` };
     }
+    const builtHost = Object.entries(stored.record.hosts).find(([, state]) => state === 'built');
+    if (builtHost) return { kind: 'resume-exit', roundId: id, host: Number(builtHost[0]) as ChildId };
     const activeHost = Object.entries(stored.record.hosts).find(([, state]) => state === 'admitted' || state === 'repairing');
     if (activeHost) return { kind: 'navigate-leaf-to-build', roundId: id, host: Number(activeHost[0]) as ChildId };
   }
