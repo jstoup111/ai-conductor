@@ -849,6 +849,16 @@ type ConductorEventBody =
       unresolvedReasons: readonly string[];
       excludedMarkerFiles?: readonly { readonly selector: string; readonly reason: string }[];
     }
+  /** Durable announcement of the engine-decided scope for one rubric lap. */
+  | {
+      type: 'build_review_review_scope';
+      rubric: string;
+      lapId: string;
+      mode: 'full' | 'delta';
+      reason: 'first-lap' | 'merge-base-changed' | 'version-changed' | 'record-unreadable' | 'open-source-unmapped' | 'delta';
+      deltaHunkCount: number;
+      settledHunkCount: number;
+    }
   /** adr-2026-08-21 D5: a cached judgement discarded because the judging engine or rubric skill text changed. */
   | { type: 'build_review_cache_discarded'; rubric: string; lapId: string; reason: 'engine-version-mismatch' | 'skill-digest-mismatch'; cachedEngineStamp?: string; currentEngineStamp: string }
   | {
