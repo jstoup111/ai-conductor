@@ -307,6 +307,7 @@ describe('routed repair durable record parsers', () => {
     }))).toBeUndefined();
   });
 
+  // Covers: task:28
   it('parses valid repair markers and revalidation queues', () => {
     expect(parseRepairMarker(JSON.stringify({ host: 2, roundId: 'r1' }))).toEqual({ host: 2, roundId: 'r1' });
     expect(parseRevalidationQueueRecord(JSON.stringify({
@@ -360,6 +361,7 @@ describe('routed repair durable record parsers', () => {
     });
   });
 
+  // Covers: task:28
   it('rejects queues with duplicate children, non-ascending positions, or abbreviated closure SHAs', () => {
     const entry = {
       child: 2,
