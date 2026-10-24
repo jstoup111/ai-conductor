@@ -336,7 +336,7 @@ export async function journalRoutedApplyPlan(
   if (!routeNew) throw new Error('cannot write routed applied record blob');
   const planned = await recordRoutedApplyPlan(worktree, journal, {
     routeNew,
-    invalidation: [...transition.wouldInvalidate.entries()].map(([child, gates]) => ({ child, gates: [...gates] })),
+    invalidation: transition.queueInvalidation.map(({ child, gates }) => ({ child, gates: [...gates] })),
   }, { git });
   if (planned.kind !== 'updated') throw new Error('cannot record routed apply plan');
   return planned.journal;
