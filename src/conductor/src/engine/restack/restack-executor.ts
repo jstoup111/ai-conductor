@@ -42,6 +42,7 @@ import {
   checkCascadeCap,
 } from './cascade-cap.js';
 import { readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
+import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -276,6 +277,31 @@ export async function appliedTransactionLines(
 
 /** Injectable ownership seam: normal execution and recovery share this builder. */
 export const restackTransactionBuilder = { appliedTransactionLines };
+
+/**
+ * A routed applied transaction owns a fixed set of old values. When its CAS
+ * loses, name the first changed value rather than replaying an ambiguous exit.
+ */
+export async function changedRoutedAppliedRef(
+  journal: StoredRestackJournal,
+  git: GitRunner,
+): Promise<string | undefined> {
+  const routed = journal.journal.routed;
+  if (routed === undefined) return undefined;
+  const expected = [
+    { ref: routeRecordRefFor(journal.slug, routed.roundId), old: routed.routeOld },
+    { ref: repairMarkerRefFor(journal.slug), old: routed.markerOld },
+    ...(routed.queueOld === undefined ? [] : [{ ref: revalidationQueueRefFor(journal.slug), old: routed.queueOld }]),
+  ];
+  for (const entry of expected) {
+    const result = await runGit(git, ['rev-parse', '-q', '--verify', entry.ref]);
+    if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error(`cannot read routed applied ref ${entry.ref}`);
+    const live = result.exitCode === 0 ? parseCommitSha(result.stdout.trim()) : undefined;
+    if (result.exitCode === 0 && !live) throw new Error(`cannot parse routed applied ref ${entry.ref}`);
+    if (live !== entry.old) return entry.ref;
+  }
+  return undefined;
+}
 
 /** Persist a routed route-record replacement before the applied transaction can use it. */
 async function journalRoutedApplyPlan(
@@ -693,7 +719,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     journal = await journalRoutedApplyPlan(options.worktree, journal, transition, git);
     const applied = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
     const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(applied.lines));
-    if (appliedWrite.exitCode !== 0) throw new Error('cannot transition restack journal to applied');
+    if (appliedWrite.exitCode !== 0) {
+      const changed = await changedRoutedAppliedRef(journal, git);
+      if (changed !== undefined) {
+        await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: changed });
+        terminal = true;
+        return { kind: 'halted' };
+      }
+      throw new Error('cannot transition restack journal to applied');
+    }
     journal = applied.journal;
     if (journal.journal.followOnCause === undefined) await cleanAppliedJournal(journal, git);
     for (const range of plan.ranges) {
