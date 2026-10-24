@@ -533,10 +533,6 @@ describe('task command child slice membership', () => {
       await fsPromises.writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
         activePlanPath: '.docs/plans/demo.md',
       }));
-      await writeSliceTopologyFixture(root, {
-        version: 1, slug: 'demo', runId: 'routed-cli', status: 'done', entries: [],
-        sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] },
-      }, coverageBindingFilesystem);
       const positionsPath = join(root, 'positions.json');
       await fsPromises.writeFile(positionsPath, '[1,2,3]');
       await git(['update-ref', 'refs/conductor/demo/positions', (await git(['hash-object', '-w', positionsPath])).stdout.trim()]);

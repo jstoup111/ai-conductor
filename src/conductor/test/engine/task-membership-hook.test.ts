@@ -348,6 +348,10 @@ describe('task-membership-check hook command', () => {
         '### Task T3: Second', '**Story:** Story 2', '**Dependencies:** T1', '',
       ].join('\n'));
       await writeFile(join(repo, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: First\n\n## Story 2: Second\n');
+      const positionsPath = join(repo, '.pipeline', 'positions.json');
+      await writeFile(positionsPath, '[1,2]');
+      const positions = await git('hash-object', '-w', positionsPath);
+      await git('update-ref', 'refs/conductor/demo/positions', positions.stdout.trim());
 
       await writeFile(join(repo, 'allowed.txt'), 'allowed\n');
       await git('add', 'allowed.txt');
