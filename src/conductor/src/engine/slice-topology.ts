@@ -1,0 +1,242 @@
+import { existsSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
+import { basename, join, relative } from 'node:path';
+import { resolveFeaturePlanPath, parseComplexityTier, parseStackedDeliverySignoff, splitStoryBlocks } from './artifacts.js';
+import { buildStepRegistry } from './steps.js';
+import { loadConfig } from './config.js';
+import { parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
+import { makeGitRunner, type GitRunner } from './rebase.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import {
+  customStepsInPerChildRegion,
+  deriveStoryOwnership,
+  evaluateStackEligibility,
+  validatePlanSlices,
+  type PlanSliceViolation,
+  type StackEligibilityVerdict,
+} from './plan-slices.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+
+export type SliceTopologyUnavailableCause =
+  | 'plan-missing'
+  | 'plan-invalid'
+  | 'positions-changed'
+  | 'positions-ref-unreadable'
+  | 'git-error';
+
+export interface SliceTopologyMembership {
+  readonly taskSlices: Readonly<Record<string, number>>;
+  readonly titles: readonly string[];
+}
+
+export type SliceTopology =
+  | { readonly kind: 'unsliced' }
+  | {
+      readonly kind: 'sliced';
+      readonly positions: readonly number[];
+      readonly sliceMembership: SliceTopologyMembership;
+      readonly storyOwnership: Readonly<Record<string, number>>;
+      readonly stackEligibility: StackEligibilityVerdict;
+    }
+  | {
+      readonly kind: 'unavailable';
+      readonly cause: SliceTopologyUnavailableCause;
+      readonly planPath?: string;
+      readonly storiesPath?: string;
+      readonly violations?: readonly PlanSliceViolation[];
+      readonly positionsRef?: string;
+      readonly recordedPositions?: readonly number[];
+      readonly planPositions?: readonly number[];
+    };
+
+export interface DurableChildStateDependencies {
+  readonly git?: GitRunner;
+}
+
+export interface LoadSliceTopologyDependencies extends DurableChildStateDependencies {
+  /** The root whose project config decides whether a new stack is eligible. */
+  readonly projectRoot?: string;
+}
+
+async function runGit(git: GitRunner, args: string[]) {
+  try {
+    return await git(args);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether durable child state survives for this feature, independent of the
+ * current stacked-prs setting. A recreated worktree can lose
+ * `.pipeline/children` while retaining the child branches and closure refs.
+ */
+export async function hasDurableChildState(
+  worktree: string,
+  slug: string,
+  dependencies: DurableChildStateDependencies = {},
+): Promise<boolean | 'git-error'> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  try {
+    if ((await readdir(join(worktree, '.pipeline', 'children'))).length > 0) return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'git-error';
+  }
+  // Legacy N=1 callers and unit fixtures may intentionally have no Git
+  // boundary. Without child state on disk they cannot have durable child refs.
+  if (!existsSync(join(worktree, '.git'))) return false;
+  const refs = await runGit(git, ['for-each-ref', '--format=%(refname)', 'refs/heads/feat']);
+  if (!refs || refs.exitCode !== 0) return 'git-error';
+  if (refs.stdout.split('\n').some((ref) => {
+    const identity = parseFeatureRef(ref.trim());
+    return identity.kind === 'child' && identity.slug === slug;
+  })) return true;
+  const conductorRefs = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/`]);
+  if (!conductorRefs || conductorRefs.exitCode !== 0) return 'git-error';
+  const prefix = `refs/conductor/${slug}/`;
+  return conductorRefs.stdout.split('\n').some((line) => {
+    const ref = line.trim();
+    return ref.startsWith(prefix) && isStackOwnedConductorRef(ref.slice(prefix.length), slug);
+  });
+}
+
+const STACK_OWNED_CONDUCTOR_REFS = ['positions', 'publication', 'leaf-moved', 'cascades'] as const;
+const STACK_OWNED_CONDUCTOR_REF_DIRS = ['closed/', 'restack/'] as const;
+const STACK_PUSH_RECEIPT_DIRS = ['pushed/', 'push-intent/'] as const;
+
+function isStackOwnedConductorRef(name: string, slug: string): boolean {
+  const receiptBranch = STACK_PUSH_RECEIPT_DIRS.find((dir) => name.startsWith(dir));
+  if (receiptBranch !== undefined) {
+    const identity = parseFeatureBranch(name.slice(receiptBranch.length));
+    return identity.kind === 'child' && identity.slug === slug;
+  }
+  return (STACK_OWNED_CONDUCTOR_REFS as readonly string[]).includes(name) ||
+    STACK_OWNED_CONDUCTOR_REF_DIRS.some((dir) => name.startsWith(dir));
+}
+
+function unavailable(
+  cause: SliceTopologyUnavailableCause,
+  details: Omit<Extract<SliceTopology, { kind: 'unavailable' }>, 'kind' | 'cause'> = {},
+): Extract<SliceTopology, { kind: 'unavailable' }> {
+  return { kind: 'unavailable', cause, ...details };
+}
+
+function conventionalPlanPath(slug: string): string {
+  return `.docs/plans/${slug}.md`;
+}
+
+function repoPath(worktree: string, absolutePath: string): string {
+  return relative(worktree, absolutePath).replaceAll('\\', '/');
+}
+
+function parseRecordedPositions(value: string): number[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every((position) => Number.isSafeInteger(position) && position > 0)) return undefined;
+    const positions = [...new Set(parsed)].sort((left, right) => left - right);
+    return positions.length === parsed.length ? positions : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function verifyPositions(
+  worktree: string,
+  slug: string,
+  positions: readonly number[],
+  git: GitRunner,
+): Promise<Extract<SliceTopology, { kind: 'unavailable' }> | undefined> {
+  const durable = await hasDurableChildState(worktree, slug, { git });
+  if (durable === 'git-error') return unavailable('git-error');
+  if (!durable) return undefined;
+
+  const positionsRef = `refs/conductor/${slug}/positions`;
+  const recorded = await runGit(git, ['cat-file', '-p', positionsRef]);
+  if (!recorded) return unavailable('git-error');
+  const recordedPositions = recorded.exitCode === 0 ? parseRecordedPositions(recorded.stdout) : undefined;
+  if (recorded.exitCode !== 0 || recordedPositions === undefined) {
+    return unavailable('positions-ref-unreadable', { positionsRef });
+  }
+  const planPositions = [...positions].sort((left, right) => left - right);
+  if (recordedPositions.length !== planPositions.length || recordedPositions.some((position, index) => position !== planPositions[index])) {
+    return unavailable('positions-changed', { recordedPositions, planPositions });
+  }
+  return undefined;
+}
+
+/** Derive one feature's stack topology from its sealed plan and stories artifacts. */
+export async function loadSliceTopology(
+  worktree: string,
+  slug: string,
+  dependencies: LoadSliceTopologyDependencies = {},
+): Promise<SliceTopology> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const planPath = await resolveFeaturePlanPath(worktree, slug);
+  if (!planPath) return unavailable('plan-missing', { planPath: conventionalPlanPath(slug) });
+
+  const planRepoPath = repoPath(worktree, planPath);
+  let planText: string;
+  try {
+    planText = await readFile(planPath, 'utf8');
+  } catch {
+    return unavailable('plan-missing', { planPath: planRepoPath });
+  }
+
+  const validation = validatePlanSlices(planText);
+  if (validation.kind === 'invalid') return unavailable('plan-invalid', { planPath: planRepoPath, violations: validation.violations });
+
+  if (validation.kind === 'unsliced') {
+    return (await verifyPositions(worktree, slug, [], git)) ?? { kind: 'unsliced' };
+  }
+
+  const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
+  if (storiesPath === null) {
+    return unavailable('plan-invalid', {
+      planPath: planRepoPath,
+      violations: [{ code: 'stories-path', message: 'the plan Stories reference does not resolve to a .docs stories artifact' }],
+    });
+  }
+  let storiesText: string;
+  try {
+    storiesText = await readFile(join(worktree, storiesPath), 'utf8');
+  } catch {
+    return unavailable('plan-invalid', {
+      planPath: planRepoPath,
+      storiesPath,
+      violations: [{ code: 'stories-unreadable', message: `cannot read stories artifact ${storiesPath}` }],
+    });
+  }
+
+  const ownership = deriveStoryOwnership(
+    planText,
+    validation.slices,
+    new Set(splitStoryBlocks(storiesText).flatMap(({ id }) => id === undefined ? [] : [id])),
+  );
+  if (ownership.kind === 'invalid') return unavailable('plan-invalid', { planPath: planRepoPath, storiesPath, violations: ownership.violations });
+
+  const membership: SliceTopologyMembership = {
+    taskSlices: Object.fromEntries(validation.slices.flatMap((slice) =>
+      slice.taskIds
+        .filter((taskId) => !isEngineAppendedRemediationTaskId(taskId))
+        .map((taskId) => [taskId, slice.position]),
+    )),
+    titles: validation.slices.map((slice) => slice.title),
+  };
+  const positions = validation.slices.map((slice) => slice.position);
+  const positionFailure = await verifyPositions(worktree, slug, positions, git);
+  if (positionFailure) return positionFailure;
+
+  const configResult = await loadConfig(dependencies.projectRoot ?? worktree);
+  const config = configResult.ok ? configResult.config : undefined;
+  const complexityPath = join(worktree, '.docs', 'complexity', `${basename(planPath, '.md')}.md`);
+  const complexityContent = await readFile(complexityPath, 'utf8').catch(() => null);
+  const stackEligibility = evaluateStackEligibility({
+    tier: parseComplexityTier(complexityContent),
+    signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
+    slicePositions: positions,
+    maxSlices: config?.stacked_prs?.max_slices ?? 1,
+    regionCoupledSteps: config ? customStepsInPerChildRegion(buildStepRegistry(config)) : [],
+    complexityPath: repoPath(worktree, complexityPath),
+  });
+  return { kind: 'sliced', positions, sliceMembership: membership, storyOwnership: ownership.ownership, stackEligibility };
+}

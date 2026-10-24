@@ -1,5 +1,4 @@
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseChildId, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
@@ -8,9 +7,11 @@ import {
   readCoverageBindingEnvelope,
   type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
-import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
+import { childBranchFor, featureSlugOf, leafBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { resolveGitRef } from './routing/git-ref-resolver.js';
+import { hasDurableChildState } from './slice-topology.js';
+export { hasDurableChildState } from './slice-topology.js';
 import { resolveThroughMap } from './rebase-translate.js';
 import { readRepairMarker, readRevalidationQueue, readRouteRecord } from './routing/route-record-store.js';
 import type { RoundId } from './routing/route-types.js';
@@ -119,63 +120,6 @@ async function runGit(git: GitRunner, args: string[]) {
   } catch {
     return undefined;
   }
-}
-
-/**
- * Whether durable child state survives for this feature, independent of the
- * current stacked-prs setting. A recreated worktree can lose
- * `.pipeline/children` while retaining the child branches and closure refs.
- */
-export async function hasDurableChildState(
-  worktree: string,
-  slug: string,
-  dependencies: ActiveChildDependencies = {},
-): Promise<boolean | 'git-error'> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
-  try {
-    if ((await readdir(join(worktree, '.pipeline', 'children'))).length > 0) return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'git-error';
-  }
-  // Legacy N=1 callers and unit fixtures may intentionally have no Git
-  // boundary.  Without child state on disk they cannot have durable child
-  // refs, so preserve the flat path instead of making resume preflight fail.
-  if (!existsSync(join(worktree, '.git'))) return false;
-  const refs = await runGit(git, ['for-each-ref', '--format=%(refname)', 'refs/heads/feat']);
-  if (!refs || refs.exitCode !== 0) return 'git-error';
-  if (refs.stdout.split('\n').some((ref) => {
-    const identity = parseFeatureRef(ref.trim());
-    return identity.kind === 'child' && identity.slug === slug;
-  })) return true;
-  // The feature-owned conductor namespace is durable across worktree
-  // recreation.  Do not restrict this probe to closure receipts: a published
-  // positions/publication receipt is itself enough to keep the stack guard on.
-  // Push receipts are durable stack state only for child branches.  The leaf
-  // receipt is ordinary N=1 publication evidence and must retain the flat
-  // FINISH path.
-  const conductorRefs = await runGit(git, ['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/`]);
-  if (!conductorRefs || conductorRefs.exitCode !== 0) return 'git-error';
-  const prefix = `refs/conductor/${slug}/`;
-  return conductorRefs.stdout.split('\n').some((line) => {
-    const ref = line.trim();
-    return ref.startsWith(prefix) && isStackOwnedConductorRef(ref.slice(prefix.length), slug);
-  });
-}
-
-/** Stack-owned names under `refs/conductor/<slug>/`: exact refs and ref directories. */
-const STACK_OWNED_CONDUCTOR_REFS = ['positions', 'publication', 'leaf-moved', 'cascades'] as const;
-const STACK_OWNED_CONDUCTOR_REF_DIRS = ['closed/', 'restack/'] as const;
-const STACK_PUSH_RECEIPT_DIRS = ['pushed/', 'push-intent/'] as const;
-
-function isStackOwnedConductorRef(name: string, slug: string): boolean {
-  const receiptBranch = STACK_PUSH_RECEIPT_DIRS
-    .find((dir) => name.startsWith(dir));
-  if (receiptBranch !== undefined) {
-    const identity = parseFeatureBranch(name.slice(receiptBranch.length));
-    return identity.kind === 'child' && identity.slug === slug;
-  }
-  return (STACK_OWNED_CONDUCTOR_REFS as readonly string[]).includes(name) ||
-    STACK_OWNED_CONDUCTOR_REF_DIRS.some((dir) => name.startsWith(dir));
 }
 
 async function closedChildren(slug: string, positions: readonly ChildId[], git: GitRunner): Promise<ClosedChild[] | 'git-error'> {

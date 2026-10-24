@@ -1,4 +1,4 @@
-// Covers: task:5, task:14
+// Covers: task:1, task:5, task:14
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -168,6 +168,7 @@ describe('plan-slices consumer boundary', () => {
       .sort();
     expect(planSliceImporters).toEqual([
       join('engine', 'engineer', 'land-spec.ts'),
+      join('engine', 'slice-topology.ts'),
       join('engine', 'step-runners.ts'),
     ]);
 
@@ -192,6 +193,7 @@ describe('plan-slices consumer boundary', () => {
       join('engine', 'plan-slices.ts'),
       join('engine', 'routing', 'round-receipt.ts'),
       join('engine', 'routing', 'route-types.ts'),
+      join('engine', 'slice-topology.ts'),
       join('engine', 'step-runners.ts'),
       join('types', 'config.ts'),
       ]);
