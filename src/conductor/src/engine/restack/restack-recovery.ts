@@ -29,7 +29,7 @@ import { replayChildRange } from './restack-replay.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
-import { mergeInRange, restackTransactionBuilder, runRestack } from './restack-executor.js';
+import { changedRoutedAppliedRef, mergeInRange, restackTransactionBuilder, runRestack } from './restack-executor.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
@@ -815,7 +815,14 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       });
       const appliedTransaction = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
       const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(appliedTransaction.lines));
-      if (appliedWrite?.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
+      if (appliedWrite?.exitCode !== 0) {
+        const changed = await changedRoutedAppliedRef(journal, git);
+        if (changed !== undefined) {
+          await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: changed });
+          return { kind: 'halted' };
+        }
+        return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
+      }
       const applied = appliedTransaction.journal;
       if (applied.journal.followOnCause === undefined && !await cleanJournal(options.worktree, applied, git)) {
         return { kind: 'unavailable', detail: 'cannot clean recovered restack journal' };

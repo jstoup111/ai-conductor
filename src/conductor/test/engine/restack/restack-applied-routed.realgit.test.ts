@@ -1,5 +1,7 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
@@ -64,6 +66,29 @@ async function routedRepairStack(withRepair = true): Promise<SweepRepository & {
     await subject.git(['checkout', '-q', 'feat/daemon-demo']);
   }
   return { ...subject, routeOld, markerOld };
+}
+
+async function concurrentRouteBlob(worktree: string, git: GitRunner): Promise<CommitSha> {
+  const stored = await readRouteRecord(worktree, 'demo', roundId, { git });
+  if (stored.kind !== 'record') throw new Error('expected routed record');
+  return writeBlob(git, {
+    ...stored.record,
+    hosts: { ...stored.record.hosts, [host]: 'restacked' },
+  });
+}
+
+function appliedAttempts(calls: readonly { readonly args: readonly string[]; readonly input?: string }[]): number {
+  return calls.filter((call) => call.args[0] === 'update-ref'
+    && call.args[1] === '--stdin'
+    && call.input?.includes('refs/conductor/demo/routes/r1')
+    && call.input?.includes('refs/conductor/demo/restack/journal')).length;
+}
+
+async function expectRoutedApplyHalt(worktree: string): Promise<void> {
+  await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'))
+    .resolves.toContain('refs/conductor/demo/routes/r1');
+  await expect(readFile(join(worktree, '.pipeline', 'HALT.class'), 'utf8'))
+    .resolves.toContain('needs-human');
 }
 
 describe('routed restack applied transaction (real local Git)', () => {
@@ -164,5 +189,83 @@ describe('routed restack applied transaction (real local Git)', () => {
       marker: 1,
       applied: expect.stringMatching(/(?=.*update refs\/conductor\/demo\/routes\/r1 )(?=.*delete refs\/conductor\/demo\/repairing )(?=.*update refs\/conductor\/demo\/cascades )(?=.*update refs\/conductor\/demo\/restack\/journal )/s),
     }));
+  });
+
+  it('halts at synced without retrying when a concurrent writer changes the routed record on the normal path', async () => {
+    const subject = await routedRepairStack();
+    const native = makeGitRunner(subject.repo);
+    const concurrent = await concurrentRouteBlob(subject.repo, native);
+    const calls: Array<{ readonly args: readonly string[]; readonly input?: string }> = [];
+    let changed = false;
+    const git: GitRunner = async (args, options) => {
+      if (args[0] === 'update-ref') calls.push({ args: [...args], input: options?.input });
+      const result = await native(args, options);
+      if (!changed && args[0] === 'update-ref'
+        && args[1] === 'refs/conductor/demo/restack/journal'
+        && args[3] !== '') {
+        await native(['update-ref', routeRecordRefFor('demo', roundId), concurrent, subject.routeOld]);
+        changed = true;
+      }
+      return result;
+    };
+
+    await expect(restackExecutor.runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      routed: { roundId, host, routeOld: subject.routeOld, markerOld: subject.markerOld },
+      git,
+    })).resolves.toEqual({ kind: 'halted' });
+
+    const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
+    expect({
+      changed,
+      attempts: appliedAttempts(calls),
+      state: journal.kind === 'journal' ? journal.journal.state : journal.kind,
+    }).toEqual({ changed: true, attempts: 1, state: 'synced' });
+    await expectRoutedApplyHalt(subject.repo);
+  });
+
+  it('halts at synced without retrying when a concurrent writer changes the routed record during recovery', async () => {
+    const subject = await routedRepairStack();
+    const native = makeGitRunner(subject.repo);
+    const interrupted: GitRunner = async (args, options) => {
+      if (args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes('refs/conductor/demo/cascades')) {
+        throw new Error('simulated crash before applied transaction');
+      }
+      return native(args, options);
+    };
+
+    await expect(restackExecutor.runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      routed: { roundId, host, routeOld: subject.routeOld, markerOld: subject.markerOld },
+      git: interrupted,
+    })).resolves.toMatchObject({ kind: 'unavailable' });
+    const synced = await readRestackJournal(subject.repo, 'demo', { git: native });
+    if (synced.kind !== 'journal') throw new Error('expected synced journal');
+    const concurrent = await concurrentRouteBlob(subject.repo, native);
+    await native(['update-ref', routeRecordRefFor('demo', roundId), concurrent, subject.routeOld]);
+    const deadBlob = await writeRestackJournalBlob(subject.repo, {
+      ...synced.journal,
+      owner: { host: 'recovery-test', pid: 999999, processStartTime: '0' },
+    }, { git: native });
+    await native(['update-ref', 'refs/conductor/demo/restack/journal', deadBlob, synced.blob]);
+    const calls: Array<{ readonly args: readonly string[]; readonly input?: string }> = [];
+    const recording: GitRunner = async (args, options) => {
+      if (args[0] === 'update-ref') calls.push({ args: [...args], input: options?.input });
+      return native(args, options);
+    };
+
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: recording }))
+      .resolves.toEqual({ kind: 'halted' });
+
+    const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
+    expect({
+      attempts: appliedAttempts(calls),
+      state: journal.kind === 'journal' ? journal.journal.state : journal.kind,
+    }).toEqual({ attempts: 1, state: 'synced' });
+    await expectRoutedApplyHalt(subject.repo);
   });
 });
