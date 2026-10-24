@@ -486,6 +486,7 @@ async function resumePlanned(
     try {
       replay = await replayChildRange(range, parent, current.journal.committer, git, {
         comparisonCommits: current.journal.comparisonCommits,
+        appendOnlyRemUnion: current.journal.routed !== undefined,
       });
     } catch (error) {
       const conflict = await replayConflict(git, error);
@@ -512,7 +513,7 @@ async function resumePlanned(
           ...('reason' in resolution.outcome ? { detail: resolution.outcome.reason } : {}),
         };
       }
-      const ownership = await checkPathOwnership(range, parent, resolution.tip, git);
+      const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
       if (ownership.kind === 'refused') {
         return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
       }
@@ -531,7 +532,7 @@ async function resumePlanned(
       parent = resolution.tip;
       continue;
     }
-    const ownership = await checkPathOwnership(range, parent, replay.tip, git);
+    const ownership = await checkPathOwnership(range, parent, replay.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
     if (ownership.kind === 'refused') {
       return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
     }

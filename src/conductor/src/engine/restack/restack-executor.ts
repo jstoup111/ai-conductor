@@ -30,7 +30,7 @@ import {
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
-import { replayChildRange, type CommitterStamp } from './restack-replay.js';
+import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
@@ -598,8 +598,16 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       try {
         replay = await replayChildRange(range, parent, journal.journal.committer, git, {
           comparisonCommits: newStackCommits,
+          appendOnlyRemUnion: options.routed !== undefined,
         });
       } catch (error) {
+        if (error instanceof RemBlockBodyMismatchError) {
+          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, {
+            commit: error.commit, paths: [error.path],
+          }, options.events, git, 'conflict', `remediation block body mismatch: ${error.remId}`);
+          terminal = true;
+          return { kind: 'halted' };
+        }
         const conflict = await replayConflict(git, error);
         if (!conflict) throw error;
         const merge = await mergeInRange(git, range);
@@ -631,7 +639,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           terminal = true;
           return { kind: 'halted' };
         }
-        const ownership = await checkPathOwnership(range, parent, resolution.tip, git);
+        const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
         if (ownership.kind === 'refused') {
           await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths }, options.events, git, 'replay-mismatch');
           terminal = true;
@@ -649,7 +657,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       if (updated.kind !== 'updated') throw new Error(updated.kind === 'stale' ? 'restack journal changed while replaying' : updated.detail);
       journal = updated.journal;
       exactRewrites.set(range.child, replay.rewrites);
-      const ownership = await checkPathOwnership(range, parent, replay.tip, git);
+      const ownership = await checkPathOwnership(range, parent, replay.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
       if (ownership.kind === 'refused') {
         await abortJournal(options.worktree, journal, git, moves);
         await haltRestack(options.worktree, 'replay-mismatch', options.events, {
