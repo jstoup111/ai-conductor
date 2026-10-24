@@ -192,6 +192,12 @@ export interface HostEntry {
   readonly host: ChildId;
   readonly pinnedBase: CommitSha;
   readonly tree: CommitSha;
+  /** Revalidation admission pins the exact queue generation and closure it may acknowledge. */
+  readonly revalidation?: {
+    readonly queueBlob: CommitSha;
+    readonly generation: number;
+    readonly closureSha: CommitSha;
+  };
 }
 
 /** The immutable rem-* blocks to append when a host enters its region. */
@@ -460,6 +466,16 @@ function parseHostEntry(value: unknown): HostEntry | undefined {
   const host = parseChild(value.host);
   const pinnedBase = typeof value.pinnedBase === 'string' ? parseCommitSha(value.pinnedBase) : undefined;
   const tree = typeof value.tree === 'string' ? parseCommitSha(value.tree) : undefined;
+  const revalidation = value.revalidation;
+  if (revalidation !== undefined) {
+    const generation = isRecord(revalidation) ? revalidation.generation : undefined;
+    if (!isRecord(revalidation) || typeof revalidation.queueBlob !== 'string' || typeof revalidation.closureSha !== 'string'
+      || typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 0) return undefined;
+    const queueBlob = parseCommitSha(revalidation.queueBlob);
+    const closureSha = parseCommitSha(revalidation.closureSha);
+    if (!host || !pinnedBase || !tree || !queueBlob || !closureSha) return undefined;
+    return { host, pinnedBase, tree, revalidation: { queueBlob, generation, closureSha } };
+  }
   return host && pinnedBase && tree ? { host, pinnedBase, tree } : undefined;
 }
 

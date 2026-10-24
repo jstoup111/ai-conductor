@@ -117,7 +117,20 @@ describe('revalidation queue generations', () => {
       await writeRouteRecord(subject.repo, stored, repairing.record, { git: subject.git });
       const current = await readRouteRecord(subject.repo, 'demo', parseRoundId('r1')!, { git: subject.git });
       if (current.kind !== 'record') throw new Error('expected repairing record');
-      await expect(acknowledgeQueueEntry(subject.repo, 'demo', current, child(2), { git: subject.git }))
+      const pinnedQueue = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
+      if (pinnedQueue.kind !== 'queue') throw new Error('expected pinned queue');
+      const closure = parseCommitSha((await subject.git(['rev-parse', closureRefFor('demo', child(2))])).stdout.trim())!;
+      const tree = parseCommitSha((await subject.git(['rev-parse', `${closure}^{tree}`])).stdout.trim())!;
+      const pinned = {
+        ...current.record,
+        entry: { host: child(2), pinnedBase: closure, tree, revalidation: {
+          queueBlob: pinnedQueue.blob, generation: pinnedQueue.queue.generation, closureSha: closure,
+        } },
+      };
+      await writeRouteRecord(subject.repo, current, pinned, { git: subject.git });
+      const acknowledged = await readRouteRecord(subject.repo, 'demo', parseRoundId('r1')!, { git: subject.git });
+      if (acknowledged.kind !== 'record') throw new Error('expected pinned revalidate record');
+      await expect(acknowledgeQueueEntry(subject.repo, 'demo', acknowledged, child(2), { git: subject.git }))
         .resolves.toEqual({ kind: 'acknowledged', leavesRoundOpen: false });
       await expect(readRepairMarker(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'absent' });
       await expect(readRevalidationQueue(subject.repo, 'demo', { git: subject.git })).resolves.toMatchObject({
