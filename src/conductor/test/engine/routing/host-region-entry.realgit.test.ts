@@ -180,9 +180,9 @@ describe('routed host region entry (real local Git)', () => {
   });
 
   // Covers: task:48
-  it('refuses the deferred revalidate restage and any non-terminal restack journal', async () => {
+  it('refuses a revalidate host without a queue entry and any non-terminal restack journal', async () => {
     const revalidate = await fixture('revalidate');
-    await expect(entered(revalidate)).resolves.toMatchObject({ kind: 'refused', detail: expect.stringContaining('#3212') });
+    await expect(entered(revalidate)).resolves.toMatchObject({ kind: 'refused', detail: 'revalidate host 1 has no queued entry' });
 
     const subject = await fixture();
     const journal: RestackJournal = {
