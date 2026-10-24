@@ -118,10 +118,10 @@ describe('stacked daemon status', () => {
       expect.objectContaining({
         slug: 'demo',
         step: 'build',
-        activeChild: { child: 2, total: 2 },
+        activeChild: { child: 2, total: 2, taskIds: ['2'] },
       }),
     ]);
-    expect(renderDashboard(state)).toContain('demo @build (child 2/2)');
+    expect(renderDashboard(state)).toContain('demo @build (child 2/2; tasks 2)');
   });
 
   it('shows the active child and reads its kickback ledger in daemon status', async () => {
@@ -142,7 +142,7 @@ describe('stacked daemon status', () => {
     });
 
     const rendered = out.join('\n');
-    expect(rendered).toContain('PLAN GROWTH [demo child 2/2]');
+    expect(rendered).toContain('PLAN GROWTH [demo child 2/2; tasks 2]');
     expect(rendered).toContain('remaining 9/9');
     expect(rendered).toContain('KICKBACK BUDGET [demo]: Allowance: laps; Child: 2 |');
     expect(rendered).toContain('Kickback budget (build_review): 2/5 consumed; 3 remaining');

@@ -73,6 +73,7 @@ describe('repair-pending and divergent cursor kinds (sweep)', () => {
   // Covers: task:29
   it('distinguishes an operator commit past closed/c1 (repair-pending) from an amended A2 or a reset behind the closure (closed-child-rewritten)', async () => {
     await sealStack([1, 2]);
+    await git(['branch', '-f', 'feat/daemon-demo', 'HEAD']);
     await git(['checkout', '-q', '-b', 'feat/c1/demo', 'feat/daemon-demo']);
     const a1 = await commitFile('a1.txt', 'A1\n', 'A1');
     const a2 = await commitFile('a2.txt', 'A2\n', 'A2');

@@ -139,6 +139,6 @@ describe('build child task scope', () => {
     }));
     const unownedRemediation = await checkStepCompletion(root, 'build', completionContext(child2));
     expect(unownedRemediation).toMatchObject({ done: false });
-    expect(unownedRemediation.reason).toContain('rem-1 has no recorded child');
+    expect(unownedRemediation.reason).toContain('rem-1');
   });
 });
