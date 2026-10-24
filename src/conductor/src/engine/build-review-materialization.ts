@@ -36,6 +36,7 @@ export interface BuildReviewFrozenInputScope {
 export function renderBuildReviewFrozenInputScope(scope: BuildReviewFrozenInputScope): string {
   return [
     `Frozen build-review input ${scope.contentDigest}.`,
+    'Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.',
     ...(scope.view === undefined ? [] : [
       `Reviewed baseline ${scope.mergeBase} (read-only): ${scope.view.baselinePath}`,
       `Reviewed head ${scope.headSha} (read-only): ${scope.view.headPath}`,
