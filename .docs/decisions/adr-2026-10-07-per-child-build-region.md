@@ -132,6 +132,8 @@ The decisions below incorporate the fixes.
 > and that child's region is entered while its closure is kept
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 8).
 
+> **Amended 2026-10-23 by #3365:** Positions come from the sealed plan through the slice-topology loader, not the `coverage_binding` envelope, which no longer exists (adr-2026-10-23-slice-topology-from-sealed-plan decisions 2 and 4). `refs/conductor/<slug>/positions` remains the authority once children exist.
+
 2. **When there are children, and what happens when the envelope is missing.**
    - A feature has children only when all of these hold:
      - `stacked_prs.enabled` is true;
@@ -145,6 +147,8 @@ The decisions below incorporate the fixes.
    - A region dispatch with child refs present and no sealed envelope halts needs-human.
      `coverage_binding` precedes the region and re-seals after a worktree recreation, so this is
      reached only on real corruption.
+
+> **Amended 2026-10-23 by #3365:** With the envelope gone, "child refs present and no sealed envelope" cannot occur. A cursor that cannot resolve (`topology-unavailable` with its cause, `git-error`, or `detached-head`) makes the resume stack preflight write its own needs-human HALT naming the cause and a recovery command (adr-2026-10-23-slice-topology-from-sealed-plan decision 5). `coverage_binding` no longer precedes the region.
 
 3. **Child branch creation, switching and the leaf move.**
    - **Creation** happens at the active child's region entry, only after:
@@ -188,6 +192,8 @@ The decisions below incorporate the fixes.
 > host child, and region keys are written to the execution child
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 2–4 and 8).
 
+> **Amended 2026-10-23 by #3365:** The `coverage_binding` step is removed (adr-2026-10-23-slice-topology-from-sealed-plan decision 1), so no kickback target sits at it.
+
 5. **Acceptance specs are per child.**
    - The `writing-system-tests` skill receives the child's owned stories, projected from envelope
      `storyOwnership`.
@@ -206,6 +212,8 @@ The decisions below incorporate the fixes.
 > verify-green mode. A retained RED marker is checked when present, and its absence is not a
 > refusal. `closeChild` records the RED proof's digest under `refs/conductor/<slug>/red/c<k>`
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
+> **Amended 2026-10-23 by #3365:** Owned stories are projected from the slice-topology loader's story ownership, derived from the sealed plan and stories, not from an envelope (adr-2026-10-23-slice-topology-from-sealed-plan decision 2).
 
 6. **`build`, stall detection and the commit hook are per child.**
    - **`build`** completes when child k's slice tasks are resolved, plus the remediation tasks
@@ -330,6 +338,8 @@ The decisions below incorporate the fixes.
       exists, a reseal that moves, adds or removes a position halts needs-human. A re-run that
       re-owns a story without moving a task emits `story_reowned`.
 
+> **Amended 2026-10-23 by #3365:** The position-immutability guard moves from `coverage_binding` to `reseal` and to the slice-topology loader. A reseal that would move, add, or remove a position is refused, and a mismatch between the plan and the positions ref returns `positions-changed` (adr-2026-10-23-slice-topology-from-sealed-plan decision 3). `story_reowned` is removed with the step.
+
 14. **N=1 is unchanged.** With no child:
     - no ref is written;
     - the hook's membership check abstains with today's exit status (decision 6);
@@ -340,6 +350,8 @@ The decisions below incorporate the fixes.
     flag on with an ineligible plan.
 
 > **Amended 2026-10-10 by #2943:** With no child, every successful feature-branch push records its tip under `refs/conductor/<slug>/pushed/<branch>` (decision 11); no other ref is written for N=1 (`adr-2026-10-10-stacked-restack-journaled-replay`).
+
+> **Amended 2026-10-23 by #3365:** The N=1 golden suite changes only by the removed `coverage_binding` step: every retained golden loses only that step's lines, and the two `coverage_binding` cells `flag-on-ineligible-coverage-binding.golden` and `flag-on-single-slice-coverage-binding.golden` are deleted (adr-2026-10-23-slice-topology-from-sealed-plan decision 7). It stays byte-identical otherwise.
 
 ## Consequences
 
