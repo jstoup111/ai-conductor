@@ -78,7 +78,8 @@ defect discovered later at the same path still blocks the gate.
 - Given any accepted finding, when a new finding shares its path but not its classification member,
   then no path-level, rubric-level, or feature-level suppression occurs — only the exact identity is
   suppressed, apart from a later-lap finding the `remediate` adjudicator binds by `existingCaseId` to
-  a case holding that acceptance, which settles as carried (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
+  a case holding that acceptance, which settles as carried (adr-2026-10-20-operator-acceptance-is-durable-case-state D3),
+  and apart from out-of-delta classification, which is scope bookkeeping and never accepted risk.
 - Given a completeness identity, when it is derived, then it includes a missing-surface reference —
   a test asserts that two different missing deliverables under one plan task do not collapse.
 
@@ -86,7 +87,8 @@ defect discovered later at the same path still blocks the gate.
 - [ ] Same-path different-classification cases are pinned per rubric and remain blocking.
 - [ ] The completeness collapse case is pinned explicitly.
 - [ ] No suppression path exists that is broader than one exact identity, other than carry through an
-      adjudicator binding to a case holding that acceptance.
+      adjudicator binding to a case holding that acceptance, and out-of-delta classification, which is
+      scope bookkeeping and never accepted risk.
 
 ---
 

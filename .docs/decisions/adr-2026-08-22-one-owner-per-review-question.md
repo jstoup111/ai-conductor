@@ -88,6 +88,8 @@ does not authorize.**
 > findings or supplies operator decisions. The admitted appender sources are unchanged
 > (`adr-2026-10-12-routed-whole-feature-repair` decisions 2 and 3).
 
+> **Amended 2026-10-24 by #3294:** The build_review rubrics still own their questions over the whole feature diff since the merge base, but after the first lap at a merge base they judge only the unsettled delta. The whole diff stays reference context. A non-critical finding on settled, unchanged code blocks only when it names a delta cause hunk. A `critical` finding in any rubric is never out of delta and is classified exactly as without delta scoping, so an off-plan critical security defect that is not accepted or settled still fails build_review before the SHIP tail (adr-2026-10-24-lap-monotonic-build-review-scope D3, D5).
+
 ## Consequences
 
 ### Positive

@@ -189,6 +189,8 @@ plus mechanically available action evidence. It never deletes history.
 
 > **Amended 2026-10-20 by #3271:** The case store moves to v3. It adds case `operatorAcceptance` origins, case `operatorResolution`, the `carried` outcome and an outbox of `ConductorEvent` values, and v2 is upgraded on write (adr-2026-10-20-operator-acceptance-is-durable-case-state D1, D6). The store now holds one operator-authored field, `operatorResolution`, written only by `build-review resolve-case`, so the autonomous/operator separation holds per field. Open-case retirement, by absence or by acceptance, is decided by one shared reconciler predicate (adr-2026-10-20-operator-acceptance-is-durable-case-state D5). On a coordinator reuse halt, the halting proposal's live sources are linked to the bound case (adr-2026-10-20-operator-acceptance-is-durable-case-state D3).
 
+> **Amended 2026-10-24 by #3294:** `recurrenceOf` may also name a provenance owner. That is an act case with an applied action effect, open or resolved, that owns a source raised in the predecessor lap on the same path as a delta hunk the new act case's source maps to. Among several, the one with the most applied lineage attempts wins, ties going to the lowest case id. A `distinctFrom` entry naming a provenance candidate counts (adr-2026-10-24-lap-monotonic-build-review-scope D7).
+
 ### D6 — Effects use a reserved, idempotent outbox
 
 After complete validation, the engine reserves stable effect ids in the case store before performing

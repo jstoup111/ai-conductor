@@ -351,12 +351,14 @@ a new defect under the same rubric.
 #### Negative Paths
 
 - Given a proposed match shares only a rubric, file, summary fragment, or hash without the same full
-  canonical identity payload, when dispositions are applied, then it remains unresolved and blocks.
+  canonical identity payload, when dispositions are applied, then it is not accepted risk and it
+  remains unresolved and blocks, unless the engine classifies it out of delta, which is scope
+  bookkeeping and never accepted risk.
 
 ### Done When
 
 - [ ] Same-rubric fixtures cover different paths, obligations, concern kinds, and canonical payloads.
-- [ ] No rubric-wide, path-wide, feature-wide, or future-finding wildcard is accepted.
+- [ ] No rubric-wide, path-wide, feature-wide, or future-finding wildcard is accepted; out-of-delta classification is never recorded as accepted risk.
 
 ## Story 14: Refuse invalid disposition requests atomically
 
@@ -691,7 +693,7 @@ re-dispatches and disposition-only laps do not repeatedly spend tokens.
   that rubric, then the engine makes no provider call, emits a cache-hit event, and materializes a
   current-lap rubric result before the normal join.
 - Given an operator accepts one finding without changing code or rubric policy, when the gate is
-  rejoined, then unchanged raw rubric results are reused and the disposition changes only the
+  rejoined at the same head, then unchanged raw rubric results are reused and the disposition changes only the
   effective verdict.
 
 #### Negative Paths

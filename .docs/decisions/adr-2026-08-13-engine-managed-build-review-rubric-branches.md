@@ -133,6 +133,8 @@ results must repeat the lap ID and snapshot digest; a mismatch is an infrastruct
 > defect this amendment removes: on a 155-file diff the inlined regions alone reached ~1.3 MB and
 > every lap failed as `invalid-provider-result` (jstoup111/ai-conductor#2582).
 
+> **Amended 2026-10-24 by #3294:** The snapshot still excludes prior grader prose and accepted dispositions. From the second lap on, each projection also carries an engine-derived `reviewScope` (`mode`, `deltaHunks`), with `changedFiles` kept as the whole-diff reference context. It is computed before projection from prior lap `reviewScope` records and the case store, and rubrics never receive those records. Under D2.1 the scope is an identity in the projection digest, so §7's cache invalidates mechanically (see the #3294 note on §7). Built-in projections move to v5 (adr-2026-10-24-lap-monotonic-build-review-scope D1, D3, D4).
+
 ### 3. Reuse green test evidence and preflight only Tautology's RED side
 
 The preceding `test_suite` gate is the authoritative proof that the current HEAD is green.
@@ -229,6 +231,8 @@ not-judged behavior, remains visible as reduced coverage, and is excluded from j
 denominators. Completeness remains default-enabled but may now be explicitly disabled; this is the
 operator-approved escape hatch that partially supersedes its former unconditionality.
 
+> **Amended 2026-10-24 by #3294:** Branch outcomes gain a third kind, `scope-empty`, beside `judged` and `skipped`. It applies to a rubric whose delta lap has no unsettled hunk. The rubric is not dispatched and runs no preflight. It contributes no findings and counts as non-failing in the aggregate. It is excluded from judged-rate metrics, and it is never evidence that a source is no longer raised. It is announced on `build_review_rubric_skipped` with reason `scope-empty`. "A skip is never converted to a pass" still holds for `skipped` (adr-2026-10-24-lap-monotonic-build-review-scope D3).
+
 ### 7. Short-circuit unchanged rubric judgements without reusing stale verdicts
 
 Every closed rubric descriptor declares content-addressed caching. The cache key combines the
@@ -249,6 +253,8 @@ its resolved execution policy invalidates that rubric deterministically. Cache s
 Tautology preflight evidence, is bounded feature-scoped durable control state under
 `.pipeline/build-review/cache/`, not a telemetry ledger.
 
+> **Amended 2026-10-24 by #3294:** The cache key is unchanged, but the projection digest now covers each rubric's `reviewScope`. On a new head, an operator acceptance or a threshold change can change a later lap's delta, and with it the digest. "Changing dispositions leaves raw projections unchanged" now holds for a rejoin at the same head: that lap reuses its recorded scope, so its projections and cache hits are unchanged (adr-2026-10-24-lap-monotonic-build-review-scope D3, D4).
+
 ### 8. Keep branch writes disjoint and join once
 
 Each session writes only `.pipeline/build-review/«lap»/«rubric».json`. The path is supplied by the
@@ -268,6 +274,8 @@ post-judgement resolution inputs even though v1 supplies only operator dispositi
 an integration seam for the operator-identified future Tautology/Scope claim-or-bypass spec without
 defining, authorizing, matching, or applying those future records here. Neither present dispositions
 nor future resolution inputs may appear in rubric projections or convert a raw finding to raw PASS.
+
+> **Amended 2026-10-24 by #3294:** The raw aggregate is still formed before accepted dispositions are consulted. Dispositions now also enter earlier, through the engine's pre-projection scope decision: a hunk whose findings are all non-blocking can be settled and leave a later lap's delta. That is a scope decision, not a raw-to-PASS conversion. A finding the rubric does raise stays raw (adr-2026-10-24-lap-monotonic-build-review-scope D2, D3).
 
 ### 9. Extend existing observability and publication paths
 

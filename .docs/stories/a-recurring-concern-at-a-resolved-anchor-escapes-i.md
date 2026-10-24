@@ -24,11 +24,11 @@ inferred and a bad declaration costs no halt.
 #### Happy Path
 - Given R owns S, when a judgement's unbound act row on S carries `distinctFrom` naming R with a non-empty reason, then the artifact is admitted and the declaration counts for R.
 - Given resolved act cases R1 owning S1 and R2 owning S2, when an unbound act row on S1 and S2 declares `distinctFrom` naming only R1, then the declaration counts for R1 and not for R2.
-- Given the remediate skill contract, when a Claude dispatch and a Codex dispatch render the remediate step, then both read the same `skills/remediate/SKILL.md`, which describes the `distinctFrom` entry shape, its non-empty reason, the three-attempt lineage limit, and the rule that entries for non-qualifying cases are ignored.
+- Given the remediate skill contract, when a Claude dispatch and a Codex dispatch render the remediate step, then both read the same `skills/remediate/SKILL.md`, which describes the `distinctFrom` entry shape, its non-empty reason, the three-attempt lineage limit, and the rule that entries naming neither a resolved act owner of a row source nor a provenance candidate of the row are ignored.
 
 #### Negative Paths
 - Given R owns S, when an unbound act row on S declares `distinctFrom` naming a case id absent from the supplied prior cases, then that entry is dropped, the judgement is admitted, and the row is treated as a recurrence of R.
-- Given an open act case O and R both appear in prior cases, when an unbound act row on S declares `distinctFrom` naming O, then that entry is dropped because O is not a resolved act owner of a row source.
+- Given an open act case O and R both appear in prior cases, when an unbound act row on S declares `distinctFrom` naming O, then that entry is dropped because O is neither a resolved act owner of a row source nor a provenance candidate of the row.
 - Given a resolved `defer` case D that owns no source of the row, when an unbound act row on S declares `distinctFrom` naming D, then that entry is dropped and the row is treated as a recurrence of R.
 - Given a `distinctFrom` on a row bound by `existingCaseId`, or on a row whose disposition is not `act`, when the artifact is validated, then the declaration is ignored and that row is reconciled exactly as it would be without it.
 - Given an unbound act row whose `distinctFrom` is an empty list, an entry with an empty or over-bound reason, or an entry with extra keys, when the artifact is parsed, then the whole artifact is rejected as malformed exactly like any other malformed remediate artifact, and no case or effect is written.
@@ -57,7 +57,7 @@ already failed, so that its history follows it instead of starting over.
 - Given the #2423 shape (resolved R with an applied effect, and an undeclared unbound act re-raise of R's source with a changed concern), when the lap runs through the real store, reconciler and coordinator, then N is persisted with `recurrenceOf` [R], R is byte-identical, and no `remediation_adjudication_failed` or halt event is emitted.
 
 #### Negative Paths
-- Given an unbound act row whose sources' authoritative owners are all open cases or have no owner, when it is reconciled, then the new case carries no `recurrenceOf` and no `distinctFrom`.
+- Given an unbound act row whose sources' authoritative owners are all open cases or have no owner, when it is reconciled, then the new case carries no `recurrenceOf` and no `distinctFrom`, unless the row has a provenance candidate, in which case `recurrenceOf` names that candidate.
 - Given R owns S, when the judgement proposes an unbound `defer`, `reject`, `advisory` or `escalate` row on S, then the case it produces carries no `recurrenceOf` and behaves exactly as before this change.
 - Given R holds no operator acceptance, when the judgement binds S to R by `existingCaseId` with disposition `act`, then the lap still halts `semantic remediation case regression R` and no new case is persisted.
 - Given an open case O owns S, when an undeclared unbound act row on S with a different source set is proposed, then the lap still halts with a rejected transition naming `source-linked-by-multiple-cases`, and no `recurrenceOf` is written.

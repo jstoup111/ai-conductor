@@ -17,7 +17,7 @@ As the build_review adjudication coordinator, I want the remediate context to ca
 - Given a plan where two tasks both declare the finding's evidence path `src/shared.ts`, when the adjudication context is assembled, then both tasks' full bodies are supplied, even though the finding pointer names neither task because its anchor matches more than one.
 - Given an open prior case-v2 action case whose act task admitted plan task 12, and no current finding's evidence path is declared by task 12, when the adjudication context is assembled, then task 12's full body is supplied.
 - Given a 140-task plan whose current findings and open cases touch 4 tasks, when the adjudication context is assembled, then assembly succeeds with 4 supplied bodies and 140 index entries rather than stopping with `field-overflow` on `admittedTaskContracts`.
-- Given any lap with prior cases, when the adjudication context is assembled, then every feature-local prior case is present in the context exactly as before this change, including cases that touch none of the supplied tasks.
+- Given any lap with prior cases, when the adjudication context is assembled, then every feature-local prior case is present in the context exactly as before this change apart from its optional source finding digests, including cases that touch none of the supplied tasks.
 
 #### Negative Paths
 - Given a lap whose current findings carry no evidence path that any plan task declares and no prior case is open, when the adjudication context is assembled, then the plan contract supplies zero task bodies, lists every task in the index, and the lap still dispatches the remediate judgement.
@@ -29,7 +29,7 @@ As the build_review adjudication coordinator, I want the remediate context to ca
 ### Done When
 - [ ] A coordinator test over a 56-task plan fixture asserts the supplied body ids equal the selected set and the index holds all 56 ids with titles and dependency ids.
 - [ ] A test over a plan of more than 128 tasks asserts context assembly returns `ok` when four tasks are selected.
-- [ ] A test asserts that the serialized prior-case list is byte-identical with and without the scoping change for the same case store.
+- [ ] A test asserts that the serialized prior-case list, excluding source finding digests, is byte-identical with and without the scoping change for the same case store.
 - [ ] The existing build_review adjudication test suites pass, with only fixtures that asserted every plan body was supplied changed to assert the selected set.
 
 ## Story 2: Admission against an unsupplied task is rejected by name

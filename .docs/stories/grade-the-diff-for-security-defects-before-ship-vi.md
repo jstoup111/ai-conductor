@@ -46,7 +46,7 @@ As a daemon operator, I want the security rubric to see the entire feature diff 
 
 - Given a frozen snapshot whose diff touches three files across two prior batches, when the security projection is derived, then it lists all three files with their change kinds and hunk ranges, carries `mergeBase`, `headSha`, `lapId`, `snapshotDigest`, and `contentDigest`, and contains no test-scope, preflight, or counterfactual field.
 - Given a prior judged security result cached for a projection digest, when a later lap derives an identical projection under the same policy fingerprint and skill digest, then the branch is served from cache with no dispatch and a `build_review_cache_hit` occurrence for `security`.
-- Given a rebase that changes commit identities but leaves every hunk's content unchanged, when the projection is derived, then its digest equals the pre-rebase digest and the cached judgement is reused.
+- Given a rebase that changes commit identities but leaves every hunk's content unchanged, when the projection is derived, then, when its review scope is also unchanged, its digest equals the pre-rebase digest and the cached judgement is reused.
 
 #### Negative Paths
 
@@ -57,7 +57,7 @@ As a daemon operator, I want the security rubric to see the entire feature diff 
 
 ### Done When
 
-- [ ] Deriving projections for an enabled `security` returns a `security` projection whose `changedFiles` equals the by-reference parse of the frozen diff and whose field set is exactly the common projection fields.
+- [ ] Deriving projections for an enabled `security` returns a `security` projection whose `changedFiles` equals the by-reference parse of the frozen diff and whose field set is exactly the common projection fields, including `reviewScope`.
 - [ ] Two snapshots with equal hunk content and different `headSha` values produce equal `security` projection digests.
 - [ ] A skill-digest change or a policy-fingerprint change produces a cache miss for an otherwise identical projection.
 - [ ] An unreadable skill file produces an infrastructure-failure branch, not a judged or cached result.

@@ -155,7 +155,7 @@ a remediate session every lap it recurs unchanged.
 - Given lap two reports settled finding B and new finding D, when adjudication runs, then the judge is dispatched with D as its only current source.
 
 #### Negative Paths
-- Given lap one deferred finding B, when lap two reports B with an anchor that differs by one character, then B is a live source and the judge is dispatched, because only an exact id is settled.
+- Given lap one deferred finding B, when lap two reports B with an anchor that differs by one character, then, in a full lap or when B maps to a delta hunk or names a delta cause hunk, B is a live source and the judge is dispatched, because only an exact id is settled.
 - Given lap one deferred finding B but its deferral effect is still reserved, when lap two reports B, then B is not settled and the lap follows the existing unfinished-effect route.
 - Given lap one produced an open action case for finding A that BUILD has not attempted, when lap two reports A, then A is not settled and the existing action route applies.
 - Given the settled-source predicate runs, when the case store is read afterwards, then no case was written, resolved, or pruned by the predicate.
@@ -164,7 +164,7 @@ a remediate session every lap it recurs unchanged.
 ### Done When
 - [ ] A finding whose exact id has its authoritative source link on a finalized deferred, rejected, or merged case, or on an advisory case while its rubric threshold still admits it, is removed from the live source set before dispatch.
 - [ ] A lap whose live set is empty after settlement finalizes from durable state without dispatching the judge.
-- [ ] A drifted id, a reserved or failed effect, and an open action case each leave the finding live.
+- [ ] A drifted id in a full lap or on a delta hunk, a reserved or failed effect, and an open action case each leave the finding live.
 - [ ] The settled-source predicate performs no write to the case store.
 
 ## Story 7: A skipped dispatch is recorded
