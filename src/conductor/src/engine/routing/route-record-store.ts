@@ -1,6 +1,6 @@
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { journalRefFor, readRestackJournal } from '../restack/restack-journal.js';
-import { parseCommitSha, type CommitSha } from '../restack/restack-types.js';
+import { journalRefFor, readRestackJournal, type ReadRestackJournalResult } from '../restack/restack-journal.js';
+import { parseCommitSha, type CommitSha, type RestackOpId } from '../restack/restack-types.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
 import {
   MAX_ROUTE_ROUNDS,
@@ -26,6 +26,18 @@ export type WriteRouteRecordResult = { readonly kind: 'updated' } | { readonly k
 export type NextRoundIdResult = RoundId | { readonly kind: 'round-limit' } | { readonly kind: 'unavailable' };
 
 const ZERO_SHA = '0'.repeat(40);
+
+/**
+ * A routing writer can pass an in-progress sync only when it owns that
+ * journal. Other non-terminal journal states fence routing mutations.
+ */
+export function routingFenceOpen(journal: ReadRestackJournalResult, ownerOpId?: RestackOpId): boolean {
+  if (journal.kind === 'missing') return true;
+  if (journal.kind !== 'journal') return false;
+  return journal.journal.state === 'aborted'
+    || (journal.journal.state === 'applied' && journal.journal.followOnCause === undefined)
+    || (journal.journal.state === 'synced' && ownerOpId === journal.journal.opId);
+}
 
 function isFeatureBranchRef(ref: string): boolean {
   return /^refs\/heads\/feat\/(?:c[1-9]\/|daemon-)[a-z0-9][a-z0-9-]*$/.test(ref);
@@ -129,9 +141,7 @@ export async function writeRoutingTransaction(
   const git = dependencies.git ?? makeGitRunner(worktree);
   const journal = await readRestackJournal(worktree, slug, { git });
   if (journal.kind === 'unreadable') return { kind: 'unavailable' };
-  if (journal.kind === 'journal' &&
-    (journal.journal.state !== 'applied' && journal.journal.state !== 'aborted' ||
-      (journal.journal.state === 'applied' && journal.journal.followOnCause !== undefined))) {
+  if (!routingFenceOpen(journal)) {
     return { kind: 'restack-journal-open' };
   }
   try {
