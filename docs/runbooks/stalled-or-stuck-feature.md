@@ -13,6 +13,17 @@ kickback loops. For operators reading `.pipeline/` state and the daemon log.
 > **Not sure this is the right runbook?** Run `/daemon-triage` — it gathers the evidence
 > read-only, classifies the failure, and routes to the one runbook that owns it.
 
+### Routed repair halted on the cascade cap
+
+**Symptom:** the HALT begins `restack refused (cascade-cap) child <n>` and names this section.
+
+**Diagnosis:** the routed exit has consumed that child's permitted restack cascades. The repair
+marker remains in place and no journal was created, so neither the route nor any stack ref moved.
+
+**Recovery:** after reviewing the repeated repair, authorize one more restack with
+`ai-conductor kickback-budget raise --gate restack` and resume the feature. Slices merged before
+the routing flag flip route without re-validation; do not reopen them merely to clear this halt.
+
 ## Symptom
 
 Any of these:

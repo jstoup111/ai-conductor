@@ -60,6 +60,10 @@ export interface RunRestackOptions {
   readonly worktree: string;
   readonly slug: string;
   readonly cause: RestackCause;
+  /**
+   * Explicit routed origins are captured by the exit cursor.  Other repairs
+   * derive them solely from the immutable range planner.
+   */
   readonly originatingChildren?: readonly ChildId[];
   /** The already-resolved default-branch tip for a base refresh. */
   readonly newDefault?: string;
@@ -446,8 +450,20 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     }
     if (plan.kind === 'unavailable') throw new Error(plan.detail);
 
+    const originating = options.originatingChildren === undefined
+      ? plan.originating
+      : [...new Set(options.originatingChildren)].sort((left, right) => left - right);
+    if (options.routed !== undefined && !originating.includes(options.routed.host)) {
+      await haltRestack(options.worktree, 'range-not-ancestor', options.events, {
+        child: options.routed.host,
+        detail: `routed exit origin set is missing host ${options.routed.host}`,
+      });
+      terminal = true;
+      return { kind: 'halted' };
+    }
+
     if (options.cause === 'feature-repair') {
-      const cap = await checkCascadeCap(options.worktree, options.slug, plan.originating, { git });
+      const cap = await checkCascadeCap(options.worktree, options.slug, originating, { git });
       if (cap.kind === 'exhausted') {
         const entry = await recordKickbackCapEvidence(options.worktree, 'restack', {
           consumed: cap.count,
@@ -458,7 +474,9 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         const rendered = renderKickbackBudgetView(entry, 'restack', cap.limit, undefined, undefined, active.child);
         await haltRestack(options.worktree, 'cascade-cap', options.events, {
           child: cap.child,
-          detail: `${cap.detail ?? `originating child ${cap.child} reached ${cap.count}/${cap.limit} cascades`}\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
+          detail: `${cap.detail ?? `originating child ${cap.child} reached ${cap.count}/${cap.limit} cascades`}` +
+            `${options.routed === undefined ? '' : '\nRunbook: Routed repair halted on the cascade cap'}` +
+            `\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
         });
         terminal = true;
         return { kind: 'halted' };
@@ -479,7 +497,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       committer: await committerStamp(git),
       newDefault: stackDefault,
       comparisonCommits: comparison,
-      ...(options.cause === 'feature-repair' ? { originatingChildren: plan.originating } : {}),
+      ...(options.cause === 'feature-repair' ? { originatingChildren: originating } : {}),
       ...(options.routed === undefined ? {} : { routed: options.routed }),
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
@@ -512,7 +530,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const unenteredLeafOwners = new Map<ChildId, ChildId>();
     let parent = planningDefault;
     const lastOriginIndex = options.cause === 'feature-repair'
-      ? Math.max(-1, ...plan.ranges.map((range, index) => plan.originating.includes(range.child) ? index : -1))
+      ? Math.max(-1, ...plan.ranges.map((range, index) => originating.includes(range.child) ? index : -1))
       : -1;
     for (const [rangeIndex, range] of plan.ranges.entries()) {
       if (range.kind === 'leaf-unentered') {

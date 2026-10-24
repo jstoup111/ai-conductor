@@ -212,12 +212,14 @@ import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } fro
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
-import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
+import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound } from './routing/round-admission.js';
 import { routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
+import { requestRoutedExit } from './routing/routed-exit.js';
+import { EventPersister } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -714,6 +716,7 @@ export class Conductor {
   private readonly enterChildRegion: typeof enterChildRegion;
   private readonly enterHostRegion: typeof enterHostRegion;
   private readonly advanceChildRegion: typeof advanceChildRegion;
+  private readonly requestRoutedExit: typeof requestRoutedExit;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
@@ -2537,6 +2540,7 @@ export class Conductor {
     this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
     this.enterHostRegion = opts.childRegionLifecycle?.enterHostRegion ?? enterHostRegion;
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
+    this.requestRoutedExit = opts.childRegionLifecycle?.requestRoutedExit ?? requestRoutedExit;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
@@ -15254,6 +15258,36 @@ export class Conductor {
           ) {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
+            const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+            if (execution.source === 'routed-host' && execution.roundId !== undefined) {
+              const exited = await this.requestRoutedExit({
+                worktree: this.projectRoot,
+                slug,
+                roundId: execution.roundId,
+                host: execution.target.child,
+                events: this.events,
+              });
+              if (exited.kind === 'halted') {
+                await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit refused: ${exited.detail}`);
+                return;
+              }
+              const persister = new EventPersister(join(this.projectRoot, '.pipeline', 'events.jsonl'), this.events);
+              const drained = await drainRoutingOutboxes(this.projectRoot, slug, (event) => persister.persistDurably(event));
+              if (drained.kind !== 'drained') {
+                await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit outbox refused: ${drained.kind}`);
+                return;
+              }
+              const next = await this.resolveActiveChild(this.projectRoot, slug);
+              const nextExecution = resolveExecutionChild(next, slug);
+              if (nextExecution.source !== 'cursor' && nextExecution.source !== 'routed-host' && nextExecution.source !== 'revalidating') {
+                await this.haltChildRegionRefusal(this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+                return;
+              }
+              activeChild = nextExecution.target;
+              await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
+              i = indexOf('acceptance_specs') - 1;
+              continue;
+            }
             const advanced = await this.advanceChildRegion(
               this.projectRoot,
               slug,
