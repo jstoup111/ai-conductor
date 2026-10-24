@@ -204,14 +204,14 @@ import {
 } from './child-context.js';
 import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
-import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
-import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
+import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound } from './routing/round-admission.js';
@@ -6741,7 +6741,7 @@ export class Conductor {
           },
         });
         if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
-        if (preflight.kind === 'navigate-leaf-to-build') {
+        if (preflight.kind === 'navigate-leaf-to-build' || preflight.kind === 'navigate-host') {
           // Admission wrote the route and marker before its normal leaf
           // rewind.  A crash in that gap is recovered by rewinding the leaf's
           // own region state; the next BUILD entry adopts the marker-selected
@@ -16208,11 +16208,33 @@ export class Conductor {
           );
     if (kickbackVerdict === 'halt') return 'halt';
 
+    let routedParking: import('./selector.js').RoutedParking | undefined;
+    const parkingSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    // Do not probe routing refs for flat/N=1 features.  The sealed leaf is a
+    // local durable fact and is enough to reject that whole class before any
+    // marker or queue read.
+    if (parkingSlug && this.config.stacked_prs?.route_whole_feature_fixes === true) {
+      const leaf = await resolveSealedLeaf(this.projectRoot);
+      if (leaf !== undefined && leaf > 1) {
+        const marker = await readRepairMarker(this.projectRoot, parkingSlug);
+        if (marker.kind === 'marker') {
+          routedParking = marker.marker.host === leaf
+            ? { kind: 'leaf-host' }
+            : { kind: 'child', child: marker.marker.host };
+        } else {
+          const queue = await readRevalidationQueue(this.projectRoot, parkingSlug);
+          if (queue.kind === 'unreadable' || (queue.kind === 'queue' && queue.queue.entries.length > 0)) {
+            routedParking = { kind: 'queue' };
+          }
+        }
+      }
+    }
     const decision = selectNextGate({
       steps,
       state,
       verdicts,
       regionStart: topo.regionStart,
+      ...(routedParking === undefined ? {} : { routedParking }),
     });
     if (decision.kind === 'done') {
       await writeFile(

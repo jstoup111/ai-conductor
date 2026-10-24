@@ -13,6 +13,7 @@ import {
 import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
+import { advanceRound } from './routed-exit.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string };
 
@@ -74,6 +75,7 @@ export type ReconcileRoundsResult =
   | { readonly kind: 'navigate-leaf-to-build'; readonly roundId: string; readonly host: ChildId }
   /** A crash occurred after the host's entry CAS and before it journaled its exit. */
   | { readonly kind: 'resume-exit'; readonly roundId: RoundId; readonly host: ChildId }
+  | { readonly kind: 'navigate-host'; readonly roundId: RoundId; readonly host: ChildId }
   | { readonly kind: 'deferred' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
@@ -107,6 +109,12 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     if (builtHost) return { kind: 'resume-exit', roundId: id, host: Number(builtHost[0]) as ChildId };
     const activeHost = Object.entries(stored.record.hosts).find(([, state]) => state === 'admitted' || state === 'repairing');
     if (activeHost) return { kind: 'navigate-leaf-to-build', roundId: id, host: Number(activeHost[0]) as ChildId };
+    if (stored.record.phase === 'open') {
+      const advanced = await advanceRound(worktree, slug, stored, { git });
+      if (advanced.kind === 'admitted') return { kind: 'navigate-host', roundId: id, host: advanced.host };
+      if (advanced.kind === 'unavailable') return { kind: 'unavailable', detail: advanced.detail };
+      return { kind: 'deferred' };
+    }
   }
   return { kind: 'deferred' };
 }
