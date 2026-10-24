@@ -27,7 +27,7 @@ As the operator, I want every newly claimed feature to run on the build `dist` p
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a daemon in `executor_isolation: child` mode whose supervisor booted on build v1 and `dist` now points to v2, when a feature is claimed, then its executor process runs from `dist-versions/v2` and its WorkOrder records `engineVersionId` v2.
+- Given a daemon whose supervisor booted on build v1 and `dist` now points to v2, when a feature is claimed, then its executor process runs from `dist-versions/v2` and its WorkOrder records `engineVersionId` v2.
 - Given feature A is in flight on v1 and `dist` flips to v2, when feature B is claimed while A is still running, then B is dispatched immediately on v2 with no claim-stop and without waiting for A to finish.
 - Given a feature halted on v1 and `dist` now points to v2, when the halt is cleared and the feature is re-dispatched, then the new dispatch runs on v2, not v1.
 
@@ -155,7 +155,7 @@ As the operator, I want shared-`.git` worktree operations from every executor an
 
 **Requirement:** ADR D4; adr-2026-08-27 D8
 
-As the operator, I want daemon.log, OTel and the feature ledger to show a child-mode feature exactly as they show an in-process one, so that observability does not regress.
+As the operator, I want daemon.log, OTel and the feature ledger to show every feature that runs in its child executor with full slug attribution, events and traces, so that process separation costs no observability.
 
 ### Acceptance Criteria
 
@@ -178,13 +178,13 @@ As the operator, I want daemon.log, OTel and the feature ledger to show a child-
 
 **Requirement:** ADR D1, D4
 
-As the operator, I want child-mode outcomes to drive claims, parking, watches and processed-marking exactly as in-process outcomes do, so that backlog bookkeeping is unchanged.
+As the operator, I want child executor outcomes to drive claims, parking, watches and processed-marking on the dispatcher side, so that backlog bookkeeping stays correct across the process boundary.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a child finishes with status `done` and terminal effects including `markProcessed` and `enrollWatch`, when the dispatcher collects it, then the claim completes and both effects run supervisor-side.
-- Given a child ends `halted` or `parked`, when it is collected, then the claim is parked and a HALT-cleared watcher is registered, exactly as for in-process outcomes.
+- Given a child ends `halted` or `parked`, when it is collected, then the claim is parked and a HALT-cleared watcher is registered.
 
 #### Negative Paths
 - Given a child process exits non-zero without sending an outcome, when the supervisor observes the exit, then the dispatch is collected as `error` with the exit code and signal in its reason, and the claim is released into the halted path.
@@ -234,7 +234,7 @@ As the operator, I want the supervisor's memory evidence, heap guard, process co
 #### Negative Paths
 - Given a child's rss crosses the daemon memory threshold, when the supervisor evaluates its threshold, then no supervisor heap snapshot is written, because only the supervisor's own memory is compared.
 - Given a child is launched, when its command line is inspected, then it does not contain `daemon --continuous`, so it can never satisfy the supervisor process pattern.
-- Given a child-mode dispatch would take the legacy no-`providerExecution` branch while the supervisor's effective concurrency is greater than 1, when the child evaluates the guard, then it refuses fail-closed exactly as in-process mode does, using the effective concurrency passed by the supervisor.
+- Given a dispatch would take the legacy no-`providerExecution` branch while the supervisor's effective concurrency is greater than 1, when the child evaluates the guard, then it refuses fail-closed, using the effective concurrency passed by the supervisor.
 
 ### Done When
 - [ ] A test proves that child-mode memory samples are supervisor-origin with the supervisor pid and unchanged fields.
@@ -280,7 +280,7 @@ As the operator of a self-host daemon with the stale-engine gates armed, I want 
 
 #### Happy Path
 - Given a self-host daemon with the stale-engine gates armed, executors in flight and `engine_refresh_min_interval_seconds` elapsed, when the background maintenance job runs, then it fetches, fast-forwards, rebuilds and flips `dist` without waiting for the pool to drain.
-- Given a daemon in `executor_isolation: child` mode and that rebuild produced a new build, when the next feature is claimed, then that feature runs on the new build.
+- Given that rebuild produced a new build, when the next feature is claimed, then that feature runs on the new build.
 - Given a consumer (non-self-host) daemon in child mode, when the shared install is rebuilt by any means into a protocol-compatible build, then its next claim runs on the new build, and no rebuild job runs in the consumer daemon.
 
 #### Negative Paths
@@ -337,40 +337,39 @@ As the operator, I want `daemon status` to show each in-flight feature's engine 
 - [ ] The observe CLI renders a per-feature engine version column from `.daemon/executors/` records.
 - [ ] Older-than-current marking, unreadable-record and unresolvable-`dist` cases are tested against rendered output.
 
-## Story 15: `executor_isolation` selects child or in-process execution
+## Story 15: Every daemon feature runs in its per-dispatch child executor
 
 **Requirement:** ADR D1
 
-As the operator, I want a config lever to fall back to in-process execution, so that a child-mode defect can be reverted without a code change.
+As the operator, I want every dispatched feature to run in its own child executor, so that a single execution path carries every feature and per-dispatch engine pinning always applies.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given no `executor_isolation` key in config, when the daemon starts, then it uses child mode.
-- Given `executor_isolation: in-process`, when the daemon starts, then features run in the supervisor process on its boot build, exactly as before this change, and its startup log says that per-dispatch engine pinning is disabled.
+- Given a valid project config, when the daemon starts and claims a feature, then the feature runs in a child process forked from its pinned engine version and its feature ledger records `executor_started`.
 
 #### Negative Paths
-- Given `executor_isolation` set to an unrecognized value, when the config loads, then startup fails with a message naming the key and its allowed values `child` and `in-process`.
+- Given a project config that sets `executor_isolation` to any value, when the config loads, then loading fails with `Unknown top-level key: "executor_isolation"` and the daemon claims no feature.
 
 ### Done When
-- [ ] Config parsing for `executor_isolation` is tested for the default, both values and an invalid value.
-- [ ] A test shows that in-process mode wires the existing in-process executor.
+- [ ] A config validation test shows `executor_isolation` is rejected as an unknown top-level key.
+- [ ] A composition test shows the daemon wires the child executor for every dispatch with no config input selecting it.
 
-## Story 16: A full feature runs end to end in child mode with in-process parity
+## Story 16: A full feature runs end to end in the child executor
 
 **Requirement:** architecture review condition 1; ADR assumption A2
 
-As the operator, I want a full feature dispatch through the child executor to produce the same steps, ledger and outcome as in-process, so that no coordination path is silently lost.
+As the operator, I want a full feature dispatch through the child executor to produce the fixture's expected steps, ledger and outcome, so that no coordination path is silently lost across the process boundary.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a fixture feature with a stubbed provider, when it is dispatched once in child mode and once in in-process mode, then both runs record the same ordered step sequence, the same terminal status and the same terminal effects.
+- Given a fixture feature with a stubbed provider, when it is dispatched through the child executor, then the run records the fixture's expected ordered step sequence, terminal status `done` and expected terminal effects.
 
 #### Negative Paths
-- Given the fixture provider returns a rate-limit on its first call, when the feature runs in child mode, then the run waits on the daemon-wide episode and completes after it clears, matching in-process behavior.
-- Given the fixture feature halts at a gate, when it runs in child mode, then the halt marker, the ledger and the collected outcome match the in-process run.
+- Given the fixture provider returns a rate-limit on its first call, when the feature runs in the child executor, then the run waits on the daemon-wide episode, completes after it clears, and records the same step sequence as an unthrottled run.
+- Given the fixture feature halts at a gate, when it runs in the child executor, then the halt marker, the ledger and the collected `halted` outcome match the fixture's expected halt.
 
 ### Done When
-- [ ] A parity test drives one fixture feature through both executor adapters and compares step sequence, ledger event types and the outcome.
-- [ ] The parity test covers a rate-limited path and a halted path.
+- [ ] An end-to-end test drives one fixture feature through the child executor, with the real executor-child runtime and broker, and checks step sequence, ledger event types and the outcome against the fixture's expectations.
+- [ ] The test covers a rate-limited path and a halted path.
