@@ -90,6 +90,10 @@ describe('Conductor routed acceptance verify-green path', () => {
     const advanceChildRegion = vi.fn();
     const requestRoutedExit = vi.fn(async () => ({ kind: 'no-commit-done' as const }));
     const resolveActiveChild = vi.fn()
+      // The routed receipt ledger probes the cursor before BUILD entry.
+      .mockResolvedValueOnce({
+        kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
+      })
       .mockResolvedValueOnce({
         kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
       })
