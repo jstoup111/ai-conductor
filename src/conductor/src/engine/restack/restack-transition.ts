@@ -16,10 +16,11 @@ import {
   type GitRunner,
   type RebaseOutcome,
 } from '../rebase.js';
-import { compareReplayTree, type ReplayIdentity } from '../rebase-replay.js';
+import { compareReplayTree, type ReplayComparison, type ReplayIdentity } from '../rebase-replay.js';
 import { applyRebaseTransition } from '../rebase-transition.js';
 import { translateAfterRebase } from '../rebase-translate.js';
 import { readState } from '../state.js';
+import { parsePlanTaskBlocks } from '../plan-task-parse.js';
 import { stripInheritedRemBlocks } from '../routing/rem-block-merge.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { RestackMoveRef } from './restack-move.js';
@@ -78,27 +79,100 @@ async function showPath(git: GitRunner, ref: CommitSha, path: string): Promise<s
   return result.exitCode === 0 ? result.stdout : undefined;
 }
 
-/** Remove only plan deltas that are byte-for-byte inherited rem blocks from the new parent. */
+interface NormalizedRemPlanSurface {
+  readonly authored: string;
+  readonly remBlocks: readonly [string, string][];
+}
+
+/**
+ * The conflict resolver preserves task blocks but may attach a separator to
+ * the preceding block body. Compare the inherited-rem-free surfaces rather
+ * than treating that formatting detail as a child replay change.
+ */
+function normalizedRemPlanSurface(plan: string, parent: string): NormalizedRemPlanSurface | undefined {
+  const entries = [...parsePlanTaskBlocks(plan)];
+  const parentBlocks = parsePlanTaskBlocks(parent);
+  const firstRem = entries.findIndex(([id]) => id.startsWith('rem-'));
+  if (firstRem === -1 || entries.slice(firstRem).some(([id]) => !id.startsWith('rem-'))) return undefined;
+  const firstHeading = entries[firstRem]![1].heading;
+  const firstStart = plan.startsWith(firstHeading) ? 0 : plan.indexOf(`\n${firstHeading}`);
+  if (firstStart === -1) return undefined;
+  const remBlocks = entries.slice(firstRem)
+    .filter(([id, block]) => {
+      const inherited = parentBlocks.get(id);
+      return inherited === undefined || `${inherited.heading}\n${inherited.body}`.trimEnd() !== `${block.heading}\n${block.body}`.trimEnd();
+    })
+    .map(([id, block]) => [id, `${block.heading}\n${block.body}`.trimEnd()] as [string, string])
+    .sort(([left], [right]) => left.localeCompare(right));
+  return { authored: plan.slice(0, firstStart === 0 ? 0 : firstStart + 1).trimEnd(), remBlocks };
+}
+
+function sameInheritedRemSurface(before: string, oldParent: string, after: string, newParent: string): boolean {
+  const left = normalizedRemPlanSurface(before, oldParent);
+  const right = normalizedRemPlanSurface(after, newParent);
+  return left !== undefined && right !== undefined &&
+    left.authored === right.authored && JSON.stringify(left.remBlocks) === JSON.stringify(right.remBlocks);
+}
+
+/** Remove only plan deltas that are byte-for-byte inherited rem blocks from their respective parents. */
 async function normalizeInheritedRemPaths(git: GitRunner, tuple: RestackTuple, paths: readonly string[]): Promise<string[]> {
   const normalized: string[] = [];
   for (const path of paths) {
     if (!path.startsWith('.docs/plans/') || !path.endsWith('.md')) { normalized.push(path); continue; }
-    const [before, after, parent] = await Promise.all([
-      showPath(git, tuple.previous, path), showPath(git, tuple.head, path), showPath(git, tuple.onto, path),
+    const [before, after, oldParent, newParent] = await Promise.all([
+      showPath(git, tuple.previous, path),
+      showPath(git, tuple.head, path),
+      showPath(git, tuple.base, path),
+      showPath(git, tuple.onto, path),
     ]);
-    if (before === undefined || after === undefined || parent === undefined || stripInheritedRemBlocks(after, parent) !== before) normalized.push(path);
+    if (
+      before === undefined || after === undefined || oldParent === undefined || newParent === undefined ||
+      (
+        stripInheritedRemBlocks(before, oldParent) !== stripInheritedRemBlocks(after, newParent) &&
+        !sameInheritedRemSurface(before, oldParent, after, newParent)
+      )
+    ) normalized.push(path);
   }
   return normalized;
 }
 
-async function normalizedReplayComparison(git: GitRunner, tuple: RestackTuple, replay: ReplayIdentity) {
+interface NormalizedReplayComparison {
+  readonly comparison: ReplayComparison;
+  /** Present only when child-owned replay normalization replaces a failed exact reconstruction. */
+  readonly fallbackPaths?: readonly string[];
+}
+
+async function normalizedReplayComparison(
+  git: GitRunner,
+  tuple: RestackTuple,
+  replay: ReplayIdentity,
+): Promise<NormalizedReplayComparison> {
+  // A restacked child owns only its old range. The new parent's changes are
+  // inherited inputs, not evidence that this child changed its replay.
+  // Normalize rem blocks on both sides before using this fallback so a union
+  // resolution does not turn the parent's appended block into child work.
+  const childOwned = await changedPaths(git, tuple.base, tuple.previous);
+  const relevant = await normalizeInheritedRemPaths(git, tuple, childOwned);
   const comparison = await compareReplayTree(git, replay);
-  if (comparison.kind !== 'changed') return comparison;
-  const raw = await changedPaths(git, tuple.previous, tuple.head);
-  const relevant = await normalizeInheritedRemPaths(git, tuple, raw);
-  return relevant.length === 0
-    ? { ...comparison, kind: 'unchanged' as const, expectedTree: comparison.completedTree }
-    : comparison;
+  if (comparison.kind === 'unchanged' || relevant.length > 0) return { comparison };
+  if (comparison.kind === 'changed') {
+    return {
+      comparison: { ...comparison, kind: 'unchanged' as const, expectedTree: comparison.completedTree },
+      fallbackPaths: relevant,
+    };
+  }
+
+  // A plan-only conflict makes merge-tree conservatively unproved even when
+  // the resolved child-owned surface is identical. Bind the normalized result
+  // to the actual completed tree rather than returning early on `unproved`.
+  const completed = await git(['rev-parse', `${replay.completedHead}^{tree}`]);
+  const completedTree = completed.exitCode === 0 ? completed.stdout.trim() : '';
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(completedTree)
+    ? {
+        comparison: { kind: 'unchanged', identity: replay, expectedTree: completedTree, completedTree },
+        fallbackPaths: relevant,
+      }
+    : { comparison };
 }
 
 async function mergeBase(git: GitRunner, left: CommitSha, right: CommitSha): Promise<CommitSha> {
@@ -155,11 +229,14 @@ export async function queueInvalidation(
   });
   if (outcome.kind !== 'changed' || outcome.replay === undefined) return undefined;
 
+  const normalized = await normalizedReplayComparison(git, {
+    previous: range.oldTip, base: range.oldParent, onto: newParent, head: move.newSha,
+  }, outcome.replay);
   const projection = classifyReplayGateInvalidation(
-    outcome.allChangedPaths ?? outcome.changedCodePaths,
+    normalized.fallbackPaths ?? outcome.allChangedPaths ?? outcome.changedCodePaths,
     outcome.featureSurface ?? [],
     false,
-    await normalizedReplayComparison(git, { previous: range.oldTip, base: range.oldParent, onto: newParent, head: move.newSha }, outcome.replay),
+    normalized.comparison,
     outcome.documentInputs,
   );
   const invalidated = new Set(projection.invalidated);
@@ -411,13 +488,14 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
       wouldInvalidate.set(range.child, []);
       continue;
     }
+    const normalized = await normalizedReplayComparison(options.git, {
+      previous: range.oldTip, base: range.oldParent, onto: newParentFor(range), head: move.newSha,
+    }, outcome.replay!);
     const projection = classifyReplayGateInvalidation(
-      outcome.allChangedPaths ?? outcome.changedCodePaths,
+      normalized.fallbackPaths ?? outcome.allChangedPaths ?? outcome.changedCodePaths,
       outcome.featureSurface ?? [],
       false,
-      await normalizedReplayComparison(options.git, {
-        previous: range.oldTip, base: range.oldParent, onto: newParentFor(range), head: move.newSha,
-      }, outcome.replay!),
+      normalized.comparison,
       outcome.documentInputs,
     );
     const invalidated = new Set(projection.invalidated);

@@ -7,6 +7,8 @@ import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { readVerdict, writeVerdict, type GateVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import { applyRestackTransition } from '../../../src/engine/restack/restack-transition.js';
+import { parseRefName } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from './restack-sweepG2-fixture.js';
 
@@ -71,6 +73,57 @@ async function repairableStack(): Promise<SweepRepository & { oldLeaf: string }>
 }
 
 describe('restack verdict transition sweep (real local Git)', () => {
+  // Covers: task:rem-prd-audit-rem-vg4-s4-4
+  it('treats an unproved replay as unchanged when parent and child rem blocks are inherited', async () => {
+    const subject = await createSweepRepository('restack-inherited-rem-', cleanup);
+    const child2 = parseChildId(2)!;
+    const leaf = parseChildId(3)!;
+    const plan = '.docs/plans/demo.md';
+    const rem1 = '### Task rem-child-1: child one\n**Gate:** prd-audit\n**Done when:**\n- child one';
+    const rem2 = '### Task rem-child-2: child two\n**Gate:** prd-audit\n**Done when:**\n- child two';
+    const base = await subject.commit('approved plan', plan, '# Plan\n');
+
+    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+    const oldParent = await subject.commit('child 1', 'src/one.ts', 'export const one = 1;\n');
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', oldParent]);
+    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+    const oldTip = await subject.commit(
+      'child 2 remediation',
+      plan,
+      `# Plan\n\n${rem2}`,
+    );
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', oldTip]);
+
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.write('src/one.ts', 'export const one = 2;\n');
+    await subject.write(plan, `# Plan\n\n${rem1}`);
+    await subject.git(['add', 'src/one.ts', plan]);
+    await subject.git(['commit', '-qm', 'child 1 repair and remediation']);
+    const newParent = await subject.rev('HEAD');
+
+    await subject.git(['checkout', '-qb', 'feat/c2/replayed', newParent]);
+    const replayedPlan = `# Plan\n\n${rem1}\n${rem2}`;
+    const newTip = await subject.commit('replay child 2 remediation', plan, replayedPlan);
+    await seedJudgedEvidence(subject.repo, oldTip, child2);
+
+    const result = await applyRestackTransition({
+      worktree: subject.repo,
+      cause: 'feature-repair',
+      oldDefault: base,
+      newDefault: newParent,
+      activeChild: leaf,
+      ranges: [{ child: child2, oldParent, oldTip, kind: 'closed' }],
+      moves: [
+        { ref: parseRefName('refs/heads/feat/c2/demo')!, child: child2, oldSha: oldTip, newSha: newTip },
+      ],
+      isRegionGateFresh: async () => true,
+      git: makeGitRunner(subject.repo),
+    });
+
+    expect(result.wouldInvalidate.get(child2)).toEqual([]);
+    expect(result.queueInvalidation).toEqual([]);
+  });
+
   // Covers: S11.5, S11.6, task:18
   it('invalidates the whole-feature and leaf gates whose inputs a feature-repair commit X touches while the default is unchanged, and keeps them passed when X touches no gate input', async () => {
     const leaf = parseChildId(3)!;
