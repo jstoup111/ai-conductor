@@ -292,7 +292,11 @@ export async function resolveChildBase(
 async function onlyHaltRecordChanged(git: GitRunner, sha: string, slug: string): Promise<boolean | 'git-error'> {
   const changed = await runGit(git, ['diff-tree', '--no-commit-id', '--name-only', '-r', sha]);
   if (!changed || changed.exitCode !== 0) return 'git-error';
-  return changed.stdout.split('\n').filter(Boolean).every((path) => path === `.docs/halted/${slug}.md`);
+  const paths = changed.stdout.split('\n').filter(Boolean);
+  // An empty metadata commit is still an authored commit past closure.  It
+  // must trigger the routed exit restack rather than disappearing through the
+  // halt-record exemption's vacuous `every` result.
+  return paths.length > 0 && paths.every((path) => path === `.docs/halted/${slug}.md`);
 }
 
 /** Resolves the next child and fails closed when stacked state is ambiguous or divergent. */

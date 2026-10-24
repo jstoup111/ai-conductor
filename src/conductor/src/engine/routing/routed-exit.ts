@@ -168,9 +168,17 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     ...(input.events === undefined ? {} : { events: input.events }),
     git,
   });
-  return restack.kind === 'applied'
+  if (restack.kind !== 'applied') return halted(`routed exit host ${input.host}: ${restackDetail(restack)}`);
+
+  // Applying the routed journal appends the terminal `restacked` occurrence
+  // to the same route-record transaction.  Drain that new durable entry before
+  // reporting success, just as the pre-restack outbox was drained above.
+  const appliedRecord = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (appliedRecord.kind !== 'record') return halted(`routed exit host ${input.host}: cannot reread restacked route record`);
+  const appliedDrain = await drainOutbox(input.worktree, appliedRecord, persist, { git });
+  return appliedDrain.kind === 'drained'
     ? { kind: 'restacked' }
-    : halted(`routed exit host ${input.host}: ${restackDetail(restack)}`);
+    : halted(`routed exit host ${input.host}: routing outbox ${appliedDrain.kind}`);
 }
 
 function restackDetail(result: Exclude<RunRestackResult, { readonly kind: 'applied' }>): string {
