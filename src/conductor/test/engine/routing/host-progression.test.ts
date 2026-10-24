@@ -17,7 +17,7 @@ function record(
 }
 
 function queue(entries: boolean): Pick<RevalidationQueueRecord, 'entries'> {
-  return { entries: entries ? [{}] as RevalidationQueueRecord['entries'] : [] };
+  return { entries: entries ? [{}] as unknown as RevalidationQueueRecord['entries'] : [] };
 }
 
 describe('routed host progression', () => {

@@ -78,7 +78,7 @@ function stepsWithPostRegionCustomStep() {
 
 describe('engine/selector — selectNextGate', () => {
   it('parks a child host on only its region steps while the baseline selects pending post-region work', () => {
-    const state: ConductState = {
+    const state = {
       ...frontDone(),
       build: 'done',
       test_suite: 'done',
@@ -89,7 +89,7 @@ describe('engine/selector — selectNextGate', () => {
       rebase: 'pending',
       finish: 'pending',
       post_region_custom: 'pending',
-    };
+    } as ConductState;
     const fixture: SelectorInput = {
       ...input(state, { build: VSAT, test_suite: VSAT, build_review: VSAT }),
       steps: stepsWithPostRegionCustomStep(),
@@ -108,7 +108,7 @@ describe('engine/selector — selectNextGate', () => {
   });
 
   it('does not advance a child host to leaf gates or post-region work after its region settles', () => {
-    const state: ConductState = {
+    const state = {
       ...frontDone(),
       build: 'done',
       test_suite: 'done',
@@ -119,7 +119,7 @@ describe('engine/selector — selectNextGate', () => {
       rebase: 'pending',
       finish: 'pending',
       post_region_custom: 'pending',
-    };
+    } as ConductState;
 
     const decision = selectNextGate(withParking({
       ...input(state, { build: VSAT, test_suite: VSAT, build_review: VSAT }),
@@ -172,7 +172,7 @@ describe('engine/selector — selectNextGate', () => {
   });
 
   it('parks a revalidation queue before leaf gates and post-region work', () => {
-    const state: ConductState = {
+    const state = {
       ...frontDone(),
       build: 'done',
       test_suite: 'done',
@@ -183,7 +183,7 @@ describe('engine/selector — selectNextGate', () => {
       rebase: 'pending',
       finish: 'pending',
       post_region_custom: 'pending',
-    };
+    } as ConductState;
     const verdicts = { build: VSAT, test_suite: VSAT, build_review: VSAT };
 
     const decision = selectNextGate(withParking({
