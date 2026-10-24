@@ -1488,19 +1488,18 @@ Opts a project into stacked delivery of a sliced plan. Plan-slice grammar valida
 `plan-slices` land gate) runs regardless of this block; the checks below run only when `enabled` is
 `true`. An admitted plan builds
 [child by child](#child-by-child-build), and FINISH publishes it as a
-[GitHub native stack](#stacked-publication). Routing whole-feature fixes to the owning child is dark-launched behind
-`route_whole_feature_fixes`. Round admission and the routed repair pass on the host are implemented;
-child revalidation and the exit restack land with #3212.
+[GitHub native stack](#stacked-publication). `route_whole_feature_fixes` routes whole-feature fixes
+to the owning child, carries them up the stack, and re-validates the closed children above it.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
 | `stacked_prs.enabled` | boolean | Boolean, else hard error | `false` |
 | `stacked_prs.max_slices` | integer | Integer from 1 through 9, else hard error; a value above 5 loads with a review-size warning | `1` |
-| `stacked_prs.route_whole_feature_fixes` | boolean | Boolean, else hard error | `false` |
+| `stacked_prs.route_whole_feature_fixes` | boolean | Boolean, else hard error | `true` |
 
 `stacked_prs` must be an object. Unknown sub-keys and non-object values are hard errors. When the
 block is present, an omitted `enabled` resolves to `false` and an omitted `max_slices` resolves to
-`1`. An omitted `route_whole_feature_fixes` resolves to `false`, with or without the block.
+`1`. An omitted `route_whole_feature_fixes` resolves to `true`, with or without the block.
 
 `route_whole_feature_fixes: true` takes effect only for a feature with durable child state. The
 engine then reads the feature's [routing refs](artifacts.md#worktree-and-branch-names), and the stack
@@ -1528,8 +1527,7 @@ a routed round instead of appended to the leaf plan:
   a `Round: r<n>` trailer, binds each item's repair obligation to the host branch, and seeds task
   status. Resume verifies that state and never re-appends. An entry with nothing left to build halts
   `needs-human` with `routed host <k> entry derived already complete`; other failures halt with
-  `routed host <k> entry halted:` or `entry refused:` plus the detail. A `revalidate` round refuses
-  until #3212.
+  `routed host <k> entry halted:` or `entry refused:` plus the detail.
 - **Membership.** `prepare-commit-msg` stamps `Round: r<n>` on commits made on the current host
   (hidden `ai-conductor round-stamp`). `ai-conductor task` and `task-membership-check` accept the
   round's routed task ids on its host; task status stays feature-wide.
@@ -1550,6 +1548,23 @@ a routed round instead of appended to the leaf plan:
   closure, moves the round to that child in one fenced transaction, and emits
   `remediation_rerouted`. A malformed or unverified claim counts as an ordinary failed build
   attempt; a failed move or worktree sync halts `needs-human`.
+- **Exit.** When a host child's `build_review` passes, the host leaves the round. A host tip equal
+  to its closure exits with one compare-and-swap that marks the host `done` and deletes the marker.
+  Otherwise the engine marks the host `built` and runs a journaled `feature-repair`
+  [restack](#restack), whose transaction marks the host `restacked` and deletes the marker. A failed
+  exit halts `needs-human` with `routed exit host <k>:` plus the detail.
+- **Progression.** The round then admits its next pending child host in recorded order. After the
+  child hosts come queued revalidations, then the leaf host. With nothing pending, the engine
+  switches to the leaf, records the return in the route record, closes the round, and re-pends
+  `prd_audit`, `architecture_review_as_built`, `manual_test`, and the custom gates between
+  `build_review` and `finish`. Those gates re-run under their existing caps; the return records no
+  kickback.
+- **Revalidation.** Every restack of a feature with the setting on queues the closed children whose
+  gate verdicts it invalidated, at `refs/conductor/<slug>/revalidate`. Children are re-validated
+  bottom-up, one `revalidate` round per child, re-running only the child's queued gates. A pass with
+  no new commits acknowledges the entry by compare-and-swap (`child_revalidated`, `outcome:
+  passed`). A child that commits a fix exits through the restack (`outcome: fixed`), which can queue
+  the children above it. Leaf gates and FINISH wait until the queue is empty.
 - **Fallback.** A lap with any `halt` disposition, an unresolved target, or a target other than
   `build` takes the ordinary remediation path unchanged.
 - **Halts.** A routing refusal halts `needs-human` with its detail, for example
