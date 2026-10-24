@@ -1,11 +1,11 @@
-// Covers: task:3
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+// Covers: task:3, task:5
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { installDaemonBotCoAuthor } from '../../src/engine/bot-co-author.js';
+import { createBotCoAuthorResolver, installDaemonBotCoAuthor } from '../../src/engine/bot-co-author.js';
 import { installDaemonProcessServices } from '../../src/engine/daemon-process-bootstrap.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
@@ -105,5 +105,26 @@ describe('daemon process bootstrap', () => {
     await expect(access(join(projectRoot, '.pipeline', 'co-author'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(skipped).toEqual([]);
     expect(await git('log', '-1', '--format=%B')).not.toContain(TRAILER);
+  });
+
+  it('leaves a direct operator commit unstamped and silent without daemon bootstrap', async () => {
+    const events = new ConductorEventEmitter();
+    const skipped: unknown[] = [];
+    events.on('bot_co_author_skipped', event => { skipped.push(event); });
+    const runner = vi.fn(async () => ({ stdout: JSON.stringify({ login: 'example-bot', id: 42 }) })) as GhRunner;
+    const uninstalledResolver = createBotCoAuthorResolver({
+      cwd: projectRoot,
+      events,
+      runner,
+      readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
+      readToken: async () => ({ kind: 'token', token: 'secret' }),
+    });
+
+    await git('commit', '--allow-empty', '-m', 'operator commit');
+
+    expect(uninstalledResolver.current()).toBeUndefined();
+    expect(runner).not.toHaveBeenCalled();
+    expect(await git('log', '-1', '--format=%B')).not.toContain(TRAILER);
+    expect(skipped).toEqual([]);
   });
 });
