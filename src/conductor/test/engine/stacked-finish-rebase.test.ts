@@ -250,7 +250,7 @@ describe('FINISH rebase step on a stacked feature (real local Git)', () => {
   // Covers: S10.5, task:rem-prd-audit-R9-2, task:32
   it('runs a base-refresh restack despite a mergeable leaf when the base advance changes an active review input', async () => {
     const subject = await stackedFixture();
-    const advanced = await subject.advanceDefault('.docs/plans/demo.md', '# demo plan, amended upstream\n');
+    const advanced = await subject.advanceDefault('.docs/coherence/demo.md', '# coherence, amended upstream\n');
     // The leaf merges cleanly onto B' — mergeability alone would allow the skip.
     expect((await execFile('git', ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'], { cwd: subject.repo }).then(() => 0, () => 1))).toBe(0);
     const events = new ConductorEventEmitter();
