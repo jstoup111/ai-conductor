@@ -163,3 +163,28 @@ durable state read by name (exception C) and is not replaced by an event.
 - `writeHaltMarker`'s signature changes from `Promise<void>` to a result-returning call at six
   call sites. It is internal to the engine — no consumer-visible CLI, hook, or
   `settings.json` surface changes, so this is not a breaking release surface.
+
+## Amendment
+
+**Amended by:** BUILD for `ship-halts-from-as-built-are-recorded-as-prd-audit` (#3287, PR #3373,
+2026-10-24, operator-authorized). This amendment narrows Decision 2. It does not reverse it.
+
+The central stamp resolves the in-flight dispatching step, or failing that the last-advanced step.
+Inside a daemon validation group, every member runs under the step the group was entered from. As a
+result, the central stamp attributes every member's halt to that entry step. An as-built halt is
+recorded as `prd_audit`, and a `manual_test` fault is recorded under whichever step the group entered
+from. Option C above already named parallel groups as the case where positional inference is
+ambiguous. The same ambiguity defeats the central stamp. Only the group join knows which member
+raised the halt.
+
+- **The central stamp stays the default, and it is the only path outside a validation group.** Every
+  `loop_halt` still routes through the one conductor-owned emit path, and a site that supplies no
+  step gets exactly the attribution Decision 2 describes.
+- **The validation-group join may supply the halting member.** `emitLoopHalt` and the conductor's
+  `writeHaltMarker` take an optional `haltingStep`, which the group's terminal exits pass. The
+  central path prefers it over the dispatching step and validates it against the known steps. The
+  committed halt record renders the same value, so the two streams still agree (Decision 3).
+- **No other site passes it.** The narrowing applies only where central resolution is unable to know
+  the answer. Halts outside a group keep the central stamp. Omitting the argument at a group exit
+  falls back to the entry step, which matches the behaviour before this amendment. It does not
+  produce a new form of misattribution.
