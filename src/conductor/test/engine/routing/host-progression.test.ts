@@ -3,11 +3,20 @@ import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { selectNextHost } from '../../../src/engine/routing/routed-exit.js';
-import type { RevalidationQueueRecord, RouteRecord, HostState } from '../../../src/engine/routing/route-types.js';
+import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
+import type { RevalidationQueueEntry, RevalidationQueueRecord, RouteRecord, HostState } from '../../../src/engine/routing/route-types.js';
 
 const child1 = parseChildId(1)!;
 const child2 = parseChildId(2)!;
 const leaf = parseChildId(3)!;
+const queueEntry: RevalidationQueueEntry = {
+  child: child1,
+  position: child1,
+  closureSha: parseCommitSha('a'.repeat(40))!,
+  gates: ['test_suite'],
+  replay: { oldParent: parseCommitSha('b'.repeat(40))!, newParent: parseCommitSha('c'.repeat(40))! },
+  state: 'queued',
+};
 
 function record(
   hosts: Readonly<Record<number, HostState>>,
@@ -17,7 +26,7 @@ function record(
 }
 
 function queue(entries: boolean): Pick<RevalidationQueueRecord, 'entries'> {
-  return { entries: entries ? [{}] as RevalidationQueueRecord['entries'] : [] };
+  return { entries: entries ? [queueEntry] : [] };
 }
 
 describe('routed host progression', () => {
