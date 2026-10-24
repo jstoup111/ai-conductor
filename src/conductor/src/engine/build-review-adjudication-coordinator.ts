@@ -15,8 +15,9 @@ import {
 import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import { parsePlanTaskBodies, parsePlanTaskPaths, parsePlanTaskTitles } from './plan-task-parse.js';
 import { parsePlanDependencyGraph } from './plan-dependencies.js';
+import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
-import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
+import { projectBuildReviewAggregateSources, type BuildReviewAggregate, type BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, resolveAbsentFailedBuildReviewCases, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
@@ -132,6 +133,51 @@ async function sourcePlanContract(
     };
   } catch {
     return { path: null, pointers: [], admittedTaskContracts: [] };
+  }
+}
+
+function evidencePath(location: string): string {
+  return location.replace(/:\d+(?:-\d+)?$/, '');
+}
+
+function matchPathsForSources(
+  aggregate: BuildReviewAggregate,
+  sources: readonly BuildReviewRawSourceProjection[],
+): string[] {
+  const paths = new Set(sources.flatMap((source) => source.evidenceLocations.map(evidencePath)));
+  const sourceKeys = new Set(sources.map((source) => `${source.rubric}:${source.findingId}`));
+  for (const [rubric, result] of Object.entries(aggregate.results)) {
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
+      });
+      if (identity && sourceKeys.has(`${rubric}:${identity.id}`)) paths.add(finding.anchor.locus.path);
+    }
+  }
+  return [...paths];
+}
+
+async function scopedPlanContract(
+  projectRoot: string,
+  planContract: BuildReviewAdjudicationPlanContract,
+  aggregate: BuildReviewAggregate,
+  sources: readonly BuildReviewRawSourceProjection[],
+  openCaseAdmittedTaskIds: readonly string[],
+): Promise<BuildReviewAdjudicationPlanContract> {
+  if (planContract.path === null) return { ...planContract, admittedTaskContracts: [], index: [] };
+  try {
+    const plan = await readFile(isAbsolute(planContract.path) ? planContract.path : join(projectRoot, planContract.path), 'utf8');
+    const selected = selectAdmittedTaskContracts({
+      plan,
+      matchPaths: matchPathsForSources(aggregate, sources),
+      openCaseAdmittedTaskIds,
+    });
+    return { path: planContract.path, pointers: planContract.pointers, ...selected };
+  } catch {
+    // The injected test seam supplies an already-scoped contract without a
+    // worktree plan. Production obtains the text above and never takes this path.
+    return { ...planContract, admittedTaskContracts: planContract.admittedTaskContracts ?? [], index: [] };
   }
 }
 
@@ -643,7 +689,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   if (allOperatorResolved(resolved)) {
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
-  let currentSources = sources.filter((source) => !resolved.has(source.findingId));
+  let currentSources = sources.filter((source) => !resolved.has(source.findingId) && !nonActionable(source.findingId));
   const prior = await store.read();
   if (!prior.ok) return failStore('case store', prior);
   // An exact source bound to a refutation with unfinished durable follow-up
@@ -679,7 +725,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     : []);
   const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate, input.feature)))();
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
-  const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
+  const openCaseIds = new Set(prior.state.cases.filter((record) => record.resolution === 'open').map((record) => record.id));
+  const openCaseAdmittedTaskIds = publishedOrder.ok
+    ? publishedOrder.workOrder.cases
+      .filter((row) => openCaseIds.has(row.caseId))
+      .flatMap((row) => row.tasks.flatMap((task) => 'admittedTaskIds' in task ? task.admittedTaskIds : []))
+    : [];
   // Context must expose the same carry-eligible cases that the later
   // classifier consumes; invalidated dispositions are excluded by the source.
   const carryInput = {
@@ -687,7 +738,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
   };
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, declaredSeverityThresholds: input.declaredSeverityThresholds, operatorResolvedFindingIds: resolved, carryInput, ...contextEvidence,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, declaredSeverityThresholds: input.declaredSeverityThresholds, operatorResolvedFindingIds: resolved, carryInput,
+    excludedSourceIds: new Set(sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)),
+    planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, currentSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
@@ -739,7 +792,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
-    operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
+    operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
+    planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
@@ -765,7 +819,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // is what made any pre-existing acceptance un-adjudicable.
   const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, {
     existingCaseIds: prior.state.cases.map((record) => record.id),
-    admittedTaskIds: planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
+    admittedTaskIds: freshContext.context.planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
+    planTaskIds: freshContext.context.planContract.index?.map((task) => task.id) ?? [],
     sourceRubrics: Object.fromEntries(dispatchSources.map((source) => [
       buildReviewAdjudicationSourceId(source), source.rubric,
     ])),

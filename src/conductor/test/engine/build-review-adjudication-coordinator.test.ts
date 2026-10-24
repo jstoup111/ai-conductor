@@ -3970,6 +3970,67 @@ describe('coordinateBuildReviewAdjudication', () => {
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '4', status: 'completed' }] },
       effectPointers: [],
     });
+    expect((seen as { planContract: { admittedTaskContracts: { id: string }[]; index: { id: string }[] } }).planContract)
+      .toMatchObject({ admittedTaskContracts: [{ id: '4' }], index: [{ id: '4' }] });
+  });
+
+  it('supplies only finding-matched bodies while indexing a large active plan', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const plan = Array.from({ length: 140 }, (_value, index) => {
+      const id = index + 1;
+      const path = id <= 4 ? 'test/example.test.ts' : `src/task-${id}.ts`;
+      return `### Task ${id}: Task ${id}\n**Dependencies:** ${id === 1 ? 'none' : `Task ${id - 1}`}\n**Files:** ${path}\n\nTask ${id} contract.`;
+    }).join('\n\n');
+    await writeFile(join(root, '.docs/plans/example.md'), plan, 'utf8');
+
+    let seen: unknown;
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async (context) => { seen = context; return actionJudgement(); }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect((seen as { planContract: { admittedTaskContracts: { id: string }[]; index: { id: string; title: string; dependencies: string[] }[] } }).planContract)
+      .toMatchObject({
+        admittedTaskContracts: [{ id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }],
+        index: expect.arrayContaining([{ id: '140', title: 'Task 140', dependencies: ['139'] }]),
+      });
+    expect((seen as { planContract: { admittedTaskContracts: unknown[]; index: unknown[] } }).planContract.admittedTaskContracts).toHaveLength(4);
+    expect((seen as { planContract: { admittedTaskContracts: unknown[]; index: unknown[] } }).planContract.index).toHaveLength(140);
+  });
+
+  it.each(['open', 'resolved'] as const)('uses a prior work-order admission only while its action case is %s', async (resolution) => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(), 'utf8');
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-open', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'A prior admitted repair remains relevant.', resolution,
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-10-23T00:00:00.000Z' }],
+        effect: { id: 'effect-open', kind: 'action', status: 'applied', workOrderId: 'order-open' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-open',
+      cases: [{
+        caseId: 'case-open', priority: 'high',
+        tasks: [{ title: 'Prior admitted repair', admittedTaskIds: ['12'], admissionRationale: 'The case already admitted task 12.' }],
+      }],
+    });
+
+    let seen: unknown;
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async (context) => { seen = context; return actionJudgement(); }),
+      readPlanContract: async () => ({ path: '.docs/plans/example.md', pointers: [] }),
+    })).resolves.toMatchObject({ ok: true });
+
+    expect((seen as { planContract: { admittedTaskContracts: { id: string }[] } }).planContract.admittedTaskContracts.map((task) => task.id))
+      .toEqual(resolution === 'open' ? ['12'] : []);
   });
 
   // Covers: task:7, task:8

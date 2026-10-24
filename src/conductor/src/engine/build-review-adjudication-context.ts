@@ -15,6 +15,7 @@ export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxCurrentSources: 512,
   maxPolicyCriteria: 64,
   maxAdmittedTaskContracts: 128,
+  maxPlanIndexEntries: 1_024,
   maxPriorCases: 128,
   maxSourcesPerCase: 512,
   maxEvidenceLocations: 64,
@@ -61,11 +62,19 @@ export interface BuildReviewAdjudicationPlanContract {
   readonly pointers: readonly string[];
   /** Every active plan task's complete body, available for repair admission. */
   readonly admittedTaskContracts?: readonly BuildReviewAdjudicationTaskContract[];
+  /** Every active plan task without its full body. */
+  readonly index?: readonly BuildReviewAdjudicationPlanIndexEntry[];
 }
 
 export interface BuildReviewAdjudicationTaskContract {
   readonly id: string;
   readonly contract: string;
+}
+
+export interface BuildReviewAdjudicationPlanIndexEntry {
+  readonly id: string;
+  readonly title: string;
+  readonly dependencies: readonly string[];
 }
 
 /** Engine-supplied task-status evidence for the active plan. */
@@ -74,7 +83,7 @@ export interface BuildReviewAdjudicationTaskStatus {
   readonly tasks: readonly { readonly id: string; readonly status: string }[];
 }
 
-const ABSENT_PLAN_CONTRACT: BuildReviewAdjudicationPlanContract = Object.freeze({ path: null, pointers: Object.freeze([]), admittedTaskContracts: Object.freeze([]) });
+const ABSENT_PLAN_CONTRACT: BuildReviewAdjudicationPlanContract = Object.freeze({ path: null, pointers: Object.freeze([]), admittedTaskContracts: Object.freeze([]), index: Object.freeze([]) });
 const ABSENT_TASK_STATUS: BuildReviewAdjudicationTaskStatus = Object.freeze({ path: null, tasks: Object.freeze([]) });
 
 /** The approved lifecycle boundaries that a policy finding cannot reclaim. */
@@ -148,7 +157,7 @@ export interface AssembleBuildReviewAdjudicationContextInput {
 export type BuildReviewAdjudicationContextStop =
   | { readonly code: 'invalid-aggregate' }
   | { readonly code: 'missing-scope-evidence'; readonly subject: 'policy-context' | 'admitted-task-contracts' | 'task-status' }
-  | { readonly code: 'field-overflow'; readonly subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract'; readonly field: string; readonly limit: number; readonly actual: number; readonly caseId?: string }
+  | { readonly code: 'field-overflow'; readonly subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract' | 'plan-index'; readonly field: string; readonly limit: number; readonly actual: number; readonly caseId?: string }
   | { readonly code: 'unrepresentable-prior-case'; readonly caseId: string; readonly field: string }
   | { readonly code: 'serialized-byte-overflow'; readonly limit: number; readonly actual: number };
 
@@ -176,7 +185,7 @@ function bytes(value: string): number {
 function boundedString(
   value: unknown,
   max: number,
-  subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract',
+  subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract' | 'plan-index',
   field: string,
   caseId?: string,
 ): BuildReviewAdjudicationContextStop | undefined {
@@ -289,6 +298,25 @@ function validateAdmissionScope(
     for (const criterion of policy.criteria) {
       const criterionStop = boundedString(criterion, LIMITS.maxReferenceBytes, 'policy-context', 'criteria[]');
       if (criterionStop) return criterionStop;
+    }
+  }
+  return undefined;
+}
+
+function validatePlanIndex(planContract: BuildReviewAdjudicationPlanContract): BuildReviewAdjudicationContextStop | undefined {
+  const index = planContract.path === null ? [] : planContract.index ?? [];
+  if (index.length > LIMITS.maxPlanIndexEntries) {
+    return { code: 'field-overflow', subject: 'plan-index', field: 'index', limit: LIMITS.maxPlanIndexEntries, actual: index.length };
+  }
+  for (const entry of index) {
+    const id = boundedString(entry?.id, LIMITS.maxReferenceBytes, 'plan-index', 'id');
+    if (id) return id;
+    const title = boundedString(entry?.title, LIMITS.maxTextBytes, 'plan-index', 'title');
+    if (title) return title;
+    if (!Array.isArray(entry?.dependencies)) return { code: 'invalid-aggregate' };
+    for (const dependency of entry.dependencies) {
+      const dependencyStop = boundedString(dependency, LIMITS.maxReferenceBytes, 'plan-index', 'dependencies[]');
+      if (dependencyStop) return dependencyStop;
     }
   }
   return undefined;
@@ -534,6 +562,8 @@ export function assembleBuildReviewAdjudicationContext(
   const taskStatus = input.taskStatus ?? ABSENT_TASK_STATUS;
   const scopeStop = validateAdmissionScope(policyContext, planContract, taskStatus);
   if (scopeStop) return { ok: false, stop: scopeStop };
+  const indexStop = validatePlanIndex(planContract);
+  if (indexStop) return { ok: false, stop: indexStop };
   const mode = policyContext.some((policy) =>
     isCustomPolicyContext(policy) || policy.rubric === 'implementationQuality',
   ) ? 'case-v2' as const : 'case-v1' as const;
@@ -547,7 +577,11 @@ export function assembleBuildReviewAdjudicationContext(
     planContract: Object.freeze({
       path: planContract.path,
       pointers: Object.freeze([...planContract.pointers]),
-      admittedTaskContracts: Object.freeze([...(planContract.admittedTaskContracts ?? [])].map((task) => Object.freeze({ ...task }))),
+      admittedTaskContracts: Object.freeze(planContract.path === null ? [] : [...(planContract.admittedTaskContracts ?? [])].map((task) => Object.freeze({ ...task }))),
+      index: Object.freeze(planContract.path === null ? [] : [...(planContract.index ?? [])].map((entry) => Object.freeze({
+        ...entry,
+        dependencies: Object.freeze([...entry.dependencies]),
+      }))),
     }),
     taskStatus: Object.freeze({
       path: taskStatus.path,
