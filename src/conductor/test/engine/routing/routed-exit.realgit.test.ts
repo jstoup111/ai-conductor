@@ -24,6 +24,7 @@ import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.j
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writePublicationRecord } from '../../../src/engine/stack-publication-record.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from '../restack/restack-sweepG2-fixture.js';
 
 const cleanup: string[] = [];

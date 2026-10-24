@@ -85,6 +85,11 @@ export interface EventPersisterDependencies {
   readonly appendFile?: (filePath: string, contents: string, encoding: BufferEncoding) => void;
 }
 
+// Persistence is composed at the application boundary.  Engine code that must
+// durably acknowledge an outbox entry borrows that already-active owner rather
+// than constructing a second writer for the same feature ledger.
+const activePersisters = new WeakMap<ConductorEventEmitter, EventPersister>();
+
 /**
  * EventPersister subscribes to every ConductorEvent and appends each event
  * as a newline-delimited JSON line (with timestamp) to the specified file.
@@ -130,6 +135,7 @@ export class EventPersister {
    */
   start(): void {
     this.buildObservationIndex();
+    activePersisters.set(this.emitter, this);
     for (const type of persistedEventTypes()) {
       this.emitter.on(type, this.handler);
     }
@@ -142,6 +148,7 @@ export class EventPersister {
     for (const type of persistedEventTypes()) {
       this.emitter.off(type, this.handler);
     }
+    if (activePersisters.get(this.emitter) === this) activePersisters.delete(this.emitter);
   }
 
   /** Append once to the canonical event spine, preserving a producer occurrence timestamp. */
@@ -276,6 +283,20 @@ export class EventPersister {
       executionContext,
     })?.correlationKey;
   }
+}
+
+/**
+ * Persist an outbox occurrence through the emitter's composition-owned ledger.
+ * The acknowledgement is intentionally direct: normal event delivery swallows
+ * subscriber errors, while an outbox must retain its entry on a write failure.
+ */
+export async function persistOnActiveEventSpine(
+  events: ConductorEventEmitter,
+  event: ConductorEvent,
+): Promise<'persisted' | 'duplicate'> {
+  const persister = activePersisters.get(events);
+  if (persister === undefined) throw new EventPersistError('<active event spine>', new Error('no active event persister'));
+  return persister.persistDurably(event);
 }
 
 function readCanonicalEvents(filePath: string): string | undefined {
