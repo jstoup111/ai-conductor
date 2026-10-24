@@ -15,6 +15,7 @@ import { isOperatorParked } from './park-marker.js';
 import { DefaultStepRunner } from './step-runners.js';
 import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
 import { readWorktreeOutcome } from './daemon-deps.js';
+import { installDaemonProcessServices, type DaemonProcessServicesOptions } from './daemon-process-bootstrap.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { runSetupFailureTriage } from './setup-triage.js';
 import { PluginRegistry } from './plugin-registry.js';
@@ -27,6 +28,7 @@ import { validateConfiguredProviderModels } from './provider-model-probe.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
+import { leafBranchFor } from './feature-branch-identity.js';
 import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
 import { seedDaemonDispatchState } from './daemon-state.js';
 import type { ConductStateStore } from './conduct-state-store.js';
@@ -44,6 +46,35 @@ export interface ExecutorChildFeatureRunnerInput {
   log?: (message: string) => void;
   /** Store for the daemon base-state seed; defaults to the filesystem store. */
   stateStore?: ConductStateStore<ConductState>;
+}
+
+export interface MakeExecutorChildRunOptions {
+  readonly projectRoot: string;
+  readonly runFeature?: typeof runExecutorChildFeature;
+  readonly githubBoundary?: Pick<DaemonProcessServicesOptions, 'runner' | 'readCredential' | 'readToken'>;
+}
+
+/**
+ * Compose the child-only daemon services before running its sole feature.
+ * Each child handles one order, so the order's feature bus is the process bus.
+ */
+export function makeExecutorChildRun({
+  projectRoot,
+  runFeature = runExecutorChildFeature,
+  githubBoundary,
+}: MakeExecutorChildRunOptions): (input: ExecutorChildRunInput) => Promise<FeatureExecutionOutcome> {
+  return async (input) => {
+    installDaemonProcessServices({ projectRoot, events: input.events, ...githubBoundary });
+    return runFeature({
+      ...input,
+      worktree: {
+        path: join(projectRoot, '.worktrees', input.order.slug),
+        branch: leafBranchFor(input.order.slug),
+      },
+      projectRoot,
+      supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
+    });
+  };
 }
 
 /**

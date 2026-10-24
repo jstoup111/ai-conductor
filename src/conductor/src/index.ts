@@ -848,17 +848,15 @@ async function dispatchCliCommand(): Promise<void> {
   if (process.argv[2] === 'executor-child') {
     const [
       { runExecutorChild, withExecutorBrokerProxies },
-      { runExecutorChildFeature },
+      { makeExecutorChildRun },
       { createWorkOrderGitRunner },
       { makeFeatureRunnerDeps },
-      { leafBranchFor },
       { defaultSelfHostDetector },
     ] = await Promise.all([
       import('./engine/executor-child.js'),
       import('./engine/executor-child-runtime.js'),
       import('./daemon-cli.js'),
       import('./engine/daemon-deps.js'),
-      import('./engine/feature-branch-identity.js'),
       import('./engine/self-host/detector.js'),
     ]);
     const projectRoot = process.cwd();
@@ -877,15 +875,7 @@ async function dispatchCliCommand(): Promise<void> {
         });
         return runnerDeps.createWorktree(order.slug, order);
       },
-      run: async (input) => {
-        const branch = leafBranchFor(input.order.slug);
-        return runExecutorChildFeature({
-          ...input,
-          worktree: { path: join(projectRoot, '.worktrees', input.order.slug), branch },
-          projectRoot,
-          supervisorEngineVersionId: input.order.supervisorEngineVersionId ?? input.order.engineVersionId,
-        });
-      },
+      run: makeExecutorChildRun({ projectRoot }),
       // The WorkOrder is the supervisor's authority for self-host mode.  The
       // detector is only a compatibility fallback for pre-field orders.
       liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
