@@ -323,7 +323,7 @@ describe('acceptance_specs child with no owned criteria', () => {
     await writeFile(path, content);
   }
 
-  it('uses loader ownership for no-owned-criteria despite a stale envelope', async () => {
+  it('grounds disposition-only evidence and no-owned-criteria in loader ownership despite a stale envelope', async () => {
     const root = await mkdtemp(join(tmpdir(), 'acceptance-child-empty-'));
     roots.push(root);
     await createFile(root, '.docs/plans/feature.md', slicedPlan('n/a', 'Story 2'));
@@ -354,6 +354,23 @@ describe('acceptance_specs child with no owned criteria', () => {
       status: 'disabled',
       storyOwnership: { '2': 1 },
     }));
+    const child2 = parseChildId(2)!;
+    const story2Happy = 'Story 2 happy: Given child 2, When it writes specs, Then only its criterion is included.';
+    await createFile(root, 'test/engine/existing-behavior.test.ts', '// existing proof\n');
+    await createFile(root, '.pipeline/children/2/acceptance-specs-red.json', JSON.stringify({
+      outcome: 'disposition-only',
+      dispositions: [{
+        criterion: story2Happy,
+        disposition: 'existing-sufficient-test',
+        citation: 'test/engine/existing-behavior.test.ts:1',
+      }],
+    }));
+    resolveChildBase.mockResolvedValue({ kind: 'none' });
+    await expect(checkStepCompletion(root, 'acceptance_specs', {
+      activeChild: child2,
+      featureDesc: 'feature',
+      artifactResolution: { featureIdentities: ['feature'], changedPaths: new Set<string>() },
+    })).resolves.toEqual({ done: true, viaException: false });
     resolveActiveChild.mockResolvedValue({
       kind: 'active', child: child1, position: 1, isLeaf: false, branch: 'feat/c1/feature',
     });
