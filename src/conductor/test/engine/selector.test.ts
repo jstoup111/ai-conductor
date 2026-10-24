@@ -40,15 +40,11 @@ function input(
   state: ConductState,
   verdicts: Partial<Record<StepName, GateVerdict>> = {},
   regionStart: StepName = 'stories',
-  coverageBindingSatisfied = true,
 ): SelectorInput {
   return {
     steps: ALL_STEPS,
     state,
-    verdicts: {
-      ...(coverageBindingSatisfied ? { coverage_binding: VSAT } : {}),
-      ...verdicts,
-    },
+    verdicts,
     regionStart,
   };
 }
@@ -214,11 +210,6 @@ describe('engine/selector — selectNextGate', () => {
     for (const fixture of fixtures) {
       expect(selectNextGate(withParking(fixture))).toEqual(selectNextGate(fixture));
     }
-  });
-
-  it('lands on coverage_binding in normal entry before build', () => {
-    const d = selectNextGate(input(frontDone(), {}, 'stories', false));
-    expect(d).toEqual({ kind: 'run', step: 'coverage_binding', reason: expect.any(String) });
   });
 
   it('lands on build in normal entry (front half done, no loop verdicts yet)', () => {

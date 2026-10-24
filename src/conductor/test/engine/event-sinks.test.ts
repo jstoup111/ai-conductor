@@ -358,14 +358,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'memory_setup',
   'plan_growth',
   'kickback_budget_adjustment_authorized',
-  'coverage_binding_amendment_judged',
-  'coverage_binding_conflict_judged',
-  'coverage_binding_judged',
   'rebase_regrade_judged',
-  'coverage_binding_disabled',
-  'coverage_binding_invalidated',
-  'coverage_binding_task_reopened',
-  'plan_slices_changed',
   'plan_review_dispatched',
   'plan_review_completed',
   'plan_review_finding_accepted',
@@ -415,7 +408,6 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'restack_refused',
   'restack_recovered',
   'push_lease_refused',
-  'story_reowned',
   ...ROUTING_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -534,24 +526,6 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
 // @ts-expect-error -- every ConductorEvent type must declare all three sink decisions.
 missingVerdictFreshness satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-const { coverage_binding_judged: _coverageBindingJudgedOmitted, ...missingCoverageBindingJudged } = EVENT_SINKS;
-// @ts-expect-error -- coverage_binding_judged must declare every sink decision.
-missingCoverageBindingJudged satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-const { coverage_binding_disabled: _coverageBindingDisabledOmitted, ...missingCoverageBindingDisabled } = EVENT_SINKS;
-// @ts-expect-error -- coverage_binding_disabled must declare every sink decision.
-missingCoverageBindingDisabled satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-const { coverage_binding_conflict_judged: _coverageBindingConflictJudgedOmitted, ...missingCoverageBindingConflictJudged } = EVENT_SINKS;
-// @ts-expect-error -- coverage_binding_conflict_judged must declare every sink decision.
-missingCoverageBindingConflictJudged satisfies Record<ConductorEvent['type'], SinkDeclaration>;
-
-// @ts-expect-error -- coverage_binding is intentionally terminal-only telemetry.
-const coverageBindingStarted: Extract<ConductorEvent, { type: 'coverage_binding_started' }> = { type: 'coverage_binding_started' };
-// @ts-expect-error -- coverage_binding halts are represented by the ordinary step outcome.
-const coverageBindingHalted: Extract<ConductorEvent, { type: 'coverage_binding_halted' }> = { type: 'coverage_binding_halted' };
-void [coverageBindingStarted, coverageBindingHalted];
 
 const deliberatelyNotPersisted = {
   render: false,
@@ -876,7 +850,6 @@ describe('event sink subscriptions', () => {
       { type: 'child_closed', child: childOne, position: 1, branch: 'feat/c1/demo', tip: 'child-one-tip' },
       { type: 'child_switched', from: 1, to: 2, position: 2, branch: 'feat/daemon-demo' },
       { type: 'rebase_skipped_for_stack', child: childOne, reason: 'active child is not the leaf' },
-      { type: 'story_reowned', story: '2', from: 1, to: 2 },
     ] satisfies ConductorEvent[];
 
     try {
@@ -1036,55 +1009,6 @@ describe('event sink subscriptions', () => {
       rendered: expect.arrayContaining(['memory_setup']),
       audited: expect.not.arrayContaining(['memory_setup']),
       otel: expect.arrayContaining(['memory_setup']),
-    });
-  });
-
-  it('persists coverage-binding terminal observations without rendering, audit, or OpenTelemetry', () => {
-    expect({
-      judged: EVENT_SINKS.coverage_binding_judged,
-      amendmentJudged: EVENT_SINKS.coverage_binding_amendment_judged,
-      conflictJudged: EVENT_SINKS.coverage_binding_conflict_judged,
-      disabled: EVENT_SINKS.coverage_binding_disabled,
-      persisted: persistedEventTypes(),
-      rendered: renderedEventTypes(),
-      audited: auditedEventTypes(),
-      otel: otelEventTypes(),
-    }).toMatchObject({
-      judged: { render: false, persist: true, audit: false, otel: false },
-      amendmentJudged: { render: false, persist: true, audit: false, otel: false },
-      conflictJudged: { render: false, persist: true, audit: false, otel: false },
-      disabled: { render: false, persist: true, audit: false, otel: false },
-      persisted: expect.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-      rendered: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-      audited: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-      otel: expect.not.arrayContaining(['coverage_binding_judged', 'coverage_binding_amendment_judged', 'coverage_binding_conflict_judged', 'coverage_binding_disabled']),
-    });
-  });
-
-  it('persists plan slice membership changes without rendering, audit, or OpenTelemetry', () => {
-    const changed = {
-      type: 'plan_slices_changed',
-      step: 'coverage_binding',
-      moved: [{ taskId: '4', from: 1, to: 2 }],
-      added: ['9'],
-      removed: ['3'],
-      manifest: 'unchanged',
-    } satisfies ConductorEvent;
-
-    expect({
-      changed,
-      sink: EVENT_SINKS.plan_slices_changed,
-      persisted: persistedEventTypes(),
-      rendered: renderedEventTypes(),
-      audited: auditedEventTypes(),
-      otel: otelEventTypes(),
-    }).toMatchObject({
-      changed,
-      sink: { render: false, persist: true, audit: false, otel: false },
-      persisted: expect.arrayContaining(['plan_slices_changed']),
-      rendered: expect.not.arrayContaining(['plan_slices_changed']),
-      audited: expect.not.arrayContaining(['plan_slices_changed']),
-      otel: expect.not.arrayContaining(['plan_slices_changed']),
     });
   });
 

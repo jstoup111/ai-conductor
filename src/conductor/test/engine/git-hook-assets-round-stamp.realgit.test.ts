@@ -81,13 +81,6 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
   await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
   await git(root, ['add', '.gitignore', '.ai-conductor/config.yml']);
   await git(root, ['commit', '-qm', 'base']);
-  await git(root, ['checkout', '-qb', 'feat/c1/demo']);
-  await writeFile(join(root, 'child.txt'), 'child\n');
-  await git(root, ['add', 'child.txt']);
-  await git(root, ['commit', '-qm', 'child']);
-  await git(root, ['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
-  await git(root, ['checkout', '-qb', 'feat/daemon-demo']);
-  await git(root, ['commit', '--allow-empty', '-qm', 'leaf']);
   await writeSliceTopologyFixture(root, {
     version: 1,
     slug: 'demo',
@@ -97,6 +90,13 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
+  await git(root, ['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(root, 'child.txt'), 'child\n');
+  await git(root, ['add', 'child.txt']);
+  await git(root, ['commit', '-qm', 'child']);
+  await git(root, ['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
+  await git(root, ['checkout', '-qb', 'feat/daemon-demo']);
+  await git(root, ['commit', '--allow-empty', '-qm', 'leaf']);
   await git(root, ['checkout', '-q', 'feat/c1/demo']);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'current-task'), 'T1\n');

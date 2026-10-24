@@ -949,10 +949,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     });
     expect(await readVerdict(dir, 'build')).toBeNull();
     expect(await readVerdict(dir, 'build_review')).toBeNull();
-    expect(await readVerdict(dir, 'coverage_binding')).toMatchObject({
-      satisfied: false,
-      kickback: { from: 'rebase' },
-    });
   });
 
   it('changed but manual_test did not run (featureSurface uncomputable) → build/deterministic group/build_review/audits kicked back, manual_test excluded', async () => {
@@ -1384,16 +1380,11 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.prd_audit.surface).toEqual([
       '<.docs/stories/|.docs/specs/>',
     ]);
-    expect(byGate.coverage_binding.surface).toEqual([
-      '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
-    ]);
-    // The as-built review consumes the same coverage/review decision inputs
-    // as coverage_binding.
+    // The as-built review consumes the review decision inputs.
     expect(byGate.architecture_review_as_built.surface).toEqual([
       '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
     ]);
     expect(byGate.prd_audit.deltaConsidered).toEqual([]);
-    expect(byGate.coverage_binding.deltaConsidered).toEqual([]);
     // The as-built review sees neither feature runtime nor declared inputs.
     expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([]);
     // Invalidated gates must not appear in the preserved set.
@@ -1422,10 +1413,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     await emitGateInvalidationEvents(events, outcome, true);
 
     const byGate = Object.fromEntries(invalidated.map((event) => [event.gate, event.matchedPaths]));
-    expect(byGate.coverage_binding).toEqual([
-      '.docs/stories/feature.md',
-      '.docs/specs/feature.md',
-    ]);
     expect(byGate.prd_audit).toEqual([
       '.docs/stories/feature.md',
       '.docs/specs/feature.md',
@@ -2737,7 +2724,7 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
       .toEqual(['architecture_review_as_built']);
   });
 
-  it('Task 13: treats a plan-cited ADR as a coverage-binding rebase input', async () => {
+  it('Task 13: treats a plan-cited ADR as a review rebase input', async () => {
     const { resolveReviewInputs } = await import('../../src/engine/rebase.js');
     const citedAdr = '.docs/decisions/adr-2026-01-01-cited.md';
 
@@ -2745,6 +2732,6 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
     const invalidation = classifyGateInvalidation([citedAdr], [], true, inputs);
 
     expect(inputs).toContain(citedAdr);
-    expect(invalidation.invalidated).toContain('coverage_binding');
+    expect(invalidation.invalidated).toContain('build_review');
   });
 });

@@ -157,8 +157,7 @@ describe('engine/rebase — refusal before rebase starts', () => {
         documentInputs: expect.arrayContaining([planPath]),
       });
       const verdicts = await applyRebaseVerdicts(root, outcome, false);
-      // The active plan is a declared coverage input, so coverage_binding is
-      // directly invalidated. The bare PASS verdicts for the other candidate
+      // The bare PASS verdicts for the candidate
       // preservations carry no durable, applicable evidence, so the selective
       // rebase policy conservatively revalidates them too. BUILD remains
       // untouched for a document-only delta.
@@ -167,7 +166,6 @@ describe('engine/rebase — refusal before rebase starts', () => {
         'prd_audit',
         'architecture_review_as_built',
       ]);
-      expect(await readVerdict(root, 'coverage_binding')).toMatchObject({ satisfied: false });
       await expect(readVerdict(root, 'build')).resolves.toMatchObject({ satisfied: true, reason: 'prior BUILD' });
       await expect(readVerdict(root, 'test_suite')).resolves.toMatchObject({ satisfied: false, kickback: { from: 'rebase' } });
       await expect(readVerdict(root, 'build_review')).resolves.toMatchObject({ satisfied: false, kickback: { from: 'rebase' } });

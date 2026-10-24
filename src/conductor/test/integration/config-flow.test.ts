@@ -203,10 +203,9 @@ describe('Integration: config flow', () => {
 
     expect(archIdx).toBeLessThan(planIdx); // architecture precedes plan (reorder)
     expect(customIdx).toBe(planIdx + 1); // custom step lands right after plan
-    // coherence_check (built-in, S-skippable), plan_review, and
-    // coverage_binding sit between the custom step and acceptance_specs — the
-    // custom insertion lands ahead of all three built-ins immediately after plan.
-    expect(specsIdx).toBe(customIdx + 4);
+    // coherence_check (built-in, S-skippable) and plan_review sit between the
+    // custom step and acceptance_specs.
+    expect(specsIdx).toBe(customIdx + 3);
     expect(registry[customIdx].prerequisites).toEqual(['plan']);
   });
 

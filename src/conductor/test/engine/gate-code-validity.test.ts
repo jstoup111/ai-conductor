@@ -1281,8 +1281,6 @@ describe('gateVerdictStillValid', () => {
   // governing ADRs, and nothing else.  An uncited ADR is not an input.
   it.each([
     ['architecture_review_as_built', '.docs/decisions/adr-governing.md', 'rerun'],
-    ['.docs/decisions/adr-governing.md', 'rerun'],
-    ['.docs/decisions/adr-upstream-uncited.md', 'preserve'],
     ['architecture_review_as_built', '.docs/decisions/adr-upstream-uncited.md', 'preserve'],
     ['architecture_review_as_built', '.docs/notes/unrelated.md', 'preserve'],
     ['prd_audit', '.docs/decisions/adr-governing.md', 'preserve'],
@@ -1298,31 +1296,6 @@ describe('gateVerdictStillValid', () => {
     await commit(s, { [path]: 'updated\n' }, 'document update');
 
     await expect(gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, gate, baseline)).resolves.toBe(expected);
-  });
-
-  it('reads the preserved coverage identity from its declared artifact', async () => {
-    const s = await makeRepo();
-    scratches.push(s.repo);
-    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
-    // The production pair: a closed five-key envelope plus the runner's stamp.
-    await writeFile(join(s.repo, '.pipeline/coverage-binding.json'), JSON.stringify({
-      version: 1, slug: 'active', runId: 'coverage-run', status: 'done', entries: [],
-    }));
-    await writeFile(join(s.repo, '.pipeline/coverage-binding-code-stamp.json'), JSON.stringify({ runId: 'coverage-run', codeStamp: 'coverage-head' }));
-    await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toMatchObject({
-      attemptId: 'coverage-run', runId: 'coverage-run', codeStamp: 'coverage-head',
-    });
-  });
-
-  it('rejects coverage preservation when its declared artifact lacks a code stamp', async () => {
-    const s = await makeRepo();
-    scratches.push(s.repo);
-    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
-    await writeFile(join(s.repo, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'active', runId: 'coverage-run', status: 'done', entries: [] }));
-    await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toBeNull();
-    // A stamp left by an earlier run does not identify this envelope.
-    await writeFile(join(s.repo, '.pipeline/coverage-binding-code-stamp.json'), JSON.stringify({ runId: 'older-run', codeStamp: 'coverage-head' }));
-    await expect(currentPreservedJudgeIdentity(s.repo, 'coverage_binding')).resolves.toBeNull();
   });
 
   it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {

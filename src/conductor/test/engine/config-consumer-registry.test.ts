@@ -65,7 +65,6 @@ describe('config consumer registry', () => {
       'build_progress_halt',
       'gate_code_validity',
       'retry_routing',
-      'coverage_binding.judge',
       'markdown_viewer',
       'mermaid_renderer',
     ]));
@@ -108,14 +107,14 @@ describe('config consumer registry', () => {
     });
   });
 
-  it('registers the BUILD child cursor as a direct stacked-PR enablement consumer', () => {
-    const childCursorSource = readFileSync(new URL('../../src/engine/child-cursor.ts', import.meta.url), 'utf8');
+  it('registers the sealed-topology loader as a direct stacked-PR enablement consumer', () => {
+    const topologySource = readFileSync(new URL('../../src/engine/slice-topology.ts', import.meta.url), 'utf8');
 
-    expect(childCursorSource).toContain('config.config.stacked_prs?.enabled === true');
+    expect(topologySource).toContain("config?.stacked_prs?.enabled === false");
     expect(configConsumerRegistry['stacked_prs.enabled'].consumer).toEqual([
       'src/conductor/src/engine/engineer/land-spec.ts',
       'src/conductor/src/engine/step-runners.ts',
-      'src/conductor/src/engine/child-cursor.ts',
+      'src/conductor/src/engine/slice-topology.ts',
     ]);
   });
 
