@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { hostNoOpEvidence } from '../../../src/engine/routing/routed-exit.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
@@ -28,8 +29,8 @@ async function fixture(): Promise<{ readonly root: string; readonly git: ReturnT
   await writeFile(join(root, 'host.txt'), 'closure\n');
   await git(['add', 'host.txt']);
   await git(['commit', '-qm', 'closed host']);
-  const closure = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-  const tree = (await git(['rev-parse', 'HEAD^{tree}'])).stdout.trim();
+  const closure = parseCommitSha((await git(['rev-parse', 'HEAD'])).stdout.trim())!;
+  const tree = parseCommitSha((await git(['rev-parse', 'HEAD^{tree}'])).stdout.trim())!;
   await git(['update-ref', closureRefFor('demo', host), closure]);
   const record: RouteRecord = {
     roundId,
