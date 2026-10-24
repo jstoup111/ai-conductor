@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:3, task:5
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import * as routeRecordStore from '../../../src/engine/routing/route-record-store.js';
 import {
   createRouteRecord,
   readRepairMarker,
@@ -96,6 +97,85 @@ async function journalFixture(
 }
 
 describe('ref-backed route record store', () => {
+  it('renders routed applied lines only for the synced journal owner', () => {
+    const routeOld = sha('a'.repeat(40));
+    const routeNew = sha('b'.repeat(40));
+    const markerOld = sha('c'.repeat(40));
+    const journal: RestackJournal = {
+      opId: 'op-1' as RestackOpId,
+      cause: 'feature-repair',
+      committer: { name: 'Routing', email: 'routing@example.test', date: '2030-01-01T00:00:00Z' },
+      dirtyPaths: [],
+      refs: [],
+      ranges: [],
+      children: [],
+      state: 'synced',
+      owner: { host: 'test-host', pid: 1, processStartTime: '1' },
+      routed: { roundId, host: c1, routeOld, routeNew, markerOld },
+    };
+    const routedAppliedLines = (routeRecordStore as typeof routeRecordStore & {
+      readonly routedAppliedLines?: (
+        slug: string,
+        journal: RestackJournal,
+        ownerOpId: RestackOpId,
+      ) => readonly string[] | 'refused';
+    }).routedAppliedLines;
+
+    expect([
+      routedAppliedLines?.('demo', journal, 'op-1' as RestackOpId),
+      routedAppliedLines?.('demo', journal, 'op-2' as RestackOpId),
+    ]).toEqual([
+      [
+        `update ${routeRecordRefFor('demo', roundId)} ${routeNew} ${routeOld}`,
+        `delete ${repairMarkerRefFor('demo')} ${markerOld}`,
+      ],
+      'refused',
+    ]);
+  });
+
+  it('marks a routed host restacked and adds exactly one routed repair phase event after exit', async () => {
+    const fixture = await createRepo();
+    try {
+      await routeFixture(fixture, { ...routeRecord, hosts: { [c1]: 'built' } });
+      const stored = await readRouteRecord(fixture.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('expected stored route record');
+      const routedRecordAfterExit = (routeRecordStore as typeof routeRecordStore & {
+        readonly routedRecordAfterExit?: (
+          record: typeof stored,
+          host: typeof c1,
+          outcome: 'restacked',
+        ) => unknown;
+      }).routedRecordAfterExit;
+
+      const result = routedRecordAfterExit?.(stored, c1, 'restacked') as {
+        readonly kind?: string;
+        readonly record?: RouteRecord;
+      } | undefined;
+      expect(result).toMatchObject({ kind: 'updated', record: { hosts: { [c1]: 'restacked' } } });
+      expect(result?.record?.outbox).toHaveLength(1);
+      expect(result?.record?.outbox[0]?.event).toMatchObject({
+        type: 'routed_repair_phase', host: c1, phase: 'restacked',
+      });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('returns cas-failed for a stale public delete-marker transaction and preserves the marker blob', async () => {
+    const fixture = await createRepo();
+    try {
+      const marker = { host: c1, roundId };
+      const markerBlob = await writeRef(fixture, repairMarkerRefFor('demo'), marker);
+      const stale = sha('d'.repeat(40));
+      const deleteMarker = [{ kind: 'delete-marker', old: stale }] as unknown as Parameters<typeof routeRecordStore.writeRoutingTransaction>[2];
+
+      expect(await routeRecordStore.writeRoutingTransaction(fixture.repo, 'demo', deleteMarker)).toEqual({ kind: 'cas-failed' });
+      expect(await readRepairMarker(fixture.repo, 'demo')).toEqual({ kind: 'marker', slug: 'demo', blob: markerBlob, marker });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
   it('reads typed route records, markers and queues, distinguishing absent and unreadable route records', async () => {
     const fixture = await createRepo();
     try {
