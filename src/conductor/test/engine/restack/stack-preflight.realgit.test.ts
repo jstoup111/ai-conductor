@@ -126,7 +126,7 @@ describe('runStackPreflight (real local Git)', () => {
     expect(planned[0]!.opId).not.toBe(planned[1]!.opId);
   });
 
-  // Covers: task:rem-vg5-s10-2
+  // Covers: task:rem-prd-audit-rem-vg5-s10-2
   it('emits deferred-base-refresh once when a routed round opens after the repair applies', async () => {
     const subject = await fixture();
     await subject.git(['checkout', '-q', 'main']);
