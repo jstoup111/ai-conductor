@@ -210,6 +210,7 @@ describe('EventPersister', () => {
     });
   });
 
+  // Covers: task:5
   it('persists a build-review review-scope occurrence with its complete scope summary', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     const event = {
@@ -232,6 +233,7 @@ describe('EventPersister', () => {
     expect(record).toEqual(event);
   });
 
+  // Covers: task:5
   it('registers build-review review-scope occurrences as persistent but non-rendered', () => {
     expect(EVENT_SINKS).toHaveProperty('build_review_review_scope', {
       render: false,
