@@ -240,6 +240,9 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       await deps.rootEvents.emit({
         type: 'feature_dispatch_ended', slug: order.slug,
         outcome: result.status === 'done' ? 'complete' : result.status === 'halted' || result.status === 'parked' ? 'halted' : 'terminated',
+        ...(result.status === 'halted' && result.halt
+          ? { step: result.halt.step, haltClass: result.halt.haltClass }
+          : {}),
       });
       return result;
     },
