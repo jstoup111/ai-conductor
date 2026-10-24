@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
+  BUILD_REVIEW_JUDGED_V4_SCHEMA,
   buildReviewFindingReferenceContext,
   diagnoseBuildReviewJudgedResultRejection,
   deriveBuildReviewInfrastructureFailureReason,
@@ -198,6 +199,48 @@ describe('build-review domain', () => {
     expect(withoutConfidence).toMatchObject({ kind: 'custom-findings' });
     if (withoutConfidence?.kind !== 'custom-findings') throw new Error('expected custom findings payload');
     expect(withoutConfidence.findings[0]).not.toHaveProperty('confidence');
+  });
+
+  it('retains an optional cause hunk on built-in v4 and custom v2 findings without re-keying identity', () => {
+    const causeHunk = { path: 'src/widget.ts', contentHash: HASH, display: 'new causal boundary', occurrence: 2 };
+    const withoutCause = parseBuildReviewJudgedResult(judged([finding()]));
+    const builtIn = parseBuildReviewJudgedResult(judged([finding({ causeHunk })]));
+    const custom = parseBuildReviewCustomReviewerPayload(customPayload([customFinding({ causeHunk })]));
+    const findingProperties = (BUILD_REVIEW_JUDGED_V4_SCHEMA.properties.findings as { items: { properties: Record<string, unknown> } }).items.properties;
+
+    expect(findingProperties.causeHunk).toMatchObject({
+      type: 'object', additionalProperties: false, required: ['path', 'contentHash', 'display'],
+    });
+    expect(builtIn?.findings[0]).toMatchObject({ causeHunk });
+    expect(custom).toMatchObject({ kind: 'custom-findings', findings: [{ causeHunk }] });
+
+    const identityWithoutCause = canonicalizeBuildReviewFindingIdentity({
+      rubric: withoutCause!.rubric, contractVersion: withoutCause!.contractVersion,
+      concernKind: withoutCause!.findings[0]!.concernKind, anchor: withoutCause!.findings[0]!.anchor,
+    });
+    const identityWithCause = canonicalizeBuildReviewFindingIdentity({
+      rubric: builtIn!.rubric, contractVersion: builtIn!.contractVersion,
+      concernKind: builtIn!.findings[0]!.concernKind, anchor: builtIn!.findings[0]!.anchor,
+    });
+    expect(identityWithCause).toEqual(identityWithoutCause);
+  });
+
+  it('rejects malformed built-in cause hunks as contract-invalid', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    for (const causeHunk of [
+      { path: 'src/widget.ts', display: 'missing content hash' },
+      { path: 'src/widget.ts', contentHash: HASH, display: 'unexpected field', extra: true },
+    ]) {
+      const value = judged([finding({ causeHunk })]);
+      expect(parseBuildReviewJudgedResult(value), JSON.stringify(causeHunk)).toBeUndefined();
+      expect(diagnoseBuildReviewJudgedResultRejection(value, 'testQuality', expected)).toMatchObject({
+        kind: 'explained',
+        problems: [{
+          field: 'findings[0].causeHunk',
+          required: 'must be a content-region reference {"path", "contentHash", "display", "occurrence"?}',
+        }],
+      });
+    }
   });
 
   it('ignores custom reviewer routing claims and rejects other identity claims and invalid bounded finding values', () => {
