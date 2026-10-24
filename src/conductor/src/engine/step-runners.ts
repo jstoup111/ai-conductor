@@ -80,6 +80,8 @@ import {
 } from './plan-slices.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import { resolveCoverageBindingDecideSet } from './coverage-binding-decide-set.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { loadSliceTopology } from './slice-topology.js';
 import {
   projectChildOwnership,
   readCoverageBindingEnvelope,
@@ -5832,30 +5834,38 @@ export class DefaultStepRunner implements StepRunner {
     const active = await resolveActiveChild(this.projectDir, this.featureDesc);
     if (active.kind !== 'active') return '';
 
-    const envelope = await readCoverageBindingEnvelope(
-      this.projectDir,
-      this.coverageBindingFilesystem ?? productionCoverageBindingFilesystem,
-    );
-    if (envelope === null) {
-      throw new Error(`acceptance_specs cannot resolve child ${active.child} ownership: coverage-binding envelope is missing or invalid`);
+    const topology = await loadSliceTopology(this.projectDir, this.featureDesc);
+    if (topology.kind !== 'sliced') {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} ownership: sealed-plan topology is unavailable`);
     }
-    const ownership = projectChildOwnership(envelope, active.position);
-    const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc);
-    if (decideSet?.storiesPath === null || decideSet?.storiesPath === undefined) {
-      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature DECIDE set has no stories artifact`);
+    const planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc);
+    if (!planPath) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature plan is missing`);
+    }
+    let planText: string;
+    try {
+      planText = await readFile(planPath, 'utf8');
+    } catch (error) {
+      throw new Error(`acceptance_specs cannot read child ${active.child} plan at ${relative(this.projectDir, planPath)}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const storiesPath = resolvePlanStoriesPath(relative(this.projectDir, planPath).replaceAll('\\', '/'), planText);
+    if (storiesPath === null) {
+      throw new Error(`acceptance_specs cannot resolve child ${active.child} stories: the feature plan has no valid stories artifact`);
     }
 
     let storiesText: string;
     try {
-      storiesText = await readFile(join(this.projectDir, decideSet.storiesPath), 'utf8');
+      storiesText = await readFile(join(this.projectDir, storiesPath), 'utf8');
     } catch (error) {
-      throw new Error(`acceptance_specs cannot read child ${active.child} stories at ${decideSet.storiesPath}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`acceptance_specs cannot read child ${active.child} stories at ${storiesPath}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const ownedStories = new Set(ownership.storyIds);
+    const ownership = Object.entries(topology.storyOwnership)
+      .flatMap(([storyId, position]) => position === active.position ? [storyId] : []);
+    const ownedStories = new Set(ownership);
     const blocks = splitStoryBlocks(storiesText).filter((block) => block.id !== undefined && ownedStories.has(block.id));
     if (blocks.length !== ownedStories.size) {
       const present = new Set(blocks.flatMap((block) => block.id === undefined ? [] : [block.id]));
-      const missing = ownership.storyIds.filter((id) => !present.has(id));
+      const missing = ownership.filter((id) => !present.has(id));
       throw new Error(`acceptance_specs cannot resolve child ${active.child} owned stories: missing ${missing.join(', ')}`);
     }
 

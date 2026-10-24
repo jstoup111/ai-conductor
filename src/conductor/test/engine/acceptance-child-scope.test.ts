@@ -1,18 +1,18 @@
-// Covers: task:14, task:15, task:17, task:18, task:19
+// Covers: task:5, task:14, task:15, task:17, task:18, task:19
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
-const { hasDurableChildState, resolveActiveChild, resolveChildBase, resolveCoverageBindingDecideSet } = vi.hoisted(() => ({
+const { hasDurableChildState, resolveActiveChild, resolveChildBase } = vi.hoisted(() => ({
   hasDurableChildState: vi.fn(),
   resolveActiveChild: vi.fn(),
   resolveChildBase: vi.fn(),
-  resolveCoverageBindingDecideSet: vi.fn(),
 }));
 
 vi.mock('../../src/engine/child-cursor.js', () => ({ hasDurableChildState, resolveActiveChild, resolveChildBase }));
-vi.mock('../../src/engine/coverage-binding-decide-set.js', () => ({ resolveCoverageBindingDecideSet }));
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import {
@@ -25,6 +25,42 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 
+const execFile = promisify(execFileCallback);
+
+function slicedPlan(story1 = 'Story 1', story2 = 'Story 2'): string {
+  return `# Implementation Plan: feature
+
+**Stories:** .docs/stories/feature.md
+
+## Slices
+
+| Slice | Title | Tasks |
+| --- | --- | --- |
+| 1 | First | 1 |
+| 2 | Second | 2 |
+
+### Task 1: First
+**Story:** ${story1}
+**Dependencies:** none
+
+### Task 2: Second
+**Story:** ${story2}
+**Dependencies:** 1
+`;
+}
+
+async function recordStackPositions(root: string): Promise<void> {
+  await execFile('git', ['init', '-q', '-b', 'feat/daemon-feature'], { cwd: root });
+  await execFile('git', ['config', 'user.email', 'acceptance@example.test'], { cwd: root });
+  await execFile('git', ['config', 'user.name', 'Acceptance test'], { cwd: root });
+  await execFile('git', ['add', '.'], { cwd: root });
+  await execFile('git', ['commit', '-qm', 'fixture'], { cwd: root });
+  const positionsPath = join(root, 'positions.json');
+  await writeFile(positionsPath, '[1,2]');
+  const { stdout } = await execFile('git', ['hash-object', '-w', positionsPath], { cwd: root });
+  await execFile('git', ['update-ref', 'refs/conductor/feature/positions', stdout.trim()], { cwd: root });
+}
+
 describe('acceptance_specs child scope', () => {
   const roots: string[] = [];
 
@@ -36,8 +72,10 @@ describe('acceptance_specs child scope', () => {
   it('dispatches only the active child\'s owned story criteria', async () => {
     const root = await mkdtemp(join(tmpdir(), 'acceptance-child-scope-'));
     roots.push(root);
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.docs', 'stories'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'feature.md'), slicedPlan());
     await writeFile(join(root, '.docs', 'stories', 'feature.md'), `# Stories
 
 ## Story 1: first child
@@ -52,17 +90,7 @@ describe('acceptance_specs child scope', () => {
 ### Negative Paths
 - Given child 2 fails, When it runs, Then its failure is recorded.
 `);
-    await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-      version: 1,
-      slug: 'feature',
-      runId: 'run-1',
-      status: 'done',
-      entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
-      storyOwnership: { '1': 1, '2': 2 },
-    }));
-    resolveActiveChild.mockResolvedValue({ kind: 'active', child: 1, position: 1, isLeaf: false, branch: 'feat/c1/feature' });
-    resolveCoverageBindingDecideSet.mockResolvedValue({ storiesPath: '.docs/stories/feature.md' });
+    resolveActiveChild.mockResolvedValue({ kind: 'active', child: 2, position: 2, isLeaf: false, branch: 'feat/c2/feature' });
     const invoke = vi.fn().mockResolvedValue({ success: true, output: 'done', exitCode: 0 });
     const runner = new DefaultStepRunner(
       { lifecycleCapability: { synchronousSpawnPermit: true }, invoke } as LLMProvider,
@@ -72,9 +100,9 @@ describe('acceptance_specs child scope', () => {
     await runner.run('acceptance_specs', {});
 
     const systemPrompt = invoke.mock.calls[0]?.[0]?.systemPrompt as string;
-    expect(systemPrompt).toContain('active child 1');
-    expect(systemPrompt).toContain('Story 1: first child');
-    expect(systemPrompt).not.toContain('Story 2: second child');
+    expect(systemPrompt).toContain('active child 2');
+    expect(systemPrompt).toContain('Story 2: second child');
+    expect(systemPrompt).not.toContain('Story 1: first child');
   });
 });
 
@@ -177,6 +205,7 @@ describe('acceptance_specs child-scoped disposition grounding', () => {
   async function seed(dispositions: readonly ReturnType<typeof record>[]): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), 'acceptance-child-disposition-'));
     roots.push(root);
+    await createFile(root, '.docs/plans/feature.md', slicedPlan());
     await createFile(root, '.docs/stories/feature.md', `# Stories
 
 ## Story 1: first child
@@ -189,21 +218,13 @@ describe('acceptance_specs child-scoped disposition grounding', () => {
 ### Negative Paths
 - Given child 2 fails, When it records evidence, Then it is refused.
 `);
-    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'feature',
-      runId: 'run-1',
-      status: 'done',
-      entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
-      storyOwnership: { '1': 1, '2': 2 },
-    }));
     await createFile(root, 'test/engine/existing-behavior.test.ts', '// existing proof\n');
     await createFile(
       root,
       '.pipeline/children/2/acceptance-specs-red.json',
       JSON.stringify({ outcome: 'disposition-only', dispositions }),
     );
+    await recordStackPositions(root);
     resolveChildBase.mockResolvedValue({ kind: 'none' });
     return root;
   }
@@ -298,17 +319,13 @@ describe('acceptance_specs child with no owned criteria', () => {
   it('records no-owned-criteria and dispatches build without dispatching acceptance authoring', async () => {
     const root = await mkdtemp(join(tmpdir(), 'acceptance-child-empty-'));
     roots.push(root);
-    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'feature',
-      runId: 'run-1',
-      status: 'done',
-      entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
-      // Child 1 deliberately owns a task but no story; child 2 owns the only
-      // story in this fixture.
-      storyOwnership: { '2': 2 },
-    }));
+    await createFile(root, '.docs/plans/feature.md', slicedPlan('n/a', 'Story 2'));
+    await createFile(root, '.docs/stories/feature.md', `# Stories
+
+## Story 2: second child
+### Happy Path
+- Given child 2, When it writes specs, Then only its criterion is included.
+`);
     const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
     await createFile(root, '.pipeline/conduct-state.json', JSON.stringify({
       ...state,
@@ -322,6 +339,7 @@ describe('acceptance_specs child with no owned criteria', () => {
       test_suite: 'done',
       build_review: 'done',
     }));
+    await recordStackPositions(root);
     resolveActiveChild.mockResolvedValue({
       kind: 'active', child: child1, position: 1, isLeaf: false, branch: 'feat/c1/feature',
     });
@@ -351,15 +369,13 @@ describe('acceptance_specs child with no owned criteria', () => {
   it('does not produce no-owned-criteria without an active child', async () => {
     const root = await mkdtemp(join(tmpdir(), 'acceptance-flat-'));
     roots.push(root);
-    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'feature',
-      runId: 'run-1',
-      status: 'done',
-      entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
-      storyOwnership: { '2': 2 },
-    }));
+    await createFile(root, '.docs/plans/feature.md', slicedPlan('n/a', 'Story 2'));
+    await createFile(root, '.docs/stories/feature.md', `# Stories
+
+## Story 2: second child
+### Happy Path
+- Given child 2, When it writes specs, Then only its criterion is included.
+`);
 
     await expect(checkStepCompletion(root, 'acceptance_specs', { featureDesc: 'feature' })).resolves.not.toMatchObject({
       acceptanceOutcome: 'no-owned-criteria',
