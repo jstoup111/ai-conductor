@@ -41,6 +41,8 @@ export type AdvanceRoundResult =
   | { readonly kind: 'admitted'; readonly host: ChildId }
   | { readonly kind: 'queue' }
   | { readonly kind: 'closed' }
+  /** The final settled round switched back to the leaf and re-pended its gates. */
+  | { readonly kind: 'leaf-returned' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 function pendingHost(state: HostState): boolean {
@@ -189,7 +191,7 @@ export async function returnToLeaf(
   slug: string,
   stored: StoredRouteRecord,
   options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter } = {},
-): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'unavailable' }>> {
+): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
   if (stored.record.phase === 'closed') return { kind: 'closed' };
   const otherOpen = await hasOtherOpenRound(worktree, slug, stored.record.roundId, git);
@@ -223,7 +225,7 @@ export async function returnToLeaf(
   const closed = { ...currentStored.record, phase: 'closed' as const };
   const closedWrite = await writeRoutingTransaction(worktree, slug, [{ kind: 'update-record', previous: currentStored, record: closed }], { git });
   if (closedWrite.kind !== 'updated') return { kind: 'unavailable', detail: `round close ${closedWrite.kind}` };
-  return { kind: 'closed' };
+  return { kind: 'leaf-returned' };
 }
 
 /** The immutable Git comparison facts used to choose a routed host's exit. */

@@ -10,7 +10,7 @@ import {
   type PersistOutboxEvent,
   type RouteRecordStoreDependencies,
 } from './route-record-store.js';
-import { isLegalRoundPhaseTransition, parseRoundId, type RouteRecord, type RoundId } from './route-types.js';
+import { assertNever, isLegalRoundPhaseTransition, parseRoundId, type RouteRecord, type RoundId } from './route-types.js';
 import { completeRerouteSync } from './prerequisite-claim.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { advanceRound } from './routed-exit.js';
@@ -77,6 +77,10 @@ export type ReconcileRoundsResult =
   /** A crash occurred after the host's entry CAS and before it journaled its exit. */
   | { readonly kind: 'resume-exit'; readonly roundId: RoundId; readonly host: ChildId }
   | { readonly kind: 'navigate-host'; readonly roundId: RoundId; readonly host: ChildId }
+  /** The current call durably returned from the last host to the leaf. */
+  | { readonly kind: 'leaf-returned'; readonly roundId: RoundId }
+  /** Route records remain only as closed history; no marker or queue work remains. */
+  | { readonly kind: 'quiescent' }
   | { readonly kind: 'deferred' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
@@ -112,12 +116,21 @@ export async function reconcileRounds(worktree: string, slug: string, dependenci
     if (activeHost) return { kind: 'navigate-leaf-to-build', roundId: id, host: Number(activeHost[0]) as ChildId };
     if (stored.record.phase === 'open') {
       const advanced = await advanceRound(worktree, slug, stored, { git });
-      if (advanced.kind === 'admitted') return { kind: 'navigate-host', roundId: id, host: advanced.host };
-      if (advanced.kind === 'unavailable') return { kind: 'unavailable', detail: advanced.detail };
-      return { kind: 'deferred' };
+      switch (advanced.kind) {
+        case 'admitted':
+          return { kind: 'navigate-host', roundId: id, host: advanced.host };
+        case 'leaf-returned':
+          return { kind: 'leaf-returned', roundId: id };
+        case 'unavailable':
+          return { kind: 'unavailable', detail: advanced.detail };
+        case 'closed':
+        case 'queue':
+          return { kind: 'deferred' };
+      }
+      return assertNever(advanced);
     }
   }
-  return { kind: 'deferred' };
+  return marker.kind === 'absent' ? { kind: 'quiescent' } : { kind: 'deferred' };
 }
 
 /** True when routing durability says that automatic base movement would race a round. */

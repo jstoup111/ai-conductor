@@ -15356,9 +15356,17 @@ export class Conductor {
               }
               let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
               // Queue admission always wins over a return to whole-feature
-              // gates. `none`/`aborted` describes the round just reconciled,
-              // not necessarily every durable routed obligation.
-              if (reconciled.kind === 'deferred' || reconciled.kind === 'none' || reconciled.kind === 'aborted') {
+              // gates. Reconciliation reports the final leaf return separately
+              // from a close that still has routed work, but every terminal
+              // result must still prove the queue empty before whole-feature
+              // validation may resume.
+              if (
+                reconciled.kind === 'deferred' ||
+                reconciled.kind === 'none' ||
+                reconciled.kind === 'aborted' ||
+                reconciled.kind === 'leaf-returned' ||
+                reconciled.kind === 'quiescent'
+              ) {
                 consumed = await consumeLowestQueued(this.projectRoot, slug);
                 if (consumed.kind === 'unavailable') {
                   await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
@@ -15378,7 +15386,12 @@ export class Conductor {
                 }
               }
               if (
-                (reconciled.kind === 'none' || reconciled.kind === 'aborted') &&
+                (
+                  reconciled.kind === 'none' ||
+                  reconciled.kind === 'aborted' ||
+                  reconciled.kind === 'leaf-returned' ||
+                  reconciled.kind === 'quiescent'
+                ) &&
                 consumed?.kind === 'none' &&
                 !await routedRoundOpen(this.projectRoot, slug)
               ) {

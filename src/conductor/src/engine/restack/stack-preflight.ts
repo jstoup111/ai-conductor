@@ -162,7 +162,13 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
     }
     // Queue admission is marker-first and happens before any leaf return.
     // A closed audit round may therefore yield to its lowest invalidated child.
-    if (reconciled.kind === 'none' || reconciled.kind === 'deferred') {
+    if (
+      reconciled.kind === 'none' ||
+      reconciled.kind === 'aborted' ||
+      reconciled.kind === 'deferred' ||
+      reconciled.kind === 'leaf-returned' ||
+      reconciled.kind === 'quiescent'
+    ) {
       const consumed = await consumeLowestQueued(options.worktree, options.slug, { git: options.git });
       if (consumed.kind === 'admitted') return { kind: 'navigate-host', roundId: consumed.roundId, host: consumed.host };
       if (consumed.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
