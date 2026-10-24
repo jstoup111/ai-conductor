@@ -124,7 +124,7 @@ function providerOperatorOwnedState(caseRow: RemediationCaseRow):
 function validateEffect(
   caseRow: RemediationCaseRow,
   judgement: RemediationCaseJudgement,
-): RemediationCaseGraphRejection | undefined {
+): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> | undefined {
   const effect = caseRow.effect as unknown as Record<string, unknown>;
   if (caseRow.disposition === 'act') {
     if (effect.kind !== 'action' || effect.route !== 'build' || !Array.isArray(effect.tasks) || effect.tasks.length === 0) {
@@ -144,7 +144,7 @@ function validateEffect(
       if (!nonEmptyString(admission.admissionRationale)) return 'missing-admission-rationale';
       const seen = new Set<string>();
       for (const taskId of admission.admittedTaskIds) {
-        if (!nonEmptyString(taskId)) return 'unknown-admission-task';
+        if (!nonEmptyString(taskId)) return 'invalid-action-effect';
         if (seen.has(taskId)) return 'duplicate-admission-task';
         seen.add(taskId);
       }
@@ -184,11 +184,10 @@ function unknownAdmissionTaskIds(
 
   for (const caseRow of judgement.cases) {
     if (caseRow.disposition !== 'act') continue;
-    const tasks = (caseRow.effect as Record<string, unknown>).tasks;
-    if (!Array.isArray(tasks)) continue;
-    for (const task of tasks) {
-      const taskIds = (task as Record<string, unknown>).admittedTaskIds;
-      if (!Array.isArray(taskIds)) continue;
+    if (caseRow.effect.kind !== 'action') continue;
+    for (const task of caseRow.effect.tasks) {
+      if (!('admittedTaskIds' in task)) continue;
+      const taskIds = task.admittedTaskIds;
       for (const taskId of taskIds) {
         if (!nonEmptyString(taskId) || admittedTaskIds.has(taskId)) continue;
         if (planTaskIds.has(taskId)) {
@@ -234,7 +233,7 @@ function validateConsistency(
   currentSources: ReadonlySet<string>,
   casesByRef: ReadonlyMap<string, RemediationCaseRow>,
   judgement: Extract<RemediationCaseJudgement, { readonly mode: 'case-v2' }>,
-): RemediationCaseGraphRejection | undefined {
+): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> | undefined {
   const consistency = judgement.consistency as unknown as Record<string, unknown>;
   if (!nonEmptyString(consistency.rationale)) return 'missing-consistency-rationale';
   // The consistency record names the *implicated* sources and cases

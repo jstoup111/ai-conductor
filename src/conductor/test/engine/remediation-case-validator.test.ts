@@ -619,6 +619,13 @@ describe('remediation case graph validator', () => {
           effect: { ...VALID_CASE_V2_JUDGEMENT.cases[0].effect, tasks: [{ ...VALID_CASE_V2_JUDGEMENT.cases[0].effect.tasks[0], admittedTaskIds: [] }] },
         }, ...VALID_CASE_V2_JUDGEMENT.cases.slice(1)],
       }, 'missing-admission-task'],
+      ['a task action with an empty admission task id', {
+        ...VALID_CASE_V2_JUDGEMENT,
+        cases: [{
+          ...VALID_CASE_V2_JUDGEMENT.cases[0],
+          effect: { ...VALID_CASE_V2_JUDGEMENT.cases[0].effect, tasks: [{ ...VALID_CASE_V2_JUDGEMENT.cases[0].effect.tasks[0], admittedTaskIds: [''] }] },
+        }, ...VALID_CASE_V2_JUDGEMENT.cases.slice(1)],
+      }, 'invalid-action-effect'],
       ['a task action with no admission rationale', {
         ...VALID_CASE_V2_JUDGEMENT,
         cases: [{
