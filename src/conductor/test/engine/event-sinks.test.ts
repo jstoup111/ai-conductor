@@ -1,4 +1,4 @@
-// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:15, task:17, task:23
+// Covers: task:4, task:1, task:2, task:3, task:5, task:6, task:7, task:8, task:9, task:10, task:11, task:14, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,6 +55,16 @@ it('declares one persistent sink row for each stack event', () => {
       otel: false,
     });
   }
+});
+
+it('declares remediation-closure judgements as durable, unaudited event-spine records', () => {
+  expect(EVENT_SINKS.remediation_closure_judged).toEqual({
+    render: false,
+    persist: true,
+    audit: false,
+    otel: false,
+  });
+  expect(persistedEventTypes()).toContain('remediation_closure_judged');
 });
 
 type Equal<Left, Right> =
@@ -198,6 +208,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'mode_skip',
   'build_done_when_unverified',
   'done_when_citation_judged',
+  'remediation_closure_judged',
   'done_when_citation_accepted',
   'build_progress',
   'unattributed_progress',

@@ -39,6 +39,7 @@ import { persistRemediationPlan, type RemediationPlanStoreFilesystem } from './r
 import type {
   CitationJudgementDispatchResult,
   ComplexityAssessment,
+  RemediationClosureJudgementDispatchResult,
   StepRunner,
   StepRunResult,
   StepRunOptions,
@@ -99,6 +100,11 @@ import {
   validateCitationJudgementOutput,
   type CitationJudgementInput,
 } from './done-when-citation-judgement.js';
+import {
+  REMEDIATION_CLOSURE_JUDGEMENT_SCHEMA,
+  validateRemediationClosureOutput,
+  type RemediationClosureInput,
+} from './remediation-closure-judgement.js';
 import { engineContentStamp } from './engine-version-id.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { resolveSkillName } from './skill-names.js';
@@ -784,6 +790,8 @@ export interface StepRunnerOptions {
   configuredProviders?: readonly string[];
   /** Injectable candidate executor; production uses executeProviderCandidates. */
   providerExecutor?: typeof executeProviderCandidates;
+  /** Test seam for the stable-HEAD boundary around remediation closure judgement attempts. */
+  remediationClosureHeadReader?: (projectRoot: string) => Promise<string | null>;
   /** Per-candidate attempt event sink. */
   providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   /** Visible provider-transition warning sink. */
@@ -1088,6 +1096,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerRuntimes?: ProviderRuntimeSet;
   private configuredProviders: readonly string[];
   private providerExecutor: typeof executeProviderCandidates;
+  private readonly remediationClosureHeadReader: (projectRoot: string) => Promise<string | null>;
   private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   private providerCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
@@ -1178,6 +1187,7 @@ export class DefaultStepRunner implements StepRunner {
       options?.providerExecutor ??
       options?.providerExecution?.executor ??
       executeProviderCandidates;
+    this.remediationClosureHeadReader = options?.remediationClosureHeadReader ?? currentCommitSha;
     this.providerLifecycleTimer =
       options?.providerLifecycleTimer ?? systemProviderLifecycleTimer;
     this.providerLifecycleEpisodeStore =
@@ -2858,6 +2868,115 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
     return { kind: 'unavailable', cause: `Done-when citation judgement unavailable after two attempts: ${lastCause}` };
+  }
+
+  /**
+   * Dispatch the engine-owned remediation-closure judgement.  This remains a
+   * free-form, native-schema request: the engine supplies the complete
+   * bounded input and no review skill session is opened.  Its provider policy
+   * belongs to build_review, while BUILD owns lifecycle supervision.
+   */
+  async dispatchRemediationClosureJudgement(
+    input: RemediationClosureInput,
+  ): Promise<RemediationClosureJudgementDispatchResult> {
+    const llmProvider = this.config?.steps?.build_review?.llm_provider
+      ?? this.config?.llm_provider
+      ?? DEFAULT_PROVIDER;
+    const configuredProviders = normalizeProviderSelection(llmProvider);
+    if (!this.providerRuntimes || !this.sessionStore) {
+      return {
+        kind: 'unavailable', attempts: 0,
+        cause: 'Remediation closure judgement provider runtime is unavailable.',
+      };
+    }
+    const schemaCandidates = configuredProviders.filter(
+      (provider) => this.providerRuntimes!.nativeSchemaCapabilityFor(provider)?.nativeOutputSchema === true,
+    );
+    if (schemaCandidates.length === 0) {
+      return {
+        kind: 'unavailable', attempts: 0,
+        cause: `Remediation closure judgement cannot enforce its native output schema: candidate set [${configuredProviders.join(', ')}] has no provider declaring nativeSchemaCapability.nativeOutputSchema.`,
+      };
+    }
+
+    const preferredProvider = schemaCandidates[0]!;
+    const providerPolicy = this.providerRuntimes.get(preferredProvider).policy;
+    const native = resolvePreferredProviderNativeStepConfig({
+      step: 'build_review',
+      phase: phaseForStep('build_review'),
+      preferredProvider,
+      inheritedProvider: normalizeProviderSelection(this.config?.llm_provider)[0]!,
+      policy: providerPolicy,
+      config: this.config,
+    });
+    const resolved = this.resolvedConfigFor('build_review');
+    const policy: ResolvedBuildReviewRubricPolicy = {
+      enabled: true,
+      max_projection_bytes: DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
+      llm_provider: schemaCandidates,
+      model: native.model,
+      effort: native.effort,
+      model_fallback_ladder: selectFallbackLadder(providerPolicy, preferredProvider, this.config ?? {}),
+      max_retries: 1,
+      escalate: resolved.escalate,
+      min_confidence: 0,
+    };
+
+    let lastCause = 'provider returned no structured remediation-closure judgement';
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const beforeHead = await this.remediationClosureHeadReader(this.projectDir);
+        const dispatched = await this.dispatchProviderWithLifecycleSupervision(
+          'build',
+          {
+            prompt: `REMEDIATION CLOSURE JUDGEMENT (engine-owned input):\n${JSON.stringify(input)}\n\nReturn only the native-schema response. Judge whether each named remediation change is present.`,
+            cwd: this.projectDir,
+            interactive: false,
+            readOnlyReview: true,
+            nativeSchema: REMEDIATION_CLOSURE_JUDGEMENT_SCHEMA,
+          },
+          (options) => executeAuxiliaryProviderCandidates({
+            step: 'build', memberId: 'remediation-closure-judgement', policy,
+            nativeConfigStep: 'build_review',
+            runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch('remediation-closure-judgement:judge'),
+            config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+            nextCaptureAttempt: () => this.nextAuxiliaryTranscriptCaptureAttempt('build'),
+            providerAvailability: this.providerExecutionContext?.providerAvailability,
+            withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+            onAttempt: this.providerAttempt, onAuxiliaryAttemptFailed: this.providerExecutionContext?.onAuxiliaryAttemptFailed,
+            onCandidateStart: this.providerCandidateStart, warn: this.providerWarn,
+            options,
+            optionsForCandidate: () => options,
+          }),
+        );
+        this.callCount++;
+        const afterHead = await this.remediationClosureHeadReader(this.projectDir);
+        if (beforeHead !== afterHead) {
+          lastCause = 'HEAD changed during remediation closure judgement attempt';
+          continue;
+        }
+        if (!dispatched.success) {
+          lastCause = dispatched.output ?? 'remediation closure judgement provider dispatch failed';
+          continue;
+        }
+        if (dispatched.structuredResultFailure !== undefined || dispatched.finalStructuredResult === undefined) {
+          lastCause = 'remediation closure judgement provider returned no valid native-schema result';
+          continue;
+        }
+        const validated = validateRemediationClosureOutput(
+          dispatched.finalStructuredResult,
+          input.candidates.map(({ taskId }) => taskId),
+        );
+        if (validated.kind === 'valid') return { ...validated, attempts: attempt };
+        lastCause = validated.reason;
+      } catch (error) {
+        lastCause = error instanceof Error ? error.message : String(error);
+      }
+    }
+    return {
+      kind: 'unavailable', attempts: 2,
+      cause: `Remediation closure judgement unavailable after two attempts: ${lastCause}`,
+    };
   }
 
   async resolveRebaseConflict(ctx: ResolutionContext): Promise<ResolutionAttempt> {

@@ -14,7 +14,7 @@ import type {
   HarnessConfig,
   ProviderSelection,
 } from '../types/config.js';
-import { resolveProviderCandidates } from './provider-selection.js';
+import { normalizeProviderSelection, resolveProviderCandidates } from './provider-selection.js';
 import type {
   ProviderRuntime,
   ProviderRuntimeSet,
@@ -55,6 +55,7 @@ import {
 import type { SelfHostProviderId } from './self-host/provider-home.js';
 import {
   CODEX_DISPLAY_NAME,
+  DEFAULT_PROVIDER,
   findBuiltInProviderDescriptor,
   supportsProviderCapability,
 } from '../execution/provider-catalog.js';
@@ -267,6 +268,12 @@ export type PrepareCandidateSelfHost = (
 
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
+  /**
+   * Optional configuration source for native model/effort resolution.  The
+   * lifecycle step remains `step`; auxiliary work can therefore inherit a
+   * different step's policy without manufacturing another lifecycle session.
+   */
+  nativeConfigStep?: StepName;
   configuredProviders: readonly string[];
   preferredProvider?: ProviderSelection;
   runtimes: ProviderRuntimeSet;
@@ -866,6 +873,7 @@ export function buildProviderAttemptMetadata({
  */
 export async function executeProviderCandidates({
   step,
+  nativeConfigStep,
   configuredProviders,
   preferredProvider: stepSelection,
   runtimes,
@@ -898,6 +906,8 @@ export async function executeProviderCandidates({
   options,
   optionsForCandidate,
 }: ExecuteProviderCandidatesInput): Promise<ProviderExecutionResult> {
+  const resolvedNativeConfigStep = nativeConfigStep ?? step;
+  const inheritedProvider = normalizeProviderSelection(config?.llm_provider)[0] ?? DEFAULT_PROVIDER;
   const substitutionPolicy = config?.steps?.[step]?.provider_substitution ?? config?.provider_substitution;
   const candidates = resolveProviderCandidates({
     configuredProviders,
@@ -943,7 +953,7 @@ export async function executeProviderCandidates({
     for (const [index, providerKey] of candidates.entries()) {
       const runtime = runtimes.get(providerKey);
       const resolved = resolveProviderCandidateNativeConfig({
-        step, candidateIndex: index, preferredProvider, inheritedProvider: configuredProviders[0],
+        step: resolvedNativeConfigStep, candidateIndex: index, preferredProvider, inheritedProvider,
         runtime, config, tier, attempt, escalate, modelOverride, effortOverride,
       });
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
@@ -964,10 +974,10 @@ export async function executeProviderCandidates({
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
     const resolved = resolveProviderCandidateNativeConfig({
-      step,
+      step: resolvedNativeConfigStep,
       candidateIndex: index,
       preferredProvider,
-      inheritedProvider: configuredProviders[0],
+      inheritedProvider,
       runtime,
       config,
       tier,
@@ -1521,6 +1531,8 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       preferredProvider: input.policy.llm_provider,
       attempt,
       escalate: input.policy.escalate,
+      // Overrides apply only to candidate zero; fallback candidates resolve in
+      // nativeConfigStep through resolveFallbackProviderNativeStepConfig.
       modelOverride: input.policy.model,
       effortOverride: input.policy.effort,
       modelFallbackLadder: input.policy.model_fallback_ladder,

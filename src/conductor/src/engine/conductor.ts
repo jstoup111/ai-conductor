@@ -304,6 +304,7 @@ import {
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
 import { parsePlanTaskBodies, parsePlanTaskDoneWhen, parsePlanTaskPaths } from './plan-task-parse.js';
+import { runRemediationClosurePass } from './remediation-closure-judgement.js';
 import { AS_BUILT_VERDICT_CONTRACT_VERSION } from './as-built-contract.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
@@ -12104,6 +12105,7 @@ export class Conductor {
               // the later bounded fallback task; this happy-path boundary
               // only applies durable verdicts from a valid native dispatch.
               let citationRefusalReason: string | undefined;
+              let remediationClosureReason: string | undefined;
               if (step.name === 'build' && this.stepRunner.dispatchDoneWhenCitationJudgement) {
                 try {
                   const status = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
@@ -12166,6 +12168,47 @@ export class Conductor {
                   throw new Error(`citation judgement unavailable: ${error instanceof Error ? error.message : String(error)}`);
                 }
               }
+              // Closure judgement is independent of citation support.  It
+              // must also never judge a mixed worktree, because the provider
+              // would otherwise inspect changes not represented by a close.
+              if (step.name === 'build' &&
+                (await uncommittedPathsOrNull(await this.completionCtx(state))) === null) {
+                const planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc).catch(() => undefined);
+                if (planPath) {
+                  const planText = await readFile(planPath, 'utf8');
+                  const taskIds = [...parsePlanTaskBodies(planText).keys()];
+                  const currentStatus = await readFile(join(this.projectRoot, '.pipeline', 'task-status.json'), 'utf8')
+                    .then((raw) => JSON.parse(raw) as unknown)
+                    .catch(() => undefined);
+                  if (currentStatus !== undefined) {
+                    const childBranch = this.activeRegionChild === undefined || !state.feature_desc
+                      ? undefined
+                      : childBranchFor(state.feature_desc, this.activeRegionChild);
+                    try {
+                      const reopened = await runRemediationClosurePass({
+                        projectRoot: this.projectRoot,
+                        planPath,
+                        planText,
+                        status: currentStatus,
+                        scopeTaskIds: taskIds,
+                        ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
+                        ...(childBranch?.ok ? { branch: childBranch.branch } : {}),
+                        attemptsExhausted: attempt >= stepMaxRetries,
+                        ...(this.stepRunner.dispatchRemediationClosureJudgement === undefined ? {} : {
+                          dispatch: this.stepRunner.dispatchRemediationClosureJudgement.bind(this.stepRunner),
+                        }),
+                        onJudged: (pass) => emitTracked({ type: 'remediation_closure_judged', ...pass }),
+                      });
+                      if (reopened.length > 0) remediationClosureReason = reopened.map(({ reason }) => reason).join('\n');
+                    } catch (error) {
+                      // A corrupt durable verdict record is an incomplete BUILD
+                      // boundary, not a provider failure. In particular, do not
+                      // dispatch a new judgement over state we cannot replay.
+                      remediationClosureReason = error instanceof Error ? error.message : String(error);
+                    }
+                  }
+                }
+              }
               // A final BUILD attempt cannot consume a future review lap.
               // Mark its nudge spent before evaluating completion so a forced
               // demotion remains a successful terminal disposition.
@@ -12191,7 +12234,8 @@ export class Conductor {
                   ...(await this.completionCtx(state)),
                 },
               );
-              if (citationRefusalReason) completion = { ...completion, done: false, reason: citationRefusalReason };
+              const reopenReason = [citationRefusalReason, remediationClosureReason].filter(Boolean).join('\n');
+              if (reopenReason) completion = { ...completion, done: false, reason: reopenReason };
             }
 
             // Task 2, session-fresh-verdict-artifacts: audit-trail event for

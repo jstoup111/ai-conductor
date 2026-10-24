@@ -632,3 +632,27 @@ Search hints: `dispatchDoneWhenCitationJudgement`, `admitCitationRefusals`, `set
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-rem-as-built-closure-policy-1: src/conductor/src/engine/step-runners.ts dispatchRemediationClosureJudgement: resolve every candidate's model/effort under build_review (per-candidate optionsForCandidate / step resolution) while keeping dispatchProviderWithLifecycleSupervision('build') attribution; add a RED test in the Task 6 suite with two build_review providers asserting the fallback candidate also gets build_review model/effort
+**Gate:** as-built
+**Rationale:** Verified (95%, read step-runners.ts:2925-2950): executeAuxiliaryProviderCandidates is called with step:'build' and optionsForCandidate returns the same options for every candidate, so fallback candidates resolve model/effort under BUILD policy. ADR adr-2026-10-21-remediation-closure-judgement D4 is approved and unambiguous (build_review policy, BUILD lifecycle attribution); plan Task 6 admits the repair and its existing test asserts model/effort resolved for build_review. This is conforming implementation drift, not an architectural decision.
+**Governing clause:** adr-2026-10-21-remediation-closure-judgement decision 4
+**Done when:**
+- adr-2026-10-21-remediation-closure-judgement decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-closure-policy-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-closure-obligation-2: src/conductor/src/engine/remediation-closure-judgement.ts applyRemediationClosureReopen: scope the admitOrReplay key and obligation id by canonical plan identity (planPath) alongside closeIdentity, keeping source.findingId as the close identity; add a RED test that two plans with identical task/check/evidence/reopen-count each admit and settle their own remediation-closure obligation and both tasks are restaged
+**Gate:** as-built
+**Rationale:** Verified (95%, read remediation-closure-judgement.ts:110-135): the admitOrReplay key and obligation id derive only from closeIdentity, which excludes plan identity, so identical closes in two plans collide in the shared repair-obligation store and the second plan's reopen is replayed/rejected. ADR adr-2026-09-06-reopened-task-resolution D3 already requires per-plan obligations; plan Task 9 admits the reopen-obligation repair. Fix scopes the obligation key/id by canonical plan identity while leaving remediationCloseIdentity (Task 3) unchanged, so completed close-identity behavior and coverage are preserved.
+**Governing clause:** adr-2026-09-06-reopened-task-resolution decision 3
+**Done when:**
+- adr-2026-09-06-reopened-task-resolution decision 3 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-closure-obligation-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-as-built-closure-inherited-provider-3: src/conductor/src/engine/provider-execution.ts executeProviderCandidates (:954 and :978): derive inheritedProvider from the global provider (normalizeProviderSelection(config?.llm_provider)[0] ?? DEFAULT_PROVIDER), not configuredProviders[0]. In the auxiliary path (:1535), keep explicit build_review policy.model/effort for the preferred candidate when nativeConfigStep is set. Fallback candidates must keep resolving under nativeConfigStep (build_review). Add RED tests in the Task 6 suite: (a) global claude with defaults.model=opus and build_review.llm_provider=codex, no review model: Codex must not receive opus; (b) an explicit build_review model/effort reaches the preferred candidate; (c) the existing two-provider fallback test still resolves build_review model/effort.
+**Gate:** as-built
+**Rationale:** Verified (95%, read provider-execution.ts:954/978 and :1535): both candidate-resolution sites pass inheritedProvider: configuredProviders[0] (the build_review selection's first provider) instead of the global provider, which every other call site uses (step-runners.ts:2717/2778/2908, conductor.ts:7999). resolved-config.ts:330 compares preferredProvider to inheritedProvider to decide whether global defaults apply, so another provider's global defaults (e.g. defaults.model=opus) leak into Codex. The nativeConfigStep branch at :1535 also drops the primary's resolved model/effort overrides. ADR D4 remains authoritative and the plan admits the repair under Task 6 (dispatch under build_review policy) and the existing remediation task rem-as-built-rem-as-built-closure-policy-1. This is a conforming implementation regression with a clear fix, so it routes to BUILD. Preserved behavior: fallback candidates must still resolve under build_review, which is the prior finding's fix.
+**Governing clause:** adr-2026-10-21-remediation-closure-judgement decision 4
+**Done when:**
+- adr-2026-10-21-remediation-closure-judgement decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-closure-inherited-provider-3 is committed and its targeted tests pass.
