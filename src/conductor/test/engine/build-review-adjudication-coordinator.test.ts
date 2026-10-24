@@ -4001,6 +4001,58 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect((seen as { planContract: { admittedTaskContracts: unknown[]; index: unknown[] } }).planContract.index).toHaveLength(140);
   });
 
+  it('retries one case-v2 judgement with index-only task bodies without persisting its first answer', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(14), 'utf8');
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    const contexts: unknown[] = [];
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const caseV2Aggregate = customMixedAggregate();
+    const caseV2SourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!);
+    const judgement = (caseRef: string, admittedTaskIds: readonly string[]): RemediationCaseJudgement => ({
+      mode: 'case-v2', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: caseV2SourceId, outcome: 'acted', caseRef }],
+      cases: [{
+        caseRef, disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The changed test needs an assertion.',
+        effect: {
+          kind: 'action', route: 'build',
+          tasks: [{ title: `Repair from ${caseRef}`, admittedTaskIds, admissionRationale: 'The named plan tasks own this repair.' }],
+        },
+      }],
+      consistency: { verdict: 'consistent', sourceIds: [caseV2SourceId], caseRefs: [caseRef], rationale: 'The repair is internally consistent.' },
+    });
+    const judge = vi.fn(async (context: unknown) => {
+      contexts.push(context);
+      return contexts.length === 1
+        ? judgement('round-one', ['9', '14'])
+        : judgement('round-two', ['9', '14']);
+    });
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: caseV2Aggregate, chargeEffect: charge, generateId: sequentialIds('expanded'),
+      readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [
+        { id: '9', status: 'in_progress' }, { id: '14', status: 'pending' },
+      ] }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(judge).toHaveBeenCalledTimes(2);
+    const taskIds = (context: unknown) => (context as { planContract: { admittedTaskContracts: { id: string }[] } }).planContract.admittedTaskContracts.map((task) => task.id);
+    const priorCases = (context: unknown) => (context as { priorCases: unknown[] }).priorCases;
+    expect(taskIds(contexts[1])).toEqual([...taskIds(contexts[0]), '9', '14'].sort((left, right) => left.localeCompare(right)));
+    expect(priorCases(contexts[1])).toEqual(priorCases(contexts[0]));
+    expect(charge).toHaveBeenCalledTimes(1);
+    await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [expect.objectContaining({ id: 'expanded-1', rationale: 'The changed test needs an assertion.' })] },
+    });
+    await expect(readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')).resolves.toContain('Repair from round-two');
+    await expect(readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')).resolves.not.toContain('Repair from round-one');
+  });
+
   it.each(['open', 'resolved'] as const)('uses a prior work-order admission only while its action case is %s', async (resolution) => {
     const root = await projectRoot();
     await mkdir(join(root, '.docs/plans'), { recursive: true });

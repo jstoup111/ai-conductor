@@ -25,7 +25,7 @@ import { classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuil
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
 import { appendRemediationCaseOutbox, BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT, buildReviewRecurrenceLineage, buildReviewSeverityThresholdPolicies, classifyBuildReviewRecurrence, currentBuildReviewSourceLinks, drainRemediationCaseOutbox, finalizedBuildReviewSourceIds, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseSuppressionEntry, type RemediationCaseTransitionViolation } from './remediation-case-store.js';
-import { validateRemediationCaseGraph } from './remediation-case-validator.js';
+import { classifyIndexOnlyAdmission, validateRemediationCaseGraph, type RemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
 import type { EffectMarkerTrackerClient } from './tracker-client.js';
@@ -164,6 +164,7 @@ async function scopedPlanContract(
   aggregate: BuildReviewAggregate,
   sources: readonly BuildReviewRawSourceProjection[],
   openCaseAdmittedTaskIds: readonly string[],
+  expansionTaskIds: readonly string[] = [],
 ): Promise<BuildReviewAdjudicationPlanContract> {
   if (planContract.path === null) return { ...planContract, admittedTaskContracts: [], index: [] };
   try {
@@ -171,7 +172,7 @@ async function scopedPlanContract(
     const selected = selectAdmittedTaskContracts({
       plan,
       matchPaths: matchPathsForSources(aggregate, sources),
-      openCaseAdmittedTaskIds,
+      openCaseAdmittedTaskIds: [...openCaseAdmittedTaskIds, ...expansionTaskIds],
     });
     return { path: planContract.path, pointers: planContract.pointers, ...selected };
   } catch {
@@ -797,15 +798,66 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
-  let judgement: RemediationCaseJudgement;
-  try { judgement = await input.judge(freshContext.context); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
-  // The context, not the judge, selects the case contract.  A custom lap's
-  // case-v2 consistency decision and admission evidence cannot be shed by
-  // answering in the older mode, whose acts would all be authorized.
-  // The stricter v2 answer to a v1 request keeps every gate and stays valid.
-  if (freshContext.context.mode === 'case-v2' && judgement.mode !== 'case-v2') {
-    return failUnlessAccepted(`remediation judgement mode mismatch: requested ${freshContext.context.mode}, received ${String(judgement.mode)}`, { settleAbsentAttempted: true });
+  let dispatchContext = freshContext.context;
+  let accepted: { readonly judgement: RemediationCaseJudgement; readonly validation: { readonly ok: true; readonly graph: RemediationCaseGraph } } | undefined;
+  for (let round = 0; round < 2; round += 1) {
+    let judgement: RemediationCaseJudgement;
+    try { judgement = await input.judge(dispatchContext); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
+    // The context, not the judge, selects the case contract.  A custom lap's
+    // case-v2 consistency decision and admission evidence cannot be shed by
+    // answering in the older mode, whose acts would all be authorized.
+    // The stricter v2 answer to a v1 request keeps every gate and stays valid.
+    if (dispatchContext.mode === 'case-v2' && judgement.mode !== 'case-v2') {
+      return failUnlessAccepted(`remediation judgement mode mismatch: requested ${dispatchContext.mode}, received ${String(judgement.mode)}`, { settleAbsentAttempted: true });
+    }
+    const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, {
+      existingCaseIds: prior.state.cases.map((record) => record.id),
+      admittedTaskIds: dispatchContext.planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
+      planTaskIds: dispatchContext.planContract.index?.map((task) => task.id) ?? [],
+      sourceRubrics: Object.fromEntries(dispatchSources.map((source) => [
+        buildReviewAdjudicationSourceId(source), source.rubric,
+      ])),
+      sourceReviewerSeverities: Object.fromEntries(dispatchSources.flatMap((source) =>
+        source.severity === undefined
+          ? []
+          : [[buildReviewAdjudicationSourceId(source), source.severity] as const],
+      )),
+      declaredSeverityThresholds: input.declaredSeverityThresholds,
+    });
+    if (graph.ok) {
+      accepted = { judgement, validation: graph };
+      break;
+    }
+    if (round === 0 && dispatchContext.mode === 'case-v2' && graph.reason === 'unknown-admission-task') {
+      const classification = classifyIndexOnlyAdmission(dispatchSourceIds, judgement, {
+        existingCaseIds: prior.state.cases.map((record) => record.id),
+        admittedTaskIds: dispatchContext.planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
+        planTaskIds: dispatchContext.planContract.index?.map((task) => task.id) ?? [],
+        sourceRubrics: Object.fromEntries(dispatchSources.map((source) => [
+          buildReviewAdjudicationSourceId(source), source.rubric,
+        ])),
+        sourceReviewerSeverities: Object.fromEntries(dispatchSources.flatMap((source) =>
+          source.severity === undefined
+            ? []
+            : [[buildReviewAdjudicationSourceId(source), source.severity] as const],
+        )),
+        declaredSeverityThresholds: input.declaredSeverityThresholds,
+      }, graph);
+      if (classification.kind === 'index-only') {
+        const expandedContext = assembleBuildReviewAdjudicationContext({
+          aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
+          operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
+          planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, classification.taskIds), taskStatus, attemptedCaseIds,
+        });
+        if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
+        dispatchContext = expandedContext.context;
+        continue;
+      }
+    }
+    return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
   }
+  if (!accepted) return failUnlessAccepted('invalid remediation judgement unknown-admission-task', { settleAbsentAttempted: true });
+  const { judgement, validation: graph } = accepted;
   // Do not reconcile or effect a provider result after a late exact operator
   // acceptance made every source non-autonomous.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
@@ -817,21 +869,6 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // source: its case is dropped before reservation, and every sibling case is
   // still reconciled, effected, and routed. Failing the whole lap closed here
   // is what made any pre-existing acceptance un-adjudicable.
-  const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, {
-    existingCaseIds: prior.state.cases.map((record) => record.id),
-    admittedTaskIds: freshContext.context.planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
-    planTaskIds: freshContext.context.planContract.index?.map((task) => task.id) ?? [],
-    sourceRubrics: Object.fromEntries(dispatchSources.map((source) => [
-      buildReviewAdjudicationSourceId(source), source.rubric,
-    ])),
-    sourceReviewerSeverities: Object.fromEntries(dispatchSources.flatMap((source) =>
-      source.severity === undefined
-        ? []
-        : [[buildReviewAdjudicationSourceId(source), source.severity] as const],
-    )),
-    declaredSeverityThresholds: input.declaredSeverityThresholds,
-  });
-  if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
   // The v2 consistency/escalation gate is an effect authority, not advisory
   // context: no partial action set survives a blocked or escalated judgement.
   const liveSourceIds = liveSourceIdsFor(resolved);
