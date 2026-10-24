@@ -336,3 +336,12 @@ Task 7 ───────────────────────┴�
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-3a: Scope pre-dispatch plan-contract bodies to live (non-settled) sources in build-review-adjudication-coordinator.ts so settled findings cannot overflow admittedTaskContracts or block all-settled finalize; add a 129-task settled-finding regression test in build-review-adjudication-coordinator.test.ts
+**Gate:** as-built
+**Rationale:** Verified (95%, read build-review-adjudication-coordinator.ts:760-830): the pre-dispatch assembleBuildReviewAdjudicationContext call passes scopedPlanContract(..., currentSources, ...) before settledSourceIds and the reduced currentSources are computed, and the !context.ok return at :779 fails before the all-settled finalize branch can run. The fresh assembly already scopes bodies to dispatchSources. This is implementation drift from approved mixed-laps ADR D5. That ADR stays authoritative and needs no architecture decision. Plan task 3 already admits the repair, since it governs wiring scoped bodies into both the pre-dispatch and the fresh assembly. Fix: scope pre-dispatch task bodies only to live sources (excluding operator-resolved, non-actionable, settled and unfinished-refuted sources), or move the settled-source computation ahead of the body selection. Then an all-settled lap finalizes, and settled findings that match more than 128 tasks never cause field-overflow. Keep the existing task-3 coverage passing: the 4-of-140 selected-set test, and the settled/suppressed/accepted/advisory no-body test. Add a regression test in which a settled finding matches 129 tasks. It must not field-overflow when the live context is bounded, and an all-settled lap must finalize with zero judge calls.
+**Parent task:** 3
+**Governing clause:** Task 3
+**Done when:**
+- Task 3 is satisfied by this task.
+- The repair for task rem-as-built-3a is committed and its targeted tests pass.
