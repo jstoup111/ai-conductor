@@ -11,10 +11,25 @@ import {
   readBuildReviewBranchArtifact,
   writeBuildReviewBranchArtifact,
   type BuildReviewArtifactFilesystem,
+  type BuildReviewReviewScope,
 } from '../../src/engine/build-review-artifacts.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
+
+const reviewScope: BuildReviewReviewScope = {
+  mode: 'delta' as const,
+  reason: 'delta' as const,
+  sequence: 2,
+  unreadableLapIds: [],
+  mergeBase: 'merge-base',
+  headSha: 'head-sha',
+  policyIdentity: 'sha256:policy',
+  predecessorLapId: parseBuildReviewLapId('lap-prior')!,
+  reviewedHunks: [{ path: 'src/file.ts', contentHash: 'sha256:reviewed' }],
+  deltaHunks: [{ path: 'src/file.ts', contentHash: 'sha256:delta' }],
+  outOfDeltaSourceIds: ['source-settled'],
+};
 
 function filesystem(files: Record<string, string> = {}): BuildReviewArtifactFilesystem & { files: Record<string, string> } {
   return {
@@ -152,6 +167,39 @@ describe('build-review current-lap branch artifacts', () => {
     expect(artifact).toMatchObject({ rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged() });
     expect(Object.keys(fs.files)).toEqual(['/feature/.pipeline/build-review/lap-current/testQuality.json']);
     expect(await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
+  });
+
+  it('round-trips the durable review scope record field-for-field', async () => {
+    const fs = filesystem();
+    const artifact = await writeBuildReviewBranchArtifact('/feature', {
+      rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' },
+      reviewScope,
+    }, fs);
+
+    expect(artifact.reviewScope).toEqual(reviewScope);
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({ reviewScope });
+  });
+
+  it('contains a malformed persisted review scope without rewriting the artifact', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
+    const raw = JSON.stringify({
+      version: 2, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' },
+      reviewScope: { mode: 'delta', unexpected: true },
+    });
+    const fs = filesystem({ [path]: raw });
+
+    expect(parseBuildReviewBranchArtifact(JSON.parse(raw))).toMatchObject({ reviewScope: { kind: 'unreadable' } });
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({ reviewScope: { kind: 'unreadable' } });
+    expect(fs.files[path]).toBe(raw);
+    expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy branch artifacts without a review scope readable', () => {
+    const artifact = parseBuildReviewBranchArtifact({
+      version: 2, rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' },
+    });
+    expect(artifact).toBeDefined();
+    expect('reviewScope' in artifact!).toBe(false);
   });
 
   // Covers: task:1

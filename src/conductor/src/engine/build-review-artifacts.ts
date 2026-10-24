@@ -20,6 +20,38 @@ export const BUILD_REVIEW_POLICY_MATERIAL_DIRECTORY = `${ARTIFACT_DIRECTORY}/pol
 type BuildReviewArtifactVersion = 1 | typeof ARTIFACT_VERSION;
 export type BuildReviewArtifactRubric = BuildReviewRubricId | string;
 
+export interface ReviewedHunk {
+  readonly path: string;
+  readonly contentHash: string;
+}
+
+export type BuildReviewReviewScopeReason =
+  | 'first-lap'
+  | 'merge-base-changed'
+  | 'version-changed'
+  | 'record-unreadable'
+  | 'open-source-unmapped'
+  | 'delta';
+
+/** Durable branch-local authority for deciding a rubric's next review scope. */
+export interface BuildReviewReviewScope {
+  readonly mode: 'full' | 'delta';
+  readonly reason: BuildReviewReviewScopeReason;
+  readonly sequence: number;
+  readonly unreadableLapIds: readonly BuildReviewLapId[];
+  readonly mergeBase: string;
+  readonly headSha: string;
+  readonly policyIdentity: string;
+  readonly predecessorLapId?: BuildReviewLapId;
+  readonly reviewedHunks: readonly ReviewedHunk[];
+  readonly deltaHunks: readonly ReviewedHunk[];
+  readonly outOfDeltaSourceIds: readonly string[];
+}
+
+export type BuildReviewArtifactReviewScope =
+  | BuildReviewReviewScope
+  | { readonly kind: 'unreadable' };
+
 /**
  * Durable, self-describing provenance for a custom policy judgement.  It is
  * intentionally separate from the current catalog: historical evidence must
@@ -105,6 +137,8 @@ export interface BuildReviewBranchArtifact {
   readonly descriptor?: BuildReviewCustomEvidenceDescriptor;
   /** Validated declared obligation for a custom failure with unavailable content. */
   readonly declaration?: BuildReviewCustomDeclaration;
+  /** Absent on legacy or infrastructure-failure artifacts. */
+  readonly reviewScope?: BuildReviewArtifactReviewScope;
 }
 
 /** Injected so branch-artifact tests never write to the host filesystem. */
@@ -146,6 +180,55 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
 
 function stringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isNonEmptyString) && new Set(value).size === value.length;
+}
+
+function parseReviewedHunks(value: unknown): readonly ReviewedHunk[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hunks = value.map((hunk) => {
+    if (typeof hunk !== 'object' || hunk === null || Array.isArray(hunk)) return undefined;
+    const candidate = hunk as Record<string, unknown>;
+    return exactKeys(candidate, ['path', 'contentHash']) && isNonEmptyString(candidate.path) && isNonEmptyString(candidate.contentHash)
+      ? { path: candidate.path, contentHash: candidate.contentHash }
+      : undefined;
+  });
+  if (hunks.some((hunk) => hunk === undefined)) return undefined;
+  const reviewedHunks = hunks as ReviewedHunk[];
+  return new Set(reviewedHunks.map((hunk) => `${hunk.path}\u0000${hunk.contentHash}`)).size === reviewedHunks.length
+    ? reviewedHunks
+    : undefined;
+}
+
+function parseBuildReviewReviewScope(value: unknown): BuildReviewReviewScope | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const keys = candidate.predecessorLapId === undefined
+    ? ['mode', 'reason', 'sequence', 'unreadableLapIds', 'mergeBase', 'headSha', 'policyIdentity', 'reviewedHunks', 'deltaHunks', 'outOfDeltaSourceIds']
+    : ['mode', 'reason', 'sequence', 'unreadableLapIds', 'mergeBase', 'headSha', 'policyIdentity', 'predecessorLapId', 'reviewedHunks', 'deltaHunks', 'outOfDeltaSourceIds'];
+  if (!exactKeys(candidate, keys) || (candidate.mode !== 'full' && candidate.mode !== 'delta') ||
+    !['first-lap', 'merge-base-changed', 'version-changed', 'record-unreadable', 'open-source-unmapped', 'delta'].includes(candidate.reason as string) ||
+    !Number.isInteger(candidate.sequence) || (candidate.sequence as number) < 1 ||
+    !isNonEmptyString(candidate.mergeBase) || !isNonEmptyString(candidate.headSha) || !isNonEmptyString(candidate.policyIdentity) ||
+    (candidate.predecessorLapId !== undefined && !parseBuildReviewLapId(candidate.predecessorLapId))) return undefined;
+  const unreadableLapIds = Array.isArray(candidate.unreadableLapIds)
+    ? candidate.unreadableLapIds.map(parseBuildReviewLapId)
+    : undefined;
+  const reviewedHunks = parseReviewedHunks(candidate.reviewedHunks);
+  const deltaHunks = parseReviewedHunks(candidate.deltaHunks);
+  if (!unreadableLapIds || unreadableLapIds.some((lapId) => lapId === undefined) ||
+    new Set(unreadableLapIds).size !== unreadableLapIds.length || !reviewedHunks || !deltaHunks || !stringArray(candidate.outOfDeltaSourceIds)) return undefined;
+  return {
+    mode: candidate.mode,
+    reason: candidate.reason as BuildReviewReviewScopeReason,
+    sequence: candidate.sequence as number,
+    unreadableLapIds: unreadableLapIds as BuildReviewLapId[],
+    mergeBase: candidate.mergeBase,
+    headSha: candidate.headSha,
+    policyIdentity: candidate.policyIdentity,
+    ...(candidate.predecessorLapId === undefined ? {} : { predecessorLapId: candidate.predecessorLapId as BuildReviewLapId }),
+    reviewedHunks,
+    deltaHunks,
+    outOfDeltaSourceIds: candidate.outOfDeltaSourceIds,
+  };
 }
 
 export function parseBuildReviewCustomDeclaration(value: unknown): BuildReviewCustomDeclaration | undefined {
@@ -259,7 +342,7 @@ export function parseBuildReviewBranchArtifact(value: unknown): BuildReviewBranc
   const isV2 = candidate.version === ARTIFACT_VERSION;
   const expected = isV1
     ? ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance']
-    : ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance', ...(candidate.descriptor === undefined ? [] : ['descriptor']), ...(candidate.declaration === undefined ? [] : ['declaration']), ...(candidate.reuse === undefined ? [] : ['reuse'])];
+    : ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance', ...(candidate.descriptor === undefined ? [] : ['descriptor']), ...(candidate.declaration === undefined ? [] : ['declaration']), ...(candidate.reuse === undefined ? [] : ['reuse']), ...(candidate.reviewScope === undefined ? [] : ['reviewScope'])];
   if (!exactKeys(candidate, expected) || (!isV1 && !isV2) || !isNonEmptyString(candidate.snapshotDigest)) return undefined;
   const lapId = parseBuildReviewLapId(candidate.lapId);
   const provenance = parseProvenance(candidate.provenance);
@@ -276,12 +359,14 @@ export function parseBuildReviewBranchArtifact(value: unknown): BuildReviewBranc
   if (custom && custom.result.kind === 'judged' && custom.result.lapId !== lapId) return undefined;
   const reuse = candidate.reuse as Record<string, unknown> | undefined;
   if (reuse !== undefined && (!custom || custom.result.kind !== 'judged' || !exactKeys(reuse, ['sourceLapId', 'sourceSnapshotDigest']) || !parseBuildReviewLapId(reuse.sourceLapId) || !isNonEmptyString(reuse.sourceSnapshotDigest))) return undefined;
+  const reviewScope = candidate.reviewScope === undefined ? undefined : parseBuildReviewReviewScope(candidate.reviewScope) ?? { kind: 'unreadable' as const };
   return {
     version: candidate.version as BuildReviewArtifactVersion, rubric: candidate.rubric as BuildReviewArtifactRubric, lapId, snapshotDigest: candidate.snapshotDigest,
     result, provenance,
     ...(custom?.descriptor === undefined ? {} : { descriptor: custom.descriptor }),
     ...(custom?.declaration === undefined ? {} : { declaration: custom.declaration }),
     ...(reuse === undefined ? {} : { reuse: { sourceLapId: reuse.sourceLapId as BuildReviewLapId, sourceSnapshotDigest: reuse.sourceSnapshotDigest as string } }),
+    ...(reviewScope === undefined ? {} : { reviewScope }),
   };
 }
 
@@ -291,6 +376,9 @@ export async function writeBuildReviewBranchArtifact(
   artifact: Omit<BuildReviewBranchArtifact, 'version'>,
   fs: BuildReviewArtifactFilesystem,
 ): Promise<BuildReviewBranchArtifact> {
+  if (artifact.reviewScope && 'kind' in artifact.reviewScope) {
+    throw new Error('build-review branch artifact cannot write an unreadable review scope');
+  }
   const validated = parseBuildReviewBranchArtifact({ version: ARTIFACT_VERSION, ...artifact });
   if (!validated) throw new Error('build-review branch artifact must carry matching engine identity');
   const path = buildReviewBranchArtifactPath(projectRoot, validated.lapId, validated.rubric);
