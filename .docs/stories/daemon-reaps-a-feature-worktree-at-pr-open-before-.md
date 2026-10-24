@@ -184,8 +184,9 @@ abandoned after its PR was closed does not hold a worktree forever with no way t
 ### Acceptance Criteria
 
 #### Happy Path
-- Given one or more retained worktrees, when the operator runs the daemon status/dashboard, then each
-  is listed under a retained-worktree category with its slug and the reason it is retained.
+- Given one or more retained worktrees, when the operator runs the daemon status or reads the full
+  dashboard render (`daemon.log`, or the console with `--all`), then each is listed under a
+  retained-worktree category with its slug and the reason it is retained.
 - Given the retained-worktree category is rendered, when it is built, then it is enumerated from the
   `.worktrees/` directory on disk — never from `.daemon/mergeable-watch.jsonl` — so registry
   membership never determines visibility. (Conflict report, Conflict 2.)
