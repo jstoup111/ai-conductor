@@ -77,12 +77,12 @@ function stepsWithPostRegionCustomStep() {
 }
 
 describe('engine/selector — selectNextGate', () => {
-  it('parks a child host on only its region steps while leaf gates and post-region work are pending', () => {
+  it('parks a child host on only its region steps while the baseline selects pending post-region work', () => {
     const state: ConductState = {
       ...frontDone(),
       build: 'done',
-      test_suite: 'pending',
-      build_review: 'pending',
+      test_suite: 'done',
+      build_review: 'done',
       manual_test: 'pending',
       prd_audit: 'pending',
       architecture_review_as_built: 'pending',
@@ -90,13 +90,21 @@ describe('engine/selector — selectNextGate', () => {
       finish: 'pending',
       post_region_custom: 'pending',
     };
-
-    const decision = selectNextGate(withParking({
-      ...input(state, { build: VSAT }),
+    const fixture: SelectorInput = {
+      ...input(state, { build: VSAT, test_suite: VSAT, build_review: VSAT }),
       steps: stepsWithPostRegionCustomStep(),
-    }, { kind: 'child', child: 1 }));
+    };
 
-    expect(decision).toEqual({ kind: 'run', step: 'test_suite', reason: expect.any(String) });
+    expect(selectNextGate(fixture)).toEqual({
+      kind: 'run',
+      step: 'post_region_custom',
+      reason: expect.any(String),
+    });
+
+    expect(selectNextGate(withParking(fixture, { kind: 'child', child: 1 }))).toEqual({
+      kind: 'done',
+      reason: expect.any(String),
+    });
   });
 
   it('does not advance a child host to leaf gates or post-region work after its region settles', () => {
