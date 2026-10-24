@@ -307,8 +307,16 @@ export async function changedRoutedAppliedRef(
   return undefined;
 }
 
+/** A route CAS lost before its applied plan could be made durable. */
+export class RoutedApplyPlanRefChangedError extends Error {
+  constructor(readonly ref: string) {
+    super(`routed applied ref changed: ${ref}`);
+    this.name = 'RoutedApplyPlanRefChangedError';
+  }
+}
+
 /** Persist a routed route-record replacement before the applied transaction can use it. */
-async function journalRoutedApplyPlan(
+export async function journalRoutedApplyPlan(
   worktree: string,
   journal: StoredRestackJournal,
   transition: Awaited<ReturnType<typeof applyRestackTransition>>,
@@ -317,7 +325,10 @@ async function journalRoutedApplyPlan(
   const routed = journal.journal.routed;
   if (routed === undefined || routed.routeNew !== undefined) return journal;
   const stored = await readRouteRecord(worktree, journal.slug, routed.roundId, { git });
-  if (stored.kind !== 'record' || stored.blob !== routed.routeOld) throw new Error('cannot read routed record for applied transaction');
+  if (stored.kind !== 'record') throw new Error('cannot read routed record for applied transaction');
+  if (stored.blob !== routed.routeOld) {
+    throw new RoutedApplyPlanRefChangedError(routeRecordRefFor(journal.slug, routed.roundId));
+  }
   const advanced = routedRecordAfterExit(stored, routed.host, 'restacked');
   if (advanced.kind !== 'updated') throw new Error('cannot mark routed host restacked');
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(advanced.record));
@@ -734,7 +745,16 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       rewritesByChild: exactRewrites,
       ...(options.events === undefined ? {} : { events: options.events }),
     });
-    journal = await journalRoutedApplyPlan(options.worktree, journal, transition, git);
+    try {
+      journal = await journalRoutedApplyPlan(options.worktree, journal, transition, git);
+    } catch (error) {
+      if (error instanceof RoutedApplyPlanRefChangedError) {
+        await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: error.ref });
+        terminal = true;
+        return { kind: 'halted' };
+      }
+      throw error;
+    }
     const applied = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
     const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(applied.lines));
     if (appliedWrite.exitCode !== 0) {

@@ -191,6 +191,83 @@ describe('routed restack applied transaction (real local Git)', () => {
     }));
   });
 
+  it('builds the missing routed apply plan when recovery inherits a synced journal', async () => {
+    const subject = await routedRepairStack();
+    const native = makeGitRunner(subject.repo);
+    let interrupted = false;
+    const crashAfterSync: GitRunner = async (args, options) => {
+      const result = await native(args, options);
+      if (!interrupted && args[0] === 'update-ref') {
+        const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
+        if (journal.kind === 'journal' && journal.journal.state === 'synced' && journal.journal.routed?.routeNew === undefined) {
+          interrupted = true;
+          throw new Error('simulated crash after sync before routed apply plan');
+        }
+      }
+      return result;
+    };
+
+    await expect(restackExecutor.runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      routed: { roundId, host, routeOld: subject.routeOld, markerOld: subject.markerOld },
+      git: crashAfterSync,
+    })).resolves.toMatchObject({ kind: 'unavailable' });
+    const synced = await readRestackJournal(subject.repo, 'demo', { git: native });
+    if (synced.kind !== 'journal') throw new Error('expected synced journal');
+    expect(synced.journal.routed?.routeNew).toBeUndefined();
+    const deadBlob = await writeRestackJournalBlob(subject.repo, {
+      ...synced.journal,
+      owner: { host: 'recovery-test', pid: 999999, processStartTime: '0' },
+    }, { git: native });
+    await native(['update-ref', 'refs/conductor/demo/restack/journal', deadBlob, synced.blob]);
+
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: native }))
+      .resolves.toEqual({ kind: 'recovered', fromState: 'synced' });
+    const route = await readRouteRecord(subject.repo, 'demo', roundId, { git: native });
+    expect({
+      host: route.kind === 'record' ? route.record.hosts[host] : undefined,
+      marker: (await native(['rev-parse', '-q', '--verify', repairMarkerRefFor('demo')])).exitCode,
+    }).toEqual({ host: 'restacked', marker: 1 });
+  });
+
+  it('halts before the applied transaction when the route changes before its plan is journalled', async () => {
+    const subject = await routedRepairStack();
+    const native = makeGitRunner(subject.repo);
+    const concurrent = await concurrentRouteBlob(subject.repo, native);
+    const calls: Array<{ readonly args: readonly string[]; readonly input?: string }> = [];
+    let changed = false;
+    const git: GitRunner = async (args, options) => {
+      if (args[0] === 'update-ref') calls.push({ args: [...args], input: options?.input });
+      const result = await native(args, options);
+      if (!changed && args[0] === 'update-ref') {
+        const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
+        if (journal.kind === 'journal' && journal.journal.state === 'synced' && journal.journal.routed?.routeNew === undefined) {
+          await native(['update-ref', routeRecordRefFor('demo', roundId), concurrent, subject.routeOld]);
+          changed = true;
+        }
+      }
+      return result;
+    };
+
+    await expect(restackExecutor.runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'feature-repair',
+      routed: { roundId, host, routeOld: subject.routeOld, markerOld: subject.markerOld },
+      git,
+    })).resolves.toEqual({ kind: 'halted' });
+
+    const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
+    expect({
+      changed,
+      attempts: appliedAttempts(calls),
+      state: journal.kind === 'journal' ? journal.journal.state : journal.kind,
+    }).toEqual({ changed: true, attempts: 0, state: 'synced' });
+    await expectRoutedApplyHalt(subject.repo);
+  });
+
   it('halts at synced without retrying when a concurrent writer changes the routed record on the normal path', async () => {
     const subject = await routedRepairStack();
     const native = makeGitRunner(subject.repo);
