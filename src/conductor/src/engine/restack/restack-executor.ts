@@ -14,7 +14,9 @@ import {
   updateRestackChildStatus,
   writeRestackJournalBlob,
   journalStateUpdateLines,
+  recordRoutedApplyPlan,
   type RestackJournalDraft,
+  type RestackJournalRouted,
   type StoredRestackJournal,
 } from './restack-journal.js';
 import {
@@ -39,6 +41,7 @@ import {
   cascadeUpdateLines,
   checkCascadeCap,
 } from './cascade-cap.js';
+import { readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -68,6 +71,8 @@ export interface RunRestackOptions {
   readonly replacesAppliedJournal?: StoredRestackJournal;
   /** A durable operation which must replace this one after it reaches applied. */
   readonly followOnCause?: RestackCause;
+  /** Durable route and marker CAS values for an exit restack. */
+  readonly routed?: Omit<RestackJournalRouted, 'routeNew' | 'queueNew'>;
 }
 
 export type RunRestackResult =
@@ -240,24 +245,60 @@ async function transitionState(
   return { slug: journal.slug, blob, journal: next };
 }
 
-/** Apply the terminal journal transition and the repair cascade charge atomically. */
-export async function transitionAppliedWithCascade(
+/**
+ * Assemble the sole applied transaction shared by normal execution and
+ * recovery.  Nothing writes these lines except the caller's one update-ref
+ * transaction, so routed state, cascade accounting, and the journal settle
+ * together or not at all.
+ */
+export async function appliedTransactionLines(
   worktree: string,
   journal: StoredRestackJournal,
-  originatingChildren: readonly ChildId[],
   git: GitRunner,
-): Promise<StoredRestackJournal> {
+): Promise<{ readonly journal: StoredRestackJournal; readonly lines: readonly string[] }> {
   if (!isLegalJournalTransition(journal.journal.state, 'applied')) throw new Error('illegal restack state transition to applied');
   const next = { ...journal.journal, state: 'applied' as const };
   const blob = await writeRestackJournalBlob(worktree, next, { git });
-  const updates = await cascadeUpdateLines(worktree, journal.slug, originatingChildren, { git });
-  if (updates.kind !== 'lines') throw new Error(updates.detail);
-  const updated = await runGit(git, ['update-ref', '--stdin'], transaction([
-    ...updates.lines,
-    ...journalStateUpdateLines(journal, blob, 'applied'),
-  ]));
-  if (updated.exitCode !== 0) throw new Error('cannot transition restack journal to applied with cascade counts');
-  return { slug: journal.slug, blob, journal: next };
+  const lines: string[] = [];
+  if ((journal.journal.originatingChildren?.length ?? 0) > 0) {
+    const updates = await cascadeUpdateLines(worktree, journal.slug, journal.journal.originatingChildren!, { git });
+    if (updates.kind !== 'lines') throw new Error(updates.detail);
+    lines.push(...updates.lines);
+  }
+  if (journal.journal.routed !== undefined) {
+    const routed = routedAppliedLines(journal.slug, journal.journal, journal.journal.opId);
+    if (routed === 'refused') throw new Error('cannot build routed applied transaction');
+    lines.push(...routed);
+  }
+  lines.push(...journalStateUpdateLines(journal, blob, 'applied'));
+  return { journal: { slug: journal.slug, blob, journal: next }, lines };
+}
+
+/** Injectable ownership seam: normal execution and recovery share this builder. */
+export const restackTransactionBuilder = { appliedTransactionLines };
+
+/** Persist a routed route-record replacement before the applied transaction can use it. */
+async function journalRoutedApplyPlan(
+  worktree: string,
+  journal: StoredRestackJournal,
+  transition: Awaited<ReturnType<typeof applyRestackTransition>>,
+  git: GitRunner,
+): Promise<StoredRestackJournal> {
+  const routed = journal.journal.routed;
+  if (routed === undefined || routed.routeNew !== undefined) return journal;
+  const stored = await readRouteRecord(worktree, journal.slug, routed.roundId, { git });
+  if (stored.kind !== 'record' || stored.blob !== routed.routeOld) throw new Error('cannot read routed record for applied transaction');
+  const advanced = routedRecordAfterExit(stored, routed.host, 'restacked');
+  if (advanced.kind !== 'updated') throw new Error('cannot mark routed host restacked');
+  const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(advanced.record));
+  const routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+  if (!routeNew) throw new Error('cannot write routed applied record blob');
+  const planned = await recordRoutedApplyPlan(worktree, journal, {
+    routeNew,
+    invalidation: [...transition.wouldInvalidate.entries()].map(([child, gates]) => ({ child, gates: [...gates] })),
+  }, { git });
+  if (planned.kind !== 'updated') throw new Error('cannot record routed apply plan');
+  return planned.journal;
 }
 
 async function cleanAppliedJournal(journal: StoredRestackJournal, git: GitRunner): Promise<void> {
@@ -413,6 +454,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       newDefault: stackDefault,
       comparisonCommits: comparison,
       ...(options.cause === 'feature-repair' ? { originatingChildren: plan.originating } : {}),
+      ...(options.routed === undefined ? {} : { routed: options.routed }),
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
       ranges: plan.ranges,
@@ -648,9 +690,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       rewritesByChild: exactRewrites,
       ...(options.events === undefined ? {} : { events: options.events }),
     });
-    journal = options.cause === 'feature-repair'
-      ? await transitionAppliedWithCascade(options.worktree, journal, plan.originating, git)
-      : await transitionState(options.worktree, journal, 'applied', git);
+    journal = await journalRoutedApplyPlan(options.worktree, journal, transition, git);
+    const applied = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
+    const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(applied.lines));
+    if (appliedWrite.exitCode !== 0) throw new Error('cannot transition restack journal to applied');
+    journal = applied.journal;
     if (journal.journal.followOnCause === undefined) await cleanAppliedJournal(journal, git);
     for (const range of plan.ranges) {
       const move = moves.find((entry) => entry.child === range.child);
