@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { type ChildId } from '../child-context.js';
 import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
+import { loadMergedConfigForRead } from '../config.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import {
@@ -41,8 +42,10 @@ import {
   cascadeUpdateLines,
   checkCascadeCap,
 } from './cascade-cap.js';
-import { readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
+import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
+import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
+import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -100,6 +103,47 @@ async function runGit(git: GitRunner, args: string[], input?: string) {
 
 function transaction(lines: readonly string[]): string {
   return ['start', ...lines, 'prepare', 'commit', ''].join('\n');
+}
+
+const EMPTY_REVALIDATION_QUEUE: RevalidationQueueRecord = { generation: 0, entries: [], outbox: [] };
+
+async function queueTrackingAtCreation(
+  worktree: string,
+  slug: string,
+  git: GitRunner,
+): Promise<{ readonly queueTracked: true; readonly queueOld?: CommitSha } | undefined> {
+  const config = await loadMergedConfigForRead(worktree);
+  if (!config.ok || !routingEligible({ kind: 'active' }, config.config as Parameters<typeof routingEligible>[1])) return undefined;
+  const queue = await readRevalidationQueue(worktree, slug, { git });
+  if (queue.kind === 'unreadable') throw new Error('cannot read revalidation queue before restack');
+  return queue.kind === 'queue'
+    ? { queueTracked: true, queueOld: queue.blob }
+    : { queueTracked: true };
+}
+
+async function queueRecordAtJournalStart(
+  journal: StoredRestackJournal,
+  git: GitRunner,
+): Promise<RevalidationQueueRecord> {
+  const old = journal.journal.queueOld;
+  if (old === undefined) return EMPTY_REVALIDATION_QUEUE;
+  const result = await runGit(git, ['cat-file', '-p', old]);
+  const parsed = result.exitCode === 0 ? parseRevalidationQueueRecord(result.stdout) : undefined;
+  if (!parsed) throw new Error('cannot read journaled revalidation queue');
+  return parsed;
+}
+
+async function writeQueuePlan(
+  journal: StoredRestackJournal,
+  entries: Awaited<ReturnType<typeof applyRestackTransition>>['queueInvalidation'],
+  git: GitRunner,
+): Promise<CommitSha | undefined> {
+  if (journal.journal.queueTracked !== true || entries.length === 0) return undefined;
+  const next = mergeQueueGeneration(await queueRecordAtJournalStart(journal, git), entries);
+  const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(next));
+  const queueNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+  if (!queueNew) throw new Error('cannot write revalidation queue blob');
+  return queueNew;
 }
 
 async function requiredSha(git: GitRunner, revision: string, context: string): Promise<CommitSha> {
@@ -275,6 +319,11 @@ export async function appliedTransactionLines(
     if (routed === 'refused') throw new Error('cannot build routed applied transaction');
     lines.push(...routed);
   }
+  if (journal.journal.queueTracked === true && journal.journal.queueNew !== undefined) {
+    const queueRef = revalidationQueueRefFor(journal.slug);
+    if (journal.journal.queueOld === undefined) lines.push(`create ${queueRef} ${journal.journal.queueNew}`);
+    else lines.push(`update ${queueRef} ${journal.journal.queueNew} ${journal.journal.queueOld}`);
+  }
   lines.push(...journalStateUpdateLines(journal, blob, 'applied'));
   return { journal: { slug: journal.slug, blob, journal: next }, lines };
 }
@@ -291,11 +340,12 @@ export async function changedRoutedAppliedRef(
   git: GitRunner,
 ): Promise<string | undefined> {
   const routed = journal.journal.routed;
-  if (routed === undefined) return undefined;
   const expected = [
-    { ref: routeRecordRefFor(journal.slug, routed.roundId), old: routed.routeOld },
-    { ref: repairMarkerRefFor(journal.slug), old: routed.markerOld },
-    ...(routed.queueOld === undefined ? [] : [{ ref: revalidationQueueRefFor(journal.slug), old: routed.queueOld }]),
+    ...(routed === undefined ? [] : [
+      { ref: routeRecordRefFor(journal.slug, routed.roundId), old: routed.routeOld },
+      { ref: repairMarkerRefFor(journal.slug), old: routed.markerOld },
+    ]),
+    ...(journal.journal.queueTracked === true ? [{ ref: revalidationQueueRefFor(journal.slug), old: journal.journal.queueOld }] : []),
   ];
   for (const entry of expected) {
     const result = await runGit(git, ['rev-parse', '-q', '--verify', entry.ref]);
@@ -323,20 +373,27 @@ export async function journalRoutedApplyPlan(
   git: GitRunner,
 ): Promise<StoredRestackJournal> {
   const routed = journal.journal.routed;
-  if (routed === undefined || routed.routeNew !== undefined) return journal;
-  const stored = await readRouteRecord(worktree, journal.slug, routed.roundId, { git });
-  if (stored.kind !== 'record') throw new Error('cannot read routed record for applied transaction');
-  if (stored.blob !== routed.routeOld) {
-    throw new RoutedApplyPlanRefChangedError(routeRecordRefFor(journal.slug, routed.roundId));
+  if (journal.journal.state !== 'synced' || routed?.routeNew !== undefined || journal.journal.queueNew !== undefined) return journal;
+  let routeNew: CommitSha | undefined;
+  if (routed !== undefined) {
+    const stored = await readRouteRecord(worktree, journal.slug, routed.roundId, { git });
+    if (stored.kind !== 'record') throw new Error('cannot read routed record for applied transaction');
+    if (stored.blob !== routed.routeOld) {
+      throw new RoutedApplyPlanRefChangedError(routeRecordRefFor(journal.slug, routed.roundId));
+    }
+    const advanced = routedRecordAfterExit(stored, routed.host, 'restacked');
+    if (advanced.kind !== 'updated') throw new Error('cannot mark routed host restacked');
+    const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(advanced.record));
+    routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
+    if (!routeNew) throw new Error('cannot write routed applied record blob');
   }
-  const advanced = routedRecordAfterExit(stored, routed.host, 'restacked');
-  if (advanced.kind !== 'updated') throw new Error('cannot mark routed host restacked');
-  const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(advanced.record));
-  const routeNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
-  if (!routeNew) throw new Error('cannot write routed applied record blob');
+  const queueNew = await writeQueuePlan(journal, transition.queueInvalidation, git);
+  if (routeNew === undefined && queueNew === undefined) return journal;
   const planned = await recordRoutedApplyPlan(worktree, journal, {
     routeNew,
+    queueNew,
     invalidation: transition.queueInvalidation.map(({ child, gates }) => ({ child, gates: [...gates] })),
+    queueInvalidation: transition.queueInvalidation,
   }, { git });
   if (planned.kind !== 'updated') throw new Error('cannot record routed apply plan');
   return planned.journal;
@@ -501,6 +558,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       ? plan.ranges[0].oldParent
       : planningDefault;
     const comparison = await comparisonCommits(git, options.cause, plan.ranges, planningDefault);
+    const queueTracking = await queueTrackingAtCreation(options.worktree, options.slug, git);
     const draft: RestackJournalDraft = {
       opId: randomUUID() as RestackOpId,
       cause: options.cause,
@@ -510,6 +568,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       comparisonCommits: comparison,
       ...(options.cause === 'feature-repair' ? { originatingChildren: originating } : {}),
       ...(options.routed === undefined ? {} : { routed: options.routed }),
+      ...(queueTracking === undefined ? {} : queueTracking),
       dirtyPaths: [],
       refs: await journalRefs(git, options.slug, plan.ranges),
       ranges: plan.ranges,

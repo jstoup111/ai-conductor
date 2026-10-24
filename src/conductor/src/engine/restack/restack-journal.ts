@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import type { ChildId } from '../child-context.js';
 import { parseChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { parseRoundId, type RoundId } from '../routing/route-types.js';
+import { parseRevalidationQueueRecord, parseRoundId, type RevalidationQueueEntry, type RoundId } from '../routing/route-types.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
@@ -77,6 +77,14 @@ export interface RestackJournalDraft {
   readonly routed?: RestackJournalRouted;
   /** Closed-child gates invalidated by the restack. */
   readonly invalidation?: readonly RestackJournalInvalidation[];
+  /** Whether this operation owns a revalidation queue compare-and-swap. */
+  readonly queueTracked?: true;
+  /** Queue ref value captured before this operation starts; omitted for an absent ref. */
+  readonly queueOld?: CommitSha;
+  /** Precomputed replacement queue blob, written only by the applied transaction. */
+  readonly queueNew?: CommitSha;
+  /** Complete queue entries produced by the transition. */
+  readonly queueInvalidation?: readonly RevalidationQueueEntry[];
   readonly dirtyPaths: readonly string[];
   readonly refs: readonly RestackJournalRef[];
   readonly ranges: readonly ChildRange[];
@@ -111,9 +119,10 @@ export type UpdateRestackChildStatusResult =
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 export interface RoutedApplyPlan {
-  readonly routeNew: CommitSha;
+  readonly routeNew?: CommitSha;
   readonly queueNew?: CommitSha;
   readonly invalidation: readonly RestackJournalInvalidation[];
+  readonly queueInvalidation?: readonly RevalidationQueueEntry[];
 }
 
 export type RecordRoutedApplyPlanResult =
@@ -267,6 +276,11 @@ function parseInvalidation(value: unknown): readonly RestackJournalInvalidation[
   return invalidation;
 }
 
+function parseQueueInvalidation(value: unknown): readonly RevalidationQueueEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return parseRevalidationQueueRecord(JSON.stringify({ generation: 0, entries: value, outbox: [] }))?.entries;
+}
+
 function parseJournal(value: unknown): RestackJournal | undefined {
   if (!isRecord(value) || typeof value.opId !== 'string' || value.opId === '' || typeof value.state !== 'string') return undefined;
   const cause = parseCause(value.cause);
@@ -287,13 +301,20 @@ function parseJournal(value: unknown): RestackJournal | undefined {
       : undefined;
   const routed = value.routed === undefined ? undefined : parseRouted(value.routed);
   const invalidation = value.invalidation === undefined ? undefined : parseInvalidation(value.invalidation);
+  const queueOld = value.queueOld === undefined ? undefined : typeof value.queueOld === 'string' ? parseCommitSha(value.queueOld) : undefined;
+  const queueNew = value.queueNew === undefined ? undefined : typeof value.queueNew === 'string' ? parseCommitSha(value.queueNew) : undefined;
+  const queueInvalidation = value.queueInvalidation === undefined ? undefined : parseQueueInvalidation(value.queueInvalidation);
   if (!cause || (value.followOnCause !== undefined && !followOnCause) || !journalStates.has(value.state as JournalState) || !owner || !committer
     || !isStringArray(value.dirtyPaths) || !refs || !ranges || !children
     || (value.newDefault !== undefined && !newDefault)
     || (value.comparisonCommits !== undefined && (!comparisonCommits || comparisonCommits.some((commit) => !commit)))
     || (value.originatingChildren !== undefined && (!originatingChildren || originatingChildren.some((child) => !child)))
     || (value.routed !== undefined && !routed)
-    || (value.invalidation !== undefined && !invalidation)) return undefined;
+    || (value.invalidation !== undefined && !invalidation)
+    || (value.queueTracked !== undefined && value.queueTracked !== true)
+    || (value.queueOld !== undefined && !queueOld)
+    || (value.queueNew !== undefined && !queueNew)
+    || (value.queueInvalidation !== undefined && !queueInvalidation)) return undefined;
   return {
     opId: value.opId as RestackOpId,
     cause,
@@ -304,6 +325,10 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     ...(originatingChildren === undefined ? {} : { originatingChildren: originatingChildren as ChildId[] }),
     ...(routed === undefined ? {} : { routed }),
     ...(invalidation === undefined ? {} : { invalidation }),
+    ...(value.queueTracked === true ? { queueTracked: true as const } : {}),
+    ...(queueOld === undefined ? {} : { queueOld }),
+    ...(queueNew === undefined ? {} : { queueNew }),
+    ...(queueInvalidation === undefined ? {} : { queueInvalidation }),
     dirtyPaths: [...value.dirtyPaths],
     refs,
     ranges,
@@ -403,15 +428,25 @@ export async function recordRoutedApplyPlan(
   plan: RoutedApplyPlan,
   dependencies: RestackJournalDependencies = {},
 ): Promise<RecordRoutedApplyPlanResult> {
-  if (previous.journal.state !== 'synced' || !previous.journal.routed) return { kind: 'stale' };
+  if (previous.journal.state !== 'synced' || (plan.routeNew !== undefined && !previous.journal.routed)) return { kind: 'stale' };
   const journal: RestackJournal = {
     ...previous.journal,
-    routed: {
-      ...previous.journal.routed,
-      routeNew: plan.routeNew,
-      ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
-    },
+    ...(previous.journal.routed === undefined ? {} : {
+      routed: {
+        ...previous.journal.routed,
+        ...(plan.routeNew === undefined ? {} : { routeNew: plan.routeNew }),
+        ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
+      },
+    }),
+    ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
     invalidation: plan.invalidation.map((entry) => ({ ...entry, gates: [...entry.gates] })),
+    ...(plan.queueInvalidation === undefined ? {} : {
+      queueInvalidation: plan.queueInvalidation.map((entry) => ({
+        ...entry,
+        gates: [...entry.gates],
+        replay: { ...entry.replay },
+      })),
+    }),
   };
   const git = dependencies.git ?? makeGitRunner(worktree);
   const blob = await writeRestackJournalBlob(worktree, journal, { git });
