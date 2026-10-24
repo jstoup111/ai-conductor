@@ -1,7 +1,7 @@
 # ADR: Coverage claims bind to `Done when`; a default-off pre-BUILD judge confirms the binding
 
 **Date:** 2026-08-31
-**Status:** APPROVED (operator-approved 2026-08-31, composer session for #2088)
+**Status:** SUPERSEDED by adr-2026-10-23-slice-topology-from-sealed-plan
 **Deciders:** operator (jstoup111), DECIDE architecture review for #2088
 
 <!-- Filename convention: adr-{{DATE}}-<kebab-slug>.md (no sequential numbers).

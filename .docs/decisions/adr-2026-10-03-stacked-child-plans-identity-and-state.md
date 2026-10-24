@@ -187,6 +187,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > flag-on stack-eligibility verdict at land and `coverage_binding`, and `MAX_PLAN_SLICES` is replaced
 > by the `MAX_CHILD_ID` ceiling in the flag-independent grammar rung.
 
+> **Amended 2026-10-23 by #3365:** The source of a feature's children is the sealed plan's slice manifest, read through the slice-topology loader (adr-2026-10-23-slice-topology-from-sealed-plan decision 2). The `coverage_binding` envelope is removed.
+
 6. **The leaf is a branch kind, not the absence of a child.**
    - When a feature has children, the leaf is the child with the highest declared position. Its
      region state lives under that child's directory, and its branch stays `feat/daemon-<slug>`.
@@ -199,6 +201,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
    - A reseal that would move, add or remove a position halts needs-human instead of silently
      re-attributing state. The guard belongs in `coverage_binding` and is implemented by the ticket
      that first creates children (#2942).
+
+> **Amended 2026-10-23 by #3365:** The position guard belongs to `reseal` and the slice-topology loader, not `coverage_binding`, which is removed (adr-2026-10-23-slice-topology-from-sealed-plan decision 3).
 
 8. **Per-child state lives under `.pipeline/children/<k>/`, mirroring the flat layout.**
    - One seam, `pipelinePathFor(root, relative, child?)`, forms every per-child path.
@@ -226,6 +230,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > their round receipts, the repairing marker, the re-validation queue and `red/c<k>`. The flat
 > ledger becomes a reconciled cache of the receipts (`adr-2026-10-12-routed-whole-feature-repair`
 > decisions 6, 9 and 10).
+
+> **Amended 2026-10-23 by #3365:** `coverage_binding` is removed from the whole-feature state set (adr-2026-10-23-slice-topology-from-sealed-plan decision 1).
 
 9. **Region caps apply per child.**
    - Because region gate entries, including `build_review`'s cumulative count, live in the child's

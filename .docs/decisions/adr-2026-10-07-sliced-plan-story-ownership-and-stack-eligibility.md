@@ -164,6 +164,8 @@ into one stack-eligibility verdict. Land and `coverage_binding` both evaluate it
      > feature builds flat. The land `stacked-delivery` rung is the only refusing point. Decision 6's
      > ownership recording on an eligible run is unchanged.
 
+> **Amended 2026-10-23 by #3365:** The predicates run at land and in the slice-topology loader, which replaces the `coverage_binding` run (adr-2026-10-23-slice-topology-from-sealed-plan decision 2). The loader's eligibility verdict is consulted only where children are created.
+
 6. **Ownership is recorded, feature-scoped.** On a valid sliced, flag-on run, `coverage_binding`
    records `story id → child position` in its envelope beside the slice membership
    (`adr-2026-09-29-plan-slice-manifest` D6). It follows the same rules as that membership:
@@ -184,6 +186,8 @@ into one stack-eligibility verdict. Land and `coverage_binding` both evaluate it
 
 > **Amended 2026-10-07 by #2942:** A missing envelope (for example after worktree recreation loses the gitignored `.pipeline/`) is a re-run condition. The re-run must reproduce the same positions, enforced by the position-immutability guard (`adr-2026-10-07-per-child-build-region` decisions 2 and 13).
 
+> **Amended 2026-10-23 by #3365:** Ownership is not recorded in an envelope. The slice-topology loader derives `story id → child position` from the sealed plan and stories whenever the plan is sliced, independent of the flag (adr-2026-10-23-slice-topology-from-sealed-plan decision 2).
+
 7. **The slice bound splits in two.**
    - **Grammar ceiling:** the flag-independent `plan-slices` rung bound becomes `MAX_CHILD_ID` (9).
      It replaces `MAX_PLAN_SLICES` = 5. It is only looser, so no plan that lands today is refused.
@@ -194,6 +198,8 @@ into one stack-eligibility verdict. Land and `coverage_binding` both evaluate it
    - A drift test keeps the stacking bound no greater than `MAX_CHILD_ID`.
    - The consumer registry records `stacked_prs.max_slices` as consumed by land and
      `coverage_binding`.
+
+> **Amended 2026-10-23 by #3365:** References to the `coverage_binding` step here read as the slice-topology loader; the step is removed (adr-2026-10-23-slice-topology-from-sealed-plan decision 1).
 
 ## Consequences
 
