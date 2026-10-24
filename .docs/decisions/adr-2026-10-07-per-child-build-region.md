@@ -351,6 +351,8 @@ The decisions below incorporate the fixes.
 
 > **Amended 2026-10-10 by #2943:** With no child, every successful feature-branch push records its tip under `refs/conductor/<slug>/pushed/<branch>` (decision 11); no other ref is written for N=1 (`adr-2026-10-10-stacked-restack-journaled-replay`).
 
+> **Amended 2026-10-23 by #3365:** The N=1 golden suite changes only by the removed `coverage_binding` step: every retained golden loses only that step's lines, and the two `coverage_binding` cells `flag-on-ineligible-coverage-binding.golden` and `flag-on-single-slice-coverage-binding.golden` are deleted (adr-2026-10-23-slice-topology-from-sealed-plan decision 7). It stays byte-identical otherwise.
+
 ## Consequences
 
 ### Positive

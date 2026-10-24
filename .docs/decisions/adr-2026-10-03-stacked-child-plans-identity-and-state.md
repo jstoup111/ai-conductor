@@ -261,6 +261,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > else the cursor child) is what region consumers read (`adr-2026-10-12-routed-whole-feature-repair`
 > decision 8).
 
+> **Amended 2026-10-23 by #3365:** The active child's positions come from the sealed plan through the slice-topology loader, not the sealed envelope (adr-2026-10-23-slice-topology-from-sealed-plan decisions 2 and 4).
+
 11. **The base-override contract is implemented by #2942.**
     - One producer, `resolveChildBase(worktree, child)`, returns one of three results:
       - nothing, for no child or the first declared position, so today's per-site ladder runs;
@@ -283,6 +285,8 @@ verdict paths, events, daemon status and the dashboard, PR bodies, and shipped-r
 > **Amended 2026-10-12 by #2944:** Two bases are added. `routed-repair` is the host's closure at
 > region entry, pinned in the route record. A re-validation pass grades the replayed contribution
 > against its new parent (`adr-2026-10-12-routed-whole-feature-repair` decision 12).
+
+> **Amended 2026-10-23 by #3365:** `resolveChildBase` takes its positions from the slice-topology loader; the base-override contract is otherwise unchanged (adr-2026-10-23-slice-topology-from-sealed-plan decision 4).
 
 12. **Events carry an optional `child`.**
     - `ConductorEvent` becomes `(existing union) & { child?: ChildId }`.
