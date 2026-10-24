@@ -4049,6 +4049,38 @@ describe('coordinateBuildReviewAdjudication', () => {
     }
   });
 
+  it('finalizes an all-settled 129-task path match without admitting overflowing task bodies', async () => {
+    const root = await projectRoot();
+    const source = projectBuildReviewAggregateSources(customAggregate)!.find((candidate) => candidate.rubric === 'security')!;
+    const settledSourceId = buildReviewAdjudicationSourceId(source);
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
+    await writeFile(join(root, '.docs/plans/example.md'), Array.from({ length: 129 }, (_value, index) => {
+      const id = index + 1;
+      return `### Task ${id}: Matched task ${id}\n**Dependencies:** none\n**Files:** src/handler.ts\n\nTask ${id} contract.`;
+    }).join('\n\n'), 'utf8');
+    await writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({
+      tasks: Array.from({ length: 129 }, (_value, index) => ({ id: String(index + 1), status: 'completed' })),
+    }), 'utf8');
+    await seedCases(new RemediationCaseStore(root, feature), {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-finalized-large-match', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The broad path finding is already finalized.', resolution: 'resolved',
+        sources: [{ sourceId: settledSourceId, outcome: 'rejected', recordedAt: '2026-10-24T00:00:00.000Z' }], effect: { kind: 'none' },
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, judge), aggregate: customAggregate,
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
   it('supplies no task bodies but the full index for unmatched evidence and still judges once', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.docs/plans'), { recursive: true });

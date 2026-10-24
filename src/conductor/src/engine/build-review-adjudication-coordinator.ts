@@ -771,10 +771,30 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     currentLapId: input.aggregate.lapId,
     effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
   };
+  // The initial context is only a pre-dispatch validation projection, but its
+  // admitted task bodies still must be selected from the sources that could
+  // reach the judge. Otherwise a settled source with a broad path match can
+  // overflow the body field before the later all-settled exit gets a chance to
+  // finalize the lap.
+  const decisionStopSourceIdsAtEntry = new Set(prior.state.cases
+    .filter(isBuildReviewDecisionStop)
+    .flatMap((record) => record.sources.map((source) => source.sourceId)));
+  const authoritativeLinksAtEntry = currentBuildReviewSourceLinks(prior.state.cases);
+  const settledSourceIdsAtEntry = new Set([...finalizedSourceIds(prior.state.cases)]
+    .filter((sourceId) => {
+      const current = authoritativeLinksAtEntry.get(sourceId);
+      return !decisionStopSourceIdsAtEntry.has(sourceId) &&
+        (current?.record.operatorResolution === undefined || current.link.outcome === 'carried');
+    }));
+  const preDispatchSources = sources.filter((source) =>
+    !resolved.has(source.findingId) && !nonActionable(source.findingId) &&
+    !settledSourceIdsAtEntry.has(buildReviewAdjudicationSourceId(source)) &&
+    !unfinishedRefutedSourceIds.has(buildReviewAdjudicationSourceId(source)),
+  );
   const context = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions, declaredSeverityThresholds: input.declaredSeverityThresholds, operatorResolvedFindingIds: resolved, carryInput,
-    excludedSourceIds: new Set(sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)),
-    planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, currentSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
+    excludedSourceIds: new Set([...settledSourceIdsAtEntry, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
+    planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, preDispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(context.stop)}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
