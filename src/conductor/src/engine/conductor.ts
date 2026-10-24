@@ -7625,7 +7625,10 @@ export class Conductor {
               }
               await this.activateChildRegionState(state, target.child, target.isLeaf);
               activeChild = target;
-              activeChildRequiresClosure = execution.source === 'cursor';
+              // A routed host already owns its closure, but it still needs its
+              // BUILD-region exit.  Only revalidation has a separate exit
+              // protocol at this point in the lifecycle.
+              activeChildRequiresClosure = execution.source === 'cursor' || execution.source === 'routed-host';
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
@@ -15265,7 +15268,10 @@ export class Conductor {
                 events: this.events,
               });
               if (exited.kind === 'halted') {
-                await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit refused: ${exited.detail}`);
+                // requestRoutedExit supplies the durable diagnostic (including
+                // a restack HALT where appropriate); do not replace it with a
+                // generic conductor refusal.
+                await this.haltChildRegionRefusal(exited.detail);
                 return;
               }
               const drained = await drainRoutingOutboxes(
