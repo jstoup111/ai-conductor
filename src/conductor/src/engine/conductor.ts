@@ -205,19 +205,21 @@ import {
 } from './child-context.js';
 import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
-import { hasDurableChildState, resolveActiveChild, type ActiveChildResolution } from './child-cursor.js';
+import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type ActiveChildResolution } from './child-cursor.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
 import { assertNever, emptyUnsettledReceipt, routingEligible, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { readCoverageBindingEnvelope } from './coverage-binding-envelope.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
-import { createRouteRecord, nextRoundId, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
+import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound } from './routing/round-admission.js';
-import { routedRoundOpen } from './routing/round-admission.js';
+import { reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
+import { requestRoutedExit } from './routing/routed-exit.js';
+import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -714,6 +716,7 @@ export class Conductor {
   private readonly enterChildRegion: typeof enterChildRegion;
   private readonly enterHostRegion: typeof enterHostRegion;
   private readonly advanceChildRegion: typeof advanceChildRegion;
+  private readonly requestRoutedExit: typeof requestRoutedExit;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
@@ -2537,6 +2540,7 @@ export class Conductor {
     this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
     this.enterHostRegion = opts.childRegionLifecycle?.enterHostRegion ?? enterHostRegion;
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
+    this.requestRoutedExit = opts.childRegionLifecycle?.requestRoutedExit ?? requestRoutedExit;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
@@ -6738,7 +6742,7 @@ export class Conductor {
           },
         });
         if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
-        if (preflight.kind === 'navigate-leaf-to-build') {
+        if (preflight.kind === 'navigate-leaf-to-build' || preflight.kind === 'navigate-host') {
           // Admission wrote the route and marker before its normal leaf
           // rewind.  A crash in that gap is recovered by rewinding the leaf's
           // own region state; the next BUILD entry adopts the marker-selected
@@ -7622,7 +7626,10 @@ export class Conductor {
               }
               await this.activateChildRegionState(state, target.child, target.isLeaf);
               activeChild = target;
-              activeChildRequiresClosure = execution.source === 'cursor';
+              // A routed host already owns its closure, but it still needs its
+              // BUILD-region exit.  Only revalidation has a separate exit
+              // protocol at this point in the lifecycle.
+              activeChildRequiresClosure = execution.source === 'cursor' || execution.source === 'routed-host';
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
@@ -15246,7 +15253,6 @@ export class Conductor {
             step.name === 'build_review' &&
             activeChild !== undefined &&
             activeChildRequiresClosure &&
-            !activeChild.isLeaf &&
             CHILD_REGION_STEPS.every((regionStep) => {
               const status = getStepStatus(state, regionStep);
               return status === 'done' || status === 'skipped';
@@ -15254,6 +15260,62 @@ export class Conductor {
           ) {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
+            const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+            if (execution.source === 'routed-host' && execution.roundId !== undefined) {
+              const exited = await this.requestRoutedExit({
+                worktree: this.projectRoot,
+                slug,
+                roundId: execution.roundId,
+                host: execution.target.child,
+                events: this.events,
+              });
+              if (exited.kind === 'halted') {
+                // requestRoutedExit supplies the durable diagnostic (including
+                // a restack HALT where appropriate); do not replace it with a
+                // generic conductor refusal.
+                const existingHalt = await readHaltMarkerContent(this.projectRoot);
+                if (existingHalt?.trim()) {
+                  const body = existingHalt.trim();
+                  const prUrl = await this.surfaceRemediationPr(body);
+                  await this.emitLoopHalt(body, prUrl);
+                } else {
+                  await this.haltChildRegionRefusal(exited.detail);
+                }
+                return;
+              }
+              const drained = await drainRoutingOutboxes(
+                this.projectRoot,
+                slug,
+                (event) => persistOnActiveEventSpine(this.events, event),
+              );
+              if (drained.kind !== 'drained') {
+                await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit outbox refused: ${drained.kind}`);
+                return;
+              }
+              // A routed exit only settles its host. Reconcile immediately so
+              // the same loop iteration admits the next host, closes a round
+              // before queue consumption, or records the final leaf return.
+              const reconciled = await reconcileRounds(this.projectRoot, slug);
+              if (reconciled.kind === 'unavailable') {
+                await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
+                return;
+              }
+              if (reconciled.kind === 'none' || reconciled.kind === 'deferred' || reconciled.kind === 'aborted') {
+                activeChild = undefined;
+                i = indexOf('prd_audit') - 1;
+                continue;
+              }
+              const next = await this.resolveActiveChild(this.projectRoot, slug);
+              const nextExecution = resolveExecutionChild(next, slug);
+              if (nextExecution.source !== 'cursor' && nextExecution.source !== 'routed-host' && nextExecution.source !== 'revalidating') {
+                await this.haltChildRegionRefusal(this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+                return;
+              }
+              activeChild = nextExecution.target;
+              await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
+              i = indexOf('acceptance_specs') - 1;
+              continue;
+            }
             const advanced = await this.advanceChildRegion(
               this.projectRoot,
               slug,
@@ -16168,11 +16230,33 @@ export class Conductor {
           );
     if (kickbackVerdict === 'halt') return 'halt';
 
+    let routedParking: import('./selector.js').RoutedParking | undefined;
+    const parkingSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    // Do not probe routing refs for flat/N=1 features.  The sealed leaf is a
+    // local durable fact and is enough to reject that whole class before any
+    // marker or queue read.
+    if (parkingSlug && this.config.stacked_prs?.route_whole_feature_fixes === true) {
+      const leaf = await resolveSealedLeaf(this.projectRoot);
+      if (leaf !== undefined && leaf > 1) {
+        const marker = await readRepairMarker(this.projectRoot, parkingSlug);
+        if (marker.kind === 'marker') {
+          routedParking = marker.marker.host === leaf
+            ? { kind: 'leaf-host' }
+            : { kind: 'child', child: marker.marker.host };
+        } else {
+          const queue = await readRevalidationQueue(this.projectRoot, parkingSlug);
+          if (queue.kind === 'unreadable' || (queue.kind === 'queue' && queue.queue.entries.length > 0)) {
+            routedParking = { kind: 'queue' };
+          }
+        }
+      }
+    }
     const decision = selectNextGate({
       steps,
       state,
       verdicts,
       regionStart: topo.regionStart,
+      ...(routedParking === undefined ? {} : { routedParking }),
     });
     if (decision.kind === 'done') {
       await writeFile(

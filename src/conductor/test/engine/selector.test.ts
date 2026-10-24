@@ -1,3 +1,4 @@
+// Covers: task:23
 import { describe, it, expect, vi } from 'vitest';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import {
@@ -54,7 +55,167 @@ function input(
 
 const VSAT: GateVerdict = { satisfied: true, checkedAt: 1 };
 
+function withParking(
+  selectorInput: SelectorInput,
+  routedParking?: { kind: 'child'; child: number } | { kind: 'leaf-host' } | { kind: 'queue' },
+): SelectorInput {
+  return { ...selectorInput, routedParking } as SelectorInput;
+}
+
+function stepsWithPostRegionCustomStep() {
+  const buildReviewIndex = ALL_STEPS.findIndex((step) => step.name === 'build_review');
+  const customStep = {
+    ...ALL_STEPS[buildReviewIndex]!,
+    name: 'post_region_custom' as StepName,
+    label: 'Post-region custom step',
+  };
+  return [
+    ...ALL_STEPS.slice(0, buildReviewIndex + 1),
+    customStep,
+    ...ALL_STEPS.slice(buildReviewIndex + 1),
+  ];
+}
+
 describe('engine/selector — selectNextGate', () => {
+  it('parks a child host on only its region steps while the baseline selects pending post-region work', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
+      manual_test: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      rebase: 'pending',
+      finish: 'pending',
+      post_region_custom: 'pending',
+    };
+    const fixture: SelectorInput = {
+      ...input(state, { build: VSAT, test_suite: VSAT, build_review: VSAT }),
+      steps: stepsWithPostRegionCustomStep(),
+    };
+
+    expect(selectNextGate(fixture)).toEqual({
+      kind: 'run',
+      step: 'post_region_custom',
+      reason: expect.any(String),
+    });
+
+    expect(selectNextGate(withParking(fixture, { kind: 'child', child: 1 }))).toEqual({
+      kind: 'done',
+      reason: expect.any(String),
+    });
+  });
+
+  it('does not advance a child host to leaf gates or post-region work after its region settles', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
+      manual_test: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      rebase: 'pending',
+      finish: 'pending',
+      post_region_custom: 'pending',
+    };
+
+    const decision = selectNextGate(withParking({
+      ...input(state, { build: VSAT, test_suite: VSAT, build_review: VSAT }),
+      steps: stepsWithPostRegionCustomStep(),
+    }, { kind: 'child', child: 1 }));
+
+    expect(decision.kind).toBe('done');
+  });
+
+  it('parks the leaf host on only its region steps while leaf gates are pending', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'pending',
+      manual_test: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      rebase: 'pending',
+      finish: 'pending',
+    };
+
+    const decision = selectNextGate(withParking(
+      input(state, { build: VSAT, test_suite: VSAT }),
+      { kind: 'leaf-host' },
+    ));
+
+    expect(decision).toEqual({ kind: 'run', step: 'build_review', reason: expect.any(String) });
+  });
+
+  it('does not advance a leaf host to leaf gates after its region settles', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
+      manual_test: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      rebase: 'pending',
+      finish: 'pending',
+    };
+
+    const decision = selectNextGate(withParking(
+      input(state, { build: VSAT, test_suite: VSAT, build_review: VSAT }),
+      { kind: 'leaf-host' },
+    ));
+
+    expect(decision.kind).toBe('done');
+  });
+
+  it('parks a revalidation queue before leaf gates and post-region work', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
+      manual_test: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      rebase: 'pending',
+      finish: 'pending',
+      post_region_custom: 'pending',
+    };
+    const verdicts = { build: VSAT, test_suite: VSAT, build_review: VSAT };
+
+    const decision = selectNextGate(withParking({
+      ...input(state, verdicts),
+      steps: stepsWithPostRegionCustomStep(),
+    }, { kind: 'queue' }));
+
+    expect(decision.kind).toBe('done');
+  });
+
+  it('keeps existing selector decisions when routed parking is absent', () => {
+    const fixtures: SelectorInput[] = [
+      input(frontDone()),
+      input({ ...frontDone(), plan: 'stale' }, {
+        plan: {
+          satisfied: false,
+          checkedAt: 2,
+          kickback: { from: 'build', evidence: 'AC-7 needs a new table' },
+        },
+      }),
+      input({ ...frontDone(), build: 'done', test_suite: 'done', build_review: 'done' }, {
+        build: VSAT,
+        test_suite: VSAT,
+        build_review: VSAT,
+      }),
+    ];
+
+    for (const fixture of fixtures) {
+      expect(selectNextGate(withParking(fixture))).toEqual(selectNextGate(fixture));
+    }
+  });
+
   it('lands on coverage_binding in normal entry before build', () => {
     const d = selectNextGate(input(frontDone(), {}, 'stories', false));
     expect(d).toEqual({ kind: 'run', step: 'coverage_binding', reason: expect.any(String) });

@@ -4,6 +4,14 @@ import { join } from 'node:path';
 import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
+import { unionRemBlocks } from '../routing/rem-block-merge.js';
+
+/** A deterministic append-only plan conflict that must halt without an LLM resolver. */
+export class RemBlockBodyMismatchError extends Error {
+  constructor(readonly commit: CommitSha, readonly path: string, readonly remId: string) {
+    super(`remediation block body mismatch for ${remId}`);
+  }
+}
 
 /** The operation-wide identity recorded in the durable restack journal. */
 export interface CommitterStamp {
@@ -28,6 +36,8 @@ export interface ChildRangeReplay {
 /** Commits newly introduced by the operation, never commits already in the stack. */
 export interface ReplayChildRangeOptions {
   readonly comparisonCommits?: readonly CommitSha[];
+  /** The append-only plan union is reserved for a journalled routed repair. */
+  readonly appendOnlyRemUnion?: boolean;
 }
 
 interface AuthorIdentity {
@@ -145,6 +155,44 @@ async function upperChildHaltRecordTree(
   }
 }
 
+async function textAt(git: GitRunner, revision: string, path: string): Promise<string | undefined> {
+  const result = await git(['show', `${revision}:${path}`]);
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+/** Builds a conflict-free tree from an append-only plan union without touching the worktree. */
+async function unionPlanConflictTree(
+  git: GitRunner,
+  mergeTreeOutput: string,
+  commit: CommitSha,
+  accumulator: CommitSha,
+  path: string,
+): Promise<CommitSha | undefined> {
+  if (!path.startsWith('.docs/plans/') || !path.endsWith('.md')) return undefined;
+  const [base, ours, theirs] = await Promise.all([
+    textAt(git, `${commit}^`, path), textAt(git, accumulator, path), textAt(git, commit, path),
+  ]);
+  if (base === undefined || ours === undefined || theirs === undefined) return undefined;
+  const union = unionRemBlocks(base, ours, theirs);
+  if (union.kind === 'declined') return undefined;
+  if (union.kind === 'body-mismatch') throw new RemBlockBodyMismatchError(commit, path, union.remId);
+  const mergedTree = requiredSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
+  const directory = await mkdtemp(join(tmpdir(), 'restack-rem-union-index-'));
+  const indexPath = join(directory, 'index');
+  const env = { GIT_INDEX_FILE: indexPath };
+  try {
+    const read = await git(['read-tree', mergedTree], { env });
+    const blob = await git(['hash-object', '-w', '--stdin'], { input: union.text });
+    if (read.exitCode !== 0 || blob.exitCode !== 0) throw new Error(`cannot construct remediation plan union for ${commit}`);
+    const update = await git(['update-index', '--add', '--cacheinfo', `100644,${requiredSha(blob.stdout, 'remediation plan blob')},${path}`], { env });
+    const written = await git(['write-tree'], { env });
+    if (update.exitCode !== 0 || written.exitCode !== 0) throw new Error(`cannot write remediation plan union for ${commit}`);
+    return requiredSha(written.stdout, `remediation plan union tree for ${commit}`);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 /** Construct identity for exactly one replayed commit. */
 function commitEnvironment(
   author: AuthorIdentity,
@@ -210,12 +258,15 @@ export async function replayChildRange(
       messageOf(git, commit),
     ]);
     const paths = merged.exitCode === 1 ? conflictPaths(merged.stdout, merged.stderr) : [];
-    if (merged.exitCode !== 0 && !(merged.exitCode === 1 && paths.length === 1 && isHaltRecordPath(paths[0]!))) {
+    const remUnionTree = options.appendOnlyRemUnion === true && merged.exitCode === 1 && paths.length === 1
+      ? await unionPlanConflictTree(git, merged.stdout, commit, accumulator, paths[0]!)
+      : undefined;
+    if (merged.exitCode !== 0 && !(merged.exitCode === 1 && (remUnionTree !== undefined || (paths.length === 1 && isHaltRecordPath(paths[0]!))))) {
       throw new Error(`merge-tree failed for ${commit}: ${merged.stderr}`);
     }
-    const mergedTree = paths.length === 1 && isHaltRecordPath(paths[0]!)
+    const mergedTree = remUnionTree ?? (paths.length === 1 && isHaltRecordPath(paths[0]!)
       ? await upperChildHaltRecordTree(git, merged.stdout, commit, paths[0]!)
-      : requiredSha(merged.stdout, `merge-tree for ${commit}`);
+      : requiredSha(merged.stdout, `merge-tree for ${commit}`));
 
     // Rebase drops a newly-empty patch, but evidence commits that began empty
     // remain meaningful history and must retain their exact correspondence.

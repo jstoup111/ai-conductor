@@ -8,6 +8,7 @@ import {
   EventPersister,
   EventPersistError,
   isForwardedFromFeature,
+  persistOnActiveEventSpine,
   startFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
@@ -120,6 +121,19 @@ describe('EventPersister', () => {
     persister.stop();
 
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
+  });
+
+  it('acknowledges routing outbox events through the active spine owner', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await expect(persistOnActiveEventSpine(emitter, routingEvent('routed_repair_phase', 'routing-outbox-1')))
+      .resolves.toBe('persisted');
+    persister.stop();
+
+    expect(await readFile(eventsPath, 'utf8')).toContain('"eventId":"routing-outbox-1"');
+    await expect(persistOnActiveEventSpine(emitter, routingEvent('routed_repair_phase', 'routing-outbox-2')))
+      .rejects.toBeInstanceOf(EventPersistError);
   });
 
   it('persists coordinator-derived excluded marker files on a build-review scope summary', async () => {

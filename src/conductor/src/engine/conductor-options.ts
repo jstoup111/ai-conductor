@@ -27,6 +27,7 @@ import type { RemediationProjectionLimits } from './remediation-projection.js';
 import type { resolveActiveChild } from './child-cursor.js';
 import type { advanceChildRegion, enterChildRegion } from './child-lifecycle.js';
 import type { enterHostRegion } from './routing/host-region-entry.js';
+import type { requestRoutedExit } from './routing/routed-exit.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -88,6 +89,7 @@ export interface ConductorOptions {
     enterChildRegion?: typeof enterChildRegion;
     enterHostRegion?: typeof enterHostRegion;
     advanceChildRegion?: typeof advanceChildRegion;
+    requestRoutedExit?: typeof requestRoutedExit;
   };
   operatorParkBoundary?: () => Promise<boolean>;
   resume?: boolean;

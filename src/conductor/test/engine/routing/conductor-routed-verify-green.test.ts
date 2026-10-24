@@ -1,4 +1,4 @@
-// Covers: task:207
+// Covers: task:9, task:207
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   verifyGreenAcceptance: vi.fn(),
   selfHealAcceptanceRed: vi.fn(),
+  drainRoutingOutboxes: vi.fn(async () => ({ kind: 'drained' as const })),
 }));
 
 vi.mock('../../../src/engine/routing/host-region-entry.js', () => ({
@@ -16,6 +17,13 @@ vi.mock('../../../src/engine/routing/host-region-entry.js', () => ({
 vi.mock('../../../src/engine/acceptance-red-runner.js', () => ({
   selfHealAcceptanceRed: (...args: unknown[]) => mocks.selfHealAcceptanceRed(...args),
 }));
+vi.mock('../../../src/engine/routing/route-record-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/routing/route-record-store.js')>();
+  return {
+    ...actual,
+    drainRoutingOutboxes: () => mocks.drainRoutingOutboxes(),
+  };
+});
 
 import { Conductor } from '../../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
@@ -31,6 +39,7 @@ const roots: string[] = [];
 afterEach(async () => {
   mocks.verifyGreenAcceptance.mockReset();
   mocks.selfHealAcceptanceRed.mockReset();
+  mocks.drainRoutingOutboxes.mockClear();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -76,6 +85,57 @@ function routedConductor(root: string, events: ConductorEventEmitter, runner: St
 }
 
 describe('Conductor routed acceptance verify-green path', () => {
+  it('uses the routed exit exactly once instead of advancing or closing the host child region', async () => {
+    const { root } = await routedFixture();
+    await writeFile(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    }));
+    const advanceChildRegion = vi.fn();
+    const requestRoutedExit = vi.fn(async () => ({ kind: 'no-commit-done' as const }));
+    const resolveActiveChild = vi.fn()
+      // The routed receipt ledger probes the cursor before BUILD entry.
+      .mockResolvedValueOnce({
+        kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
+      })
+      .mockResolvedValueOnce({
+        kind: 'active', child, position: child, isLeaf: false, branch: 'feat/c1/demo',
+      })
+      .mockResolvedValueOnce({
+        // A routed leaf still owns a marker and must take the routed exit;
+        // the ordinary non-leaf closure guard must not bypass it.
+        kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/daemon-demo',
+        repairChildren: [child], routedRepair: { child, roundId },
+      })
+      .mockResolvedValueOnce({ kind: 'no-child' });
+    const runner = { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) };
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'build_review',
+      mode: 'auto', daemon: true, verifyArtifacts: false,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      events: new ConductorEventEmitter(),
+      stepRunner: runner,
+      acceptanceRedExec: vi.fn(),
+      childRegionLifecycle: {
+        resolveActiveChild,
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+        advanceChildRegion,
+        requestRoutedExit,
+      },
+    });
+
+    await conductor.run();
+
+    expect(requestRoutedExit).toHaveBeenCalledTimes(1);
+    expect(requestRoutedExit).toHaveBeenCalledWith(expect.objectContaining({ slug: 'demo', roundId, host: child }));
+    // advanceChildRegion is the sole path that calls closeChild, so proving it
+    // is untouched proves the routed exit cannot close this host directly.
+    expect(advanceChildRegion).not.toHaveBeenCalled();
+    expect(mocks.drainRoutingOutboxes).toHaveBeenCalledOnce();
+  });
+
   it('settles a refused verify-green without self-healing RED, dispatching, or reporting success', async () => {
     const { root } = await routedFixture();
     mocks.verifyGreenAcceptance.mockResolvedValue({ kind: 'refused', reason: 'routed acceptance specs are not green' });

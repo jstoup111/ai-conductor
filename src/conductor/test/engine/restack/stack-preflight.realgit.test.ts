@@ -53,7 +53,7 @@ async function fixture() {
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   await commit('leaf', 'leaf.txt', 'leaf\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
   await writeCoverageBindingEnvelope(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },

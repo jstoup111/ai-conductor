@@ -29,6 +29,24 @@ function move(child: ReturnType<typeof parseChildId> & {}) {
   };
 }
 
+async function writePassingRegionVerdicts(root: string, child: ReturnType<typeof parseChildId> & {}) {
+  await Promise.all([
+    writeVerdict(root, 'acceptance_specs', { satisfied: true, checkedAt: 1, reason: 'passed' }, child),
+    writeVerdict(root, 'build', { satisfied: true, checkedAt: 1, reason: 'passed' }, child),
+    writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 1, reason: 'passed' }, child),
+    writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 1, reason: 'passed' }, child),
+  ]);
+}
+
+function closedChildGit(paths: string[]) {
+  return async (args: string[]) => {
+    if (args[0] === 'diff') return { exitCode: 0, stdout: paths.join('\n'), stderr: '' };
+    if (args[0] === 'merge-base') return { exitCode: 0, stdout: `${sha('b')}\n`, stderr: '' };
+    if (args[0] === 'rev-parse' || args[0] === 'merge-tree') return { exitCode: 0, stdout: `${sha('a')}\n`, stderr: '' };
+    return { exitCode: 0, stdout: '', stderr: '' };
+  };
+}
+
 describe('applyRestackTransition', () => {
   it('keeps an unchanged active child region gate in its child store and never writes a flat region verdict', async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
@@ -277,5 +295,107 @@ describe('applyRestackTransition', () => {
 
     expect(calls).toContainEqual(['merge-base', sha('c'), oldDefault]);
     expect(calls.some((args) => args[0] === 'fetch' && args.includes('origin/main'))).toBe(false);
+  });
+
+  // Covers: task:30
+  it('queues a moved closed child when an unowned parseA signature change invalidates test_suite', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
+    directories.push(root);
+    const closed = parseChildId(2)!;
+    await writePassingRegionVerdicts(root, closed);
+
+    const result = await applyRestackTransition({
+      worktree: root,
+      cause: 'base-refresh',
+      oldDefault: sha('b'),
+      newDefault: sha('b'),
+      activeChild: parseChildId(3)!,
+      ranges: [{ child: closed, oldParent: sha('b'), oldTip: sha('c'), kind: 'closed' }],
+      moves: [move(closed)],
+      isRegionGateFresh: async () => true,
+      git: closedChildGit(['src/a.ts']),
+    });
+
+    expect(result.queueInvalidation).toContainEqual(expect.objectContaining({
+      child: closed,
+      position: closed,
+      closureSha: sha('d'),
+      gates: expect.arrayContaining(['test_suite']),
+      replay: { oldParent: sha('b'), newParent: sha('b') },
+    }));
+  });
+
+  // Covers: task:30
+  it('queues a moved closed child when region verdicts are missing or unreadable', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
+    directories.push(root);
+    const missing = parseChildId(2)!;
+    const unreadable = parseChildId(3)!;
+    await mkdir(join(root, '.pipeline', 'children', '3', 'gates'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '3', 'gates', 'build_review.json'), '{not-json');
+
+    const missingResult = await applyRestackTransition({
+      worktree: root,
+      cause: 'base-refresh',
+      oldDefault: sha('b'),
+      newDefault: sha('b'),
+      activeChild: parseChildId(4)!,
+      ranges: [{ child: missing, oldParent: sha('b'), oldTip: sha('c'), kind: 'closed' }],
+      moves: [move(missing)],
+      isRegionGateFresh: async () => true,
+      git: closedChildGit(['src/a.ts']),
+    });
+    const unreadableResult = await applyRestackTransition({
+      worktree: root,
+      cause: 'base-refresh',
+      oldDefault: sha('b'),
+      newDefault: sha('b'),
+      activeChild: parseChildId(4)!,
+      ranges: [{ child: unreadable, oldParent: sha('b'), oldTip: sha('c'), kind: 'closed' }],
+      moves: [move(unreadable)],
+      isRegionGateFresh: async () => true,
+      git: closedChildGit(['src/a.ts']),
+    });
+
+    expect(missingResult.queueInvalidation.map((entry) => entry.child)).toEqual([missing]);
+    expect(unreadableResult.queueInvalidation.map((entry) => entry.child)).toEqual([unreadable]);
+  });
+
+  // Covers: task:30
+  it('skips a proven unchanged replay only while every region verdict remains fresh', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
+    directories.push(root);
+    const closed = parseChildId(2)!;
+    await writePassingRegionVerdicts(root, closed);
+
+    const unchanged = await applyRestackTransition({
+      worktree: root,
+      cause: 'base-refresh',
+      oldDefault: sha('b'),
+      newDefault: sha('b'),
+      activeChild: parseChildId(3)!,
+      ranges: [{ child: closed, oldParent: sha('b'), oldTip: sha('c'), kind: 'closed' }],
+      moves: [move(closed)],
+      isRegionGateFresh: async () => true,
+      git: closedChildGit(['README.md']),
+    });
+    await writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 1, reason: 'passed' }, closed);
+    const stale = await applyRestackTransition({
+      worktree: root,
+      cause: 'base-refresh',
+      oldDefault: sha('b'),
+      newDefault: sha('b'),
+      activeChild: parseChildId(3)!,
+      ranges: [{ child: closed, oldParent: sha('b'), oldTip: sha('c'), kind: 'closed' }],
+      moves: [move(closed)],
+      isRegionGateFresh: async (gate) => gate !== 'build_review',
+      git: closedChildGit(['README.md']),
+    });
+
+    expect(unchanged.queueInvalidation).toEqual([]);
+    expect(stale.queueInvalidation).toEqual([expect.objectContaining({
+      child: closed,
+      gates: ['build_review'],
+    })]);
   });
 });

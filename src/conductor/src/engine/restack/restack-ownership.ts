@@ -1,4 +1,5 @@
 import { classifyReplayMerge, type GitRunner } from '../rebase.js';
+import { stripInheritedRemBlocks } from '../routing/rem-block-merge.js';
 import type { ChildRange, CommitSha } from './restack-types.js';
 
 export type PathOwnershipResult =
@@ -62,13 +63,37 @@ export async function checkPathOwnership(
   newParent: CommitSha,
   newTip: CommitSha,
   git: GitRunner,
+  options: { readonly normaliseInheritedRemBlocks?: boolean } = {},
 ): Promise<PathOwnershipResult> {
   const [owned, replayed] = await Promise.all([
     ownedPaths(range, newParent, git),
     changedPaths(git, newParent, newTip),
   ]);
-  const unowned = sorted([...replayed].filter((path) => !owned.has(path)));
+  const inheritedPlans = options.normaliseInheritedRemBlocks
+    ? await inheritedRemPlan(range, newParent, newTip, git)
+    : new Set<string>();
+  const unowned = sorted([...replayed].filter((path) => !owned.has(path) && !inheritedPlans.has(path)));
   return unowned.length === 0 ? { kind: 'accepted' } : { kind: 'refused', paths: unowned };
+}
+
+async function fileAt(git: GitRunner, revision: CommitSha, path: string): Promise<string | undefined> {
+  const result = await git(['show', `${revision}:${path}`]);
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+/** A plan path is inherited only when removing the new parent's rem blocks restores the old child text. */
+async function inheritedRemPlan(range: ChildRange, newParent: CommitSha, newTip: CommitSha, git: GitRunner): Promise<Set<string>> {
+  const inherited = new Set<string>();
+  const paths = await changedPaths(git, newParent, newTip);
+  for (const path of paths) {
+    if (!path.startsWith('.docs/plans/') || !path.endsWith('.md')) continue;
+    const [oldPlan, replayedPlan, parentPlan] = await Promise.all([
+      fileAt(git, range.oldTip, path), fileAt(git, newTip, path), fileAt(git, newParent, path),
+    ]);
+    if (oldPlan !== undefined && replayedPlan !== undefined && parentPlan !== undefined
+      && stripInheritedRemBlocks(replayedPlan, parentPlan) === oldPlan) inherited.add(path);
+  }
+  return inherited;
 }
 
 /** Paths jointly changed by a child's old-to-new parent delta and its owned range. */

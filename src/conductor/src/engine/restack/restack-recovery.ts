@@ -29,10 +29,19 @@ import { replayChildRange } from './restack-replay.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
-import { mergeInRange, runRestack, transitionAppliedWithCascade } from './restack-executor.js';
+import {
+  changedRoutedAppliedRef,
+  journalRoutedApplyPlan,
+  mergeInRange,
+  restackTransactionBuilder,
+  RoutedApplyPlanRefChangedError,
+  runRestack,
+} from './restack-executor.js';
 import { resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
+import { routedRoundOpen } from '../routing/round-admission.js';
+import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -71,6 +80,8 @@ export interface RecoverRestackJournalOptions {
    * settled work, but must not start the journal-owned base-refresh follow-on.
    */
   readonly suppressFollowOn?: boolean;
+  /** Recreates REKICK before suppressing a queued follow-on base refresh. */
+  readonly rearmRekick?: () => Promise<void>;
 }
 
 function ref(raw: string): RefName {
@@ -479,6 +490,7 @@ async function resumePlanned(
     try {
       replay = await replayChildRange(range, parent, current.journal.committer, git, {
         comparisonCommits: current.journal.comparisonCommits,
+        appendOnlyRemUnion: current.journal.routed !== undefined,
       });
     } catch (error) {
       const conflict = await replayConflict(git, error);
@@ -505,7 +517,7 @@ async function resumePlanned(
           ...('reason' in resolution.outcome ? { detail: resolution.outcome.reason } : {}),
         };
       }
-      const ownership = await checkPathOwnership(range, parent, resolution.tip, git);
+      const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
       if (ownership.kind === 'refused') {
         return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
       }
@@ -524,7 +536,7 @@ async function resumePlanned(
       parent = resolution.tip;
       continue;
     }
-    const ownership = await checkPathOwnership(range, parent, replay.tip, git);
+    const ownership = await checkPathOwnership(range, parent, replay.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
     if (ownership.kind === 'refused') {
       return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
     }
@@ -622,6 +634,13 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   try {
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
+        if (journal.journal.followOnCause === 'base-refresh' && await routedRoundOpen(options.worktree, options.slug, { git })) {
+          await options.rearmRekick?.();
+          await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+          return await cleanJournal(options.worktree, journal, git)
+            ? { kind: 'cleaned' }
+            : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
+        }
         if (options.suppressFollowOn) {
           return await cleanJournal(options.worktree, journal, git)
             ? { kind: 'cleaned' }
@@ -796,7 +815,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       }
       const activeMove = moves.find((move) => move.ref === checkedOut);
       if (!activeMove?.child) return { kind: 'unavailable', detail: 'cannot identify active child for recovered transition' };
-      await applyRestackTransition({
+      const transitionResult = await applyRestackTransition({
         worktree: options.worktree,
         cause: journal.journal.cause,
         opId: journal.journal.opId,
@@ -813,10 +832,26 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           : [[entry.child, new Map(entry.rewrites.map(({ from, to }) => [from, to]))] as const])),
         ...(options.events === undefined ? {} : { events: options.events }),
       });
-      const applied = journal.journal.cause === 'feature-repair'
-        ? await transitionAppliedWithCascade(options.worktree, journal, journal.journal.originatingChildren ?? [], git)
-        : await transition(options.worktree, journal, 'applied', git);
-      if (!applied) return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
+      try {
+        journal = await journalRoutedApplyPlan(options.worktree, journal, transitionResult, git);
+      } catch (error) {
+        if (error instanceof RoutedApplyPlanRefChangedError) {
+          await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: error.ref });
+          return { kind: 'halted' };
+        }
+        throw error;
+      }
+      const appliedTransaction = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
+      const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(appliedTransaction.lines));
+      if (appliedWrite?.exitCode !== 0) {
+        const changed = await changedRoutedAppliedRef(journal, git);
+        if (changed !== undefined) {
+          await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: changed });
+          return { kind: 'halted' };
+        }
+        return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
+      }
+      const applied = appliedTransaction.journal;
       if (applied.journal.followOnCause === undefined && !await cleanJournal(options.worktree, applied, git)) {
         return { kind: 'unavailable', detail: 'cannot clean recovered restack journal' };
       }
