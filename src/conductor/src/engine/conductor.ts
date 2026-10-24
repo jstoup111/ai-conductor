@@ -825,6 +825,23 @@ export class Conductor {
   ): Promise<boolean> {
     if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return true;
 
+    // A queued child is only authority to re-enter BUILD after the queue has
+    // been consumed into its own open revalidate round.  The cursor carries a
+    // revalidating hint independently of that durable handshake, so validate
+    // the marker and record here, before either entry side effect or dispatch.
+    if (execution.source === 'revalidating') {
+      const marker = await readRepairMarker(this.projectRoot, slug);
+      if (marker.kind !== 'marker' || marker.marker.host !== execution.target.child || marker.marker.roundId !== execution.roundId) {
+        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no matching repair marker`);
+        return false;
+      }
+      const route = await readRouteRecord(this.projectRoot, slug, execution.roundId!);
+      if (route.kind !== 'record' || route.record.kind !== 'revalidate' || route.record.phase !== 'open') {
+        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
+        return false;
+      }
+    }
+
     const hostEntry = await this.enterHostRegion({
       worktree: this.projectRoot,
       slug,
