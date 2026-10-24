@@ -9,7 +9,7 @@ import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } 
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readVerdict, writeVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
-import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
@@ -75,6 +75,13 @@ async function fixture(): Promise<{ readonly subject: SweepRepository; readonly 
   };
   await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, record)]);
   await git(['update-ref', repairMarkerRefFor('demo'), await writeBlob(git, { host, roundId })]);
+  // Exercise the durable empty-queue path rather than treating a missing ref
+  // as the queue-empty proof. `returnToLeaf` must accept this settled state.
+  await git(['update-ref', revalidationQueueRefFor('demo'), await writeBlob(git, {
+    generation: 1,
+    entries: [],
+    outbox: [],
+  })]);
 
   const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
   const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
