@@ -270,9 +270,9 @@ automatically, so that I no longer recover a "restack required" halt by hand.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a three-child stack in which the operator committed `X` on `feat/c1/demo` past `closed/c1`, when the next daemon dispatch or conductor resume runs with no routing round open (no `refs/conductor/<slug>/repairing` marker), then: a `feature-repair` restack moves `closed/c1` to `X`; child 2 and the leaf are replayed onto it; no needs-human halt is written.
+- Given a three-child stack in which the operator committed `X` on `feat/c1/demo` past `closed/c1`, when the next daemon dispatch or conductor resume runs with no `refs/conductor/<slug>/repairing` marker, then: a `feature-repair` restack moves `closed/c1` to `X`; child 2 and the leaf are replayed onto it; no needs-human halt is written.
 - Given that state before the restack runs, when `consumeResumeAuthorizations`, `kickback-budget` inspection, `task` or `rewind` reads the active child, then: they report the active child; none throws; none moves a ref or starts a restack (`kickback-budget raise` or `reset --gate restack` updates `cascades` by design; see Story 13).
-- Given an operator commit on a closed child and a default advance at the same resume, with no routing round open, when it runs, then a `feature-repair` restack applies first, and a `base-refresh` restack second, with distinct opIds.
+- Given an operator commit on a closed child and a default advance at the same resume, with no `repairing` marker, no route record that is not `closed`, and no queued child after the repair applies, when it runs, then a `feature-repair` restack applies first, and a `base-refresh` restack second, with distinct opIds.
 - Given the operator committed `X` from another worktree that still has `feat/c1/demo` checked out, when the repair runs, then it applies.
 - Given the operator's `X` is followed by a halt-record commit on `feat/c1/demo`, when the repair runs, then `closed/c1` moves to the halt-record commit, which includes both.
 
@@ -283,15 +283,16 @@ automatically, so that I no longer recover a "restack required" halt by hand.
 - Given a refused repair (cap, dirty overlap or conflict) while a base refresh was also due, when the resume ends, then `restack_refused` with reason `deferred-base-refresh` is persisted, and no base-refresh restack ran.
 - Given the repair applied but the follow-on base refresh is refused (for example `checked-out-elsewhere`), when the resume ends, then `restack_refused` with reason `deferred-base-refresh` is persisted.
 - Given a parked feature with commits appended past `closed/c1`, when the daemon's dispatch considers it, then no restack runs and no ref moves.
-- Given the repair reached `applied` and the process died before the base refresh started, when the next resume runs with no routing round open, then the base-refresh restack runs.
-- Given the repair's journal is `applied` with a pending follow-on, when an unrelated restack is planned, then it is refused `restack-outstanding`, and the follow-on still runs.
+- Given the repair reached `applied` and the process died before the base refresh started, when the next resume runs with no `repairing` marker, no route record that is not `closed`, and no queued child, then the base-refresh restack runs.
+- Given routing is on and the repair's `applied` transaction queued a closed child, when the follow-on base refresh would run, then it is suppressed, `restack_refused` with reason `deferred-base-refresh` is persisted, and the request is retained until the queue drains.
+- Given the repair's journal is `applied` with a pending follow-on, when an unrelated restack is planned, then it is refused `restack-outstanding`, and the follow-on still runs unless the deferral below applies.
 - Given `rewind --child 1` on a closed child, when it runs, then it is refused with a message naming #3203.
 
 ### Done When
 - [ ] The preflight runs after the park checks, and before resume authorization, the re-kick
       rebase, the halt-record supersede, the cursor and operation-record classification, on both
       daemon and conductor entry.
-- [ ] Appended commits repair automatically when no routing round is open; rewritten or reset closed children halt.
+- [ ] Appended commits repair automatically when no `repairing` marker is set; rewritten or reset closed children halt.
 - [ ] A due base refresh is never lost: it runs, survives a crash between the operations, or emits
       `deferred-base-refresh`.
 
@@ -344,7 +345,7 @@ judged against the right base, so that a restack neither wipes valid passes nor 
 #### Negative Paths
 - Given a restack leaves the leaf in place while the last intermediate child has just closed, when the cursor checks for a pending leaf move, then the leaf move is still reported pending.
 - Given a `feature-repair` restack, when whole-feature gates are re-judged, then the base used is the unchanged old default, not a freshly fetched `origin/main`.
-- Given a closed child with a non-empty `wouldInvalidate`, when the feature continues, then the restack itself re-runs no region gate of that closed child, and the invalidated closed child is re-validated through the re-validation queue (#2944).
+- Given a closed child with a non-empty `wouldInvalidate`, when the feature continues, then the restack itself re-runs no region gate of that closed child; with routing on, the invalidated closed child is re-validated through the re-validation queue (#3212), and with routing off none is queued.
 - Given a `feature-repair` restack that moves only child 2 and the leaf, when `rebase-rewrites.json` is read, then it has no entry for any child-1 or default-branch commit.
 
 ### Done When

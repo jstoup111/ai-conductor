@@ -402,6 +402,13 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
       are unchanged: a `feature-repair` restack still never refunds.
     - The host's other per-child caps are unchanged.
 
+    > **Amended 2026-10-23 by #3212:** The re-validation base is not read from the restack journal.
+    > The journal is deleted as soon as `applied` commits (`cleanAppliedJournal`), so it no longer
+    > exists when a `revalidate` round runs. Instead, the restack's `applied` transaction copies each
+    > queued child's old and new replay parent into its queue entry, and the `revalidation` base
+    > reads them from there. The pre-fix base for a fix made during re-validation is pinned in the
+    > route record's existing host `entry`.
+
 13. **Routed exit is a feature-repair restack originating exactly at the host.**
     - When the host region passes, the loop does not call `closeChild` or advance the cursor.
       Instead it:
@@ -437,6 +444,14 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
     - A host's exit also acknowledges that host's own queue entry, if one exists, because its region
       has just re-run.
 
+    > **Amended 2026-10-23 by #3212:** A third case reaches the no-commit exit: a host carrying only
+    > a taskless obligation (a `manual_test` FAIL or a post-region custom-step kickback, decision 1)
+    > whose build commits nothing. Its tip still equals its closure, so it takes the no-commit exit.
+    > The leaf HEAD then does not move, the leaf's next `manual_test` PASS is refused by the
+    > anti-whitewash check, and `adr-2026-07-13-kickback-build-no-op-escalation` decision 2
+    > escalates it. A host's exit that acknowledges its own queue entry records `child_revalidated`
+    > for that host, with outcome `fixed` on the restack exit and `passed` on the no-commit exit.
+
 14. **A durable re-validation queue re-judges every closed child a restack moved.**
     - **Production.** Every restack carries, in its journal, the closed-child invalidation set
       computed at its transition. Its `applied` transaction writes the next generation of
@@ -471,6 +486,19 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
       - dedup keeps one entry per child per generation.
 
       Re-validation of N children therefore terminates.
+
+    > **Amended 2026-10-23 by #3212:**
+    > - **Eligibility.** Queue production and consumption run only when `routingEligible` holds. With
+    >   routing off, no restack reads or writes the queue ref.
+    > - **Entry and merge.** An entry is `{child, position, closureSha, gates, replay: {oldParent,
+    >   newParent}}`. A merge keeps the newest closure SHA and replay tuple and unions the gates.
+    > - **Acknowledgement.** The compare-and-swap is on the generation and the closure SHA. Gate
+    >   freshness is checked separately, through each gate's existing fingerprint, not through one
+    >   stored input identity. The skip rule uses `classifyReplayGateInvalidation` plus fresh
+    >   verdicts, and replay proof normalises inherited rem-* blocks.
+    > - **Last entry.** When an acknowledgement empties the queue and no other round is open, it
+    >   removes the entry and deletes the marker but leaves the `revalidate` round open.
+    >   `returnToLeaf` records the switch in that round, then closes it (decisions 4 and 6).
 
 15. **The leaf gates re-run when the queue drains, under their existing caps.**
     - When no marker and no queue entry remain, the leaf's whole-feature gates are re-pended under
@@ -526,6 +554,18 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
         setting's default to `true`.
     - Each spec is blocked by the one before it, so the flag stays off until the whole design is
       present.
+
+    > **Amended 2026-10-23 by #3212:** #3212 also delivers the items #3210 and #3211 moved to it:
+    > - decision 9's rem-block replay merge;
+    > - decision 12's re-validation review bases and the per-pass credit;
+    > - `selectNextHost` host progression;
+    > - `hostNoOpEvidence`;
+    > - the restack-writer exemption from decision 6.
+    >
+    > It wires the routed-exit restack to the refusal in
+    > `adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 11. A published stack is
+    > frozen, so the follow-up below that names #2945 belongs to #3269 (the PR comment on a published
+    > child) and #3268 (refreshing a published stack).
 
 ## Assumptions
 

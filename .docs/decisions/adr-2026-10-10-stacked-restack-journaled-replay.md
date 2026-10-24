@@ -443,6 +443,14 @@ Operator decisions (2026-10-10):
    - **The re-kick sentinel.** The one-shot `REKICK` sentinel is consumed before a restack runs, so
      crash recovery depends only on the journal.
 
+> **Amended 2026-10-23 by #3212:** With routing on, a follow-on base refresh is deferred while the
+> re-validation queue holds an entry or any route record is not `closed`. This applies both in the
+> preflight and in the `applied` with a follow-on recovery row: the follow-on is suppressed,
+> `restack_refused` with reason `deferred-base-refresh` is emitted, and the repair journal becomes
+> terminal. The request survives in `REKICK` until the queue drains: the preflight defers before
+> consuming it, and recovery, which runs after it was consumed, re-arms it before deleting the
+> journal (`adr-2026-10-12-routed-whole-feature-repair` decisions 7 and 14).
+
 > **Amended 2026-10-12 by #2944:** After both journal recoveries and before the cursor, the
 > preflight reconciles any open routing round. It skips the automatic repair while a host is
 > `admitted` or `repairing`. It runs the routed exit restack when a host is `built`

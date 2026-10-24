@@ -19,8 +19,8 @@ Scope outcomes (from jstoup111/ai-conductor#3210):
 5. N=1 features route and remediate exactly as today.
 
 Terms used below:
-- **Routing on:** the project sets `stacked_prs.route_whole_feature_fixes: true`. The default is
-  `false`, and with it off every story below behaves exactly as before this spec.
+- **Routing on:** `stacked_prs.route_whole_feature_fixes` resolves to `true`, which is the default.
+  A project that sets it `false` gets exactly the behavior from before this spec in every story below.
 - **Stacked feature:** a feature whose cursor reports durable child state.
 - **Three-child stack:** a stacked feature with slug `demo`, routing on, and positions `1`, `2`
   and `3`.

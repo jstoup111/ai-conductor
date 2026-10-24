@@ -292,6 +292,11 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
 > closed. They are not taken before the leaf's rewind. A repair that ends as a no-op takes the
 > no-commit exit (`adr-2026-10-12-routed-whole-feature-repair` decisions 11 and 13).
 
+> **Amended 2026-10-23 by #3212:** Only tip equality selects the no-commit exit. A no-op repair
+> whose host tip differs from its closure, because it appended rem blocks or committed anything,
+> exits through the restack. Tree equality is no-op evidence only
+> (`adr-2026-10-12-routed-whole-feature-repair` decision 13).
+
 ## Consequences
 
 ### Positive
