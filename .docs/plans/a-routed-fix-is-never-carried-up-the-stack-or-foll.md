@@ -1738,3 +1738,29 @@ Three APPROVED ADRs carry 2026-10-23 #3212 amendment notes in this change set, s
 **Done when:**
 - Task rem-prd-audit-rem-vg3-s6-8 is satisfied by this task.
 - The repair for task rem-as-built-rem-vg4-ab-f4e-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg5-s6-1: In src/conductor/src/engine/conductor.ts routed-exit branch (~15355-15381), remove the `reconciled.kind === 'deferred' && consumed?.kind === 'none'` arm from the prd_audit jump. When reconciliation is deferred and the queue is empty, call reconcileRounds again (bounded loop) or resolve the next routed host via resolveActiveChild. Enter whole-feature gates (restoreWholeFeatureState; i = indexOf('prd_audit') - 1) only when reconciliation returns 'none'/'aborted', the queue is empty and routedRoundOpen is false. Add a conductor test: revalidate round r2 is open for child 2 while audit round r1's leaf host exits and r1 closes. Assert no prd_audit dispatch and no .pipeline/DONE, and assert r2's host is entered next. Add a second test: a deferred reconciliation with a queue entry never dispatches prd_audit
+**Gate:** prd-audit
+**Rationale:** Verified (99%): src/conductor/src/engine/conductor.ts:15374-15375 still jumps to prd_audit on `reconciled.kind === 'deferred' && consumed?.kind === 'none'`. reconcileRounds returns 'deferred' after advanceRound closes one round while another round (r2) is still open, so whole-feature gates run before r2 closes and before returnToLeaf restaging. This is an implementation gap in existing task rem-as-built-rem-vg3-ab-2 and ADR decision 13; the approved architecture already defines the behavior, so no decision is needed. The earlier repair kept the 'deferred' arm, so the new task names the exact condition to remove and the test to add.
+**Criterion:** S6.1
+**Parent task:** rem-as-built-rem-vg3-ab-2
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg5-s6-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg5-s10-2: In src/conductor/src/engine/restack/stack-preflight.ts post-repair branches (~236-267), emit deferred-base-refresh exactly once. Either have recoverRestackJournal report whether it already emitted restack_refused 'deferred-base-refresh' and skip deferredBaseRefresh when it did, or make restack-recovery.ts skip its own emission when suppressFollowOn is set. Keep rearmRekick before journal deletion. Strengthen the Task 40 preflight test to assert exactly one restack_refused event with reason 'deferred-base-refresh' (count === 1), and keep the recovery-path test at one event
+**Gate:** prd-audit
+**Rationale:** Verified (99%): src/conductor/src/engine/restack/stack-preflight.ts:241-242 (and the sibling at :253) calls recoverRestackJournal({suppressFollowOn:true}) and then deferredBaseRefresh(). restack-recovery.ts:625-639 already emits restack_refused 'deferred-base-refresh' on its applied-journal base-refresh path when a routed round is open, so the event is emitted twice. Task 40's done-when requires exactly one restack_refused on the preflight path. This is an implementation/test gap inside Task 40.
+**Criterion:** S10.2
+**Parent task:** 40
+**Done when:**
+- [test] S10.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg5-s10-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg5-d14: In src/conductor/src/engine/restack/restack-transition.ts normalizedReplayComparison (~180-210), replace `fallbackPaths: []` with the parent's changed paths minus only the plan paths whose difference is inherited rem-* blocks. The classifier consumers at ~:272 and ~:531 then still see parent runtime changes. Keep the replay comparison 'unchanged'. Add restack-transition tests. (a) The parent appends a rem block and changes parseA's signature in src/a.ts, a file child 2 does not own: replay is 'unchanged', yet queueInvalidation and wouldInvalidate include child 2 with test_suite. (b) The difference is inherited rem blocks only: wouldInvalidate stays empty (Task 18 preserved)
+**Gate:** as-built
+**Rationale:** Verified (99%): restack-transition.ts:190-209 returns `fallbackPaths: []`. The consumers at :272 and :531 use `normalized.fallbackPaths ?? outcome.allChangedPaths`, so an empty array erases the parent's runtime code changes along with the inherited rem blocks. ADR decision 14 states that replay identity alone never preserves test_suite, because a lower child's change can break an upper child. Task 30's done-when requires that a parseA signature change in a file child 2 does not own puts test_suite in child 2's gates. The earlier rem tasks expecting an empty wouldInvalidate when the parent also changes code contradict D14 and Task 30. The approved ADR stays authoritative, so this is BUILD drift with no architecture change. The fix keeps Task 18's rem-only case: when the only difference is inherited rem blocks, wouldInvalidate is still empty.
+**Governing clause:** adr-2026-10-12-routed-whole-feature-repair decision 14
+**Done when:**
+- adr-2026-10-12-routed-whole-feature-repair decision 14 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg5-d14 is committed and its targeted tests pass.
