@@ -1,0 +1,1 @@
+Inapplicable: acceptance_specs — deletion: removing the in-process executor path leaves only the already-default child executor, so the surviving daemon suite — retargeted onto the production child path — and the existing config validation tests are the specification.
