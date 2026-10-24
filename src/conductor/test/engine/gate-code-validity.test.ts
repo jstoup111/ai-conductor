@@ -1281,8 +1281,8 @@ describe('gateVerdictStillValid', () => {
   // governing ADRs, and nothing else.  An uncited ADR is not an input.
   it.each([
     ['architecture_review_as_built', '.docs/decisions/adr-governing.md', 'rerun'],
-    ['coverage_binding', '.docs/decisions/adr-governing.md', 'rerun'],
-    ['coverage_binding', '.docs/decisions/adr-upstream-uncited.md', 'preserve'],
+    ['.docs/decisions/adr-governing.md', 'rerun'],
+    ['.docs/decisions/adr-upstream-uncited.md', 'preserve'],
     ['architecture_review_as_built', '.docs/decisions/adr-upstream-uncited.md', 'preserve'],
     ['architecture_review_as_built', '.docs/notes/unrelated.md', 'preserve'],
     ['prd_audit', '.docs/decisions/adr-governing.md', 'preserve'],

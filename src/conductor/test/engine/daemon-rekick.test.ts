@@ -3139,9 +3139,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       log: (message) => { logs.push(message); },
     })).resolves.toBe('rebased');
     if (changeBase) {
-      await Promise.all(([
-        'coverage_binding',
-        'test_suite',
+      await Promise.all((['test_suite',
         'build_review',
         'prd_audit',
         'architecture_review_as_built',

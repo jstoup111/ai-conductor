@@ -65,14 +65,13 @@ describe('config consumer registry', () => {
       'build_progress_halt',
       'gate_code_validity',
       'retry_routing',
-      'coverage_binding',
       'coverage_binding.judge',
       'markdown_viewer',
       'mermaid_renderer',
     ]));
   });
 
-  it.each(['test_suite', 'prd_audit', 'assess', 'build_progress', 'coverage_binding'] as const)(
+  it.each(['test_suite', 'prd_audit', 'assess', 'build_progress'] as const)(
     'rejects a newly accepted %s key until it declares a consumer',
     (block) => {
       const extendedSets = {

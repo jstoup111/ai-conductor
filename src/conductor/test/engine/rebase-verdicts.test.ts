@@ -53,7 +53,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       preVerified: ['build', 'test_suite'],
       result: {
         satisfied: true,
-        kickedBack: ['coverage_binding', 'build_review', 'prd_audit', 'architecture_review_as_built'],
+        kickedBack: ['build_review', 'prd_audit', 'architecture_review_as_built'],
         reverified: ['build', 'test_suite'],
       },
       testSuite: expect.objectContaining({
@@ -77,7 +77,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       testSuite: await readVerdict(projectRoot, 'test_suite'),
     }).toEqual({
       preVerified: ['build', 'test_suite'],
-      kickedBack: ['coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
+      kickedBack: ['build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
       testSuite: expect.objectContaining({
         satisfied: false,
         reason: 'invalidated by file-changing rebase',
@@ -113,7 +113,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       testSuite: await readVerdict(projectRoot, 'test_suite'),
     }).toEqual({
       preVerified: ['build', 'test_suite'],
-      kickedBack: ['coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
+      kickedBack: ['build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
       testSuite: expect.objectContaining({
         satisfied: false,
         reason: 'invalidated by file-changing rebase',
@@ -141,9 +141,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       manualTest: await readVerdict(projectRoot, 'manual_test'),
     }).toEqual({
       preVerified: ['build', 'test_suite'],
-      kickedBack: [
-        'coverage_binding',
-        'build_review',
+      kickedBack: ['build_review',
         'test_suite',
         'manual_test',
         'prd_audit',
@@ -223,7 +221,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       join(projectRoot, '.pipeline/coverage-binding.json'),
       JSON.stringify({ version: 1, slug: 'feature', runId: 'run-1', status: 'disabled', entries: [] }),
     );
-    await writeVerdict(projectRoot, 'coverage_binding', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(projectRoot, { satisfied: true, checkedAt: 1 });
 
     const result = await applyRebaseVerdicts(projectRoot, {
       kind: 'changed',

@@ -78,7 +78,7 @@ describe('engine/gate-verdicts', () => {
   });
 
   it('preserves decide-change kickback provenance for an unsatisfied coverage binding', async () => {
-    await writeVerdict(dir, 'coverage_binding', {
+    await writeVerdict(dir, {
       satisfied: false,
       checkedAt: 6,
       kickback: { from: 'decide-change', evidence: 'accepted plan amendment changed coverage' },

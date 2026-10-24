@@ -63,7 +63,7 @@ beforeEach(async () => {
   }, envelopeFilesystem);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
-    feature_desc: 'demo', plan: 'done', coverage_binding: 'done',
+    feature_desc: 'demo', plan: 'done',
   }));
   for (const child of [1, 2]) {
     const childPipeline = join(root, '.pipeline', 'children', String(child));

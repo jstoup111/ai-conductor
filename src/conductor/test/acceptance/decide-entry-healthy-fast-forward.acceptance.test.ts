@@ -70,7 +70,7 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       },
     }).run();
 
-    expect(ran).toEqual(['coverage_binding', 'acceptance_specs']);
+    expect(ran).toEqual(['acceptance_specs']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.explore).toBe('skipped');
@@ -135,7 +135,7 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       },
     }).run();
 
-    expect(ran).toEqual(['coverage_binding', 'build']);
+    expect(ran).toEqual(['build']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.architecture_diagram).toBe('skipped');
@@ -167,7 +167,7 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       },
     }).run();
 
-    expect(ran).toEqual(['coverage_binding', 'acceptance_specs']);
+    expect(ran).toEqual(['acceptance_specs']);
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
     const state = await readState(fixture.statePath);
     expect(state.ok && state.value.architecture_diagram).toBe('done');

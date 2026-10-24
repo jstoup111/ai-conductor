@@ -63,10 +63,7 @@ import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.j
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
-import { voidCoverageBindingForDecideChange } from '../../src/engine/coverage-binding-void.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
-import { rewindState } from '../../src/engine/rewind.js';
-import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import {
   creditKickbackGateLaps,
@@ -327,7 +324,7 @@ function useRealGitExeca(): () => void {
 }
 
 async function seedGenericTail(statePath: string): Promise<void> {
-  await writeState(statePath, { plan_review: 'done', coverage_binding: 'done' });
+  await writeState(statePath, { plan_review: 'done' });
 }
 
 function buildBoundaryState(featureDesc = 'feature'): ConductState {
@@ -1686,49 +1683,8 @@ describe('engine/conductor', () => {
     expect(state.manual_test).toBe('pending');
   });
 
-  // Covers: task:2
-  it('does not reopen a decide-change kickback while advancing the rebase step', async () => {
-    const state: ConductState = { coverage_binding: 'done' };
-    await writeState(statePath, state);
-    await writeVerdict(dir, 'coverage_binding', {
-      satisfied: false,
-      checkedAt: 1,
-      kickback: { from: 'decide-change', evidence: 'accepted plan amendment changed coverage' },
-    });
-
-    const conductor = new Conductor({
-      projectRoot: dir,
-      stateFilePath: statePath,
-      stepRunner: createMockStepRunner(),
-      events,
-      verifyArtifacts: true,
-    });
-    (conductor as unknown as { lastRebaseOutcome: { kind: 'changed' } }).lastRebaseOutcome = {
-      kind: 'changed',
-    };
-    const advanceTail = (conductor as unknown as {
-      advanceTail: (
-        step: (typeof ALL_STEPS)[number],
-        state: ConductState,
-        stuckGate: Map<StepName, number>,
-        steps: typeof ALL_STEPS,
-        indexOf: (name: StepName) => number,
-      ) => Promise<number | null | 'halt'>;
-    }).advanceTail.bind(conductor);
-
-    await advanceTail(
-      ALL_STEPS.find((step) => step.name === 'rebase')!,
-      state,
-      new Map(),
-      ALL_STEPS,
-      (name) => ALL_STEPS.findIndex((step) => step.name === name),
-    );
-
-    expect(state.coverage_binding).toBe('done');
-  });
-
   // Covers: task:5
-  it('dispatches BUILD without voiding coverage binding for a seal-reported plan self-amendment', async () => {
+  it('dispatches BUILD for a seal-reported plan self-amendment', async () => {
     const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
     vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
     try {
@@ -1745,16 +1701,11 @@ describe('engine/conductor', () => {
         baselineCommit: (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout,
       });
       await writeFile(planPath, 'self-amended plan\n');
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-        version: 1, slug: 'feature', runId: 'coverage-run', status: 'done', entries: [],
-      }));
       const state: ConductState = { feature_desc: 'feature', complexity_tier: 'M' };
       for (const step of ALL_STEPS) {
         if (step.name === 'build') break;
         state[step.name] = 'done';
       }
-      state.coverage_binding = 'done';
       await writeState(statePath, state);
       const dispatched: StepName[] = [];
       const runner: StepRunner = {
@@ -1776,117 +1727,11 @@ describe('engine/conductor', () => {
       }).run();
 
       expect(dispatched).toContain('build');
-      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'done' });
     } finally {
       vi.mocked(execa).mockImplementation(() =>
         Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
       );
     }
-  });
-
-  // Covers: task:6
-  describe('coverage binding re-entry after a DECIDE void', () => {
-    const changedDecidePath = '.docs/decisions/adr-governing.md';
-
-    async function voidCompletedCoverageBinding(lastStep: StepName, buildStatus: StepStatus = 'done'): Promise<ConductState> {
-      const state = Object.fromEntries(
-        ALL_STEPS
-          .slice(0, ALL_STEPS.findIndex((step) => step.name === lastStep) + 1)
-          .map((step) => [step.name, 'done']),
-      ) as ConductState;
-      state.last_step = lastStep;
-      state.build = buildStatus;
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeState(statePath, state);
-      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
-        tasks: [{ id: '6', status: 'completed' }],
-      }) + '\n');
-      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({
-        version: 1,
-        slug: 'test-feature',
-        runId: 'before-decide-change',
-        status: 'done',
-        entries: [],
-      }) + '\n');
-      await writeVerdict(dir, 'coverage_binding', {
-        satisfied: true,
-        checkedAt: 1,
-        reason: 'coverage binding complete',
-      });
-
-      await voidCoverageBindingForDecideChange({
-        projectRoot: dir,
-        decideSet: { paths: new Set([changedDecidePath]) },
-        rebaselines: [{
-          path: changedDecidePath,
-          priorFingerprint: 'sha256:before',
-          newFingerprint: 'sha256:after',
-        }],
-        events,
-        stateFilePath: statePath,
-      });
-      const voided = await readState(statePath);
-      if (!voided.ok) throw new Error(voided.error.message);
-      return voided.value;
-    }
-
-    function runnerThatStopsAtBuild(dispatched: StepName[]): StepRunner {
-      return {
-        run: async (step) => {
-          dispatched.push(step);
-          return step === 'build'
-            ? { success: false, output: 'expected test boundary' }
-            : { success: true };
-        },
-      };
-    }
-
-    it('re-runs coverage_binding before BUILD after an operator rewind to build', async () => {
-      const voided = await voidCompletedCoverageBinding('build_review');
-      const rewindStore = createFilesystemConductStateStore(statePath);
-      await rewindState({
-        state: voided,
-        config: {},
-        target: 'build',
-        store: rewindStore,
-        readCurrentState: async () => {
-          const current = await readState(statePath);
-          return current.ok ? current.value : {};
-        },
-      });
-
-      const dispatched: StepName[] = [];
-      await new Conductor({
-        projectRoot: dir,
-        stateFilePath: statePath,
-        stepRunner: runnerThatStopsAtBuild(dispatched),
-        events,
-        resume: true,
-        verifyArtifacts: false,
-        onRecovery: async () => 'quit',
-      }).run();
-
-      expect(dispatched[0]).toBe('coverage_binding');
-      expect(dispatched.findIndex((step) => step === 'build')).toBe(1);
-    });
-
-    it('re-runs coverage_binding before BUILD when a daemon resumes after the void', async () => {
-      await voidCompletedCoverageBinding('acceptance_specs', 'stale');
-      const dispatched: StepName[] = [];
-      await new Conductor({
-        projectRoot: dir,
-        stateFilePath: statePath,
-        stepRunner: runnerThatStopsAtBuild(dispatched),
-        events,
-        resume: true,
-        daemon: true,
-        verifyArtifacts: false,
-        onRecovery: async () => 'quit',
-      }).run();
-
-      expect(dispatched[0]).toBe('coverage_binding');
-      expect(dispatched.findIndex((step) => step === 'build')).toBe(1);
-    });
   });
 
   it('halts build_review for a human when consuming the sixth cumulative kickback', async () => {
@@ -3764,8 +3609,7 @@ describe('engine/conductor', () => {
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
         s.name !== 'rebase' &&
-        s.name !== 'plan_review' &&
-        s.name !== 'coverage_binding',
+        s.name !== 'plan_review',
     ).length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('memory');
@@ -3845,8 +3689,7 @@ describe('engine/conductor', () => {
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
         s.name !== 'rebase' &&
-        s.name !== 'plan_review' &&
-        s.name !== 'coverage_binding',
+        s.name !== 'plan_review',
     ).map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });

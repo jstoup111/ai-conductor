@@ -86,6 +86,37 @@ async function recordPositions(projectRoot: string, slug: string, positions: rea
 }
 
 /**
+ * A restack fixture needs its topology artifacts to be part of the checked-out
+ * history.  Leaving them untracked makes the protected-artifact guard reject a
+ * later rewrite because it cannot establish the plan's provenance.
+ *
+ * Fixtures that are still assembling their initial commit intentionally have
+ * no HEAD; their caller owns that first commit and this remains a no-op.
+ */
+async function commitSealedTopology(
+  projectRoot: string,
+  planPath: string,
+  storiesPath: string,
+): Promise<void> {
+  if (!existsSync(join(projectRoot, '.git'))) return;
+  try {
+    await runFile('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectRoot });
+    const paths = [
+      isAbsolute(planPath) ? planPath.slice(projectRoot.length + 1) : planPath,
+      storiesPath,
+    ];
+    await runFile('git', ['add', '--', ...paths], { cwd: projectRoot });
+    try {
+      await runFile('git', ['diff', '--cached', '--quiet', '--', ...paths], { cwd: projectRoot });
+    } catch {
+      await runFile('git', ['commit', '-qm', 'fixture: seal slice topology', '--', ...paths], { cwd: projectRoot });
+    }
+  } catch {
+    // Non-Git and injected-filesystem fixtures use their caller's seam.
+  }
+}
+
+/**
  * Materialize a sealed plan and stories artifact instead of the retired
  * coverage-binding cache.  It intentionally writes no `.pipeline` topology
  * file; callers exercise the same plan-derived loader as production.
@@ -110,6 +141,7 @@ export async function writeSliceTopologyFixture(
   await fs.mkdir(join(projectRoot, '.docs', 'stories'));
   await fs.writeFile(planPath, planText(fixture, storiesPath));
   await fs.writeFile(join(projectRoot, '.docs', 'stories', `${fixture.slug}.md`), storiesText(fixture));
+  await commitSealedTopology(projectRoot, planPath, storiesPath);
   const positions = [...new Set(Object.values(fixture.sliceMembership.taskSlices))].sort((left, right) => left - right);
   await recordPositions(projectRoot, fixture.slug, positions);
 }

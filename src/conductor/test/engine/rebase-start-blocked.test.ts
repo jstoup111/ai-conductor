@@ -162,9 +162,7 @@ describe('engine/rebase — refusal before rebase starts', () => {
       // preservations carry no durable, applicable evidence, so the selective
       // rebase policy conservatively revalidates them too. BUILD remains
       // untouched for a document-only delta.
-      expect(verdicts.kickedBack).toEqual([
-        'coverage_binding',
-        'build_review',
+      expect(verdicts.kickedBack).toEqual(['build_review',
         'test_suite',
         'prd_audit',
         'architecture_review_as_built',

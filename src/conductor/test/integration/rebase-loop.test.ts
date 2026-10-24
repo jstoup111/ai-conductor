@@ -87,7 +87,6 @@ const FRONT_DONE: ConductState = {
   plan: 'done',
   coherence_check: 'done',
   plan_review: 'done',
-  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -112,7 +111,6 @@ const FRONT_DONE_M: ConductState = {
   plan: 'done',
   coherence_check: 'done',
   plan_review: 'done',
-  coverage_binding: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'done',
   acceptance_specs: 'skipped',
@@ -183,11 +181,11 @@ describe('integration/rebase-loop', () => {
   }
 
   it.each([
-    ['.docs/stories/add-foo.md', ['coverage_binding', 'prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
-    ['.docs/specs/add-foo.md', ['coverage_binding', 'prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
-    ['.docs/plans/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
-    ['.docs/coherence/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
-    ['.docs/decisions/adr-add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    ['.docs/stories/add-foo.md', ['prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
+    ['.docs/specs/add-foo.md', ['prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
+    ['.docs/plans/add-foo.md', ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    ['.docs/coherence/add-foo.md', ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    ['.docs/decisions/adr-add-foo.md', ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
     ['.docs/stories/another-feature.md', []],
   ])('rebase reviews only the active inputs changed at %s', async (path, expected) => {
     await initRepoOnFeatureBranch({ path: 'src/foo.ts', content: 'export const foo = 1;\n' });
@@ -228,9 +226,7 @@ describe('integration/rebase-loop', () => {
     }, 1);
     expect(outcome.kind).toBe('changed');
     const result = await applyRebaseVerdicts(dir, outcome, true);
-    expect(result.kickedBack).toEqual([
-      'coverage_binding',
-      'prd_audit',
+    expect(result.kickedBack).toEqual(['prd_audit',
       'build_review',
       'test_suite',
       'manual_test',
@@ -1620,7 +1616,7 @@ describe('integration/rebase-loop', () => {
         await writeState(statePath, { ...FRONT_DONE_M });
         // Coverage was judged on the pre-rebase HEAD by the ordinary lifecycle.
         await satisfy('coverage_binding');
-        await writeVerdict(dir, 'coverage_binding', { satisfied: true, checkedAt: 1 });
+        await writeVerdict(dir, { satisfied: true, checkedAt: 1 });
 
         const counts: Record<string, number> = {};
         let completed = false;
@@ -1935,7 +1931,6 @@ describe('integration/rebase-loop', () => {
           }).toEqual({
             kickedBack: [
               'build',
-              'coverage_binding',
               'build_review',
               'test_suite',
               ...manualTarget,
@@ -1983,7 +1978,6 @@ describe('integration/rebase-loop', () => {
         // Full legacy invalidation set (fail-closed fallback), no preservations.
         expect(result.kickedBack).toEqual([
           'build',
-          'coverage_binding',
           'build_review',
           'test_suite',
           'manual_test',

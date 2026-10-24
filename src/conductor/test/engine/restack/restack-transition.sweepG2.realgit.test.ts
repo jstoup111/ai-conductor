@@ -196,7 +196,7 @@ describe('restack verdict transition sweep (real local Git)', () => {
       const defaultTip = await subject.rev('main');
       await writeJson(subject.repo, '.pipeline/conduct-state.json', { coverage_binding: 'done' });
       await writeJson(subject.repo, '.pipeline/coverage-binding-code-stamp.json', { codeStamp: subject.oldLeaf, runId: 'run-1' });
-      await writeVerdict(subject.repo, 'coverage_binding', passed);
+      await writeVerdict(subject.repo, passed);
       await seedJudgedEvidence(subject.repo, subject.oldLeaf, leaf);
       await subject.git(['checkout', '-q', 'feat/c1/demo']);
       await subject.commit('X', path, content);

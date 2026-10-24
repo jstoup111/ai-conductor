@@ -52,7 +52,7 @@ beforeEach(async () => {
   }, envelopeFilesystem);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
-    feature_desc: 'demo', coverage_binding: 'done', acceptance_specs: 'pending',
+    feature_desc: 'demo', acceptance_specs: 'pending',
   }));
 });
 
