@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  classifyIndexOnlyAdmission,
   validateRemediationCaseGraph,
   type RemediationCaseJudgement,
 } from '../../src/engine/remediation-case-validator.js';
@@ -89,6 +90,7 @@ const VALID_REFUTE_JUDGEMENT = {
 const CASE_V2_ADMISSION = {
   existingCaseIds: ['existing-case-1'],
   admittedTaskIds: ['30'],
+  planTaskIds: ['30'],
 } as const;
 
 function authorizedActionCaseRefs(
@@ -497,6 +499,75 @@ describe('remediation case graph validator', () => {
       expect(authorizedActionCaseRefs(VALID_CASE_V2_JUDGEMENT, result)).toEqual(['case-a']);
     });
 
+    it('names supplied, index-only, and absent task admissions without changing case-v1 validation', () => {
+      const withAdmissions = (admittedTaskIds: readonly string[]) => ({
+        ...VALID_CASE_V2_JUDGEMENT,
+        cases: [{
+          ...VALID_CASE_V2_JUDGEMENT.cases[0],
+          effect: {
+            ...VALID_CASE_V2_JUDGEMENT.cases[0].effect,
+            tasks: [{ ...VALID_CASE_V2_JUDGEMENT.cases[0].effect.tasks[0], admittedTaskIds }],
+          },
+        }, ...VALID_CASE_V2_JUDGEMENT.cases.slice(1)],
+      } as RemediationCaseJudgement);
+      const supplied = withAdmissions(['3']);
+      const references = {
+        admittedTaskIds: ['3'], planTaskIds: ['3', '9'], existingCaseIds: ['existing-case-1'],
+      } as const;
+
+      expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, supplied, references)).toMatchObject({ ok: true });
+      const indexOnlyRejection = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, withAdmissions(['3', '9']), references);
+      expect(indexOnlyRejection).toEqual({
+        ok: false,
+        reason: 'unknown-admission-task',
+        indexOnlyTaskIds: ['9'],
+        absentTaskIds: [],
+      });
+      if (indexOnlyRejection.ok) throw new Error('expected an admission rejection');
+      expect(classifyIndexOnlyAdmission(CURRENT_SOURCE_IDS, withAdmissions(['3', '9']), references, indexOnlyRejection))
+        .toEqual({ kind: 'index-only', taskIds: ['9'] });
+
+      const absentRejection = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, withAdmissions(['T-99']), references);
+      expect(absentRejection).toEqual({
+        ok: false,
+        reason: 'unknown-admission-task',
+        indexOnlyTaskIds: [],
+        absentTaskIds: ['T-99'],
+      });
+      if (absentRejection.ok) throw new Error('expected an admission rejection');
+      expect(classifyIndexOnlyAdmission(CURRENT_SOURCE_IDS, withAdmissions(['T-99']), references, absentRejection))
+        .toEqual({ kind: 'other', reason: 'unknown-admission-task' });
+
+      expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, VALID_JUDGEMENT, { planTaskIds: ['3', '9'] }))
+        .toEqual(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, VALID_JUDGEMENT));
+    });
+
+    it('classifies an index-only admission with a separate graph defect by the re-validation failure', () => {
+      const judgement = {
+        ...VALID_CASE_V2_JUDGEMENT,
+        sourceOutcomes: VALID_CASE_V2_JUDGEMENT.sourceOutcomes.slice(0, 3),
+        cases: [{
+          ...VALID_CASE_V2_JUDGEMENT.cases[0],
+          effect: {
+            ...VALID_CASE_V2_JUDGEMENT.cases[0].effect,
+            tasks: [{ ...VALID_CASE_V2_JUDGEMENT.cases[0].effect.tasks[0], admittedTaskIds: ['3', '9'] }],
+          },
+        }, ...VALID_CASE_V2_JUDGEMENT.cases.slice(1)],
+      } as RemediationCaseJudgement;
+      const references = { admittedTaskIds: ['3'], planTaskIds: ['3', '9'], existingCaseIds: ['existing-case-1'] } as const;
+      const rejection = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement, references);
+
+      expect(rejection).toEqual({
+        ok: false,
+        reason: 'unknown-admission-task',
+        indexOnlyTaskIds: ['9'],
+        absentTaskIds: [],
+      });
+      if (rejection.ok) throw new Error('expected an admission rejection');
+      expect(classifyIndexOnlyAdmission(CURRENT_SOURCE_IDS, judgement, references, rejection))
+        .toEqual({ kind: 'other', reason: 'missing-source' });
+    });
+
     it.each([
       ['an empty consistency source list', {
         ...VALID_CASE_V2_JUDGEMENT,
@@ -558,7 +629,7 @@ describe('remediation case graph validator', () => {
     ] as const)('rejects %s before any action is authorized', (_name, judgement, reason) => {
       const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement as RemediationCaseJudgement, CASE_V2_ADMISSION);
 
-      expect(result).toEqual({ ok: false, reason });
+      expect(result).toMatchObject({ ok: false, reason });
       expect(authorizedActionCaseRefs(judgement as RemediationCaseJudgement, result)).toEqual([]);
     });
 
