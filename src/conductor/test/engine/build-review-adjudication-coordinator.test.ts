@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { coordinateBuildReviewAdjudication, selectAdmittedTaskContracts } from '../../src/engine/build-review-adjudication-coordinator.js';
 import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
@@ -314,6 +314,57 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
     })(),
   };
 }
+
+function selectionPlan(taskCount = 56): string {
+  return Array.from({ length: taskCount }, (_, index) => {
+    const id = index + 1;
+    const dependencies = id === 1 ? 'none' : `Task ${id - 1}`;
+    const path = id === 3 ? 'src/a.ts' : id === 7 ? 'src/only7.ts' : `src/task-${id}.ts`;
+    return `### Task ${id}: Task ${id} title\n**Dependencies:** ${dependencies}\n**Files:** ${path}\n\nTask ${id} contract.`;
+  }).join('\n\n');
+}
+
+describe('selectAdmittedTaskContracts', () => {
+  it('selects the matching task body and indexes every task with title and dependencies', () => {
+    const selection = selectAdmittedTaskContracts({
+      plan: selectionPlan(), matchPaths: ['src/a.ts'], openCaseAdmittedTaskIds: [],
+    });
+
+    expect(selection).toEqual({
+      admittedTaskContracts: [{ id: '3', contract: '**Dependencies:** Task 2\n**Files:** src/a.ts\n\nTask 3 contract.\n' }],
+      index: Array.from({ length: 56 }, (_, index) => index + 1)
+        .map((id) => ({
+          id: String(id), title: `Task ${id} title`, dependencies: id === 1 ? [] : [String(id - 1)],
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    });
+  });
+
+  it('keeps every task that declares a matching path', () => {
+    const selection = selectAdmittedTaskContracts({
+      plan: `${selectionPlan(2)}\n\n### Task 3: First shared\n**Dependencies:** none\n**Files:** src/shared.ts\n\nFirst.\n\n### Task 4: Second shared\n**Dependencies:** Task 3\n**Files:** src/shared.ts\n\nSecond.`,
+      matchPaths: ['src/shared.ts'], openCaseAdmittedTaskIds: [],
+    });
+
+    expect(selection.admittedTaskContracts.map(({ id }) => id)).toEqual(['3', '4']);
+  });
+
+  it('selects a task admitted by an open case', () => {
+    const selection = selectAdmittedTaskContracts({
+      plan: selectionPlan(), matchPaths: [], openCaseAdmittedTaskIds: ['12'],
+    });
+
+    expect(selection.admittedTaskContracts.map(({ id }) => id)).toEqual(['12']);
+  });
+
+  it('selects a task whose declared anchor path has no evidence-path match', () => {
+    const selection = selectAdmittedTaskContracts({
+      plan: selectionPlan(), matchPaths: ['src/only7.ts'], openCaseAdmittedTaskIds: [],
+    });
+
+    expect(selection.admittedTaskContracts.map(({ id }) => id)).toEqual(['7']);
+  });
+});
 
 function decisionStopScope() {
   const aggregate = customMixedAggregate();

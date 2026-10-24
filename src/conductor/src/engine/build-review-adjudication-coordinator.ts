@@ -13,7 +13,8 @@ import {
   type BuildReviewAdjudicationTaskStatus,
 } from './build-review-adjudication-context.js';
 import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
-import { parsePlanTaskBodies } from './plan-task-parse.js';
+import { parsePlanTaskBodies, parsePlanTaskPaths, parsePlanTaskTitles } from './plan-task-parse.js';
+import { parsePlanDependencyGraph } from './plan-dependencies.js';
 import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
@@ -45,6 +46,45 @@ type OperatorRetirementTransition = {
     readonly reason: 'retired: every source operator-accepted or no longer raised';
   };
 };
+
+/**
+ * Selects the complete plan-task contracts which a remediation judgement may
+ * admit, while retaining a compact index of every task in the active plan.
+ *
+ * Matching is deliberately path-exact and plan-text-only: callers normalize
+ * evidence locations before this boundary, and no filesystem state is read.
+ */
+export function selectAdmittedTaskContracts(input: {
+  readonly plan: string;
+  readonly matchPaths: readonly string[];
+  readonly openCaseAdmittedTaskIds: readonly string[];
+}): {
+  readonly admittedTaskContracts: readonly { readonly id: string; readonly contract: string }[];
+  readonly index: readonly { readonly id: string; readonly title: string; readonly dependencies: readonly string[] }[];
+} {
+  const bodies = parsePlanTaskBodies(input.plan);
+  const titles = parsePlanTaskTitles(input.plan);
+  const paths = parsePlanTaskPaths(input.plan);
+  const dependencies = parsePlanDependencyGraph(input.plan).dependenciesByTaskId;
+  const matchPaths = new Set(input.matchPaths);
+  const selectedIds = new Set(input.openCaseAdmittedTaskIds.filter((id) => bodies.has(id)));
+
+  for (const [taskId, taskPaths] of paths) {
+    if ([...taskPaths].some((path) => matchPaths.has(path))) selectedIds.add(taskId);
+  }
+
+  const taskIds = [...bodies.keys()].sort((left, right) => left.localeCompare(right));
+  return {
+    admittedTaskContracts: taskIds
+      .filter((id) => selectedIds.has(id))
+      .map((id) => ({ id, contract: bodies.get(id)! })),
+    index: taskIds.map((id) => ({
+      id,
+      title: titles.get(id) ?? '',
+      dependencies: dependencies.get(id) ?? [],
+    })),
+  };
+}
 
 export type BuildReviewAdjudicationCoordinatorResult =
   | { readonly ok: true; readonly route: 'pass' | 'build' | 'mechanical-retry' | 'halt'; readonly detail: string; readonly trace: string; readonly remainingMechanical: boolean;
