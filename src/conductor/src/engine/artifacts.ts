@@ -2269,6 +2269,13 @@ async function validatePriorChildGreenAttribution(
       reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use a routed repair's pinned base ${childBase.sha}`,
     };
   }
+  if (childBase.kind === 'revalidation' || childBase.kind === 'revalidation-fix') {
+    return {
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} cannot use a revalidation base ${childBase.sha}`,
+    };
+  }
   if (attribution !== childBase.sha) {
     return {
       done: false,

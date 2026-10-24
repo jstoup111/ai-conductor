@@ -5,7 +5,7 @@ import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync, realpathSync } from 'node:fs';
-import { access, mkdir, readFile, readlink, unlink as unlinkFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readlink, unlink as unlinkFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
@@ -2046,6 +2046,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           const code = (error as NodeJS.ErrnoException).code;
           if (code !== 'ENOENT') throw error;
         });
+      },
+      rearmRekick: async () => {
+        await writeFile(rekickPath, '');
       },
       events: featureEvents,
       resolver: stepRunner.resolveRebaseConflict

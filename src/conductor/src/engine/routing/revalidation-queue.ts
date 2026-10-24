@@ -1,5 +1,17 @@
 import type { ChildId } from '../child-context.js';
-import type { RevalidationQueueEntry, RevalidationQueueRecord } from './route-types.js';
+import { makeGitRunner, type GitRunner } from '../rebase.js';
+import { childRevalidatedEvent } from './routing-events.js';
+import {
+  createRouteRecord,
+  nextRoundId,
+  readRepairMarker,
+  readRevalidationQueue,
+  transitionHost,
+  writeRoutingTransaction,
+  type StoredRouteRecord,
+} from './route-record-store.js';
+import { admitRound } from './round-admission.js';
+import type { RevalidationQueueEntry, RevalidationQueueRecord, RoundId } from './route-types.js';
 
 export interface MergeQueueGenerationOptions {
   readonly acknowledge?: ChildId;
@@ -30,4 +42,73 @@ export function mergeQueueGeneration(
     entries: [...entries.values()].sort((left, right) => left.position - right.position),
     outbox: current.outbox,
   };
+}
+
+export type ConsumeLowestQueuedResult =
+  | { readonly kind: 'admitted'; readonly roundId: RoundId; readonly host: ChildId }
+  | { readonly kind: 'none' | 'busy' | 'unavailable' };
+
+/** Converts only the queue head into a durable revalidate route. */
+export async function consumeLowestQueued(
+  worktree: string,
+  slug: string,
+  options: { readonly git?: GitRunner } = {},
+): Promise<ConsumeLowestQueuedResult> {
+  const git = options.git ?? makeGitRunner(worktree);
+  const marker = await readRepairMarker(worktree, slug, { git });
+  if (marker.kind === 'marker') return { kind: 'busy' };
+  if (marker.kind === 'unreadable') return { kind: 'unavailable' };
+  const queue = await readRevalidationQueue(worktree, slug, { git });
+  if (queue.kind === 'absent' || queue.kind === 'queue' && queue.queue.entries.length === 0) return { kind: 'none' };
+  if (queue.kind !== 'queue') return { kind: 'unavailable' };
+  const entry = queue.queue.entries[0]!;
+  const roundId = await nextRoundId(worktree, slug, { git });
+  if (typeof roundId !== 'string') return { kind: 'unavailable' };
+  const created = await createRouteRecord(worktree, slug, {
+    roundId,
+    kind: 'revalidate',
+    items: [],
+    allocation: { [entry.child]: { remTaskIds: [], blockBodies: [] } },
+    sealedAuthored: 0,
+  }, { git });
+  if (created.kind !== 'created') return { kind: created.kind === 'cas-failed' ? 'busy' : 'unavailable' };
+  const admitted = await admitRound(worktree, slug, created.record, entry.child, { git });
+  return admitted.kind === 'admitted' ? { kind: 'admitted', roundId, host: entry.child } : { kind: 'unavailable' };
+}
+
+export type AcknowledgeQueueEntryResult =
+  | { readonly kind: 'acknowledged'; readonly leavesRoundOpen: boolean }
+  | { readonly kind: 'stale' | 'unavailable' };
+
+/** Acknowledges a fresh no-commit revalidation with its queue, marker and route in one CAS. */
+export async function acknowledgeQueueEntry(
+  worktree: string,
+  slug: string,
+  stored: StoredRouteRecord,
+  host: ChildId,
+  options: { readonly git?: GitRunner } = {},
+): Promise<AcknowledgeQueueEntryResult> {
+  const git = options.git ?? makeGitRunner(worktree);
+  const marker = await readRepairMarker(worktree, slug, { git });
+  const queue = await readRevalidationQueue(worktree, slug, { git });
+  if (marker.kind !== 'marker' || marker.marker.roundId !== stored.record.roundId || marker.marker.host !== host || queue.kind !== 'queue') return { kind: 'stale' };
+  const entry = queue.queue.entries.find((candidate) => candidate.child === host);
+  if (entry === undefined) return { kind: 'stale' };
+  const closure = await git(['rev-parse', '-q', '--verify', `refs/conductor/${slug}/closed/c${host}`]);
+  if (closure.exitCode !== 0 || closure.stdout.trim() !== entry.closureSha) return { kind: 'stale' };
+  const nextQueue = mergeQueueGeneration(queue.queue, [], { acknowledge: host });
+  const event = childRevalidatedEvent(host, nextQueue.generation, entry.closureSha, 'passed');
+  const queueWithEvent = { ...nextQueue, outbox: [...nextQueue.outbox, { eventId: event.eventId, occurredAt: event.occurredAt, event }] };
+  const leavesRoundOpen = queueWithEvent.entries.length === 0;
+  const done = transitionHost(stored, host, 'done', { credit: false });
+  if (done.kind !== 'updated') return { kind: 'stale' };
+  const record = leavesRoundOpen ? done.record : { ...done.record, phase: 'closed' as const };
+  const wrote = await writeRoutingTransaction(worktree, slug, [
+    { kind: 'update-record', previous: stored, record },
+    { kind: 'delete-marker', old: marker.blob },
+    { kind: 'update-queue', previous: queue, queue: queueWithEvent },
+  ], { git });
+  return wrote.kind === 'updated'
+    ? { kind: 'acknowledged', leavesRoundOpen }
+    : wrote.kind === 'cas-failed' ? { kind: 'stale' } : { kind: 'unavailable' };
 }

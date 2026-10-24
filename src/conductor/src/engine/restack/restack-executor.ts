@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { type ChildId } from '../child-context.js';
-import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
+import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
 import { makeGitRunner, type GitRunner, writeSealHalt } from '../rebase.js';
@@ -45,6 +45,7 @@ import {
 import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
+import { childRevalidatedEvent } from '../routing/routing-events.js';
 import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
@@ -114,6 +115,7 @@ async function queueTrackingAtCreation(
 ): Promise<{ readonly queueTracked: true; readonly queueOld?: CommitSha } | undefined> {
   const config = await loadMergedConfigForRead(worktree);
   if (!config.ok || !routingEligible({ kind: 'active' }, config.config as Parameters<typeof routingEligible>[1])) return undefined;
+  if (!await hasDurableChildState(worktree, slug, { git })) return undefined;
   const queue = await readRevalidationQueue(worktree, slug, { git });
   if (queue.kind === 'unreadable') throw new Error('cannot read revalidation queue before restack');
   return queue.kind === 'queue'
@@ -138,8 +140,16 @@ async function writeQueuePlan(
   entries: Awaited<ReturnType<typeof applyRestackTransition>>['queueInvalidation'],
   git: GitRunner,
 ): Promise<CommitSha | undefined> {
-  if (journal.journal.queueTracked !== true || entries.length === 0) return undefined;
-  const next = mergeQueueGeneration(await queueRecordAtJournalStart(journal, git), entries);
+  if (journal.journal.queueTracked !== true || (entries.length === 0 && journal.journal.routed === undefined)) return undefined;
+  const current = await queueRecordAtJournalStart(journal, git);
+  const host = journal.journal.routed?.host;
+  const acknowledged = host === undefined ? undefined : current.entries.find((entry) => entry.child === host);
+  let next = mergeQueueGeneration(current, entries, host === undefined ? {} : { acknowledge: host });
+  if (acknowledged !== undefined) {
+    const event = childRevalidatedEvent(host!, next.generation, acknowledged.closureSha, 'fixed');
+    next = { ...next, outbox: [...next.outbox, { eventId: event.eventId, occurredAt: event.occurredAt, event }] };
+  }
+  if (next.entries.length === current.entries.length && next.outbox.length === current.outbox.length && entries.length === 0) return undefined;
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(next));
   const queueNew = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
   if (!queueNew) throw new Error('cannot write revalidation queue blob');

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { ConductorEvent } from '../../types/events.js';
 import type { ChildId } from '../child-context.js';
 import type { HostState, RouteRecord, RoundId } from './route-types.js';
+import type { CommitSha } from '../restack/restack-types.js';
 
 function occurrence(): { readonly eventId: string; readonly occurredAt: string } {
   return { eventId: randomUUID(), occurredAt: new Date().toISOString() };
@@ -25,6 +26,16 @@ export function routedRepairPhaseEvent(
   credit: boolean,
 ): Extract<ConductorEvent, { type: 'routed_repair_phase' }> {
   return { type: 'routed_repair_phase', ...occurrence(), roundId, host, phase, credit, child: host };
+}
+
+/** Creates the one durable occurrence for a completed queued revalidation. */
+export function childRevalidatedEvent(
+  child: ChildId,
+  generation: number,
+  closureSha: CommitSha,
+  outcome: 'passed' | 'fixed',
+): Extract<ConductorEvent, { type: 'child_revalidated' }> {
+  return { type: 'child_revalidated', ...occurrence(), child, generation, closureSha, outcome };
 }
 
 /** Creates the durable occurrence paired with an upward host movement. */

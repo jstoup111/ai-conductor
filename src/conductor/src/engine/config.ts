@@ -1555,7 +1555,7 @@ export function validateConfig(
     if (block.enabled === undefined) {
       block.enabled = false;
     }
-    if (block.route_whole_feature_fixes === undefined) block.route_whole_feature_fixes = false;
+    if (block.route_whole_feature_fixes === undefined) block.route_whole_feature_fixes = true;
     if (block.max_slices === undefined) {
       block.max_slices = 1;
     } else if ((block.max_slices as number) > 5) {
@@ -1564,7 +1564,7 @@ export function validateConfig(
       );
     }
   }
-  if (obj.stacked_prs === undefined) obj.stacked_prs = { route_whole_feature_fixes: false };
+  if (obj.stacked_prs === undefined) obj.stacked_prs = { route_whole_feature_fixes: true };
 
   // build_progress — intra-step build progress event cadence knobs.
   if (obj.otel !== undefined && isPlainObject(obj.otel)) {

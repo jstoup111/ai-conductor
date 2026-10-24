@@ -10,6 +10,7 @@ import { writeHaltMarker } from '../halt-marker.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import {
   drainOutbox,
+  drainQueueOutbox,
   readRevalidationQueue,
   readRepairMarker,
   readRouteRecord,
@@ -24,6 +25,7 @@ import { assertNever, type HostState, type RevalidationQueueRecord, type RouteRe
 import { leafBranchFor } from '../feature-branch-identity.js';
 import { switchToChild } from '../child-lifecycle.js';
 import { applyStateChanges, readState } from '../state.js';
+import { acknowledgeQueueEntry } from './revalidation-queue.js';
 
 export type NextHostSelection =
   | { readonly kind: 'child-host'; readonly host: ChildId; readonly index: number }
@@ -256,6 +258,19 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   // still work that must be carried.  Only the exact closure tip is a no-op.
   if (evidence.tipEqualsClosure) {
     if (state === 'built') return halted(`routed exit host ${input.host}: built host cannot take no-commit exit`);
+    if (stored.record.kind === 'revalidate') {
+      const acknowledged = await acknowledgeQueueEntry(input.worktree, input.slug, stored, input.host, { git });
+      if (acknowledged.kind !== 'acknowledged') return halted(`routed exit host ${input.host}: revalidation acknowledgement ${acknowledged.kind}`);
+      const queue = await readRevalidationQueue(input.worktree, input.slug, { git });
+      if (queue.kind === 'queue') {
+        const persister = new EventPersister(`${input.worktree}/.pipeline/events.jsonl`, input.events ?? new ConductorEventEmitter());
+        const persisted = input.persist ?? ((event) => persister.persistDurably(event));
+        // Queue delivery is replay-safe; leave the durable envelope if this process dies here.
+        const drained = await drainQueueOutbox(input.worktree, queue, persisted, { git });
+        if (drained.kind !== 'drained') return halted(`routed exit host ${input.host}: queue outbox ${drained.kind}`);
+      }
+      return { kind: 'no-commit-done' };
+    }
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark host done`);
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [

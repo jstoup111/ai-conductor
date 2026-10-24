@@ -20,6 +20,7 @@ import { drainRoutingOutboxes } from '../routing/route-record-store.js';
 import { reconcileRounds, routedRoundOpen, type ReconcileRoundsResult } from '../routing/round-admission.js';
 import { reconcileReceiptLedger } from '../routing/round-receipt.js';
 import { requestRoutedExit } from '../routing/routed-exit.js';
+import { consumeLowestQueued } from '../routing/revalidation-queue.js';
 import { EventPersister } from '../event-persister.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 
@@ -37,6 +38,8 @@ export interface RunStackPreflightOptions {
   readonly baseRefreshDue?: boolean;
   /** Removes REKICK only immediately before a journal naming its follow-on exists. */
   readonly consumeRekick?: () => Promise<void>;
+  /** Recreates REKICK when a queued child defers a journal-owned follow-on. */
+  readonly rearmRekick?: () => Promise<void>;
   readonly events?: ConductorEventEmitter;
   readonly git?: GitRunner;
   /** Provider-backed resolver and its configured attempt budget. */
@@ -150,6 +153,13 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
         ? { kind: 'repaired' }
         : { kind: 'halted' };
     }
+    // Queue admission is marker-first and happens before any leaf return.
+    // A closed audit round may therefore yield to its lowest invalidated child.
+    if (reconciled.kind === 'none' || reconciled.kind === 'deferred') {
+      const consumed = await consumeLowestQueued(options.worktree, options.slug, { git: options.git });
+      if (consumed.kind === 'admitted') return { kind: 'navigate-host', roundId: consumed.roundId, host: consumed.host };
+      if (consumed.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot consume revalidation queue' };
+    }
     if (options.baseRefreshDue && await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
       await deferredBaseRefresh(options.events);
       return { kind: 'clear' };
@@ -222,6 +232,12 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
   if (applied.kind !== 'journal' || applied.journal.state !== 'applied' || applied.journal.followOnCause !== 'base-refresh') {
     await deferredBaseRefresh(options.events);
     return { kind: 'unavailable', detail: 'feature-repair journal did not retain its base-refresh follow-on' };
+  }
+  if (await (options.routedRoundOpen ?? routedRoundOpen)(options.worktree, options.slug, { git: options.git })) {
+    await options.rearmRekick?.();
+    const suppressed = await recoverRestackJournal({ ...options, suppressFollowOn: true });
+    await deferredBaseRefresh(options.events);
+    return suppressed.kind === 'unavailable' ? suppressed : { kind: 'repaired' };
   }
   // A crash before the repair journal names its follow-on must leave REKICK in
   // place. The durable journal is the hand-off; the sentinel is only its
