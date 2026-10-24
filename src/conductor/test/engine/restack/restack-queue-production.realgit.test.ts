@@ -48,7 +48,7 @@ async function fixture(routingEnabled = true) {
   await git(['config', 'user.name', 'Restack queue']);
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await git(['add', '.gitignore']);
-  const base = await commit('base', 'base.txt', 'base\n');
+  await commit('base', 'base.txt', 'base\n');
 
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const c1 = await commit('closed child 1', 'one.ts', 'export const one = 1;\n');

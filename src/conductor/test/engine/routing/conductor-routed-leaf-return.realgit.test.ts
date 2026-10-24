@@ -1,11 +1,9 @@
 // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1, task:rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1
 import { afterEach, describe, expect, it } from 'vitest';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
 import { Conductor } from '../../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readVerdict, writeVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
@@ -20,12 +18,6 @@ import { createSweepRepository, removeAll, sealStack, type SweepRepository } fro
 const cleanup: string[] = [];
 const host = parseChildId(1)!;
 const roundId = parseRoundId('r1')!;
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: async () => undefined,
-  writeFile,
-  rename,
-};
 
 afterEach(async () => { await removeAll(cleanup); });
 
@@ -191,6 +183,6 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       expect(leafVerdicts?.[gate]).toBe(false);
     }
     expect(leafState?.acceptance_specs).toBe('pending');
-    expect(onDisk.value.routed_return_probe).toBe('recorded');
+    expect((onDisk.value as Record<string, unknown>).routed_return_probe).toBe('recorded');
   });
 });
