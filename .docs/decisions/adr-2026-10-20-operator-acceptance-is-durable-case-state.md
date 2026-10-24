@@ -210,6 +210,8 @@ component may re-implement that rule. Other components consume only its output.
      (`adr-2026-08-29-build-review-remediate-case-adjudication` D6 never drops a deferral
      silently).
 
+> **Amended 2026-10-24 by #3294:** Two new build_review classes sit outside the absence predicate. An `outOfDelta` source is outside the live sources, like an advisory one. A `scope-empty` rubric did not judge, so it gives no evidence that a source is gone. A rubric whose sources belong to an open, `failed` or `reserved` act case always keeps those hunks in its delta. Absence retirement therefore still rests only on a rubric that judged the case's hunks in the current lap (adr-2026-10-24-lap-monotonic-build-review-scope D2, D3, D6).
+
 6. **Every occurrence this feature adds goes through the case-store outbox.** The outbox entry
    is written in the same `mutate()` as the state change that causes it. That covers three
    occurrences:

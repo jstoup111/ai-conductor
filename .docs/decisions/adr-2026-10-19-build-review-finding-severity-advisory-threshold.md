@@ -129,6 +129,8 @@ Option A. Each decision below states how it extends the existing suppression arc
   identical thresholds on every path.
 - **Cache.** Neither key enters the rubric cache fingerprint. Both are applied after judgement.
 
+> **Amended 2026-10-24 by #3294:** Both keys are still applied after judgement, and neither enters the cache fingerprint. They now also feed the engine's pre-projection scope decision: a finding below a threshold is non-blocking, so its hunk can settle. Lowering or removing a threshold unsettles that hunk on the next lap. A threshold change can therefore change a later lap's delta and its projection digest (adr-2026-10-24-lap-monotonic-build-review-scope D2).
+
 ### D4 — A below-threshold finding is advisory at the effective verdict and never reaches remediate
 
 - **Order.** Both effective reducers, built-in and custom, classify each finding in this order:
@@ -156,6 +158,8 @@ Option A. Each decision below states how it extends the existing suppression arc
   finding is live again and is judged as an unbound re-raise
   (`adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication` D5.6). Operator approved
   2026-10-23.
+
+> **Amended 2026-10-24 by #3294:** Both reducers insert `outOfDelta` after settled or carried and before declared replication. Out-of-delta findings follow the advisory rules here: they are excluded from live sources, never judged, routed, kicked back or charged, never accepted risk, and outside the absence rule. They are recorded in the lap's `reviewScope.outOfDeltaSourceIds`, and `build_review_outer_verdict` carries their count (adr-2026-10-24-lap-monotonic-build-review-scope D6).
 
 ### D5 — Every advisory finding is durable and visible
 

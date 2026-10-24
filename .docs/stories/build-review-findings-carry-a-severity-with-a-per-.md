@@ -105,7 +105,7 @@ As an operator, I want to set `min_severity` per rubric so that I decide which i
 - Given `min_severity: blocker` on a built-in rubric, when config is validated, then validation fails naming the key and the allowed values critical, major, minor and nit.
 - Given `min_severity: 2` on a custom rubric, when config is validated, then validation fails naming the key, because a number is not accepted.
 - Given `min_severity: Major` on a built-in rubric, when config is validated, then validation fails, because values are case-sensitive.
-- Given a change to min_severity between two laps with identical inputs, when the second lap looks up its rubric cache, then the cached rubric result is reused, because the threshold is applied after judgement and never enters the cache fingerprint.
+- Given a change to min_severity between two laps with identical inputs that leaves every rubric's delta unchanged, when the second lap looks up its rubric cache, then the cached rubric result is reused, because the threshold is applied after judgement and never enters the cache fingerprint.
 
 ### Done When
 - [ ] Config validation accepts min_severity only from the four closed values on both built-in and custom rubric entries.
@@ -142,7 +142,7 @@ As an operator, I want findings below my threshold recorded as advisory instead 
 - Given an open action case with a failed effect whose only source is advisory this lap, when a lap that is not mechanically healthy settles, then the case stays open and is not retired by absence.
 
 ### Done When
-- [ ] Both effective reducers classify in the order accepted, settled, declared replication, suppressed, advisory, unresolved, with advisory as its own bucket.
+- [ ] Both effective reducers classify in the order accepted, settled or carried, out of delta, declared replication, suppressed, advisory, unresolved, with advisory as its own bucket.
 - [ ] Only unresolved findings block; a lap of only resolved, suppressed and advisory findings is an effective PASS that dispatches no remediate.
 - [ ] Advisory findings are absent from the coordinator's live sources and never produce a BUILD route, kickback event, or kickback-ledger charge.
 - [ ] An undeclared threshold leaves the advisory set empty on every lap.
@@ -245,7 +245,7 @@ As an operator, I want a downgraded finding not re-judged every lap, but reopene
 #### Negative Paths
 - Given a finalized advisory case at adjudicated severity minor, when the operator lowers implementationQuality min_severity to minor and the same finding recurs, then the case does not settle and the finding is a live source again.
 - Given a finalized advisory case, when the operator removes min_severity and the same finding recurs, then the finding is a live source and blocks as unresolved.
-- Given a finalized advisory case, when the recurring finding's id has drifted, then the case does not bind and the finding is judged as a live source.
+- Given a finalized advisory case, when the recurring finding's id has drifted, then the case does not bind and, in a full lap or when the finding maps to a delta hunk or names a delta cause hunk, the finding is judged as a live source.
 - Given the settled-recurrence predicate evaluating an advisory case, when it runs, then it neither writes, prunes nor resolves the case.
 
 ### Done When

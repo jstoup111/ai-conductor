@@ -116,6 +116,8 @@ remain blocking.
 
 > **Amended 2026-10-20 by #3271:** Exact dispositions in this store remain the only source of accepted risk. Their effect now also extends to later re-raises that the judge binds to a case holding an acceptance origin derived from them, recorded in the remediation case store as `carried` (adr-2026-10-20-operator-acceptance-is-durable-case-state D2, D3, D9). Invalidating a disposition stops new carry admission from it.
 
+> **Amended 2026-10-24 by #3294:** The store is still never included in grader input. Exact dispositions now also inform the engine's pre-projection scope decision: a hunk whose findings all match exact dispositions, or are otherwise non-blocking, can be settled and leave a later lap's delta. The raw aggregate remains an independent judgement of the delta the engine scoped. A finding outside that delta without a verified cause hunk is classified `outOfDelta`, which is not accepted risk (adr-2026-10-24-lap-monotonic-build-review-scope D2, D5, D6).
+
 ### 3. Serialize the coordinator and CLI through one state transaction
 
 All reads and writes that join current findings with dispositions use one feature-local
