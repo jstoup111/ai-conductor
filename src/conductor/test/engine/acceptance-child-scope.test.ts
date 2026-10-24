@@ -69,7 +69,7 @@ describe('acceptance_specs child scope', () => {
     vi.resetAllMocks();
   });
 
-  it('dispatches only the active child\'s owned story criteria', async () => {
+  it('dispatches only active-child owned story criteria without a coverage envelope', async () => {
     const root = await mkdtemp(join(tmpdir(), 'acceptance-child-scope-'));
     roots.push(root);
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
