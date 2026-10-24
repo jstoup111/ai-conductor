@@ -2126,6 +2126,7 @@ describe('DefaultStepRunner', () => {
         model: 'gpt-5.6-terra',
         effort: 'medium',
         preferredProvider: 'codex',
+        provider: 'codex',
         actualProvider: 'codex',
         attempts: [
           {
@@ -2150,6 +2151,7 @@ describe('DefaultStepRunner', () => {
         model: 'opus',
         effort: 'high',
         preferredProvider: 'claude',
+        provider: 'claude',
         actualProvider: 'claude',
         attempts: [
           {
