@@ -169,23 +169,12 @@ describe('plan-slices consumer boundary', () => {
     expect(planSliceImporters).toEqual([
       join('engine', 'engineer', 'land-spec.ts'),
       join('engine', 'slice-topology.ts'),
-      join('engine', 'step-runners.ts'),
     ]);
-
-    const runnerSource = sources.find(({ path }) => path === join('engine', 'step-runners.ts'))!.source;
-    const runnerStart = runnerSource.indexOf('private async runCoverageBinding(');
-    const sliceReferenceIndexes = [...runnerSource.matchAll(/\bvalidatePlanSlices\b/g)]
-      .map((match) => match.index!)
-      .filter((index) => index !== runnerSource.indexOf('validatePlanSlices'));
-    expect(runnerStart).toBeGreaterThanOrEqual(0);
-    expect(sliceReferenceIndexes).not.toEqual([]);
-    expect(sliceReferenceIndexes.every((index) => index > runnerStart)).toBe(true);
 
     expect(sources.filter(({ source }) => /\bSlices\b/.test(source)).map(({ path }) => path).sort())
       .toEqual([join('engine', 'plan-slices.ts')]);
     expect(sources.filter(({ source }) => /\bstacked_prs\b/.test(source)).map(({ path }) => path).sort())
       .toEqual([
-      join('engine', 'child-cursor.ts'),
       join('engine', 'child-lifecycle.ts'),
       join('engine', 'conductor.ts'),
         join('engine', 'config.ts'),
@@ -194,7 +183,6 @@ describe('plan-slices consumer boundary', () => {
       join('engine', 'routing', 'round-receipt.ts'),
       join('engine', 'routing', 'route-types.ts'),
       join('engine', 'slice-topology.ts'),
-      join('engine', 'step-runners.ts'),
       join('types', 'config.ts'),
       ]);
   });

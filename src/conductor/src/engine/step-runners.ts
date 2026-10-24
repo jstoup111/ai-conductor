@@ -64,22 +64,12 @@ import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFa
 import type { CiRepairDiagnosticReason } from '../types/events.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
-  parseComplexityTier,
-  parseStackedDeliverySignoff,
   resolveFeaturePlanPath,
   splitStoryBlocks,
   selectFeaturePlan,
 } from './artifacts.js';
 import { pipelinePathFor } from './child-context.js';
 import { runPlanReview } from './plan-review-runner.js';
-import {
-  customStepsInPerChildRegion,
-  deriveStoryOwnership,
-  evaluateStackEligibility,
-  validatePlanSlices,
-} from './plan-slices.js';
-import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
-import { resolveCoverageBindingDecideSet } from './coverage-binding-decide-set.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { loadSliceTopology } from './slice-topology.js';
 import {
@@ -117,7 +107,7 @@ import {
   readBuildReviewRubricSkill,
 } from './build-review-registry.js';
 import { currentCommitSha } from './project-prelude.js';
-import { loadConfig, resolveGateCodeValidityConfig } from './config.js';
+import { resolveGateCodeValidityConfig } from './config.js';
 import {
   assembleBuildReviewInputs,
   TestSuiteProofError,
@@ -5325,72 +5315,30 @@ export class DefaultStepRunner implements StepRunner {
     // Feature-baseline metadata, populated only after the same ownership
     // predicate that admits stacked delivery.
     let storyOwnership: Readonly<Record<string, number>> | undefined;
+    let slicePositions: readonly number[] | undefined;
     const judgedHead = await this.gitRunner(['rev-parse', 'HEAD'])
       .then((result) => (result.exitCode === 0 ? result.stdout.trim() : ''))
       .catch(() => '');
 
-    const planPath = this.planPathOverride
-      ?? await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
-    let planText: string | undefined;
-    if (planPath) {
-      try {
-        planText = await readFile(planPath, 'utf8');
-      } catch (error) {
-        this.log(`coverage_binding: plan unreadable, recording no slice topology: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-
-    if (planText !== undefined) {
-      const sliceValidation = validatePlanSlices(planText);
-      if (sliceValidation.kind === 'invalid') {
-        this.log(`coverage_binding: plan slices are invalid; building flat (${sliceValidation.violations.map((violation) => violation.message).join('; ')})`);
-      }
-      if (sliceValidation.kind === 'sliced') {
-        sliceMembership = {
-          taskSlices: Object.fromEntries(sliceValidation.slices.flatMap((slice) =>
-            slice.taskIds
-              .filter((taskId) => !isEngineAppendedRemediationTaskId(taskId))
-              .map((taskId) => [taskId, slice.position]),
-          )),
-          titles: sliceValidation.slices.map((slice) => slice.title),
-        };
-        const configResult = await loadConfig(this.projectRoot);
-        const freshConfig = configResult.ok
-          ? configResult.config
-          : configResult.error.type === 'missing'
-            ? undefined
-            : this.config;
-        if (freshConfig?.stacked_prs?.enabled === true) {
-          const decideSet = await resolveCoverageBindingDecideSet(this.projectDir, this.featureDesc || undefined);
-          const storiesPath = decideSet?.storiesPath;
-          const storiesText = storiesPath === undefined || storiesPath === null
-            ? ''
-            : await readFile(join(this.projectDir, storiesPath), 'utf8').catch(() => '');
-          const complexityPath = join(this.projectDir, '.docs', 'complexity', `${basename(planPath!, '.md')}.md`);
-          const complexityContent = await readFile(complexityPath, 'utf8').catch(() => null);
-          const ownership = deriveStoryOwnership(
-            planText,
-            sliceValidation.slices,
-            new Set(splitStoryBlocks(storiesText).flatMap(({ id }) => id === undefined ? [] : [id])),
-          );
-          const eligibility = evaluateStackEligibility({
-            tier: parseComplexityTier(complexityContent),
-            signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
-            slicePositions: sliceValidation.slices.map(({ position }) => position),
-            maxSlices: freshConfig.stacked_prs.max_slices ?? 1,
-            regionCoupledSteps: customStepsInPerChildRegion(buildStepRegistry(freshConfig)),
-            complexityPath: relative(this.projectDir, complexityPath).replaceAll('\\', '/'),
-          });
-          const reasons = [
-            ...(ownership.kind === 'invalid' ? ownership.violations.map(({ message }) => message) : []),
-            ...(eligibility.kind === 'ineligible' ? eligibility.reasons : []),
-          ];
-          if (reasons.length > 0) {
-            this.log(`coverage_binding: plan is not eligible for stacked delivery; building flat (${reasons.join('; ')})`);
-          } else if (ownership.kind === 'owned') {
-            storyOwnership = ownership.ownership;
-          }
+    if (this.featureDesc) {
+      const topology = await loadSliceTopology(this.projectDir, this.featureDesc, {
+        git: this.gitRunner,
+        projectRoot: this.projectRoot,
+        planPath: this.planPathOverride,
+      });
+      if (topology.kind === 'sliced') {
+        sliceMembership = topology.sliceMembership;
+        slicePositions = topology.positions;
+        if (topology.stackEligibility.kind === 'ineligible') {
+          this.log(`coverage_binding: plan is not eligible for stacked delivery; building flat (${topology.stackEligibility.reasons.join('; ')})`);
+        } else {
+          storyOwnership = topology.storyOwnership;
         }
+      } else if (topology.kind === 'unavailable' && topology.cause === 'plan-invalid') {
+        sliceMembership = topology.sliceMembership;
+        this.log(`coverage_binding: plan slices are invalid; building flat (${topology.violations?.map((violation) => violation.message).join('; ') ?? topology.cause})`);
+      } else if (topology.kind === 'unavailable' && topology.cause === 'positions-changed') {
+        slicePositions = topology.planPositions;
       }
     }
 
@@ -5399,7 +5347,7 @@ export class DefaultStepRunner implements StepRunner {
     const positionGuard = await verifyStackPositionImmutability(
       this.projectDir,
       this.featureDesc,
-      sliceMembership === undefined ? [] : Object.values(sliceMembership.taskSlices),
+      slicePositions ?? (sliceMembership === undefined ? [] : Object.values(sliceMembership.taskSlices)),
       this.gitRunner,
     );
     if (positionGuard.kind === 'refused') {

@@ -240,8 +240,15 @@ describe('acceptance_specs child-scoped disposition grounding', () => {
     },
   };
 
-  it('accepts child 2 when every and only its owned criteria are disposed', async () => {
+  it('grounds disposition-only evidence in loader ownership despite a stale envelope', async () => {
     const root = await seed([record(story2Happy), record(story2Negative)]);
+    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'feature',
+      runId: 'stale',
+      status: 'disabled',
+      storyOwnership: { '1': 2, '2': 1 },
+    }));
 
     await expect(checkStepCompletion(root, 'acceptance_specs', context)).resolves.toEqual({
       done: true,
@@ -316,7 +323,7 @@ describe('acceptance_specs child with no owned criteria', () => {
     await writeFile(path, content);
   }
 
-  it('records no-owned-criteria and dispatches build without dispatching acceptance authoring', async () => {
+  it('uses loader ownership for no-owned-criteria despite a stale envelope', async () => {
     const root = await mkdtemp(join(tmpdir(), 'acceptance-child-empty-'));
     roots.push(root);
     await createFile(root, '.docs/plans/feature.md', slicedPlan('n/a', 'Story 2'));
@@ -340,6 +347,13 @@ describe('acceptance_specs child with no owned criteria', () => {
       build_review: 'done',
     }));
     await recordStackPositions(root);
+    await createFile(root, '.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'feature',
+      runId: 'stale',
+      status: 'disabled',
+      storyOwnership: { '2': 1 },
+    }));
     resolveActiveChild.mockResolvedValue({
       kind: 'active', child: child1, position: 1, isLeaf: false, branch: 'feat/c1/feature',
     });

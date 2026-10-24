@@ -44,6 +44,8 @@ export type SliceTopology =
       readonly planPath?: string;
       readonly storiesPath?: string;
       readonly violations?: readonly PlanSliceViolation[];
+      /** Parsed task membership remains useful to retired compatibility readers even when story ownership is invalid. */
+      readonly sliceMembership?: SliceTopologyMembership;
       readonly positionsRef?: string;
       readonly recordedPositions?: readonly number[];
       readonly planPositions?: readonly number[];
@@ -56,6 +58,8 @@ export interface DurableChildStateDependencies {
 export interface LoadSliceTopologyDependencies extends DurableChildStateDependencies {
   /** The root whose project config decides whether a new stack is eligible. */
   readonly projectRoot?: string;
+  /** An explicit feature-plan path for compatibility callers with an injected plan. */
+  readonly planPath?: string;
 }
 
 async function runGit(git: GitRunner, args: string[]) {
@@ -171,7 +175,7 @@ export async function loadSliceTopology(
   dependencies: LoadSliceTopologyDependencies = {},
 ): Promise<SliceTopology> {
   const git = dependencies.git ?? makeGitRunner(worktree);
-  const planPath = await resolveFeaturePlanPath(worktree, slug);
+  const planPath = dependencies.planPath ?? await resolveFeaturePlanPath(worktree, slug);
   if (!planPath) return unavailable('plan-missing', { planPath: conventionalPlanPath(slug) });
 
   const planRepoPath = repoPath(worktree, planPath);
@@ -189,11 +193,22 @@ export async function loadSliceTopology(
     return (await verifyPositions(worktree, slug, [], git)) ?? { kind: 'unsliced' };
   }
 
+  const membership: SliceTopologyMembership = {
+    taskSlices: Object.fromEntries(validation.slices.flatMap((slice) =>
+      slice.taskIds
+        .filter((taskId) => !isEngineAppendedRemediationTaskId(taskId))
+        .map((taskId) => [taskId, slice.position]),
+    )),
+    titles: validation.slices.map((slice) => slice.title),
+  };
+  const positions = validation.slices.map((slice) => slice.position);
+
   const storiesPath = resolvePlanStoriesPath(planRepoPath, planText);
   if (storiesPath === null) {
     return unavailable('plan-invalid', {
       planPath: planRepoPath,
       violations: [{ code: 'stories-path', message: 'the plan Stories reference does not resolve to a .docs stories artifact' }],
+      sliceMembership: membership,
     });
   }
   let storiesText: string;
@@ -204,6 +219,7 @@ export async function loadSliceTopology(
       planPath: planRepoPath,
       storiesPath,
       violations: [{ code: 'stories-unreadable', message: `cannot read stories artifact ${storiesPath}` }],
+      sliceMembership: membership,
     });
   }
 
@@ -212,17 +228,12 @@ export async function loadSliceTopology(
     validation.slices,
     new Set(splitStoryBlocks(storiesText).flatMap(({ id }) => id === undefined ? [] : [id])),
   );
-  if (ownership.kind === 'invalid') return unavailable('plan-invalid', { planPath: planRepoPath, storiesPath, violations: ownership.violations });
-
-  const membership: SliceTopologyMembership = {
-    taskSlices: Object.fromEntries(validation.slices.flatMap((slice) =>
-      slice.taskIds
-        .filter((taskId) => !isEngineAppendedRemediationTaskId(taskId))
-        .map((taskId) => [taskId, slice.position]),
-    )),
-    titles: validation.slices.map((slice) => slice.title),
-  };
-  const positions = validation.slices.map((slice) => slice.position);
+  if (ownership.kind === 'invalid') return unavailable('plan-invalid', {
+    planPath: planRepoPath,
+    storiesPath,
+    violations: ownership.violations,
+    sliceMembership: membership,
+  });
   const positionFailure = await verifyPositions(worktree, slug, positions, git);
   if (positionFailure) return positionFailure;
 
