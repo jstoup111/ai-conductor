@@ -215,13 +215,12 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
     });
   });
 
-  it('reopens an applicable but unbindable coverage PASS instead of leaving it outside the applied decision', async () => {
+  it('ignores retired coverage state during a replay transition', async () => {
     invalidationOverride.result = { preserved: ['coverage_binding'], invalidated: [] };
     await writeFile(
       join(projectRoot, '.pipeline/coverage-binding.json'),
       JSON.stringify({ version: 1, slug: 'feature', runId: 'run-1', status: 'disabled', entries: [] }),
     );
-    await writeVerdict(projectRoot, { satisfied: true, checkedAt: 1 });
 
     const result = await applyRebaseVerdicts(projectRoot, {
       kind: 'changed',
@@ -230,11 +229,8 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
     }, false);
 
     expect(result.preservedGates).toBeUndefined();
-    expect(result.kickedBack).toContain('coverage_binding');
-    expect(await readVerdict(projectRoot, 'coverage_binding')).toMatchObject({
-      satisfied: false,
-      kickback: { from: 'rebase' },
-    });
+    expect(result.kickedBack).not.toContain('coverage_binding');
+    await expect(readVerdict(projectRoot, 'coverage_binding')).resolves.toBeNull();
   });
 
   it('reopens an otherwise applicable PASS when it lacks bounded original-judge authority', async () => {
