@@ -1,6 +1,6 @@
-// Covers: task:23, task:54, task:rem-prd-audit-rem-prd-audit-S7.3-r1, task:rem-as-built-rem-asbuilt-b00b54a4-3-r1
+// Covers: task:4, task:23, task:54, task:rem-prd-audit-rem-prd-audit-S7.3-r1, task:rem-as-built-rem-asbuilt-b00b54a4-3-r1
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -39,6 +39,30 @@ describe('task-membership-check hook command', () => {
         },
       }),
     );
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), [
+      '# Implementation Plan: demo',
+      '',
+      '**Stories:** .docs/stories/demo.md',
+      '',
+      '## Slices',
+      '',
+      '| Slice | Title | Tasks |',
+      '| --- | --- | --- |',
+      '| 1 | Foundation | T1 |',
+      '| 2 | Delivery | T3 |',
+      '',
+      '### Task T1: Foundation',
+      '**Story:** Story 1',
+      '**Dependencies:** none',
+      '',
+      '### Task T3: Delivery',
+      '**Story:** Story 2',
+      '**Dependencies:** T1',
+      '',
+    ].join('\n'));
+    await writeFile(join(root, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: Foundation\n\n## Story 2: Delivery\n');
   });
 
   afterEach(async () => {
@@ -75,6 +99,43 @@ describe('task-membership-check hook command', () => {
     expect(output.join('\n')).toContain('child 1');
   });
 
+  it('derives child membership from the plan when no envelope exists and ignores a stale envelope', async () => {
+    await rm(join(root, '.pipeline', 'coverage-binding.json'));
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), [
+      '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+      '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 1, 2, 3 |', '| 2 | Delivery | 4, 5, 6 |', '',
+      '### Task 1: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
+      '### Task 2: Foundation', '**Story:** Story 1', '**Dependencies:** 1', '',
+      '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** 2', '',
+      '### Task 4: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
+      '### Task 5: Delivery', '**Story:** Story 2', '**Dependencies:** 4', '',
+      '### Task 6: Delivery', '**Story:** Story 2', '**Dependencies:** 5', '',
+    ].join('\n'));
+    await writeFile(messagePath, 'feat: child work\n\nTask: 2\n');
+    await expect(run('feat/c1/demo')).resolves.toBe(0);
+
+    await writeFile(messagePath, 'feat: wrong child\n\nTask: 5\n');
+    const output: string[] = [];
+    await expect(run('feat/c1/demo', output)).resolves.toBe(1);
+    expect(output.join('\n')).toContain('child 2');
+
+    await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1, slug: 'demo', runId: 'stale', status: 'done', entries: [],
+      sliceMembership: { taskSlices: { '2': 2, '5': 1 }, titles: ['wrong', 'wrong'] },
+    }));
+    await writeFile(messagePath, 'feat: child work\n\nTask: 2\n');
+    await expect(run('feat/c1/demo')).resolves.toBe(0);
+    await expect(run('feat/daemon-demo')).resolves.toBe(0);
+  });
+
+  it('refuses malformed plan slices with the loader cause', async () => {
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), '# Plan\n\n## Slices\n\n| Slice | Title | Tasks |\n| --- | --- | --- |\n| 1 | broken |\n');
+    const output: string[] = [];
+
+    await expect(run('feat/c1/demo', output)).resolves.toBe(1);
+    expect(output.join('\n')).toContain('plan-invalid');
+  });
+
   // Covers: task:39
   it('projects an owner-one routed task onto its marker host only', async () => {
     const git = async (...args: string[]) => execFileAsync('git', ['-C', root, ...args]);
@@ -86,6 +147,13 @@ describe('task-membership-check hook command', () => {
       version: 1, slug: 'demo', runId: 'run', status: 'done', entries: [],
       sliceMembership: { taskSlices: { T1: 1, T3: 1 }, titles: ['foundation'] },
     }));
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), [
+      '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+      '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | T1, T3 |', '',
+      '### Task T1: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
+      '### Task T3: Foundation', '**Story:** Story 1', '**Dependencies:** T1', '',
+    ].join('\n'));
+    await writeFile(join(root, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: Foundation\n');
     const record = {
       roundId: 'r1', kind: 'audit', phase: 'open',
       items: [{ findingId: 'finding', kind: 'audit', owner: 1, host: 2, reason: 'routed', fallback: [], existingTask: true, taskIds: ['T1'] }],
@@ -155,7 +223,7 @@ describe('task-membership-check hook command', () => {
   it.each([2, '2'] as const)('accepts a canonical cached remediation child %j when its Child line is absent', async (cachedChild) => {
     await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task rem-prd-audit-T1: repair\n');
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), `${await readFile(join(root, '.docs', 'plans', 'demo.md'), 'utf8')}\n### Task rem-prd-audit-T1: repair\n`);
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
       appendedRemediationTaskChildren: { 'rem-prd-audit-T1': cachedChild },
     }));
@@ -166,7 +234,7 @@ describe('task-membership-check hook command', () => {
   it('refuses a malformed cached remediation child when its Child line is absent', async () => {
     await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task rem-prd-audit-T1: repair\n');
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), `${await readFile(join(root, '.docs', 'plans', 'demo.md'), 'utf8')}\n### Task rem-prd-audit-T1: repair\n`);
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
       appendedRemediationTaskChildren: { 'rem-prd-audit-T1': 'x' },
     }));
@@ -182,7 +250,7 @@ describe('task-membership-check hook command', () => {
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await writeFile(
       join(root, '.docs', 'plans', 'demo.md'),
-      '### Task rem-prd-audit-T1: repair\n\n**Child:** 1\n',
+      `${await readFile(join(root, '.docs', 'plans', 'demo.md'), 'utf8')}\n### Task rem-prd-audit-T1: repair\n\n**Child:** 1\n`,
     );
 
     await expect(run('feat/c1/demo')).resolves.toBe(0);
@@ -193,7 +261,7 @@ describe('task-membership-check hook command', () => {
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await writeFile(
       join(root, '.docs', 'plans', 'demo.md'),
-      '### Task rem-prd-audit-T1: repair\n\n**Child:** 1\n',
+      `${await readFile(join(root, '.docs', 'plans', 'demo.md'), 'utf8')}\n### Task rem-prd-audit-T1: repair\n\n**Child:** 1\n`,
     );
     await writeFile(
       join(root, '.pipeline', 'engine-state.json'),
@@ -215,7 +283,7 @@ describe('task-membership-check hook command', () => {
   it('refuses a rem task when neither the committed Child line nor cache is available', async () => {
     await writeFile(messagePath, 'fix: remediation\n\nTask: rem-prd-audit-T1\n');
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(root, '.docs', 'plans', 'demo.md'), '### Task rem-prd-audit-T1: repair\n');
+    await writeFile(join(root, '.docs', 'plans', 'demo.md'), `${await readFile(join(root, '.docs', 'plans', 'demo.md'), 'utf8')}\n### Task rem-prd-audit-T1: repair\n`);
     const output: string[] = [];
 
     await expect(run('feat/c1/demo', output)).resolves.toBe(1);
@@ -223,17 +291,17 @@ describe('task-membership-check hook command', () => {
     expect(output.join('\n')).toContain('rem-prd-audit-T1');
   });
 
-  it('fails closed when the child membership envelope cannot be read', async () => {
-    await rm(join(root, '.pipeline', 'coverage-binding.json'));
+  it('fails closed when the child topology cannot be read', async () => {
+    await rm(join(root, '.docs', 'plans', 'demo.md'));
     const output: string[] = [];
 
     await expect(run('feat/c1/demo', output)).resolves.toBe(1);
     expect(output.join('\n')).toContain('unreadable membership');
-    expect(output.join('\n')).toContain('coverage-binding envelope');
+    expect(output.join('\n')).toContain('plan-missing');
   });
 
   it('abstains on a non-child branch without requiring membership artifacts', async () => {
-    await rm(join(root, '.pipeline', 'coverage-binding.json'));
+    await rm(join(root, '.docs', 'plans', 'demo.md'));
 
     await expect(run('feat/daemon-other')).resolves.toBe(0);
     await expect(run(undefined)).resolves.toBe(0);
@@ -271,6 +339,15 @@ describe('task-membership-check hook command', () => {
         entries: [],
         sliceMembership: { taskSlices: { T1: 1, T3: 2 }, titles: ['first', 'second'] },
       }));
+      await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
+      await writeFile(join(repo, '.docs', 'plans', 'demo.md'), [
+        '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | First | T1 |', '| 2 | Second | T3 |', '',
+        '### Task T1: First', '**Story:** Story 1', '**Dependencies:** none', '',
+        '### Task T3: Second', '**Story:** Story 2', '**Dependencies:** T1', '',
+      ].join('\n'));
+      await writeFile(join(repo, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: First\n\n## Story 2: Second\n');
 
       await writeFile(join(repo, 'allowed.txt'), 'allowed\n');
       await git('add', 'allowed.txt');

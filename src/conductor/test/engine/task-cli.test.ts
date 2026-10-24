@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:6, task:12, task:26, task:15
+// Covers: task:1, task:2, task:3, task:4, task:6, task:12, task:26, task:15
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   detectTaskCommand,
@@ -257,11 +257,19 @@ describe('task command child slice membership', () => {
   };
 
   async function seedTaskState(root: string, currentTask?: string): Promise<void> {
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    const positionsPath = join(root, 'positions.json');
+    await fsPromises.writeFile(positionsPath, '[1,2]');
+    const positions = (await execa('git', ['hash-object', '-w', positionsPath], { cwd: root })).stdout.trim();
+    await execa('git', ['update-ref', 'refs/conductor/feature/positions', positions], { cwd: root });
     const pipeline = join(root, '.pipeline');
     await fsPromises.mkdir(pipeline, { recursive: true });
     await fsPromises.writeFile(join(pipeline, 'task-status.json'), JSON.stringify({
       tasks: [
         { id: '3', status: 'pending' },
+        { id: '4', status: 'pending' },
+        { id: '5', status: 'pending' },
+        { id: '6', status: 'pending' },
         { id: '7', status: 'pending' },
         { id: 'rem-fr10-1', status: 'pending' },
       ],
@@ -278,6 +286,17 @@ describe('task command child slice membership', () => {
       entries: [],
       ...(membership ? { sliceMembership: { taskSlices: { '3': 1, '7': 2 }, titles: ['Foundation', 'Delivery'] } } : {}),
     }, coverageBindingFilesystem);
+    if (membership) {
+      await fsPromises.mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(root, '.docs', 'stories'), { recursive: true });
+      await fsPromises.writeFile(join(root, '.docs', 'plans', 'feature.md'), [
+        '# Implementation Plan: feature', '', '**Stories:** .docs/stories/feature.md', '', '## Slices', '',
+        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 3 |', '| 2 | Delivery | 7 |', '',
+        '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
+        '### Task 7: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(root, '.docs', 'stories', 'feature.md'), '# Stories: feature\n\n## Story 1: Foundation\n\n## Story 2: Delivery\n');
+    }
   }
 
   async function snapshotPipeline(root: string): Promise<Record<string, string>> {
@@ -340,23 +359,58 @@ describe('task command child slice membership', () => {
     }
   });
 
-  it.each([
-    ['without an envelope', false],
-    ['without slice membership in the envelope', true],
-  ])('refuses %s without changing task state', async (_name, writeEnvelopeWithoutMembership) => {
+  it('refuses a missing plan without changing task state', async () => {
     const root = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-no-membership-'));
     try {
       await seedTaskState(root, '3');
       await fsPromises.mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
-      if (writeEnvelopeWithoutMembership) await writeEnvelope(root, false);
       const before = await snapshotPipeline(root);
       const command = detectTaskCommand(['node', 'conduct', 'task', 'start', '7', '--child', '2']);
 
       await expect(dispatchWithStderr(command!, root)).resolves.toEqual({
         exitCode: 1,
-        stderr: '[task-cli] no slice membership is recorded for the feature (coverage-binding envelope missing)',
+        stderr: '[task-cli] feature topology is unavailable (plan-missing)',
       });
       await expect(snapshotPipeline(root)).resolves.toEqual(before);
+    } finally {
+      await fsPromises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts child two scope from the plan with no envelope and refuses malformed slices', async () => {
+    const root = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-child-loader-'));
+    try {
+      await seedTaskState(root);
+      await fsPromises.mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+      await fsPromises.mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(root, '.docs', 'stories'), { recursive: true });
+      await fsPromises.writeFile(join(root, '.docs', 'plans', 'feature.md'), [
+        '# Implementation Plan: feature', '', '**Stories:** .docs/stories/feature.md', '', '## Slices', '',
+        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | Foundation | 1, 2, 3 |', '| 2 | Delivery | 4, 5, 6 |', '',
+        '### Task 1: Foundation', '**Story:** Story 1', '**Dependencies:** none', '',
+        '### Task 2: Foundation', '**Story:** Story 1', '**Dependencies:** 1', '',
+        '### Task 3: Foundation', '**Story:** Story 1', '**Dependencies:** 2', '',
+        '### Task 4: Delivery', '**Story:** Story 2', '**Dependencies:** 3', '',
+        '### Task 5: Delivery', '**Story:** Story 2', '**Dependencies:** 4', '',
+        '### Task 6: Delivery', '**Story:** Story 2', '**Dependencies:** 5', '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(root, '.docs', 'stories', 'feature.md'), '# Stories: feature\n\n## Story 1: Foundation\n\n## Story 2: Delivery\n');
+
+      await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'start', '5', '--child', '2'])!, root)).resolves.toBe(0);
+      const originalLog = console.log;
+      const stdout: string[] = [];
+      console.log = (...args: unknown[]) => { stdout.push(args.join(' ')); };
+      try {
+        await expect(dispatchTaskCommand(detectTaskCommand(['node', 'conduct', 'task', 'status', '--child', '2'])!, root)).resolves.toBe(0);
+      } finally {
+        console.log = originalLog;
+      }
+      expect(JSON.parse(stdout.join('\n')).map((task: { id: string }) => task.id)).toEqual(['4', '5', '6']);
+
+      await fsPromises.writeFile(join(root, '.docs', 'plans', 'feature.md'), '# Plan\n\n## Slices\n\n| Slice | Title | Tasks |\n| --- | --- | --- |\n| 1 | broken |\n');
+      await expect(dispatchWithStderr(detectTaskCommand(['node', 'conduct', 'task', 'status', '--child', '2'])!, root)).resolves.toMatchObject({
+        exitCode: 1, stderr: expect.stringContaining('plan-invalid'),
+      });
     } finally {
       await fsPromises.rm(root, { recursive: true, force: true });
     }
@@ -467,9 +521,15 @@ describe('task command child slice membership', () => {
         tasks: [{ id: 'T1', status: 'pending' }, { id: 'T2', status: 'pending' }, { id: 'T3', status: 'pending' }],
       }));
       await fsPromises.mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(root, '.docs', 'stories'), { recursive: true });
       await fsPromises.writeFile(join(root, '.docs', 'plans', 'demo.md'), [
-        '### Task T1: routed work', '', '**Done when:**', '- Current evidence is recorded.', '',
+        '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+        '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | T1 |', '| 2 | Two | T2 |', '| 3 | Three | T3 |', '',
+        '### Task T1: routed work', '**Story:** Story 1', '**Dependencies:** none', '**Done when:**', '- Current evidence is recorded.', '',
+        '### Task T2: child two', '**Story:** Story 2', '**Dependencies:** T1', '',
+        '### Task T3: child three', '**Story:** Story 3', '**Dependencies:** T2', '',
       ].join('\n'));
+      await fsPromises.writeFile(join(root, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n\n## Story 3: Three\n');
       await fsPromises.writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
         activePlanPath: '.docs/plans/demo.md',
       }));
@@ -477,6 +537,9 @@ describe('task command child slice membership', () => {
         version: 1, slug: 'demo', runId: 'routed-cli', status: 'done', entries: [],
         sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] },
       }, coverageBindingFilesystem);
+      const positionsPath = join(root, 'positions.json');
+      await fsPromises.writeFile(positionsPath, '[1,2,3]');
+      await git(['update-ref', 'refs/conductor/demo/positions', (await git(['hash-object', '-w', positionsPath])).stdout.trim()]);
       const created = await createRouteRecord(root, 'demo', {
         roundId, sealedAuthored: 1, kind: 'audit',
         items: [{ findingId: 'finding', kind: 'audit', owner: c1, host: c2, reason: 'routed', fallback: [], existingTask: true, taskIds: ['T1'] }],

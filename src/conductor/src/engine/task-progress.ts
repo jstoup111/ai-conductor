@@ -1,5 +1,5 @@
 import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
-import { isAbsolute, join, relative } from 'node:path';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import { execa } from 'execa';
 import {
   listCommitsWithTrailers,
@@ -8,13 +8,10 @@ import {
   parsePlanTaskVerifyOnly,
 } from './autoheal.js';
 import { readEngineState } from './engine-state-store.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  coverageBindingEnvelopePath,
-  parseCoverageBindingEnvelope,
-  projectChildOwnership,
-} from './coverage-binding-envelope.js';
 import type { ChildId } from './child-context.js';
+import { resolveFeaturePlanPath } from './artifacts.js';
+import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
+import { loadSliceTopology } from './slice-topology.js';
 import {
   readCommittedRemediationTaskChildren,
   resolveRemediationTaskChild,
@@ -98,9 +95,22 @@ export type ChildTaskScope =
   | { kind: 'available'; taskIds: string[] }
   | { kind: 'refused'; reason: string };
 
+/** Resolve task scope from the feature branch, falling back to its active plan identity. */
+export async function resolveTaskScopeSlug(projectRoot: string): Promise<string | undefined> {
+  try {
+    const head = await execa('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: projectRoot, reject: false });
+    const slug = head.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
+    if (slug !== undefined) return slug;
+  } catch {
+    // Non-Git fixture and operator command paths retain the active-plan fallback.
+  }
+  const planPath = await resolveFeaturePlanPath(projectRoot, undefined);
+  return planPath === undefined ? undefined : basename(planPath, '.md');
+}
+
 /**
  * The authoritative task set for one stacked BUILD child.  Plan slices are
- * sealed in coverage-binding; remediation tasks are additive and belong only
+ * derived from the sealed plan; remediation tasks are additive and belong only
  * to the child recorded at append time.  A present remediation id without
  * that attribution is unsafe to assign speculatively, so it refuses rather
  * than silently dropping it.
@@ -109,22 +119,24 @@ export async function resolveChildTaskScope(
   projectRoot: string,
   child: ChildId,
 ): Promise<ChildTaskScope> {
-  let envelope;
-  try {
-    envelope = parseCoverageBindingEnvelope(
-      JSON.parse(await readFile(coverageBindingEnvelopePath(projectRoot), 'utf8')),
-    );
-  } catch {
-    envelope = null;
-  }
-  if (
-    envelope === null ||
-    !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status) ||
-    envelope.sliceMembership === undefined
-  ) {
+  const slug = await resolveTaskScopeSlug(projectRoot);
+  if (slug === undefined) {
     return {
       kind: 'refused',
-      reason: `child ${child} task membership is unavailable: coverage-binding slice membership is missing or invalid`,
+      reason: `child ${child} task membership is unavailable: feature identity is unavailable`,
+    };
+  }
+  const topology = await loadSliceTopology(projectRoot, slug);
+  if (topology.kind === 'unavailable') {
+    return {
+      kind: 'refused',
+      reason: `child ${child} task membership is unavailable: slice topology is unavailable (${topology.cause})`,
+    };
+  }
+  if (topology.kind === 'unsliced') {
+    return {
+      kind: 'refused',
+      reason: `child ${child} task membership is unavailable: slice topology has no child task membership`,
     };
   }
 
@@ -140,7 +152,7 @@ export async function resolveChildTaskScope(
     rawChildren !== null && typeof rawChildren === 'object' && !Array.isArray(rawChildren)
       ? rawChildren as Record<string, unknown>
       : undefined;
-  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot, envelope.slug);
+  const committedChildren = await readCommittedRemediationTaskChildren(projectRoot, slug);
   // A `rem-` prefix alone does not prove engine ownership: older plans may
   // carry an ordinary remediation task with that spelling. A durable Child
   // line proves a recreated worktree's engine task; otherwise only the
@@ -148,7 +160,7 @@ export async function resolveChildTaskScope(
   const remediationIds = [...new Set([...recorded, ...Object.keys(committedChildren)])];
   const remediationOwners = new Map<string, ChildId>();
   for (const id of remediationIds) {
-    const resolved = await resolveRemediationTaskChild(projectRoot, id, children?.[id], envelope.slug);
+    const resolved = await resolveRemediationTaskChild(projectRoot, id, children?.[id], slug);
     if (resolved.kind === 'unreadable') {
       return {
         kind: 'refused',
@@ -158,7 +170,8 @@ export async function resolveChildTaskScope(
     remediationOwners.set(id, resolved.child);
   }
 
-  const owned = projectChildOwnership(envelope, child).taskIds;
+  const owned = Object.entries(topology.sliceMembership.taskSlices)
+    .flatMap(([id, owner]) => owner === child ? [id] : []);
   const remediation = [...remediationOwners].flatMap(([id, owner]) => owner === child ? [id] : []);
   return { kind: 'available', taskIds: [...new Set([...owned, ...remediation])] };
 }
