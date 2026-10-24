@@ -41,6 +41,7 @@ import { resolveRestackConflict, type RestackResolver } from './restack-resolver
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { routedRoundOpen } from '../routing/round-admission.js';
+import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalJournalTransition,
   parseCommitSha,
@@ -635,7 +636,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       if (journal.journal.followOnCause !== undefined) {
         if (journal.journal.followOnCause === 'base-refresh' && await routedRoundOpen(options.worktree, options.slug, { git })) {
           await options.rearmRekick?.();
-          await options.events?.emit({ type: 'restack_refused', reason: 'deferred-base-refresh' });
+          await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
           return await cleanJournal(options.worktree, journal, git)
             ? { kind: 'cleaned' }
             : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
