@@ -634,17 +634,17 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   try {
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
+        if (options.suppressFollowOn) {
+          return await cleanJournal(options.worktree, journal, git)
+            ? { kind: 'cleaned' }
+            : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
+        }
         if (journal.journal.followOnCause === 'base-refresh' && await routedRoundOpen(options.worktree, options.slug, { git })) {
           await options.rearmRekick?.();
           await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
           return await cleanJournal(options.worktree, journal, git)
             ? { kind: 'cleaned' }
             : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
-        }
-        if (options.suppressFollowOn) {
-          return await cleanJournal(options.worktree, journal, git)
-            ? { kind: 'cleaned' }
-            : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
         }
         if (await publishedStackRefusal(options.worktree, options.slug, { git })) {
           await haltRestack(options.worktree, 'published-stack', options.events, {

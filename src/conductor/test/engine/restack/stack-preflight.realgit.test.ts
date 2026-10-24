@@ -126,6 +126,35 @@ describe('runStackPreflight (real local Git)', () => {
     expect(planned[0]!.opId).not.toBe(planned[1]!.opId);
   });
 
+  // Covers: task:rem-vg5-s10-2
+  it('emits deferred-base-refresh once when a routed round opens after the repair applies', async () => {
+    const subject = await fixture();
+    await subject.git(['checkout', '-q', 'main']);
+    await subject.commit('base advance', 'base.txt', 'advanced\n');
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('operator change', 'operator.txt', 'X\n');
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const rearmed: string[] = [];
+
+    const { result, records } = await withPersistedEvents(subject.repo, (events) => runStackPreflight({
+      worktree: subject.repo,
+      slug: 'demo',
+      baseRefreshDue: true,
+      rearmRekick: async () => { rearmed.push('rearm'); },
+      // The routing record can be admitted after the early preflight probe
+      // but before the repair hands off its base-refresh journal.
+      routedRoundOpen: async () => true,
+      events,
+      git: makeGitRunner(subject.repo),
+    }));
+
+    expect(result).toEqual({ kind: 'repaired' });
+    expect(rearmed).toEqual(['rearm']);
+    expect(records.filter((record) => record.type === 'restack_refused' && record.reason === 'deferred-base-refresh'))
+      .toHaveLength(1);
+    expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
+  });
+
   async function withPersistedEvents<T>(repo: string, run: (events: ConductorEventEmitter) => Promise<T>) {
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(repo, '.pipeline', 'events.jsonl'), events);

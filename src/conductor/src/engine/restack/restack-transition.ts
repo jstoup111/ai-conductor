@@ -184,13 +184,21 @@ async function normalizedReplayComparison(
   // resolution does not turn the parent's appended block into child work.
   const childOwned = await changedPaths(git, tuple.base, tuple.previous);
   const relevant = await normalizeInheritedRemPaths(git, tuple, childOwned);
+  // Replay proof answers whether the child's contribution is unchanged. Gate
+  // invalidation must still see independent runtime changes inherited from
+  // the new parent, except for rem blocks normalized out of the plan surface.
+  const invalidationPaths = await normalizeInheritedRemPaths(
+    git,
+    tuple,
+    await changedPaths(git, tuple.previous, tuple.head),
+  );
   const comparison = await compareReplayTree(git, replay);
   if (comparison.kind === 'unchanged') return { comparison };
   if (comparison.kind === 'changed') {
     if (relevant.length > 0 && !await unchangedChildOwnedSurface(git, tuple, childOwned)) return { comparison };
     return {
       comparison: { ...comparison, kind: 'unchanged' as const, expectedTree: comparison.completedTree },
-      fallbackPaths: [],
+      fallbackPaths: invalidationPaths,
     };
   }
 
@@ -204,9 +212,9 @@ async function normalizedReplayComparison(
     ? {
         comparison: { kind: 'unchanged', identity: replay, expectedTree: completedTree, completedTree },
         // The child-owned surface above is byte-for-byte retained after
-        // inherited rem blocks are removed.  It contributes no replay delta;
-        // the parent's independent code is not child invalidation input.
-        fallbackPaths: [],
+        // inherited rem blocks are removed. Its replay is unchanged, while
+        // independent parent runtime paths remain invalidation inputs.
+        fallbackPaths: invalidationPaths,
       }
     : { comparison };
 }

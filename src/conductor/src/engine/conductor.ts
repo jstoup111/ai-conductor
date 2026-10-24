@@ -15374,8 +15374,7 @@ export class Conductor {
                   continue;
                 }
               }
-              if (reconciled.kind === 'none' || reconciled.kind === 'aborted' ||
-                  reconciled.kind === 'deferred' && consumed?.kind === 'none') {
+              if (reconciled.kind === 'none' || reconciled.kind === 'aborted') {
                 // returnToLeaf re-pends whole-feature gates in the root state
                 // file.  Do not keep the former routed host's overlay or its
                 // CAS baseline while selecting those gates.

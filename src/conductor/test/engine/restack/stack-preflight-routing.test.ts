@@ -85,6 +85,7 @@ describe('stack preflight routing', () => {
       git: makeGitRunner(subject.repo),
     })).resolves.toEqual({ kind: 'clear' });
 
+    expect(refusals).toHaveLength(1);
     expect(refusals).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'deferred-base-refresh' })]);
     expect(consumed).toEqual([]);
   });
