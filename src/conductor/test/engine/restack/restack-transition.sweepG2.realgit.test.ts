@@ -140,6 +140,7 @@ describe('restack verdict transition sweep (real local Git)', () => {
     const rem1 = '### Task rem-parent: parent\n**Gate:** prd-audit\n**Done when:**\n- parent';
     const rem2 = '### Task rem-child: child\n**Gate:** prd-audit\n**Done when:**\n- child';
     const base = await subject.commit('approved plan', plan, '# Plan\n');
+    await subject.commit('parseA original signature', 'src/a.ts', 'export function parseA(value: string) { return value; }\n');
 
     await subject.git(['checkout', '-qb', 'feat/c1/demo']);
     const oldParent = await subject.commit('child 1', 'src/one.ts', 'export const one = 1;\n');
@@ -154,7 +155,7 @@ describe('restack verdict transition sweep (real local Git)', () => {
 
     await subject.git(['checkout', '-q', 'feat/c1/demo']);
     await subject.write(plan, `# Plan\n\n${rem1}`);
-    await subject.write('src/a.ts', 'export function parseA(value: string) { return value; }\n');
+    await subject.write('src/a.ts', 'export function parseA(value: string, radix = 10) { return value.repeat(radix); }\n');
     await subject.git(['add', plan, 'src/a.ts']);
     await subject.git(['commit', '-qm', 'parent remediation and runtime change']);
     const newParent = await subject.rev('HEAD');
