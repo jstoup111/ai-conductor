@@ -74,7 +74,7 @@ async function repairableStack(): Promise<SweepRepository & { oldLeaf: string }>
 
 describe('restack verdict transition sweep (real local Git)', () => {
   // Covers: task:rem-prd-audit-rem-vg4-s4-4
-  it('treats an unproved replay as unchanged when parent and child rem blocks are inherited', async () => {
+  it('treats an unproved replay as unchanged when the child owns code and parent and child rem blocks are inherited', async () => {
     const subject = await createSweepRepository('restack-inherited-rem-', cleanup);
     const child2 = parseChildId(2)!;
     const leaf = parseChildId(3)!;
@@ -87,12 +87,16 @@ describe('restack verdict transition sweep (real local Git)', () => {
     const oldParent = await subject.commit('child 1', 'src/one.ts', 'export const one = 1;\n');
     await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', oldParent]);
     await subject.git(['checkout', '-qb', 'feat/c2/demo']);
-    const oldTip = await subject.commit(
+    await subject.commit(
       'child 2 remediation',
       plan,
       `# Plan\n\n${rem2}`,
     );
-    await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', oldTip]);
+    await subject.write('src/two.ts', 'export const two = 2;\n');
+    await subject.git(['add', 'src/two.ts']);
+    await subject.git(['commit', '-qm', 'child 2 code']);
+    const oldTipWithCode = await subject.rev('HEAD');
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', oldTipWithCode]);
 
     await subject.git(['checkout', '-q', 'feat/c1/demo']);
     await subject.write('src/one.ts', 'export const one = 2;\n');
@@ -103,8 +107,12 @@ describe('restack verdict transition sweep (real local Git)', () => {
 
     await subject.git(['checkout', '-qb', 'feat/c2/replayed', newParent]);
     const replayedPlan = `# Plan\n\n${rem1}\n${rem2}`;
-    const newTip = await subject.commit('replay child 2 remediation', plan, replayedPlan);
-    await seedJudgedEvidence(subject.repo, oldTip, child2);
+    await subject.commit('replay child 2 remediation', plan, replayedPlan);
+    await subject.write('src/two.ts', 'export const two = 2;\n');
+    await subject.git(['add', 'src/two.ts']);
+    await subject.git(['commit', '-qm', 'replay child 2 code']);
+    const newTipWithCode = await subject.rev('HEAD');
+    await seedJudgedEvidence(subject.repo, oldTipWithCode, child2);
 
     const result = await applyRestackTransition({
       worktree: subject.repo,
@@ -112,9 +120,9 @@ describe('restack verdict transition sweep (real local Git)', () => {
       oldDefault: base,
       newDefault: newParent,
       activeChild: leaf,
-      ranges: [{ child: child2, oldParent, oldTip, kind: 'closed' }],
+      ranges: [{ child: child2, oldParent, oldTip: oldTipWithCode, kind: 'closed' }],
       moves: [
-        { ref: parseRefName('refs/heads/feat/c2/demo')!, child: child2, oldSha: oldTip, newSha: newTip },
+        { ref: parseRefName('refs/heads/feat/c2/demo')!, child: child2, oldSha: oldTipWithCode, newSha: newTipWithCode },
       ],
       isRegionGateFresh: async () => true,
       git: makeGitRunner(subject.repo),

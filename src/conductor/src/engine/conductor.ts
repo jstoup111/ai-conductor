@@ -5654,9 +5654,15 @@ export class Conductor {
   /** Complete a verified terminal run and leave the daemon's success marker. */
   private async completeRun(state: ConductState, doneMarkerBody: string): Promise<boolean> {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    // Routing durability exists only for an actual stack.  N=1 completion
+    // must not enumerate routing refs merely because routing defaults on.
+    const leaf = slug !== undefined && this.config.stacked_prs?.route_whole_feature_fixes === true
+      ? await resolveSealedLeaf(this.projectRoot)
+      : undefined;
     if (
       slug !== undefined &&
       this.config.stacked_prs?.route_whole_feature_fixes === true &&
+      leaf !== undefined && leaf > 1 &&
       await routedRoundOpen(this.projectRoot, slug)
     ) {
       // A route marker, open round, unreadable queue, or queued child is
@@ -15348,8 +15354,9 @@ export class Conductor {
                 await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
                 return;
               }
+              let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
               if (reconciled.kind === 'deferred') {
-                const consumed = await consumeLowestQueued(this.projectRoot, slug);
+                consumed = await consumeLowestQueued(this.projectRoot, slug);
                 if (consumed.kind === 'unavailable') {
                   await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
                   return;
@@ -15367,7 +15374,8 @@ export class Conductor {
                   continue;
                 }
               }
-              if (reconciled.kind === 'none' || reconciled.kind === 'aborted') {
+              if (reconciled.kind === 'none' || reconciled.kind === 'aborted' ||
+                  reconciled.kind === 'deferred' && consumed?.kind === 'none') {
                 // returnToLeaf re-pends whole-feature gates in the root state
                 // file.  Do not keep the former routed host's overlay or its
                 // CAS baseline while selecting those gates.

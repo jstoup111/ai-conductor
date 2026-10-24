@@ -136,6 +136,37 @@ async function normalizeInheritedRemPaths(git: GitRunner, tuple: RestackTuple, p
   return normalized;
 }
 
+/**
+ * Prove that the replay retained the child's own surface when merge-tree
+ * cannot construct a whole tree solely because the two sides appended rem
+ * blocks to the same plan.  Non-plan paths remain eligible only when the new
+ * parent did not touch them; a genuine overlapping code edit stays unproved.
+ */
+async function unchangedChildOwnedSurface(
+  git: GitRunner,
+  tuple: RestackTuple,
+  childOwned: readonly string[],
+): Promise<boolean> {
+  for (const path of childOwned) {
+    const [before, after, oldParent, newParent] = await Promise.all([
+      showPath(git, tuple.previous, path),
+      showPath(git, tuple.head, path),
+      showPath(git, tuple.base, path),
+      showPath(git, tuple.onto, path),
+    ]);
+    if (path.startsWith('.docs/plans/') && path.endsWith('.md')) {
+      if (before === undefined || after === undefined || oldParent === undefined || newParent === undefined ||
+          (stripInheritedRemBlocks(before, oldParent) !== stripInheritedRemBlocks(after, newParent) &&
+           !sameInheritedRemSurface(before, oldParent, after, newParent))) return false;
+      continue;
+    }
+    // A parent edit to a child-owned code/test path requires merge-tree's
+    // exact reconstruction; do not infer that its conflict resolution held.
+    if (oldParent !== newParent || before !== after) return false;
+  }
+  return true;
+}
+
 interface NormalizedReplayComparison {
   readonly comparison: ReplayComparison;
   /** Present only when child-owned replay normalization replaces a failed exact reconstruction. */
@@ -154,23 +185,28 @@ async function normalizedReplayComparison(
   const childOwned = await changedPaths(git, tuple.base, tuple.previous);
   const relevant = await normalizeInheritedRemPaths(git, tuple, childOwned);
   const comparison = await compareReplayTree(git, replay);
-  if (comparison.kind === 'unchanged' || relevant.length > 0) return { comparison };
+  if (comparison.kind === 'unchanged') return { comparison };
   if (comparison.kind === 'changed') {
+    if (relevant.length > 0 && !await unchangedChildOwnedSurface(git, tuple, childOwned)) return { comparison };
     return {
       comparison: { ...comparison, kind: 'unchanged' as const, expectedTree: comparison.completedTree },
-      fallbackPaths: relevant,
+      fallbackPaths: [],
     };
   }
 
   // A plan-only conflict makes merge-tree conservatively unproved even when
   // the resolved child-owned surface is identical. Bind the normalized result
   // to the actual completed tree rather than returning early on `unproved`.
+  if (relevant.length > 0 && !await unchangedChildOwnedSurface(git, tuple, childOwned)) return { comparison };
   const completed = await git(['rev-parse', `${replay.completedHead}^{tree}`]);
   const completedTree = completed.exitCode === 0 ? completed.stdout.trim() : '';
   return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(completedTree)
     ? {
         comparison: { kind: 'unchanged', identity: replay, expectedTree: completedTree, completedTree },
-        fallbackPaths: relevant,
+        // The child-owned surface above is byte-for-byte retained after
+        // inherited rem blocks are removed.  It contributes no replay delta;
+        // the parent's independent code is not child invalidation input.
+        fallbackPaths: [],
       }
     : { comparison };
 }

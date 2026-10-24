@@ -138,6 +138,40 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
   });
 
+  // Covers: task:rem-as-built-rem-vg4-ab-f4e-2
+  it('does not read routing refs when an N=1 feature completes with routing enabled', async () => {
+    await writeState(statePath, { feature_desc: 'demo' } as ConductState);
+    await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
+      version: 1,
+      slug: 'demo',
+      runId: 'coverage-run',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { T1: 1 }, titles: ['leaf'] },
+      storyOwnership: {},
+    }));
+    const gitCalls: string[][] = [];
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      config: { stacked_prs: { route_whole_feature_fixes: true } } as never,
+      git: async (args) => {
+        gitCalls.push(args);
+        return { exitCode: 0, stdout: 'H\n', stderr: '' };
+      },
+    });
+
+    await (conductor as unknown as {
+      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+    }).completeRun({ feature_desc: 'demo' }, 'complete\n');
+
+    expect(gitCalls).toEqual([['rev-parse', 'HEAD']]);
+    expect(await exists(join(dir, '.pipeline', 'DONE'))).toBe(true);
+  });
+
   it('stamps the completed feature event with HEAD, rebase base, and opened PR provenance', async () => {
     const state: ConductState = {
       rebase_base_sha: 'B',
