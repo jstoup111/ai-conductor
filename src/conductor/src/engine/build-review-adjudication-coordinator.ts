@@ -797,10 +797,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
-  await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let dispatchContext = freshContext.context;
+  let expansionTaskIds: readonly string[] | undefined;
   let accepted: { readonly judgement: RemediationCaseJudgement; readonly validation: { readonly ok: true; readonly graph: RemediationCaseGraph } } | undefined;
   for (let round = 0; round < 2; round += 1) {
+    await input.emit?.({
+      type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId,
+      ...(expansionTaskIds === undefined ? {} : { expansionTaskIds }),
+    });
     let judgement: RemediationCaseJudgement;
     try { judgement = await input.judge(dispatchContext); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
     // The context, not the judge, selects the case contract.  A custom lap's
@@ -844,10 +848,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         declaredSeverityThresholds: input.declaredSeverityThresholds,
       }, graph);
       if (classification.kind === 'index-only') {
+        expansionTaskIds = [...classification.taskIds].sort((left, right) => left.localeCompare(right));
         const expandedContext = assembleBuildReviewAdjudicationContext({
           aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
           operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-          planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, classification.taskIds), taskStatus, attemptedCaseIds,
+          planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
         });
         if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
         dispatchContext = expandedContext.context;

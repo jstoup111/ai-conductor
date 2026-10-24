@@ -4008,6 +4008,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     await writeFile(join(root, '.docs/plans/example.md'), selectionPlan(14), 'utf8');
     await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: '.docs/plans/example.md' }), 'utf8');
     const contexts: unknown[] = [];
+    const events: RemediationCaseLifecycleEvent[] = [];
     const charge = vi.fn(chargeBuildReviewEffectInLedger);
     const caseV2Aggregate = customMixedAggregate();
     const caseV2SourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(caseV2Aggregate)!.find((source) => source.rubric === 'security')!);
@@ -4033,6 +4034,7 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     const result = await coordinateBuildReviewAdjudication({
       ...input(root, judge), aggregate: caseV2Aggregate, chargeEffect: charge, generateId: sequentialIds('expanded'),
+      emit: async (event) => { events.push(event); },
       readTaskStatus: async () => ({ path: '.pipeline/task-status.json', tasks: [
         { id: '9', status: 'in_progress' }, { id: '14', status: 'pending' },
       ] }),
@@ -4040,6 +4042,10 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: true, route: 'build' });
     expect(judge).toHaveBeenCalledTimes(2);
+    expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toEqual([
+      { type: 'remediation_adjudication_started', domain: 'build_review', lapId: caseV2Aggregate.lapId },
+      { type: 'remediation_adjudication_started', domain: 'build_review', lapId: caseV2Aggregate.lapId, expansionTaskIds: ['14', '9'] },
+    ]);
     const taskIds = (context: unknown) => (context as { planContract: { admittedTaskContracts: { id: string }[] } }).planContract.admittedTaskContracts.map((task) => task.id);
     const priorCases = (context: unknown) => (context as { priorCases: unknown[] }).priorCases;
     expect(taskIds(contexts[1])).toEqual([...taskIds(contexts[0]), '9', '14'].sort((left, right) => left.localeCompare(right)));
@@ -4051,6 +4057,20 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
     await expect(readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')).resolves.toContain('Repair from round-two');
     await expect(readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8')).resolves.not.toContain('Repair from round-one');
+  });
+
+  it('keeps the single-round adjudication-started event shape unchanged', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: true, route: 'build' });
+
+    expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toEqual([
+      { type: 'remediation_adjudication_started', domain: 'build_review', lapId: aggregate.lapId },
+    ]);
   });
 
   it.each(['open', 'resolved'] as const)('uses a prior work-order admission only while its action case is %s', async (resolution) => {
