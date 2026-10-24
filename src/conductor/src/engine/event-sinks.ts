@@ -53,14 +53,7 @@ export const EVENT_SINKS = {
   project_setup: { render: true, persist: true, audit: false, otel: false },
   memory_setup: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   plan_growth: { render: true, persist: true, audit: false, otel: false },
-  coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
   rebase_regrade_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_amendment_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_conflict_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_invalidated: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_task_reopened: { render: false, persist: true, audit: false, otel: false },
-  plan_slices_changed: { render: false, persist: true, audit: false, otel: false },
   // Plan-review lifecycle observations stay durable on the shared spine; a
   // later task owns any renderer, audit, or OTel projection.
   plan_review_dispatched: { render: false, persist: true, audit: false, otel: false },
@@ -80,7 +73,6 @@ export const EVENT_SINKS = {
   restack_refused: { render: false, persist: true, audit: false, otel: false },
   restack_recovered: { render: false, persist: true, audit: false, otel: false },
   push_lease_refused: { render: false, persist: true, audit: false, otel: false },
-  story_reowned: { render: false, persist: true, audit: false, otel: false },
   remediation_routed: { render: false, persist: true, audit: false, otel: false },
   remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
   routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
