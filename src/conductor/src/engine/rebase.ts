@@ -1344,7 +1344,7 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
   }
   // Decision records are inputs only when the feature CITES them.  Binding
   // every ADR in the checkout made each ADR landed on main reopen
-  // coverage_binding / prd_audit / as-built on nearly every rebase, although
+  // prd_audit / as-built on nearly every rebase, although
   // none of those gates read an uncited decision.  Scan the feature's own
   // documents (plan, coherence, stories, specs/PRD) for decision paths or
   // `adr-<stem>` references; a cited ADR edit still reopens its reviews.
@@ -2726,17 +2726,16 @@ export async function applyRebaseVerdicts(
   // Applying the classifier's invalidated and unproved-preservation buckets
   // directly makes observable verdict/event order depend on why a gate
   // reopened. Keep effects in lifecycle order, with changed requirement
-  // inputs refreshing their audit immediately after coverage.
+  // inputs refreshing their audit first.
   const activePrdInputChanged = reviewDelta(outcome).some((path) =>
     path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
   );
   const gateOrder = new Map<StepName, number>([
-    ['coverage_binding', 0],
-    ['prd_audit', activePrdInputChanged ? 1 : 4],
-    ['build_review', 1 + Number(activePrdInputChanged)],
-    ['test_suite', 2 + Number(activePrdInputChanged)],
-    ['manual_test', 3 + Number(activePrdInputChanged)],
-    ['architecture_review_as_built', 5],
+    ['prd_audit', activePrdInputChanged ? 0 : 3],
+    ['build_review', Number(activePrdInputChanged)],
+    ['test_suite', 1 + Number(activePrdInputChanged)],
+    ['manual_test', 2 + Number(activePrdInputChanged)],
+    ['architecture_review_as_built', 4],
   ]);
   const orderedTargets = [...new Set(targets)].sort(
     (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
@@ -2837,8 +2836,7 @@ export async function recordRebaseStepCompletion(
  * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
  *   - 'feature-prd-inputs' (prd_audit): changed declared stories/spec/PRD
  *     inputs only.
- *   - 'feature-coverage-inputs' (coverage_binding,
- *     architecture_review_as_built): changed declared plan, coherence,
+ *   - 'feature-coverage-inputs' (architecture_review_as_built): changed declared plan, coherence,
  *     stories, spec and cited-ADR inputs only.
  *   - 'feature-codetest' (build_review): featureSrc ∪ the feature's own test
  *     paths.

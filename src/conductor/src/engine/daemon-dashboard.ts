@@ -19,11 +19,7 @@ import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { parseChildId, isRegionStep, type ChildId } from './child-context.js';
 import { readConductStateOverlay } from './conduct-state-store.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
+import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -58,6 +54,8 @@ export interface HaltedEntry {
   inapplicable?: Array<{ step: string; reason: string }>;
   /** Cursor-derived active BUILD child, when this is a stacked feature. */
   activeChild?: ActiveChildDashboardState;
+  /** A malformed stack plan is visible instead of being rendered as flat. */
+  stackTopology?: StackTopologyDashboardState;
 }
 
 /** Lifecycle evidence surfaced from the feature's persisted provider events. */
@@ -113,6 +111,8 @@ export interface InProgressEntry {
   inFlight?: InFlightStep[];
   /** Cursor-derived active BUILD child, when this is a stacked feature. */
   activeChild?: ActiveChildDashboardState;
+  /** A malformed stack plan is visible instead of being rendered as flat. */
+  stackTopology?: StackTopologyDashboardState;
 }
 
 export interface InFlightStep {
@@ -124,6 +124,12 @@ export interface InFlightStep {
 export interface ActiveChildDashboardState {
   child: ChildId;
   total: number;
+  taskIds: readonly string[];
+}
+
+/** A stack that cannot be projected must remain visible as a stack failure. */
+export interface StackTopologyDashboardState {
+  cause: SliceTopologyUnavailableCause;
 }
 
 /** A dashboard observation needs only a short current-activity window. */
@@ -272,15 +278,6 @@ export interface ScanInheritedStateDeps {
 /** The completed-run marker; mirrors the private constant in conductor.ts. */
 const DONE_MARKER = '.pipeline/DONE';
 
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  // Dashboard reads never write. These methods satisfy the shared envelope
-  // filesystem surface and deliberately fail if that contract changes.
-  mkdir: async () => { throw new Error('dashboard is read-only'); },
-  writeFile: async () => { throw new Error('dashboard is read-only'); },
-  rename: async () => { throw new Error('dashboard is read-only'); },
-};
-
 /** `true` when `path` exists (any type), tolerant of missing/unreadable paths. */
 async function pathExists(path: string): Promise<boolean> {
   try {
@@ -427,25 +424,38 @@ async function loadDashboardWorktreeState(
   present: boolean;
   state: Record<string, unknown> | null;
   activeChild?: ActiveChildDashboardState;
+  stackTopology?: StackTopologyDashboardState;
 }> {
   const flat = await loadWorktreeState(wt);
   if (!flat.present || flat.state === null) return flat;
 
+  const topology = await loadSliceTopology(wt, slug);
+  if (topology.kind === 'unavailable') {
+    // A missing plan is ordinary for old/flat dashboard fixtures. Surface a
+    // loader failure only when durable child state proves that this feature is
+    // a stack; otherwise a flat feature must retain its established display.
+    if (await hasDurableChildState(wt, slug) === true) return { ...flat, stackTopology: { cause: topology.cause } };
+    return flat;
+  }
+  if (topology.kind !== 'sliced') return flat;
+  const positions = topology.positions
+    .map((position) => parseChildId(position))
+    .filter((position): position is ChildId => position !== undefined);
+  if (positions.length < 2) return flat;
+
   const cursor = await resolveActiveChild(wt, slug);
   if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return flat;
-
-  const envelope = await readCoverageBindingEnvelope(wt, coverageBindingFilesystem);
-  const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
-    ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-      .map((position) => parseChildId(position))
-      .filter((position): position is ChildId => position !== undefined)
-    : [];
-  if (positions.length < 2) return flat;
 
   const execution = resolveExecutionChild(cursor, slug);
   if (!('target' in execution)) return flat;
   const executionChild = execution.target.child;
-  const activeChild = { child: executionChild, total: positions.length };
+  const activeChild = {
+    child: executionChild,
+    total: positions.length,
+    taskIds: Object.entries(topology.sliceMembership.taskSlices)
+      .filter(([, position]) => position === executionChild)
+      .map(([taskId]) => taskId),
+  };
   const overlay = await readConductStateOverlay(wt, executionChild);
   if (overlay.ok) return { present: true, state: overlay.value, activeChild };
 
@@ -755,7 +765,7 @@ export async function scanInheritedState(
         // A halted worktree is KEPT for the human, so its conduct-state is still
         // on disk — mine it for the step reached, tier, and any PR already open.
         const entry: HaltedEntry = { slug, reason: haltReason(haltContent) };
-        const { state, activeChild } = await loadDashboardWorktreeState(wt, slug);
+        const { state, activeChild, stackTopology } = await loadDashboardWorktreeState(wt, slug);
         if (state) {
           entry.step = lastMeaningfulStep(state);
           const { tier, prUrl } = stateExtras(state);
@@ -765,6 +775,7 @@ export async function scanInheritedState(
           if (inapplicable) entry.inapplicable = inapplicable;
         }
         if (activeChild) entry.activeChild = activeChild;
+        if (stackTopology) entry.stackTopology = stackTopology;
         const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
         if (lifecycle?.phase === 'halted') entry.lifecycle = lifecycle;
         halted.push(entry);
@@ -772,7 +783,7 @@ export async function scanInheritedState(
         continue;
       }
 
-      const { present, state, activeChild } = await loadDashboardWorktreeState(wt, slug);
+      const { present, state, activeChild, stackTopology } = await loadDashboardWorktreeState(wt, slug);
       const isRetainedFeatureWorktree =
         !slug.startsWith('resolve-') && !slug.startsWith('engineer-');
       if (processedSlugs.has(slug)) {
@@ -838,6 +849,7 @@ export async function scanInheritedState(
         if (steps.length > 0) entry.inFlight = steps;
       }
       if (activeChild) entry.activeChild = activeChild;
+      if (stackTopology) entry.stackTopology = stackTopology;
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
       // never a scan failure — same tolerance as every other worktree read here.
       // A heartbeat naming a different step than the one in flight is a
@@ -959,8 +971,12 @@ function prSuffix(prUrl?: string): string {
 }
 
 /** Cursor-derived stack position, deliberately distinct from provider child telemetry. */
-function activeChildSuffix(entry: { activeChild?: ActiveChildDashboardState }): string {
-  return entry.activeChild ? ` (child ${entry.activeChild.child}/${entry.activeChild.total})` : '';
+function activeChildSuffix(entry: { activeChild?: ActiveChildDashboardState; stackTopology?: StackTopologyDashboardState }): string {
+  if (entry.activeChild) {
+    const tasks = entry.activeChild.taskIds.length === 0 ? '' : `; tasks ${entry.activeChild.taskIds.join(', ')}`;
+    return ` (child ${entry.activeChild.child}/${entry.activeChild.total}${tasks})`;
+  }
+  return entry.stackTopology ? ` (stack unavailable: ${entry.stackTopology.cause})` : '';
 }
 
 /**

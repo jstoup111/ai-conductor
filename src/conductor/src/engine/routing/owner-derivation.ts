@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseChildId, type ChildId } from '../child-context.js';
-import type { CoverageBindingEnvelope } from '../coverage-binding-envelope.js';
+import type { SliceTopologyMembership } from '../slice-topology.js';
 import { parsePlanTaskBodies } from '../plan-task-parse.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
 
@@ -17,7 +17,7 @@ export type TaskBoundOwnerDerivation =
 
 export interface TaskBoundOwnerInput {
   readonly taskIds: readonly string[];
-  readonly envelope: Pick<CoverageBindingEnvelope, 'sliceMembership'>;
+  readonly sliceMembership: SliceTopologyMembership;
   readonly planText: string;
   readonly appendedChildren: Readonly<Record<string, number>>;
   readonly declaredPositions: readonly number[];
@@ -121,7 +121,7 @@ export async function readCommittedRemediationTaskChildren(
  */
 export function deriveTaskBoundOwner({
   taskIds,
-  envelope,
+  sliceMembership,
   planText,
   appendedChildren,
   declaredPositions,
@@ -147,7 +147,7 @@ export function deriveTaskBoundOwner({
         continue;
       }
     } else {
-      const slice = envelope.sliceMembership?.taskSlices[taskId];
+      const slice = sliceMembership.taskSlices[taskId];
       if (slice !== undefined) {
         if (!declaredPositions.includes(slice)) {
           return { kind: 'halt', taskId, detail: `Task-bound work cannot use child position ${slice} recorded for ${taskId}` };

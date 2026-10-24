@@ -33,7 +33,6 @@ describe('GATE_SURFACE', () => {
       [
         'architecture_review_as_built',
         'build_review',
-        'coverage_binding',
         'manual_test',
         'prd_audit',
         'test_suite',
@@ -42,8 +41,7 @@ describe('GATE_SURFACE', () => {
     expect(GATE_SURFACE).not.toHaveProperty('build');
   });
 
-  it('binds coverage_binding, prd_audit and as-built to feature document inputs only', () => {
-    expect(GATE_SURFACE.coverage_binding).toBe('feature-coverage-inputs');
+  it('binds prd_audit and as-built to their declared document inputs only', () => {
     expect(GATE_SURFACE.architecture_review_as_built).toBe('feature-coverage-inputs');
     expect(GATE_SURFACE.prd_audit).toBe('feature-prd-inputs');
   });
@@ -94,7 +92,6 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       [
         'build_review',
-        'coverage_binding',
         'manual_test',
         'prd_audit',
         'architecture_review_as_built',
@@ -116,7 +113,6 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       [
         'build_review',
-        'coverage_binding',
         'manual_test',
         'prd_audit',
         'architecture_review_as_built',
@@ -145,7 +141,7 @@ describe('classifyGateInvalidation', () => {
       ['build_review', 'manual_test', 'test_suite'].sort(),
     );
     expect(result.preserved.sort()).toEqual(
-      ['coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
+      ['prd_audit', 'architecture_review_as_built'].sort(),
     );
   });
 
@@ -155,13 +151,13 @@ describe('classifyGateInvalidation', () => {
     expect(uncited.invalidated).toEqual([]);
 
     const cited = classifyGateInvalidation(['.docs/decisions/adr-cited.md'], [], true, declared);
-    expect(cited.invalidated.sort()).toEqual(['architecture_review_as_built', 'coverage_binding'].sort());
+    expect(cited.invalidated.sort()).toEqual(['architecture_review_as_built'].sort());
 
     const plan = classifyGateInvalidation(['.docs/plans/feat.md'], [], true, declared);
-    expect(plan.invalidated.sort()).toEqual(['architecture_review_as_built', 'coverage_binding'].sort());
+    expect(plan.invalidated.sort()).toEqual(['architecture_review_as_built'].sort());
 
     const stories = classifyGateInvalidation(['.docs/stories/feat.md'], [], true, declared);
-    expect(stories.invalidated.sort()).toEqual(['architecture_review_as_built', 'coverage_binding', 'prd_audit'].sort());
+    expect(stories.invalidated.sort()).toEqual(['architecture_review_as_built', 'prd_audit'].sort());
   });
 
   it('foreignSrc-only touched (feature surface untouched) preserves the feature-scoped judged gates but invalidates all-runtime gates', () => {
@@ -171,7 +167,7 @@ describe('classifyGateInvalidation', () => {
     const result = classifyGateInvalidation(D, F, true);
 
     expect(result.preserved.sort()).toEqual(
-      ['build_review', 'coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
+      ['build_review', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
     expect(result.invalidated.sort()).toEqual(
       ['test_suite', 'manual_test'].sort(),

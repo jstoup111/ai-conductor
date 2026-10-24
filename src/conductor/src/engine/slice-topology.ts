@@ -6,6 +6,7 @@ import { buildStepRegistry } from './steps.js';
 import { loadConfig } from './config.js';
 import { parseFeatureBranch, parseFeatureRef } from './feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
+import { resolveMainRepoRoot } from './park-marker.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import {
   customStepsInPerChildRegion,
@@ -237,11 +238,11 @@ export async function loadSliceTopology(
   const positionFailure = await verifyPositions(worktree, slug, positions, git);
   if (positionFailure) return positionFailure;
 
-  const configResult = await loadConfig(dependencies.projectRoot ?? worktree);
+  const configResult = await loadConfig(dependencies.projectRoot ?? await resolveMainRepoRoot(worktree));
   const config = configResult.ok ? configResult.config : undefined;
   const complexityPath = join(worktree, '.docs', 'complexity', `${basename(planPath, '.md')}.md`);
   const complexityContent = await readFile(complexityPath, 'utf8').catch(() => null);
-  const stackEligibility = evaluateStackEligibility({
+  const eligibility = evaluateStackEligibility({
     tier: parseComplexityTier(complexityContent),
     signoff: parseStackedDeliverySignoff(complexityContent) === 'approved' ? 'approved' : undefined,
     slicePositions: positions,
@@ -249,5 +250,8 @@ export async function loadSliceTopology(
     regionCoupledSteps: config ? customStepsInPerChildRegion(buildStepRegistry(config)) : [],
     complexityPath: repoPath(worktree, complexityPath),
   });
+  const stackEligibility: StackEligibilityVerdict = config?.stacked_prs?.enabled === false
+    ? { kind: 'ineligible', reasons: ['stacked_prs.enabled is false'] }
+    : eligibility;
   return { kind: 'sliced', positions, sliceMembership: membership, storyOwnership: ownership.ownership, stackEligibility };
 }

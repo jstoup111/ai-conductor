@@ -24,10 +24,8 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { writeState } from '../../src/engine/state.js';
 import { bumpKickbackGateInLedger } from '../../src/engine/kickback-ledger.js';
 import { runTaskStart } from '../../src/engine/task-cli.js';
@@ -71,10 +69,6 @@ describe('N=1 golden state', () => {
   });
 
   it.each(CELLS)('matches golden for $name', async (cell) => {
-    // The corrected single-slice path dispatches additional steps. Preserve
-    // the ineligible cell's own byte fixture rather than renumbering it for
-    // an unrelated earlier cell's behavior change.
-    if (cell.name === 'flag-on-ineligible') uuidState.counter = 57;
     const root = await mkdtemp(join(tmpdir(), `n1-golden-${cell.name}-`));
     roots.push(root);
     const expectSingleSliceMatchesUnsliced = async (suffix: string, actual: string) => {
@@ -97,14 +91,6 @@ describe('N=1 golden state', () => {
     await writeFile(join(root, '.ai-conductor', 'config.yml'), cell.configYaml);
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await writeFile(join(root, '.docs', 'plans', 'n1-golden.md'), cell.planMd);
-    if (cell.name === 'flag-on-single-slice') {
-      await mkdir(join(root, '.docs', 'stories'), { recursive: true });
-      await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
-      await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
-      await writeFile(join(root, '.docs', 'stories', 'n1-golden.md'), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
-      await writeFile(join(root, '.docs', 'complexity', 'n1-golden.md'), cell.complexityMd!);
-      await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
-    }
 
     // Git init with pinned identity and dates
     await execFile('git', ['init', '-b', 'main', '-q'], { cwd: root });
@@ -118,9 +104,6 @@ describe('N=1 golden state', () => {
       '.gitignore',
       '.docs/plans/n1-golden.md',
       '.ai-conductor/config.yml',
-      ...(cell.name === 'flag-on-single-slice'
-        ? ['.docs/stories/n1-golden.md', '.docs/complexity/n1-golden.md', 'skills/tdd/SKILL.md']
-        : []),
     ], { cwd: root });
     const env = {
       ...process.env,
@@ -129,35 +112,6 @@ describe('N=1 golden state', () => {
       USER: 'test-user',
     };
     await execFile('git', ['commit', '-m', 'init'], { cwd: root, env });
-
-    if (cell.coverageBinding) {
-      if (cell.name !== 'flag-on-single-slice') {
-        await mkdir(join(root, '.docs', 'stories'), { recursive: true });
-        await mkdir(join(root, '.docs', 'complexity'), { recursive: true });
-        await mkdir(join(root, 'skills', 'tdd'), { recursive: true });
-        await writeFile(join(root, '.docs', 'stories', 'n1-golden.md'), cell.storiesFixture === 'two' ? TWO_STORIES : ONE_STORY);
-        await writeFile(join(root, '.docs', 'complexity', 'n1-golden.md'), cell.complexityMd!);
-        await writeFile(join(root, 'skills', 'tdd', 'SKILL.md'), '# tdd\n');
-      }
-
-      const coverageRunner = new DefaultStepRunner(
-        { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: vi.fn() } as LLMProvider,
-        'n1-golden-session',
-        root,
-        {
-          featureDesc: 'n1-golden',
-          planPath: join(root, '.docs', 'plans', 'n1-golden.md'),
-          projectRoot: root,
-          config: { coverage_binding: { judge: { enabled: false } }, stacked_prs: { enabled: true, max_slices: 2 } },
-        },
-      );
-      const coverage = await coverageRunner.run('coverage_binding', { complexity_tier: 'M' });
-      expect(coverage.success, coverage.output).toBe(cell.coverageBinding === 'done');
-      const coverageGolden = coverage.success
-        ? await readAndNormalize(join(root, '.pipeline', 'coverage-binding.json'), root)
-        : coverage.refusal?.reason ?? coverage.output ?? '';
-      await expectGolden(`${cell.name}-coverage-binding`, coverageGolden);
-    }
 
     // Seed conduct-state: every step before acceptance_specs is done
     const pipeline = join(root, '.pipeline');
@@ -173,7 +127,6 @@ describe('N=1 golden state', () => {
       plan: 'done',
       coherence_check: 'done',
       plan_review: 'skipped',
-      coverage_binding: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       prd: 'done',

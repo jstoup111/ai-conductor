@@ -39,6 +39,7 @@ import {
   NEEDS_REMEDIATION_BODY_MARKER,
 } from '../../src/engine/pr-labels.js';
 import { collectProviderModelSelections } from '../../src/engine/provider-model-config.js';
+import { buildStepRegistry } from '../../src/engine/steps.js';
 
 describe('config', () => {
   let tmpDir: string;
@@ -4000,85 +4001,42 @@ steps:
     });
   });
 
-  describe('coverage_binding config field (Task 8)', () => {
-    it('resolves an omitted judge batch size to 8', () => {
-      const result = validateConfig({ coverage_binding: { judge: {} } });
+  describe('coverage_binding config retirement', () => {
+    it('loads legacy top-level and step settings with warnings and no registry entry', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), [
+        'coverage_binding:',
+        '  judge:',
+        '    enabled: true',
+        'steps:',
+        '  coverage_binding:',
+        '    llm_provider: codex',
+        '',
+      ].join('\n'));
 
+      const result = await loadConfig(tmpDir);
       expect(result).toMatchObject({
         ok: true,
-        config: { coverage_binding: { judge: { batch_size: 8 } } },
+        warnings: [
+          'coverage_binding is retired and ignored (adr-2026-10-23-slice-topology-from-sealed-plan).',
+          'steps.coverage_binding is retired and ignored (adr-2026-10-23-slice-topology-from-sealed-plan).',
+        ],
       });
-    });
-
-    it('preserves a positive judge batch size', () => {
-      const result = validateConfig({ coverage_binding: { judge: { batch_size: 1 } } });
-
-      expect(result).toMatchObject({
-        ok: true,
-        config: { coverage_binding: { judge: { batch_size: 1 } } },
-      });
-    });
-
-    it.each([
-      ['zero', 0],
-      ['a negative number', -3],
-      ['a non-integer', 2.5],
-      ['a string', '8'],
-    ])('rejects batch size %s', (_name, batch_size) => {
-      const result = validateConfig({ coverage_binding: { judge: { batch_size } } });
-
-      expect(result).toEqual({
-        ok: false,
-        error: {
-          type: 'validation_error',
-          message: 'coverage_binding.judge.batch_size must be a positive integer',
-        },
-      });
-    });
-
-    it('rejects an unknown plural batch-size key', () => {
-      const result = validateConfig({ coverage_binding: { judge: { batch_sizes: 8 } } });
-
-      expect(result).toEqual({
-        ok: false,
-        error: {
-          type: 'validation_error',
-          message: 'Unknown key in coverage_binding.judge: "batch_sizes"',
-        },
-      });
-    });
-
-    it('registers the complete judge key set', () => {
-      expect(CONFIG_CONSUMER_KEY_SETS['coverage_binding.judge']).toEqual(['enabled', 'batch_size']);
-    });
-
-    it('resolves the omitted judge to disabled', () => {
-      const result = validateConfig({});
-      expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.coverage_binding?.judge?.enabled).toBe(false);
+      expect(buildStepRegistry(result.config).map((step) => step.name)).not.toContain('coverage_binding');
     });
 
-    it('preserves an enabled judge', () => {
-      const result = validateConfig({ coverage_binding: { judge: { enabled: true } } });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.coverage_binding?.judge?.enabled).toBe(true);
+    it('still rejects a genuinely unknown top-level key', () => {
+      expect(validateConfig({ coverage_binding: {}, not_a_real_key: true })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message: 'Unknown top-level key: "not_a_real_key"' },
+      });
     });
 
-    it('rejects a non-boolean judge enablement', () => {
-      const result = validateConfig({ coverage_binding: { judge: { enabled: 'yes' } } });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toContain('coverage_binding.judge.enabled');
-      expect(result.error.message).toContain('boolean');
-    });
-
-    it('rejects an unknown key under coverage_binding.judge', () => {
-      const result = validateConfig({ coverage_binding: { judge: { enabled: true, bogus: true } } });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toContain('Unknown key in coverage_binding.judge');
+    it('does not reinterpret custom steps missing after as retired built-ins', () => {
+      expect(validateConfig({ steps: { my_step: { skill: 'skills/my-step/SKILL.md' } } })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message: "Custom step \"my_step\" requires 'after: <existing-step>'" },
+      });
     });
   });
 

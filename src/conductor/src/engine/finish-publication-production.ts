@@ -8,7 +8,7 @@
  */
 import { access, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import type { ConductorEvent, ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './step-runner-types.js';
@@ -35,13 +35,10 @@ import { activePublicationRecord, readPublicationRecord, writePublicationRecord,
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  projectChildOwnership,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { splitStoryBlocks } from './story-criteria.js';
+import { loadSliceTopology } from './slice-topology.js';
+import { resolveFeaturePlanPath } from './artifacts.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { gateSatisfied } from './selector.js';
 import {
   dispatchFinishRecord,
@@ -91,14 +88,6 @@ import {
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
 import { runTrackerAmbientRead, runTrackerRepositoryRead, runTrackerUrlRead } from './tracker-client.js';
-
-/** FINISH only reads the sealed coverage evidence; writes remain step-runner owned. */
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-  writeFile: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-  rename: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-};
 
 export interface ProductionFinishPublicationCoordinator {
   requiresArtifactValidation: true;
@@ -294,24 +283,49 @@ async function sealedChildPresentation(input: {
   base: string;
   git: GitRunner;
 }): Promise<{ slice: { position: number; name: string; taskIds: readonly string[]; storyIds: readonly string[] }; stories: readonly { id: string; title: string }[]; diffstat: string }> {
-  const envelope = await readCoverageBindingEnvelope(input.root, coverageBindingFilesystem).catch(() => null);
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack coverage evidence is unreadable');
+  // FINISH's historical Git seam requires a cwd while the topology reader's
+  // shared seam owns cwd at construction. Adapt only the compatible read
+  // options here so stack publication stays on its injected process boundary.
+  const topology = await loadSliceTopology(input.root, input.slug, {
+    git: async (args, options) => {
+      const result = await input.git(args, {
+        cwd: input.root,
+        ...(options?.credential === undefined ? {} : { credential: options.credential }),
+        ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        ...(options?.input === undefined ? {} : { input: options.input }),
+      });
+      return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+    },
+  });
+  if (topology.kind !== 'sliced') {
+    const detail = topology.kind === 'unavailable' ? topology.cause : 'unsliced';
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack topology is unavailable: ${detail}`);
   }
-  const positions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))].sort((left, right) => left - right);
-  const title = envelope.sliceMembership.titles[positions.indexOf(input.position)];
+  const title = topology.sliceMembership.titles[topology.positions.indexOf(input.position)];
   if (!title) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} is missing`);
-  const ownership = projectChildOwnership(envelope, input.position);
-  if (ownership.taskIds.length === 0) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} has no tasks`);
-  const storiesPath = join(input.root, '.docs', 'stories', `${input.slug}.md`);
-  const storiesText = await readFile(storiesPath, 'utf8').catch(() => '');
+  const taskIds = Object.entries(topology.sliceMembership.taskSlices)
+    .filter(([, position]) => position === input.position)
+    .map(([taskId]) => taskId);
+  const storyIds = Object.entries(topology.storyOwnership)
+    .filter(([, position]) => position === input.position)
+    .map(([storyId]) => storyId);
+  if (taskIds.length === 0) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} has no tasks`);
+  const planPath = await resolveFeaturePlanPath(input.root, input.slug);
+  const planText = planPath === undefined ? undefined : await readFile(planPath, 'utf8').catch(() => undefined);
+  const storiesPath = planPath === undefined || planText === undefined
+    ? null
+    : resolvePlanStoriesPath(relative(input.root, planPath).replaceAll('\\', '/'), planText);
+  if (storiesPath === null) {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack stories path is unavailable');
+  }
+  const storiesText = await readFile(join(input.root, storiesPath), 'utf8').catch(() => '');
   const stories = splitStoryBlocks(storiesText).flatMap((story) => story.id === undefined ? [] : [{
     id: story.id,
     title: story.text.split('\n').find((line) => /^##\s+Story\s+/i.test(line))?.replace(/^##\s+Story\s+[^:]+:?\s*/i, '') || story.id,
   }]);
   const diff = await input.git(['diff', '--stat', `${input.base}...${input.branch}`], { cwd: input.root });
   return {
-    slice: { position: input.position, name: title, taskIds: ownership.taskIds, storyIds: ownership.storyIds },
+    slice: { position: input.position, name: title, taskIds, storyIds },
     stories,
     diffstat: diff.stdout.trim(),
   };

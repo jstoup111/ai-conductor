@@ -1,24 +1,16 @@
 // Covers: task:31.1
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  rename,
-};
-
 afterEach(async () => { await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
 async function fixture() {
@@ -49,11 +41,19 @@ async function fixture() {
   await commit('leaf', 'leaf.txt', 'leaf\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
-  await writeCoverageBindingEnvelope(repo, {
-    version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-    sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
-    storyOwnership: { S1: 1, S2: 2, S3: 3 },
-  }, envelopeFilesystem);
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'stories', 'demo.md'), '# Stories: demo\n\n## Story 1: One\n\n## Story 2: Two\n\n## Story 3: Three\n');
+  await writeFile(join(repo, '.docs', 'plans', 'demo.md'), [
+    '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+    '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | 1 |', '| 2 | Two | 2 |', '| 3 | Leaf | 3 |', '',
+    '### Task 1: One', '**Story:** Story 1', '**Dependencies:** none', '',
+    '### Task 2: Two', '**Story:** Story 2', '**Dependencies:** none', '',
+    '### Task 3: Three', '**Story:** Story 3', '**Dependencies:** none', '',
+  ].join('\n'));
+  await writeFile(join(repo, 'positions.json'), '[1,2,3]');
+  const positionsBlob = (await git(['hash-object', '-w', 'positions.json'])).stdout.trim();
+  await git(['update-ref', 'refs/conductor/demo/positions', positionsBlob]);
   return { repo, git, commit, closed };
 }
 
@@ -84,7 +84,7 @@ describe('stack preflight live-HALT gate', () => {
     await expect(subject.git(['show', 'feat/daemon-demo:operator.txt'])).rejects.toThrow();
   });
 
-  it('repairs the stack after a matching staged authorization clears its live HALT', async () => {
+  it('halts a stack whose sealed topology cannot be resolved after authorization', async () => {
     const subject = await fixture();
     await appendRepair(subject);
     let liveHalt = true;
@@ -97,10 +97,7 @@ describe('stack preflight live-HALT gate', () => {
       hasLiveHalt: async () => liveHalt,
       hasMatchingResumeAuthorization: async () => true,
       prepareResume: async () => { prepared = true; liveHalt = false; },
-    })).resolves.toEqual({ kind: 'repaired' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(prepared).toBe(true);
-    expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim())
-      .toBe((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim());
-    expect((await subject.git(['show', 'feat/daemon-demo:operator.txt'])).stdout).toBe('X\n');
   });
 });
