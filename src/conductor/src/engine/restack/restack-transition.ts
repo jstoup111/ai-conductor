@@ -16,10 +16,11 @@ import {
   type GitRunner,
   type RebaseOutcome,
 } from '../rebase.js';
-import { compareReplayTree } from '../rebase-replay.js';
+import { compareReplayTree, type ReplayIdentity } from '../rebase-replay.js';
 import { applyRebaseTransition } from '../rebase-transition.js';
 import { translateAfterRebase } from '../rebase-translate.js';
 import { readState } from '../state.js';
+import { stripInheritedRemBlocks } from '../routing/rem-block-merge.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 import type { RestackMoveRef } from './restack-move.js';
 import type { ChildRange, CommitSha, RestackCause } from './restack-types.js';
@@ -72,6 +73,34 @@ async function changedPaths(git: GitRunner, from: CommitSha, to: CommitSha): Pro
   return result.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
 }
 
+async function showPath(git: GitRunner, ref: CommitSha, path: string): Promise<string | undefined> {
+  const result = await git(['show', `${ref}:${path}`]);
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+/** Remove only plan deltas that are byte-for-byte inherited rem blocks from the new parent. */
+async function normalizeInheritedRemPaths(git: GitRunner, tuple: RestackTuple, paths: readonly string[]): Promise<string[]> {
+  const normalized: string[] = [];
+  for (const path of paths) {
+    if (!path.startsWith('.docs/plans/') || !path.endsWith('.md')) { normalized.push(path); continue; }
+    const [before, after, parent] = await Promise.all([
+      showPath(git, tuple.previous, path), showPath(git, tuple.head, path), showPath(git, tuple.onto, path),
+    ]);
+    if (before === undefined || after === undefined || parent === undefined || stripInheritedRemBlocks(after, parent) !== before) normalized.push(path);
+  }
+  return normalized;
+}
+
+async function normalizedReplayComparison(git: GitRunner, tuple: RestackTuple, replay: ReplayIdentity) {
+  const comparison = await compareReplayTree(git, replay);
+  if (comparison.kind !== 'changed') return comparison;
+  const raw = await changedPaths(git, tuple.previous, tuple.head);
+  const relevant = await normalizeInheritedRemPaths(git, tuple, raw);
+  return relevant.length === 0
+    ? { ...comparison, kind: 'unchanged' as const, expectedTree: comparison.completedTree }
+    : comparison;
+}
+
 async function mergeBase(git: GitRunner, left: CommitSha, right: CommitSha): Promise<CommitSha> {
   const result = await git(['merge-base', left, right]);
   const value = result.stdout.trim();
@@ -82,7 +111,7 @@ async function mergeBase(git: GitRunner, left: CommitSha, right: CommitSha): Pro
 }
 
 async function outcomeFor(worktree: string, git: GitRunner, tuple: RestackTuple): Promise<RebaseOutcome> {
-  const delta = await changedPaths(git, tuple.previous, tuple.head);
+  const delta = await normalizeInheritedRemPaths(git, tuple, await changedPaths(git, tuple.previous, tuple.head));
   if (delta.length === 0) {
     return { kind: 'noop', baseSha: tuple.onto, allChangedPaths: [] };
   }
@@ -130,7 +159,7 @@ export async function queueInvalidation(
     outcome.allChangedPaths ?? outcome.changedCodePaths,
     outcome.featureSurface ?? [],
     false,
-    await compareReplayTree(git, outcome.replay),
+    await normalizedReplayComparison(git, { previous: range.oldTip, base: range.oldParent, onto: newParent, head: move.newSha }, outcome.replay),
     outcome.documentInputs,
   );
   const invalidated = new Set(projection.invalidated);
@@ -386,7 +415,9 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
       outcome.allChangedPaths ?? outcome.changedCodePaths,
       outcome.featureSurface ?? [],
       false,
-      await compareReplayTree(options.git, outcome.replay!),
+      await normalizedReplayComparison(options.git, {
+        previous: range.oldTip, base: range.oldParent, onto: newParentFor(range), head: move.newSha,
+      }, outcome.replay!),
       outcome.documentInputs,
     );
     const invalidated = new Set(projection.invalidated);

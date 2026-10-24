@@ -216,7 +216,7 @@ import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRepairMarker,
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { admitRound } from './routing/round-admission.js';
-import { routedRoundOpen } from './routing/round-admission.js';
+import { reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { requestRoutedExit } from './routing/routed-exit.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
@@ -15291,6 +15291,19 @@ export class Conductor {
               if (drained.kind !== 'drained') {
                 await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit outbox refused: ${drained.kind}`);
                 return;
+              }
+              // A routed exit only settles its host. Reconcile immediately so
+              // the same loop iteration admits the next host, closes a round
+              // before queue consumption, or records the final leaf return.
+              const reconciled = await reconcileRounds(this.projectRoot, slug);
+              if (reconciled.kind === 'unavailable') {
+                await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
+                return;
+              }
+              if (reconciled.kind === 'none' || reconciled.kind === 'deferred' || reconciled.kind === 'aborted') {
+                activeChild = undefined;
+                i = indexOf('prd_audit') - 1;
+                continue;
               }
               const next = await this.resolveActiveChild(this.projectRoot, slug);
               const nextExecution = resolveExecutionChild(next, slug);

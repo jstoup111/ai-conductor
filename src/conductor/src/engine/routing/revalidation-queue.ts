@@ -5,12 +5,14 @@ import {
   createRouteRecord,
   nextRoundId,
   readRepairMarker,
+  readRouteRecord,
   readRevalidationQueue,
   transitionHost,
   writeRoutingTransaction,
   type StoredRouteRecord,
 } from './route-record-store.js';
 import { admitRound } from './round-admission.js';
+import { parseRoundId } from './route-types.js';
 import type { RevalidationQueueEntry, RevalidationQueueRecord, RoundId } from './route-types.js';
 
 export interface MergeQueueGenerationOptions {
@@ -92,14 +94,26 @@ export async function acknowledgeQueueEntry(
   const marker = await readRepairMarker(worktree, slug, { git });
   const queue = await readRevalidationQueue(worktree, slug, { git });
   if (marker.kind !== 'marker' || marker.marker.roundId !== stored.record.roundId || marker.marker.host !== host || queue.kind !== 'queue') return { kind: 'stale' };
+  const pin = stored.record.entry?.host === host ? stored.record.entry.revalidation : undefined;
+  if (!pin || queue.blob !== pin.queueBlob || queue.queue.generation !== pin.generation) return { kind: 'stale' };
   const entry = queue.queue.entries.find((candidate) => candidate.child === host);
   if (entry === undefined) return { kind: 'stale' };
   const closure = await git(['rev-parse', '-q', '--verify', `refs/conductor/${slug}/closed/c${host}`]);
-  if (closure.exitCode !== 0 || closure.stdout.trim() !== entry.closureSha) return { kind: 'stale' };
+  if (closure.exitCode !== 0 || closure.stdout.trim() !== entry.closureSha || entry.closureSha !== pin.closureSha) return { kind: 'stale' };
   const nextQueue = mergeQueueGeneration(queue.queue, [], { acknowledge: host });
   const event = childRevalidatedEvent(host, nextQueue.generation, entry.closureSha, 'passed');
   const queueWithEvent = { ...nextQueue, outbox: [...nextQueue.outbox, { eventId: event.eventId, occurredAt: event.occurredAt, event }] };
-  const leavesRoundOpen = queueWithEvent.entries.length === 0;
+  let otherRoundOpen = false;
+  const routes = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (routes.exitCode !== 0) return { kind: 'unavailable' };
+  for (const ref of routes.stdout.split('\n').filter(Boolean)) {
+    const id = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!id || id === stored.record.roundId) continue;
+    const other = await readRouteRecord(worktree, slug, id, { git });
+    if (other.kind !== 'record') return { kind: 'unavailable' };
+    if (other.record.phase !== 'closed') { otherRoundOpen = true; break; }
+  }
+  const leavesRoundOpen = queueWithEvent.entries.length === 0 && !otherRoundOpen;
   const done = transitionHost(stored, host, 'done', { credit: false });
   if (done.kind !== 'updated') return { kind: 'stale' };
   const record = leavesRoundOpen ? done.record : { ...done.record, phase: 'closed' as const };

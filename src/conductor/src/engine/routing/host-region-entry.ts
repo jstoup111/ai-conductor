@@ -346,7 +346,19 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
   let pinnedBase = stored.record.entry?.host === input.host ? stored.record.entry.pinnedBase : undefined;
   if (stored.record.entry?.host !== input.host) {
-    const next = { ...stored.record, entry: { host: input.host, pinnedBase: resolved.pinnedBase, tree: resolved.tree } };
+    let revalidation: { readonly queueBlob: CommitSha; readonly generation: number; readonly closureSha: CommitSha } | undefined;
+    const queue = await readRevalidationQueue(input.worktree, input.slug, { git });
+    const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === input.host) : undefined;
+    if (stored.record.kind === 'revalidate' && (!queued || queue.kind !== 'queue')) {
+      return { kind: 'refused', detail: `revalidate host ${input.host} has no queued entry to pin` };
+    }
+    if (queued && queue.kind === 'queue') {
+      revalidation = { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha };
+    }
+    const next = {
+      ...stored.record,
+      entry: { host: input.host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
+    };
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
       { kind: 'update-record', previous: stored, record: next },
     ], { git });
