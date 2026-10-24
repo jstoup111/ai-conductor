@@ -177,6 +177,10 @@ For a v2 `act`, every effect task is exactly `{ "title": "...", "admittedTaskIds
 that repair, and `admissionRationale` explains the approved-scope fit. Never invent a task id or
 append a plan task.
 
+`planContract.index` lists every active-plan task without its body. `admittedTaskIds` must name supplied task bodies.
+An index-only task admission triggers at most one engine-run
+expansion round; after that round, an unsupplied admission halts.
+
 v2 adds `escalate` as both a source outcome and a case disposition. An escalation case has exactly
 the ordinary case fields plus `"escalation": { "owner": "product" | "plan" | "architecture" }`
 and its effect is exactly `{ "kind": "none" }`. Its source rows, case rationale, and consistency
