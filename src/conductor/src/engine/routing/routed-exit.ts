@@ -19,7 +19,54 @@ import {
 } from './route-record-store.js';
 import { resolveGitRef } from './git-ref-resolver.js';
 import { closureRefFor } from './routing-refs.js';
-import type { RoundId } from './route-types.js';
+import { assertNever, type HostState, type RevalidationQueueRecord, type RouteRecord, type RoundId } from './route-types.js';
+
+export type NextHostSelection =
+  | { readonly kind: 'child-host'; readonly host: ChildId; readonly index: number }
+  | { readonly kind: 'queue' }
+  | { readonly kind: 'leaf-host'; readonly host: ChildId; readonly index: number }
+  | { readonly kind: 'settled' };
+
+function pendingHost(state: HostState): boolean {
+  switch (state) {
+    case 'pending':
+      return true;
+    case 'admitted':
+    case 'repairing':
+    case 'reroute-moved':
+    case 'built':
+    case 'restacked':
+    case 'done':
+    case 'rerouted':
+      return false;
+  }
+  return assertNever(state);
+}
+
+/**
+ * Selects the next durable return target, preserving the recorded host order.
+ * The last host is the leaf, so it waits for both child hosts and revalidation.
+ */
+export function selectNextHost(
+  record: Pick<RouteRecord, 'hosts' | 'currentHostIndex'>,
+  queue: Pick<RevalidationQueueRecord, 'entries'>,
+): NextHostSelection {
+  const hosts = Object.keys(record.hosts)
+    .map(Number)
+    .sort((left, right) => left - right) as ChildId[];
+  const leafIndex = hosts.length - 1;
+
+  for (let index = record.currentHostIndex + 1; index < leafIndex; index += 1) {
+    const host = hosts[index]!;
+    if (pendingHost(record.hosts[host]!)) return { kind: 'child-host', host, index };
+  }
+
+  if (queue.entries.length > 0) return { kind: 'queue' };
+
+  const leaf = hosts[leafIndex];
+  if (leaf !== undefined && pendingHost(record.hosts[leaf]!)) return { kind: 'leaf-host', host: leaf, index: leafIndex };
+  return { kind: 'settled' };
+}
 
 /** The immutable Git comparison facts used to choose a routed host's exit. */
 export interface HostNoOpEvidence {
