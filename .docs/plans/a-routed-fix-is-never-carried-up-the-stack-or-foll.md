@@ -1764,3 +1764,21 @@ Three APPROVED ADRs carry 2026-10-23 #3212 amendment notes in this change set, s
 **Done when:**
 - adr-2026-10-12-routed-whole-feature-repair decision 14 is satisfied by this task.
 - The repair for task rem-as-built-rem-vg5-d14 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-rem-vg6-s6-1: In src/conductor/src/engine/conductor.ts routed-exit branch (~15355-15390), gate the whole-feature return on durable quiescence instead of reconciled.kind. When reconciliation is none, aborted or deferred, the queue consumption returns none, and routedRoundOpen(projectRoot, slug) is false (all route records closed, queue empty), call restoreWholeFeatureState(state), clear activeChild and set i = indexOf('prd_audit') - 1. When deferred and routedRoundOpen is still true, keep the existing resolveActiveChild path to the next routed host. Keep the existing vg5 tests passing: an open r2 means no prd_audit, and a queue entry means no prd_audit. Add a conductor test that does not mock reconcileRounds, routed-exit or returnToLeaf: drive a real final-host exit through returnToLeaf so the last round closes and reconcileRounds returns deferred. Assert that prd_audit is dispatched next, acceptance_specs is not re-dispatched, and no child region state is reactivated
+**Gate:** prd-audit
+**Rationale:** Verified 98% against HEAD edd634f789: conductor.ts:15377-15387 still enters restoreWholeFeatureState and jumps to prd_audit only when reconciled.kind is none or aborted. round-admission.ts:92 returns none only when no route refs exist. Closed rounds keep their refs, and advanceRound's leaf-return close maps to deferred (round-admission.ts:117-120). So the real leaf-return path falls through to resolveActiveChild and acceptance_specs. The vg5 commit added the queue and routedRoundOpen guards but kept the reconciled.kind gate. The approved architecture (ADR decisions 13 and 15) is clear about the required behavior, so this is conforming implementation drift and belongs in BUILD.
+**Criterion:** S6.1
+**Parent task:** rem-prd-audit-rem-vg5-s6-1
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-rem-vg6-s6-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1: In src/conductor/test (conductor routed-exit tests), add a test with real route-record, marker and conduct-state files and no mocks of reconcileRounds or returnToLeaf. A routed leaf host exits, returnToLeaf closes the final round and re-pends the post-region gates on disk. Assert that after the routed-exit branch: the in-memory state, persistedStateSnapshot and stateStore baseline equal the on-disk leaf conduct state; prd_audit, architecture_review_as_built, manual_test and every configured post-region custom step are pending in memory with their satisfied verdicts cleared; and the next commitStateChanges raises no CAS mismatch. If restoreWholeFeatureState (conductor.ts:2758) does not reload all three, fix it in the same task
+**Gate:** as-built
+**Rationale:** Same defect as S6.1, verified at HEAD (conductor.ts:15377-15398 and round-admission.ts:92,117-120). The full leaf-state and CAS-baseline restore that task rem-prd-audit-rem-vg4-s6-1 requires never runs on the actual returnToLeaf path, because that path reconciles to deferred. The gate fix belongs to rem-prd-audit-rem-vg6-s6-1. This task adds the missing state-level proof on the real (unmocked) leaf-return path, which existing tests never exercise because they mock reconcileRounds. Plan task rem-prd-audit-rem-vg4-s6-1 admits it.
+**Parent task:** rem-prd-audit-rem-vg4-s6-1
+**Governing clause:** Task rem-prd-audit-rem-vg4-s6-1
+**Done when:**
+- Task rem-prd-audit-rem-vg4-s6-1 is satisfied by this task.
+- The repair for task rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1 is committed and its targeted tests pass.
