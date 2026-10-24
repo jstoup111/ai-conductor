@@ -213,6 +213,19 @@ Supersede adr-2026-07-03-gated-writeback-announcements. Operator approved this s
 > 7. *Token confinement is unchanged.* D9.3's confinement applies to the identity read. Only the
 >    derived login and id leave the resolver, and only the trailer text reaches the worktree or
 >    any provider or build child.
+>
+> **Amended 2026-10-24 by #3377:** D10.1's "cached for the daemon process" now means cached per
+> daemon process that dispatches features: the supervisor and each executor child (one per dispatch
+> under `executor_isolation: child`) resolve and cache the identity independently. The read still
+> happens during daemon worktree preparation and never inside a commit path. Every such process
+> installs the resolver through one shared daemon-process bootstrap, called by the daemon entry
+> point and the executor-child entry point and by no operator-run entry point, so D10.3's scope
+> holds under both isolation modes. D10.6 gains a closed reason for a resolver that is absent when
+> daemon dispatch prepares a worktree; it is emitted on that feature's event spine, the trailer is
+> omitted, and setup proceeds. Operator-run worktree preparation, which is not daemon dispatch,
+> still writes no co-author value and emits nothing. D10.2, D10.4, D10.5 and D10.7 are unchanged;
+> the executor child already reads the bot credential for its own GitHub writes, so confinement
+> gains no new holder.
 
 ## Consequences
 
