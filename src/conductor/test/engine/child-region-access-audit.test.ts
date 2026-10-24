@@ -50,6 +50,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/rewind.ts:ConductStateStore.applyBatch': 3,
   'engine/rewind.ts:ConductStateStore.applyCorrection': 1,
   'engine/routing/host-region-entry.ts:ConductStateStore.applyBatch': 2,
+  'engine/routing/routed-exit.ts:writeVerdict': 1,
   'engine/routing/round-receipt.ts:readKickbackLedger': 2,
   'engine/routing/round-receipt.ts:updateKickbackLedger': 2,
   'engine/state.ts:ConductStateStore.apply': 3,
@@ -182,6 +183,7 @@ function isWholeFeatureOnly(call: CallSite): boolean {
     ((path === 'engine/rebase-transition.ts' || path === 'engine/rebase.ts') &&
       (accessor === 'readVerdict' || accessor === 'writeVerdict') &&
       (gate === "'rebase'" || gate === "'coverage_binding'")) ||
+    (path === 'engine/routing/routed-exit.ts' && accessor === 'writeVerdict') ||
     (path === 'engine/kickback-ledger.ts' && accessor === 'bumpKickbackGate');
 }
 
@@ -249,7 +251,7 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
     throw new Error(`unclassified restack region access sites: ${unclassifiedRestackAccesses.join(', ')}`);
   }
   return calls.map((call) => isWholeFeatureOnly(call)
-    ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'The rebase and coverage-binding gates remain feature-wide.' }
+    ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'This access is deliberately whole-feature scoped.' }
     : {
       site: call.site,
       classification: RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] ?? 'child-aware' as const,
