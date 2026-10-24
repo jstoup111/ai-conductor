@@ -383,7 +383,15 @@ export async function journalRoutedApplyPlan(
   git: GitRunner,
 ): Promise<StoredRestackJournal> {
   const routed = journal.journal.routed;
-  if (journal.journal.state !== 'synced' || routed?.routeNew !== undefined || journal.journal.queueNew !== undefined) return journal;
+  // A crash can leave a synced journal with only one side of its applied plan
+  // durable.  Route planning is not optional merely because a queue plan was
+  // already recorded: recovery must finish the missing route plan before the
+  // shared applied transaction can be rendered.
+  const routePlanReady = routed === undefined || routed.routeNew !== undefined;
+  // `queueInvalidation` is recorded even when merging leaves the queue blob
+  // unchanged, so it is the durable completion bit for that half of a plan.
+  const queuePlanReady = journal.journal.queueTracked !== true || journal.journal.queueInvalidation !== undefined;
+  if (journal.journal.state !== 'synced' || (routePlanReady && queuePlanReady)) return journal;
   let routeNew: CommitSha | undefined;
   if (routed !== undefined) {
     const stored = await readRouteRecord(worktree, journal.slug, routed.roundId, { git });

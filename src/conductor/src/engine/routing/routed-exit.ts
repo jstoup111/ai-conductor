@@ -3,7 +3,7 @@ import { makeGitRunner } from '../rebase.js';
 import type { GitRunner } from '../rebase.js';
 import { ConductorEventEmitter } from '../../ui/events.js';
 import { EventPersister } from '../event-persister.js';
-import { resolveActiveChild } from '../child-cursor.js';
+import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
 import { haltRestack } from '../restack/restack-move.js';
 import { writeHaltMarker } from '../halt-marker.js';
@@ -63,24 +63,31 @@ function pendingHost(state: HostState): boolean {
  * Selects the next durable return target, preserving the recorded host order.
  * The last host is the leaf, so it waits for both child hosts and revalidation.
  */
-export function selectNextHost(
+export async function selectNextHost(
+  worktree: string,
   record: Pick<RouteRecord, 'hosts' | 'currentHostIndex'>,
   queue: Pick<RevalidationQueueRecord, 'entries'>,
-): NextHostSelection {
+  options: { readonly leaf?: ChildId } = {},
+): Promise<NextHostSelection> {
   const hosts = Object.keys(record.hosts)
     .map(Number)
     .sort((left, right) => left - right) as ChildId[];
-  const leafIndex = hosts.length - 1;
+  const leaf = options.leaf ?? await resolveSealedLeaf(worktree);
+  if (leaf === undefined) return { kind: 'settled' };
+  const leafIndex = hosts.indexOf(leaf);
+  // A round can be opened before its leaf is allocated into its host map.
+  // Treat every allocated position below the durable sealed leaf as a child;
+  // the leaf remains the final return target, not the final map entry.
+  const childEnd = leafIndex === -1 ? hosts.length : leafIndex;
 
-  for (let index = record.currentHostIndex + 1; index < leafIndex; index += 1) {
+  for (let index = record.currentHostIndex + 1; index < childEnd; index += 1) {
     const host = hosts[index]!;
     if (pendingHost(record.hosts[host]!)) return { kind: 'child-host', host, index };
   }
 
   if (queue.entries.length > 0) return { kind: 'queue' };
 
-  const leaf = hosts[leafIndex];
-  if (leaf !== undefined && pendingHost(record.hosts[leaf]!)) return { kind: 'leaf-host', host: leaf, index: leafIndex };
+  if (leafIndex !== -1 && pendingHost(record.hosts[leaf]!)) return { kind: 'leaf-host', host: leaf, index: leafIndex };
   return { kind: 'settled' };
 }
 
@@ -101,7 +108,7 @@ export async function advanceRound(
     return { kind: 'unavailable', detail: 'revalidation queue is unreadable' };
   }
   const entries = options.queue?.entries ?? (queued?.kind === 'queue' ? queued.queue.entries : []);
-  const next = selectNextHost(stored.record, { entries });
+  const next = await selectNextHost(worktree, stored.record, { entries });
   if (next.kind === 'queue') {
     const everyHostSettled = Object.values(stored.record.hosts)
       .every((state) => state === 'restacked' || state === 'done' || state === 'rerouted');
@@ -169,7 +176,6 @@ async function restageLeafGates(worktree: string): Promise<string | undefined> {
       satisfied: false,
       reason: 'routed leaf return requires fresh whole-feature validation',
       checkedAt: Date.now(),
-      kickback: { from: 'build_review', evidence: 'routed leaf return' },
     })));
   } catch (error) {
     return `cannot invalidate leaf gate verdicts: ${error instanceof Error ? error.message : String(error)}`;
@@ -192,7 +198,8 @@ export async function returnToLeaf(
   const queue = await readRevalidationQueue(worktree, slug, { git });
   if (queue.kind === 'unreadable') return { kind: 'unavailable', detail: 'cannot inspect revalidation queue before leaf return' };
   if (queue.kind === 'queue' && queue.queue.entries.length > 0) return { kind: 'unavailable', detail: 'cannot return to leaf while revalidation queue has entries' };
-  const leaf = Math.max(...Object.keys(stored.record.hosts).map(Number)) as ChildId;
+  const leaf = await resolveSealedLeaf(worktree);
+  if (leaf === undefined) return { kind: 'unavailable', detail: 'cannot resolve sealed leaf before routed return' };
   const branch = leafBranchFor(slug);
   const current = await git(['symbolic-ref', '--short', 'HEAD']);
   if (current.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot determine branch before leaf return' };

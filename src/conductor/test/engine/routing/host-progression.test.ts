@@ -61,7 +61,16 @@ describe('routed host progression', () => {
       queue: queue(false),
       expected: { kind: 'settled' },
     },
-  ])('$name', ({ record: route, queue: revalidationQueue, expected }) => {
-    expect(selectNextHost(route, revalidationQueue)).toEqual(expected);
+  ])('$name', async ({ record: route, queue: revalidationQueue, expected }) => {
+    await expect(selectNextHost('', route, revalidationQueue, { leaf })).resolves.toEqual(expected);
+  });
+
+  it('keeps every allocated host below an unallocated sealed leaf ahead of the queue', async () => {
+    await expect(selectNextHost(
+      '',
+      record({ [child1]: 'restacked', [child2]: 'pending' }),
+      queue(true),
+      { leaf },
+    )).resolves.toEqual({ kind: 'child-host', host: child2, index: 1 });
   });
 });
