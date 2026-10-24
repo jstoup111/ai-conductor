@@ -10,6 +10,7 @@ import { writeHaltMarker } from '../halt-marker.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import {
   drainOutbox,
+  readRevalidationQueue,
   readRepairMarker,
   readRouteRecord,
   transitionHost,
@@ -20,12 +21,21 @@ import {
 import { resolveGitRef } from './git-ref-resolver.js';
 import { closureRefFor } from './routing-refs.js';
 import { assertNever, type HostState, type RevalidationQueueRecord, type RouteRecord, type RoundId } from './route-types.js';
+import { leafBranchFor } from '../feature-branch-identity.js';
+import { switchToChild } from '../child-lifecycle.js';
+import { applyStateChanges, readState } from '../state.js';
 
 export type NextHostSelection =
   | { readonly kind: 'child-host'; readonly host: ChildId; readonly index: number }
   | { readonly kind: 'queue' }
   | { readonly kind: 'leaf-host'; readonly host: ChildId; readonly index: number }
   | { readonly kind: 'settled' };
+
+export type AdvanceRoundResult =
+  | { readonly kind: 'admitted'; readonly host: ChildId }
+  | { readonly kind: 'queue' }
+  | { readonly kind: 'closed' }
+  | { readonly kind: 'unavailable'; readonly detail: string };
 
 function pendingHost(state: HostState): boolean {
   switch (state) {
@@ -66,6 +76,79 @@ export function selectNextHost(
   const leaf = hosts[leafIndex];
   if (leaf !== undefined && pendingHost(record.hosts[leaf]!)) return { kind: 'leaf-host', host: leaf, index: leafIndex };
   return { kind: 'settled' };
+}
+
+/**
+ * Advances a completed routed host from the persisted record.  The marker and
+ * next admission are deliberately one compare-and-swap so a resume cannot
+ * admit a second host after a crash.
+ */
+export async function advanceRound(
+  worktree: string,
+  slug: string,
+  stored: StoredRouteRecord,
+  options: { readonly git?: GitRunner; readonly queue?: Pick<RevalidationQueueRecord, 'entries'> } = {},
+): Promise<AdvanceRoundResult> {
+  const git = options.git ?? makeGitRunner(worktree);
+  const queued = options.queue === undefined ? await readRevalidationQueue(worktree, slug, { git }) : undefined;
+  if (queued !== undefined && queued.kind !== 'queue' && queued.kind !== 'absent') {
+    return { kind: 'unavailable', detail: 'revalidation queue is unreadable' };
+  }
+  const entries = options.queue?.entries ?? (queued?.kind === 'queue' ? queued.queue.entries : []);
+  const next = selectNextHost(stored.record, { entries });
+  if (next.kind === 'queue') return { kind: 'queue' };
+  if (next.kind === 'settled') return returnToLeaf(worktree, slug, stored, { git });
+  const admitted = transitionHost(stored, next.host, 'admitted', { credit: false });
+  if (admitted.kind !== 'updated') return { kind: 'unavailable', detail: `cannot admit routed host ${next.host}` };
+  const record = { ...admitted.record, currentHostIndex: next.index };
+  const wrote = await writeRoutingTransaction(worktree, slug, [
+    { kind: 'update-record', previous: stored, record },
+    { kind: 'create-marker', marker: { host: next.host, roundId: stored.record.roundId } },
+  ], { git });
+  return wrote.kind === 'updated'
+    ? { kind: 'admitted', host: next.host }
+    : { kind: 'unavailable', detail: `round advance ${wrote.kind}` };
+}
+
+/** Return to the leaf and record that return before the route can close. */
+export async function returnToLeaf(
+  worktree: string,
+  slug: string,
+  stored: StoredRouteRecord,
+  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter } = {},
+): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'unavailable' }>> {
+  const git = options.git ?? makeGitRunner(worktree);
+  if (stored.record.phase === 'closed') return { kind: 'closed' };
+  const leaf = Math.max(...Object.keys(stored.record.hosts).map(Number)) as ChildId;
+  const branch = leafBranchFor(slug);
+  const current = await git(['symbolic-ref', '--short', 'HEAD']);
+  if (current.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot determine branch before leaf return' };
+  if (current.stdout.trim() !== branch) {
+    const switched = await switchToChild(worktree, { child: leaf, position: leaf, branch }, options.events ?? new ConductorEventEmitter(), undefined, { git });
+    if (switched.kind !== 'completed') return { kind: 'unavailable', detail: 'reason' in switched ? switched.reason : 'cannot switch to leaf branch' };
+  }
+  const resolved = await resolveGitRef(git, 'HEAD');
+  if (typeof resolved !== 'string') return { kind: 'unavailable', detail: 'cannot resolve leaf return head' };
+  let currentStored = stored;
+  if (stored.record.leafReturn === undefined) {
+    const returned = { ...stored.record, leafReturn: { branch, head: resolved } };
+    const wrote = await writeRoutingTransaction(worktree, slug, [{ kind: 'update-record', previous: stored, record: returned }], { git });
+    if (wrote.kind !== 'updated') return { kind: 'unavailable', detail: `leaf return ${wrote.kind}` };
+    const reread = await readRouteRecord(worktree, slug, stored.record.roundId, { git });
+    if (reread.kind !== 'record') return { kind: 'unavailable', detail: 'cannot reread leaf return record' };
+    currentStored = reread;
+  }
+  const closed = { ...currentStored.record, phase: 'closed' as const };
+  const closedWrite = await writeRoutingTransaction(worktree, slug, [{ kind: 'update-record', previous: currentStored, record: closed }], { git });
+  if (closedWrite.kind !== 'updated') return { kind: 'unavailable', detail: `round close ${closedWrite.kind}` };
+  const statePath = `${worktree}/.pipeline/conduct-state.json`;
+  const state = await readState(statePath);
+  if (state.ok) {
+    await applyStateChanges(statePath, state.value, {
+      prd_audit: 'pending', architecture_review_as_built: 'pending', manual_test: 'pending',
+    }, 're-pend leaf gates after routed return');
+  }
+  return { kind: 'closed' };
 }
 
 /** The immutable Git comparison facts used to choose a routed host's exit. */
@@ -148,6 +231,22 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   const marker = await readRepairMarker(input.worktree, input.slug, { git });
   if (marker.kind !== 'marker' || marker.marker.host !== input.host || marker.marker.roundId !== input.roundId) {
     return halted(`routed exit host ${input.host}: repair marker is unavailable or belongs to another round`);
+  }
+
+  // The leaf is already the whole-feature branch.  Its successful BUILD
+  // region settles the marker in one CAS; replaying it would carry the fix
+  // above the stack it is meant to return to.
+  const closure = await resolveGitRef(git, closureRefFor(input.slug, input.host));
+  if (typeof closure !== 'string') {
+    const done = transitionHost(stored, input.host, 'done', { credit: false });
+    if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'update-record', previous: stored, record: done.record },
+      { kind: 'delete-marker', old: marker.blob },
+    ], { git });
+    return wrote.kind === 'updated'
+      ? { kind: 'no-commit-done' }
+      : halted(`routed exit host ${input.host}: leaf compare-and-swap ${wrote.kind}`);
   }
 
   const evidence = await hostNoOpEvidence(input.worktree, input.slug, stored, input.host);

@@ -297,6 +297,8 @@ export interface RouteRecord {
   readonly fallback?: readonly RouteFallback[];
   /** Present only while a rerouted worktree still needs tree synchronization. */
   readonly reroute?: ReroutePhase;
+  /** The leaf branch and tip durably recorded before the round is closed. */
+  readonly leafReturn?: { readonly branch: string; readonly head: CommitSha };
   readonly outbox: readonly OutboxEntry[];
 }
 
@@ -479,6 +481,13 @@ function parseReroutePhase(value: unknown): ReroutePhase | undefined {
   return rejectedTip && resetTip && destination
     ? { sourceBranch: value.sourceBranch, rejectedTip, resetTip, destination }
     : undefined;
+}
+
+function parseLeafReturn(value: unknown): { readonly branch: string; readonly head: CommitSha } | undefined {
+  if (!isRecord(value) || typeof value.branch !== 'string' || !isValidGitBranchName(value.branch)
+    || typeof value.head !== 'string') return undefined;
+  const head = parseCommitSha(value.head);
+  return head === undefined ? undefined : { branch: value.branch, head };
 }
 
 function parseOutboxEntry(value: unknown): OutboxEntry | undefined {
@@ -699,6 +708,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const entry = value.entry === undefined ? undefined : parseHostEntry(value.entry);
   const fallback = value.fallback === undefined ? undefined : Array.isArray(value.fallback) ? value.fallback.map(parseRouteFallback) : undefined;
   const reroute = value.reroute === undefined ? undefined : parseReroutePhase(value.reroute);
+  const leafReturn = value.leafReturn === undefined ? undefined : parseLeafReturn(value.leafReturn);
   const currentHostIndex = value.currentHostIndex;
   if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
     || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
@@ -706,7 +716,8 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     || (value.entry !== undefined && !entry) || (fallback?.some((item) => item === undefined) ?? false)
     || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
     || (value.sealedAuthored !== undefined && sealedAuthored === undefined)
-    || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)) return undefined;
+    || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)
+    || (value.leafReturn !== undefined && leafReturn === undefined)) return undefined;
   if (!hasConsistentRouteLifecycle({
     phase, hosts, currentHostIndex, entry, fallback: fallback as RouteFallback[] | undefined, reroute,
   })) return undefined;
@@ -726,6 +737,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     ...(entry === undefined ? {} : { entry }),
     ...(fallback === undefined ? {} : { fallback: fallback as RouteFallback[] }),
     ...(reroute === undefined ? {} : { reroute }),
+    ...(leafReturn === undefined ? {} : { leafReturn }),
     outbox,
   };
   if (reroute && !validatedReroute(record)) return undefined;

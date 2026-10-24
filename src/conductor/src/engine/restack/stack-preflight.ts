@@ -26,7 +26,7 @@ import { publishedStackRefusal } from '../stack-publication.js';
 /** The bounded result consumed by daemon and resume entry points. */
 export type StackPreflightResult =
   | { readonly kind: 'no-stack' | 'clear' | 'recovered' | 'repaired' }
-  | Extract<ReconcileRoundsResult, { readonly kind: 'navigate-leaf-to-build' }>
+  | Extract<ReconcileRoundsResult, { readonly kind: 'navigate-leaf-to-build' | 'navigate-host' }>
   | { readonly kind: 'halted' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
@@ -154,7 +154,7 @@ export async function runStackPreflight(options: RunStackPreflightOptions): Prom
       await deferredBaseRefresh(options.events);
       return { kind: 'clear' };
     }
-    if (reconciled.kind === 'navigate-leaf-to-build') return reconciled;
+    if (reconciled.kind === 'navigate-leaf-to-build' || reconciled.kind === 'navigate-host') return reconciled;
   }
 
   const cursor = receiptCursor ?? await resolveActiveChild(options.worktree, options.slug, { git: options.git });

@@ -124,3 +124,21 @@ export function unionRemBlocks(base: string, ours: string, theirs: string): Unio
 
   return { kind: 'merged', text: mergedPlanText(parsedBase, mergedBlocks) };
 }
+
+/**
+ * Removes remediation blocks already supplied by a new parent.  This is not a
+ * general plan normalizer: malformed or authored-body edits deliberately keep
+ * their original text so callers continue to reject them conservatively.
+ */
+export function stripInheritedRemBlocks(plan: string, parentPlan: string): string {
+  const parsed = parseRemPlan(plan);
+  const parent = parseRemPlan(parentPlan);
+  if (parsed === undefined || parent === undefined) return plan;
+  const retained = new Map(
+    [...parsed.remBlocks].filter(([id, block]) => {
+      const inherited = parent.remBlocks.get(id);
+      return inherited === undefined || !sameBlock(block, inherited);
+    }),
+  );
+  return mergedPlanText({ ...parsed, hasAppendedRemBlocks: false }, retained);
+}
