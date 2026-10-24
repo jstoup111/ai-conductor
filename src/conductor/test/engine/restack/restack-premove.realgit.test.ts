@@ -168,15 +168,15 @@ describe('runRestack pre-move checks (real local Git)', () => {
 
   it('halts on a violated protected-artifact seal before refs move', async () => {
     const subject = await fixture();
-    await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'approved\n');
-    await subject.git(['add', '.docs/plans/demo.md']);
-    await subject.git(['commit', '-qm', 'add approved plan']);
+    await mkdir(join(subject.repo, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'approved\n');
+    await subject.git(['add', '.docs/decisions/approved.md']);
+    await subject.git(['commit', '-qm', 'add approved decision']);
     await createProtectedArtifactSeal({
       projectRoot: subject.repo,
       baselineCommit: (await subject.git(['rev-parse', 'HEAD'])).stdout.trim(),
     });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'mutated\n');
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'mutated\n');
     const oldLeaf = (await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim();
 
     const result = await restack(subject);

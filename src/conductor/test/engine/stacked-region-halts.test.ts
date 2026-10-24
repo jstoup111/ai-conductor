@@ -19,7 +19,7 @@ const activeChild1: ActiveChildResolution = {
 const cursorRefusals: Array<[ActiveChildResolution, string]> = [
   [{ kind: 'divergent', child: child1, check: 'closed-child-rewritten' }, 'child 1 failed active-child check closed-child-rewritten'],
   [{ kind: 'divergent', child: child1, check: 'range-not-ancestor' }, 'child 1 failed active-child check range-not-ancestor'],
-  [{ kind: 'envelope-missing' }, 'coverage-binding envelope is missing while child state exists'],
+  [{ kind: 'topology-unavailable', cause: 'plan-missing' }, 'slice topology is unavailable while child state exists (plan-missing)'],
   [{ kind: 'detached-head' }, 'worktree is in detached HEAD while resolving the active child'],
   [{ kind: 'git-error' }, 'git failed while resolving the active child cursor'],
 ];

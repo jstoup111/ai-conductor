@@ -238,7 +238,7 @@ describe('rewind --child demotions', () => {
           { field: 'build', expected: 'done', intent, next: 'stale' },
           { field: 'test_suite', expected: 'done', intent, next: 'stale' },
           { field: 'build_review', expected: 'done', intent, next: 'stale' },
-          { field: 'last_step', expected: 'build_review', intent, next: 'coverage_binding' },
+          { field: 'last_step', expected: 'build_review', intent, next: 'plan_review' },
         ],
       }]],
       [paths[3], [{

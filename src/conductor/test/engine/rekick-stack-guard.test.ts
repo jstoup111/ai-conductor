@@ -55,7 +55,7 @@ async function initializeStack(activeChild: 2 | 3): Promise<void> {
   await mkdir(join(repository, '.ai-conductor'), { recursive: true });
   await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
   await seal([1, 2, 3]);
-  await git('add', '.ai-conductor/config.yml', '.pipeline/coverage-binding.json');
+  await git('add', '.ai-conductor/config.yml');
   await git('commit', '-qm', 'seal stacked region');
 
   const tip = await git('rev-parse', 'HEAD');

@@ -313,16 +313,17 @@ describe('BUILD remediation-closure judgement boundary', () => {
 
   it('judges only the execution child\'s remediation close in a stacked feature', async () => {
     const planPath = join(root, '.docs', 'plans', 'closure.md');
-    const planText = await readFile(planPath, 'utf8');
-    await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-      version: 1, slug: 'closure', runId: 'run', status: 'done', entries: [],
-      sliceMembership: { taskSlices: { '4': 2 }, titles: ['child two'] },
-    }));
-    await writeFile(planPath, planText.replace(
-      'Named repair one.', 'Named repair one.\n\n**Child:** 1',
-    ).replace(
-      'Named repair two.', 'Named repair two.\n\n**Child:** 2',
-    ));
+    await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(root, '.docs', 'stories', 'closure.md'), '## Story S2: Child two\n');
+    await writeFile(planPath, [
+      '# Implementation Plan: closure', '', '**Stories:** .docs/stories/closure.md', '',
+      '## Slices', '', '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 2 | child two | 4 |', '',
+      '### Task 4: Citation task', '**Story:** S2', '**Dependencies:** none', 'Citation text.', '', '**Done when:**', '- [test] cited check.', '',
+      '### Task rem-as-built-R5: First remediation', 'Named repair one.', '**Child:** 1', '', '**Done when:**', '- Repair one is committed.', '',
+      '### Task rem-as-built-R11: Second remediation', 'Named repair two.', '**Child:** 2', '', '**Done when:**', '- Repair two is committed.', '',
+    ].join('\n'));
+    await exec('git', ['add', '.docs/plans/closure.md', '.docs/stories/closure.md'], { cwd: root });
+    await exec('git', ['commit', '-q', '-m', 'fixture: seal child remediation ownership'], { cwd: root });
     const closures = vi.fn(async (input: RemediationClosureInput) => ({
       kind: 'valid' as const,
       verdicts: input.candidates.map(({ taskId }) => ({ taskId, verdict: 'resolved' as const, rationale: 'Present.' })),

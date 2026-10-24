@@ -3,7 +3,7 @@ import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { hasDurableChildState, resolveActiveChild, resolveSealedFirst } from '../child-cursor.js';
-import { childBranchFor } from '../feature-branch-identity.js';
+import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 import { ConductorEventEmitter } from '../../ui/events.js';
@@ -74,7 +74,7 @@ async function haltUnresolvableCursor(
   const recovery = await describeResealRecovery(options.worktree, `.docs/plans/${options.slug}.md`);
   const command = recovery ??
     (cause === 'detached-head'
-      ? `git switch feat/daemon-${options.slug}`
+      ? `git switch ${leafBranchFor(options.slug)}`
       : cause === 'positions-ref-unreadable'
         ? `git update-ref refs/conductor/${options.slug}/positions <positions-blob>`
         : `rm -f .pipeline/HALT .pipeline/HALT.class`);

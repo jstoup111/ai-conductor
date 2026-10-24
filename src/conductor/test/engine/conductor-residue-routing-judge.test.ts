@@ -405,6 +405,31 @@ const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   diagramDrift: { enabled: false, reason: 'fixture' },
 };
 
+function slicedRoutingPlan(firstDetails = '', childRepair = ''): string {
+  return [
+    '# Implementation plan',
+    '',
+    '**Stories:** .docs/stories/feature.md',
+    '',
+    '## Slices',
+    '',
+    '| Slice | Title | Tasks |',
+    '| --- | --- | --- |',
+    '| 1 | first | first |',
+    '| 2 | leaf | second |',
+    '',
+    '### Task first: authored work',
+    '**Story:** S1',
+    '**Dependencies:** none',
+    firstDetails,
+    childRepair,
+    '### Task second: leaf work',
+    '**Story:** S2',
+    '**Dependencies:** none',
+    '',
+  ].filter(Boolean).join('\n');
+}
+
 describe('Conductor residue routing judge binding', () => {
   let projectRoot: string;
 
@@ -681,7 +706,7 @@ describe('Conductor residue routing judge binding', () => {
   it('routes a proposed repair task to its admitted authored parent host', async () => {
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -847,7 +872,7 @@ describe('Conductor residue routing judge binding', () => {
 
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n\n**Files:** src/owner.ts\n\n**Done when:**\n- [test] `src/child-two.ts` is available to the repair.\n',
+      slicedRoutingPlan('**Files:** src/owner.ts\n\n**Done when:**\n- [test] `src/child-two.ts` is available to the repair.'),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -907,7 +932,7 @@ describe('Conductor residue routing judge binding', () => {
     await mustSucceed(['checkout', child.branch]);
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n\n### Task rem-as-built-repair-task-for-first: Existing child repair\n',
+      slicedRoutingPlan('', '### Task rem-as-built-repair-task-for-first: Existing child repair'),
       'utf8',
     );
     await mustSucceed(['add', '.docs/plans/feature.md']);
@@ -915,7 +940,7 @@ describe('Conductor residue routing judge binding', () => {
     await mustSucceed(['checkout', leafBranchFor('demo')]);
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -961,7 +986,7 @@ describe('Conductor residue routing judge binding', () => {
   it('passes validation-group FAIL rows verbatim to the router and returns the stored host retry hint', async () => {
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {

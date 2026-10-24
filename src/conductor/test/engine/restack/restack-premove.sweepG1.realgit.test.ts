@@ -220,19 +220,19 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
   // Covers: S5.7, task:9
   it('halts on an already-violated protected-artifact seal before any ref moves', async () => {
     const subject = await fixture();
-    await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'approved\n');
-    await subject.git(['add', '.docs/plans/demo.md']);
-    await subject.git(['commit', '-qm', 'add approved plan']);
+    await mkdir(join(subject.repo, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'approved\n');
+    await subject.git(['add', '.docs/decisions/approved.md']);
+    await subject.git(['commit', '-qm', 'add approved decision']);
     await createProtectedArtifactSeal({ projectRoot: subject.repo, baselineCommit: await tipOf(subject, 'HEAD') });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'mutated\n');
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'mutated\n');
     const before = await refSnapshot(subject);
 
     await expect(restack(subject)).resolves.toEqual({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('protected-artifact seal error');
     expect(await refSnapshot(subject)).toBe(before);
-    await expect(readFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'utf8')).resolves.toBe('mutated\n');
+    await expect(readFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'utf8')).resolves.toBe('mutated\n');
   });
 
   // Covers: S5.8, task:9

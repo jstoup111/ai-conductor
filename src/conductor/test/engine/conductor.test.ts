@@ -3725,14 +3725,14 @@ describe('engine/conductor', () => {
 
     // Should have started + completed events for every step (complexity
     // dispatches via the engine path but still emits the same event pair).
-    expect(emitted.length).toBe((ALL_STEPS.length - 2) * 2);
+    expect(emitted.length).toBe((ALL_STEPS.length - 1) * 2);
 
     // Check first step events are in correct order
     expect(emitted[0]).toEqual({ type: 'step_started', step: 'worktree' });
     expect(emitted[1]).toEqual({ type: 'step_completed', step: 'worktree' });
 
     // Check last step
-    const lastIdx = (ALL_STEPS.length - 3) * 2;
+    const lastIdx = (ALL_STEPS.length - 2) * 2;
     expect(emitted[lastIdx]).toEqual({ type: 'step_started', step: 'finish' });
     expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
   });

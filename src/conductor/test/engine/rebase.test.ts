@@ -2732,6 +2732,6 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
     const invalidation = classifyGateInvalidation([citedAdr], [], true, inputs);
 
     expect(inputs).toContain(citedAdr);
-    expect(invalidation.invalidated).toContain('build_review');
+    expect(invalidation.invalidated).toEqual(['architecture_review_as_built']);
   });
 });

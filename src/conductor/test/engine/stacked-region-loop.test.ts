@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
-import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
@@ -46,7 +46,7 @@ beforeEach(async () => {
   await git(['commit', '-qm', 'configure stack']);
   await writeFile(join(root, '.git', 'info', 'exclude'), '.pipeline/\n');
   await writeSliceTopologyFixture(root, {
-    version: 1, slug: 'demo', runId: 'loop-1', status: 'done', entries: [],
+    version: 1, slug: 'demo', runId: 'loop-1', status: 'done', entries: [], materializeTopologyCommit: true,
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
@@ -161,6 +161,9 @@ describe('stacked BUILD region loop', () => {
     await git(['switch', '-q', 'feat/c1/demo']);
     const childTip = await commit('child 1 complete');
     await git(['update-ref', 'refs/conductor/demo/closed/c1', childTip, '']);
+    await sealSliceTopologyPositions(root, {
+      slug: 'demo', sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
+    });
     await git(['switch', '-q', 'feat/daemon-demo']);
     await git(['update-ref', 'refs/remotes/origin/main', leafBefore]);
     await git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);

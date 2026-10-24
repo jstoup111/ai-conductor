@@ -301,6 +301,9 @@ describe('runRestack (real local Git)', () => {
     const haltRecord = await commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
     await git(['checkout', '-qb', 'feat/c1/demo']);
     await commit('child work', 'child.txt', 'child\n');
+    await git(['checkout', '-q', 'main']);
+    const advanced = await commit('advance', 'base.txt', 'advanced\n');
+    await git(['checkout', '-q', 'feat/daemon-demo']);
     await writeSliceTopologyFixture(repo, {
       version: 1,
       slug: 'demo',
@@ -310,9 +313,6 @@ describe('runRestack (real local Git)', () => {
       sliceMembership: { taskSlices: { '1': 1, '2': 3, '3': 5 }, titles: ['Child 1', 'Child 3', 'Leaf 5'] },
       storyOwnership: { S1: 1, S2: 3, S3: 5 },
     }, envelopeFilesystem);
-    await git(['checkout', '-q', 'main']);
-    const advanced = await commit('advance', 'base.txt', 'advanced\n');
-    await git(['checkout', '-q', 'feat/daemon-demo']);
     await writeFile(join(repo, '.pipeline', 'task-evidence.json'), JSON.stringify({
       evidenceStamps: { halted: { sha: haltRecord } },
     }));
@@ -386,9 +386,8 @@ describe('runRestack (real local Git)', () => {
     await expect(git(['merge-base', '--is-ancestor', haltRecord, repaired])).resolves.toMatchObject({ stdout: '' });
   });
 
-  it('refuses a durable child stack without its sealed envelope', async () => {
+  it('derives a durable child stack from its sealed plan without a cache file', async () => {
     const subject = await fixture();
-    await rm(join(subject.repo, '.pipeline', 'coverage-binding.json'));
 
     await expect(runRestack({
       worktree: subject.repo,
@@ -396,7 +395,7 @@ describe('runRestack (real local Git)', () => {
       cause: 'base-refresh',
       newDefault: subject.advancedDefault,
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'unavailable', detail: 'cannot resolve restack cursor: envelope-missing' });
+    })).resolves.toMatchObject({ kind: 'applied' });
   });
 
   it('persists a merge audit after flattening an uncarried side of a child range', async () => {

@@ -207,6 +207,8 @@ beforeEach(async () => {
     '## Story S1: One',
     '',
     '## Story S3: Three',
+    '',
+    '## Story S5: Leaf',
   ].join('\n'));
 });
 

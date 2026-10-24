@@ -42,7 +42,7 @@ async function fixture() {
   await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await git(['add', '.gitignore']);
   await commit('base', 'notes.txt', 'base notes\n');
-  await commit('approved plan', '.docs/plans/demo.md', 'approved\n');
+  await commit('approved decision', '.docs/decisions/demo.md', 'approved\n');
 
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const c1 = await commit('C1', 'c1.txt', 'c1\n');

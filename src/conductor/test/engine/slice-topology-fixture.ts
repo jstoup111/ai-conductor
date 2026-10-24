@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
 /** A plan-shaped fixture for tests that need sealed stack topology. */
@@ -13,6 +13,8 @@ export interface SliceTopologyFixture {
     readonly titles: readonly string[];
   };
   readonly storyOwnership?: Readonly<Record<string, number>>;
+  /** Use an ordinary commit when the test must start a child from this topology. */
+  readonly materializeTopologyCommit?: boolean;
 }
 
 export interface SliceTopologyFixtureFilesystem {
@@ -43,12 +45,19 @@ function planText(fixture: SliceTopologyFixture, storiesPath: string): string {
     const title = fixture.sliceMembership.titles[position - 1] ?? `Child ${position}`;
     return `| ${position} | ${title} | ${byPosition.get(position)!.join(', ')} |`;
   });
-  const tasks = positions.flatMap((position) => byPosition.get(position)!.sort().map((taskId) => [
-    `### Task ${taskId}: Fixture task ${taskId}`,
-    `**Story:** S${position}`,
-    '**Dependencies:** none',
-    '',
-  ].join('\n')));
+  const storiesByPosition = new Map<number, string>();
+  for (const [story, position] of Object.entries(fixture.storyOwnership ?? {})) {
+    storiesByPosition.set(position, story);
+  }
+  const tasks = positions.flatMap((position) => byPosition.get(position)!.sort().map((taskId) => {
+    const story = fixture.storyOwnership === undefined ? `S${position}` : storiesByPosition.get(position);
+    return [
+      `### Task ${taskId}: Fixture task ${taskId}`,
+      ...(story === undefined ? ['**Type:** infrastructure'] : [`**Story:** ${story}`]),
+      '**Dependencies:** none',
+      '',
+    ].join('\n');
+  }));
   return [
     `# Implementation Plan: ${fixture.slug}`,
     '',
@@ -66,8 +75,12 @@ function planText(fixture: SliceTopologyFixture, storiesPath: string): string {
 }
 
 function storiesText(fixture: SliceTopologyFixture): string {
-  const positions = [...new Set(Object.values(fixture.sliceMembership.taskSlices))].sort((left, right) => left - right);
-  return positions.map((position) => `## Story S${position}: Fixture child ${position}`).join('\n\n');
+  const stories = fixture.storyOwnership === undefined
+    ? [...new Set(Object.values(fixture.sliceMembership.taskSlices))]
+      .sort((left, right) => left - right)
+      .map((position) => [`S${position}`, position] as const)
+    : Object.entries(fixture.storyOwnership).map(([story, position]) => [story, position] as const);
+  return stories.map(([story, position]) => `## Story ${story}: Fixture child ${position}`).join('\n\n');
 }
 
 async function recordPositions(projectRoot: string, slug: string, positions: readonly number[]): Promise<void> {
@@ -83,6 +96,15 @@ async function recordPositions(projectRoot: string, slug: string, positions: rea
   } catch {
     // Tests without a local Git boundary still exercise their injected Git seam.
   }
+}
+
+/** Seal positions only after a fixture has entered child lifecycle state. */
+export async function sealSliceTopologyPositions(
+  projectRoot: string,
+  fixture: Pick<SliceTopologyFixture, 'slug' | 'sliceMembership'>,
+): Promise<void> {
+  const positions = [...new Set(Object.values(fixture.sliceMembership.taskSlices))].sort((left, right) => left - right);
+  await recordPositions(projectRoot, fixture.slug, positions);
 }
 
 /**
@@ -101,6 +123,7 @@ async function sealTopologyAtHead(
   projectRoot: string,
   planPath: string,
   storiesPath: string,
+  complexityPath: string,
 ): Promise<void> {
   if (!existsSync(join(projectRoot, '.git'))) return;
   try {
@@ -108,6 +131,7 @@ async function sealTopologyAtHead(
     const paths = [
       isAbsolute(planPath) ? planPath.slice(projectRoot.length + 1) : planPath,
       storiesPath,
+      complexityPath,
     ];
     await runFile('git', ['add', '--', ...paths], { cwd: projectRoot });
     const tree = (await runFile('git', ['write-tree'], { cwd: projectRoot })).stdout.trim();
@@ -122,6 +146,17 @@ async function sealTopologyAtHead(
     ], { cwd: projectRoot })).stdout.trim();
     await runFile('git', ['replace', head, replacement], { cwd: projectRoot });
     await runFile('git', ['reset', '--mixed', 'HEAD'], { cwd: projectRoot });
+  } catch {
+    // Non-Git and injected-filesystem fixtures use their caller's seam.
+  }
+}
+
+async function commitTopologyAtHead(projectRoot: string, paths: readonly string[]): Promise<void> {
+  if (!existsSync(join(projectRoot, '.git'))) return;
+  try {
+    await runFile('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectRoot });
+    await runFile('git', ['add', '--', ...paths], { cwd: projectRoot });
+    await runFile('git', ['commit', '-qm', 'fixture: seal slice topology', '--', ...paths], { cwd: projectRoot });
   } catch {
     // Non-Git and injected-filesystem fixtures use their caller's seam.
   }
@@ -146,13 +181,27 @@ export async function writeSliceTopologyFixture(
   } catch {
     // Conventional slug-derived plan path is authoritative when no fixture state pins one.
   }
-  const storiesPath = `.docs/stories/${fixture.slug}.md`;
+  const planStem = basename(planPath, '.md');
+  const storiesPath = `.docs/stories/${planStem}.md`;
+  const complexityPath = `.docs/complexity/${planStem}.md`;
   await fs.mkdir(join(projectRoot, '.pipeline'));
   await fs.mkdir(dirname(planPath));
   await fs.mkdir(join(projectRoot, '.docs', 'stories'));
+  await fs.mkdir(join(projectRoot, '.docs', 'complexity'));
   await fs.writeFile(planPath, planText(fixture, storiesPath));
-  await fs.writeFile(join(projectRoot, '.docs', 'stories', `${fixture.slug}.md`), storiesText(fixture));
-  await sealTopologyAtHead(projectRoot, planPath, storiesPath);
-  const positions = [...new Set(Object.values(fixture.sliceMembership.taskSlices))].sort((left, right) => left - right);
-  await recordPositions(projectRoot, fixture.slug, positions);
+  await fs.writeFile(join(projectRoot, '.docs', 'stories', `${planStem}.md`), storiesText(fixture));
+  await fs.writeFile(join(projectRoot, complexityPath), 'Tier: M\nStacked-Delivery: approved\n');
+  const topologyPaths = [
+    isAbsolute(planPath) ? planPath.slice(projectRoot.length + 1) : planPath,
+    storiesPath,
+    complexityPath,
+  ];
+  if (fixture.materializeTopologyCommit === true) await commitTopologyAtHead(projectRoot, topologyPaths);
+  else await sealTopologyAtHead(projectRoot, planPath, storiesPath, complexityPath);
+  // `startChild` owns the first write of this durable ref.  Fixtures that
+  // exercise initial child creation therefore materialize their topology in a
+  // normal commit but deliberately leave positions unsealed.
+  if (fixture.materializeTopologyCommit !== true) {
+    await sealSliceTopologyPositions(projectRoot, fixture);
+  }
 }
