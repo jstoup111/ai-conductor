@@ -231,7 +231,7 @@ describe('applyRestackTransition', () => {
     expect(await readVerdict(root, 'build_review', closed)).toMatchObject({ satisfied: true });
   });
 
-  it('passes declared document inputs to the whole-stack selective policy', async () => {
+  it('ignores a retired coverage-binding verdict when applying whole-stack selective policy', async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
     directories.push(root);
     const leaf = parseChildId(1)!;
@@ -260,8 +260,8 @@ describe('applyRestackTransition', () => {
     });
 
     expect(await readVerdict(root, 'coverage_binding')).toMatchObject({
-      satisfied: false,
-      kickback: { from: 'rebase' },
+      satisfied: true,
+      reason: 'approved',
     });
   });
 

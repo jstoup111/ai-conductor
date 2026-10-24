@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { readVerdict } from '../../../src/engine/gate-verdicts.js';
 import { installDaemonBotCoAuthor } from '../../../src/engine/bot-co-author.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
@@ -67,7 +67,7 @@ async function fixture() {
   await git(['checkout', '-q', 'main']);
   const advancedDefault = await commit('B-prime', 'base.txt', 'base advanced\n');
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',
@@ -187,7 +187,7 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'advance.txt');
     await git(['checkout', '-q', 'feat/c2/demo']);
-    await writeCoverageBindingEnvelope(repo, {
+    await writeSliceTopologyFixture(repo, {
       version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
       sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
       storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -231,7 +231,7 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'feat/c2/demo']);
     await mkdir(join(repo, '.pipeline'), { recursive: true });
     await writeFile(join(repo, '.pipeline', 'conduct-state.json'), '{}');
-    await writeCoverageBindingEnvelope(repo, {
+    await writeSliceTopologyFixture(repo, {
       version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
       sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
       storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -301,7 +301,7 @@ describe('runRestack (real local Git)', () => {
     const haltRecord = await commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
     await git(['checkout', '-qb', 'feat/c1/demo']);
     await commit('child work', 'child.txt', 'child\n');
-    await writeCoverageBindingEnvelope(repo, {
+    await writeSliceTopologyFixture(repo, {
       version: 1,
       slug: 'demo',
       runId: 'run-1',
@@ -363,7 +363,7 @@ describe('runRestack (real local Git)', () => {
     await git(['update-ref', 'refs/conductor/demo/closed/c1', closure]);
     const repaired = await commit('repair', 'repair.txt', 'repair\n');
     await git(['checkout', '-qb', 'feat/c2/demo', closure]);
-    await writeCoverageBindingEnvelope(repo, {
+    await writeSliceTopologyFixture(repo, {
       version: 1,
       slug: 'demo',
       runId: 'run-1',
@@ -452,7 +452,7 @@ describe('runRestack (real local Git)', () => {
     await git(['checkout', '-q', 'main']);
     const advanced = await commit('advance', 'advance.txt');
     await git(['checkout', '-q', 'feat/c2/demo']);
-    await writeCoverageBindingEnvelope(repo, {
+    await writeSliceTopologyFixture(repo, {
       version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
       sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
       storyOwnership: { S1: 1, S2: 2, S3: 3 },

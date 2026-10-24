@@ -122,7 +122,7 @@ vi.mock('../../src/engine/halt-record.js', async (importOriginal) => {
 });
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { clearMarker, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { __resetResolveCacheForTests, writeOperatorPark } from '../../src/engine/park-marker.js';
@@ -133,7 +133,7 @@ import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -193,7 +193,7 @@ async function daemonStack() {
   cwd = worktree;
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
   await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
-  await writeCoverageBindingEnvelope(worktree, {
+  await writeSliceTopologyFixture(worktree, {
     version: 1, slug: 'demo', runId: 'dispatch', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

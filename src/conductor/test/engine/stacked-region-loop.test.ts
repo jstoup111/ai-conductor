@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 const execFile = promisify(execFileCallback);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -45,7 +45,7 @@ beforeEach(async () => {
   await git(['add', '.ai-conductor/config.yml']);
   await git(['commit', '-qm', 'configure stack']);
   await writeFile(join(root, '.git', 'info', 'exclude'), '.pipeline/\n');
-  await writeCoverageBindingEnvelope(root, {
+  await writeSliceTopologyFixture(root, {
     version: 1, slug: 'demo', runId: 'loop-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },

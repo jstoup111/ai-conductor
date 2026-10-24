@@ -8,12 +8,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
 import { runDaemonStatus } from '../../src/engine/daemon-observe-cli.js';
 import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+  writeSliceTopologyFixture,
+  type SliceTopologyFixtureFilesystem,
+} from './slice-topology-fixture.js';
 
 const execFile = promisify(execFileCallback);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -48,7 +48,7 @@ beforeEach(async () => {
     join(featureRoot, '.ai-conductor', 'config.yml'),
     'stacked_prs:\n  enabled: true\n  max_slices: 2\n',
   );
-  await writeCoverageBindingEnvelope(featureRoot, {
+  await writeSliceTopologyFixture(featureRoot, {
     version: 1,
     slug: 'demo',
     runId: 'status-1',

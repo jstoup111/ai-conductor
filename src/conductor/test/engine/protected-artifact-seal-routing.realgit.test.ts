@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { evaluateProtectedArtifactSealRotationInRepository, type ProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
@@ -17,7 +17,7 @@ const planPath = '.docs/plans/demo.md';
 const slug = 'demo';
 const child = parseChildId(2)!;
 const roundId = parseRoundId('r1')!;
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -73,7 +73,7 @@ async function routedFixture(blockId = 'rem-prd-audit-T2', legacyConfig = false)
   await writeFile(join(repo, planPath), `approved plan\n### Task ${blockId}: Routed repair\n`);
   await mustSucceed(git, ['add', planPath]);
   await mustSucceed(git, ['commit', '-qm', 'append routed remediation']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug, runId: 'seal-routing', status: 'done', entries: [],
     sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

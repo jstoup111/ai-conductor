@@ -9,12 +9,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 
 const execFile = promisify(execFileCallback);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -61,7 +61,7 @@ export async function createSweepRepository(prefix: string, cleanup: string[]): 
 
 /** Seal a stacked feature whose positions are 1..n, the last being the leaf. */
 export async function sealStack(repo: string, positions: readonly number[] = [1, 2, 3]): Promise<void> {
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',

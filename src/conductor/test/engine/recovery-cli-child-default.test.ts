@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { dispatchRewindCommand } from '../../src/engine/rewind.js';
 import { detectTaskCommand, dispatchTaskCommand } from '../../src/engine/task-cli.js';
@@ -15,7 +15,7 @@ import { detectTaskCommand, dispatchTaskCommand } from '../../src/engine/task-cl
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8').then(() => undefined),
@@ -50,7 +50,7 @@ async function stackedFixture(repairPending = false): Promise<{ root: string; wo
   }
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
   await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n');
-  await writeCoverageBindingEnvelope(worktree, {
+  await writeSliceTopologyFixture(worktree, {
     version: 1,
     slug: 'feature',
     runId: 'run-1',

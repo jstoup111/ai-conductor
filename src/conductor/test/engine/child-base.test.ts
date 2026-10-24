@@ -9,13 +9,13 @@ import { resolveChildBase } from '../../src/engine/child-cursor.js';
 import type { ChildId } from '../../src/engine/child-context.js';
 import type { GitResult, GitRunner } from '../../src/engine/rebase.js';
 import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+  writeSliceTopologyFixture,
+  type SliceTopologyFixtureFilesystem,
+} from './slice-topology-fixture.js';
 
 const execFile = promisify(execFileCallback);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -39,7 +39,7 @@ async function gitResult(args: string[]): Promise<GitResult> {
 }
 
 async function seal(positions: readonly number[]): Promise<void> {
-  await writeCoverageBindingEnvelope(repository, {
+  await writeSliceTopologyFixture(repository, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',

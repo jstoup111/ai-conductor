@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { detectKickbackBudgetCommand } from '../../src/cli.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -74,7 +74,7 @@ async function realCascadeCapCliFixture() {
   await git(['branch', 'feat/daemon-demo', closed]);
   await git(['worktree', 'add', '-q', repo, 'feat/daemon-demo']);
   await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',
@@ -248,7 +248,7 @@ describe('restack kickback budget storage', () => {
     await execFile('git', ['worktree', 'remove', '--force', subject.repo], { cwd: subject.root });
     await execFile('git', ['worktree', 'add', '-q', subject.repo, 'feat/daemon-demo'], { cwd: subject.root });
 
-    await writeCoverageBindingEnvelope(subject.repo, {
+    await writeSliceTopologyFixture(subject.repo, {
       version: 1,
       slug: 'demo',
       runId: 'run-2',

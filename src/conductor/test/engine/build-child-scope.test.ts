@@ -5,14 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+  writeSliceTopologyFixture,
+  type SliceTopologyFixtureFilesystem,
+} from './slice-topology-fixture.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { isNoTaskProgressBuildStall } from '../../src/engine/build-progress-watcher.js';
 
-const filesystem: CoverageBindingEnvelopeFilesystem = {
+const filesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -34,7 +34,7 @@ describe('build child task scope', () => {
       '### Task T4: Fourth',
       '### Task rem-1: Remediation',
     ].join('\n'));
-    await writeCoverageBindingEnvelope(root, {
+    await writeSliceTopologyFixture(root, {
       version: 1,
       slug: 'feature',
       runId: 'scope-test',

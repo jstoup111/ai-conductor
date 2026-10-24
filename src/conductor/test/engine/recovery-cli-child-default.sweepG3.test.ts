@@ -8,7 +8,7 @@ import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ChildId } from '../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
@@ -62,7 +62,7 @@ vi.mock('../../src/engine/restack/restack-journal.js', async (importOriginal) =>
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8').then(() => undefined),
@@ -104,7 +104,7 @@ async function repairPendingFixture(withRepair = true): Promise<{ root: string; 
   }
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
   await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n');
-  await writeCoverageBindingEnvelope(worktree, {
+  await writeSliceTopologyFixture(worktree, {
     version: 1,
     slug: 'feature',
     runId: 'run-1',

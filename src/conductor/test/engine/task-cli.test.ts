@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
 import { resolveTaskIds } from '../../src/engine/task-progress.js';
-import { writeCoverageBindingEnvelope } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { admitRound } from '../../src/engine/routing/round-admission.js';
 import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
@@ -278,7 +278,7 @@ describe('task command child slice membership', () => {
   }
 
   async function writeEnvelope(root: string, membership = true): Promise<void> {
-    await writeCoverageBindingEnvelope(root, {
+    await writeSliceTopologyFixture(root, {
       version: 1,
       slug: 'feature',
       runId: 'run-1',
@@ -533,7 +533,7 @@ describe('task command child slice membership', () => {
       await fsPromises.writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
         activePlanPath: '.docs/plans/demo.md',
       }));
-      await writeCoverageBindingEnvelope(root, {
+      await writeSliceTopologyFixture(root, {
         version: 1, slug: 'demo', runId: 'routed-cli', status: 'done', entries: [],
         sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['one', 'two', 'three'] },
       }, coverageBindingFilesystem);

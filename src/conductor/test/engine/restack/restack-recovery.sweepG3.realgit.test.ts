@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
@@ -126,7 +126,7 @@ async function stackFixture() {
 }
 
 async function writeEnvelope(repo: string): Promise<void> {
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',
