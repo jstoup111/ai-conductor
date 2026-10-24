@@ -196,7 +196,7 @@ describe('integration/rebase-loop', () => {
       if (event.type !== 'rebase_gate_invalidated') return;
       invalidated.push(event.gate);
       expect(event.matchedPaths).toEqual(
-        event.gate === 'coverage_binding' || event.gate === 'prd_audit' ? [path] : [],
+        event.gate === 'prd_audit' ? [path] : [],
       );
     });
     const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, { finishMergeabilityCheck: true });
@@ -378,11 +378,6 @@ describe('integration/rebase-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
       );
-    } else if (step === 'coverage_binding') {
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
-      // The production runner stamps the HEAD it judged beside the envelope.
-      await writeFile(join(dir, '.pipeline/coverage-binding-code-stamp.json'), JSON.stringify({ runId: 'test-run', codeStamp: await git('rev-parse', 'HEAD') }));
     } else if (step === 'build_review') {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see
@@ -1511,10 +1506,6 @@ describe('integration/rebase-loop', () => {
         // One BUILD dispatch in total: the ordinary one before the rebase. A
         // clean replay adds none (Story 1, ADR D4/D8).
         expect(counts.build ?? 0).toBe(1);
-        // This fixture's coverage was never judged, so the rebase refreshes it
-        // in place; continuation then resumes in the verification tail.
-        expect(counts.coverage_binding ?? 0).toBe(1);
-        expect(order.slice(order.indexOf('coverage_binding') + 1)).toEqual(['manual_test', 'finish']);
         // The count includes the ordinary first-pass review before rebase.
         // Clean replay preservation must prevent a second dispatch, not erase
         // that already-completed review.
@@ -1602,97 +1593,6 @@ describe('integration/rebase-loop', () => {
         }
         expect(countsAtRestart.prd_audit).toBe(1);
         expect(countsAtRestart.architecture_review_as_built).toBe(1);
-      });
-    });
-
-    describe('Story: a stamped coverage judgement survives a clean replay', () => {
-      it('preserves coverage_binding and dispatches neither coverage nor BUILD again', async () => {
-        await initRepoOnFeatureBranchWithSharedRuntimeFile();
-        await addFeatureTestFile();
-        await advanceBaseWithDivergentEditToSharedFile([
-          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
-        ]);
-        forceIndeterminateProspectiveMerge();
-        await writeState(statePath, { ...FRONT_DONE_M });
-        // Coverage was judged on the pre-rebase HEAD by the ordinary lifecycle.
-        await satisfy('coverage_binding');
-        await writeVerdict(dir, { satisfied: true, checkedAt: 1 });
-
-        const counts: Record<string, number> = {};
-        let completed = false;
-        events.on('feature_complete', () => {
-          completed = true;
-        });
-        await runThroughShip(runCountingRunner(counts));
-
-        expect(completed).toBe(true);
-        expect(counts.coverage_binding ?? 0).toBe(0);
-        expect(counts.build ?? 0).toBe(1);
-        const rebase = await readGateVerdict('rebase');
-        expect(rebase?.rebaseOperation?.transition.preserved).toContain('coverage_binding');
-        expect((await readGateVerdict('coverage_binding'))?.preservation?.operationId).toBe(rebase.rebaseOperation.id);
-      });
-    });
-
-    // ── Story 3 / ADR D4 on the daemon's mandatory re-kick tail ────────────────
-    describe('Story: the re-kick tail refreshes invalidated coverage in place', () => {
-      it('continues from the verification tail after resumeRebaseFirst, dispatching neither acceptance_specs nor BUILD', async () => {
-        await initRepoOnFeatureBranchWithSharedRuntimeFile();
-        await addFeatureTestFile();
-        await writeState(statePath, { ...FRONT_DONE_M });
-
-        // First process: reaches finish on an up-to-date base, then dies.
-        const crash = new Error('process died before finish');
-        await runThroughShip({
-          run: async (step, _state, options) => {
-            if (step === 'finish') throw crash;
-            return satisfy(step, options);
-          },
-        });
-        await rm(join(dir, '.pipeline/HALT'), { force: true });
-        await rm(join(dir, '.pipeline/HALT.class'), { force: true });
-
-        // The base advances while parked; the daemon re-kicks rebase-first.
-        // (`.pipeline/` is ignored in a real worktree; keep the helper's `git add .`
-        // from committing this process's state onto the base.)
-        await writeFile(join(dir, '.git/info/exclude'), '.pipeline/\n', 'utf-8');
-        await advanceBaseWithDivergentEditToSharedFile([
-          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
-        ]);
-        const { resumeRebaseFirst, REKICK_SENTINEL } = await import('../../src/engine/daemon-rekick.js');
-        await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
-        expect(await resumeRebaseFirst({ worktreePath: dir, localBase: BASE, events, ranManualTest: true }))
-          .toBe('rebased');
-        expect((await readGateVerdict('coverage_binding'))?.kickback?.from).toBe('rebase');
-
-        const order: string[] = [];
-        let completed = false;
-        events.on('feature_complete', () => {
-          completed = true;
-        });
-        const fakeGit: GitRunner = async (args) =>
-          args.includes('--symbolic-full-name')
-            ? { stdout: 'refs/remotes/origin/feature/x\n' }
-            : { stdout: '' };
-        await new Conductor({
-          stateFilePath: statePath,
-          stepRunner: { run: async (step, _state, options) => { order.push(step); return satisfy(step, options); } },
-          events,
-          projectRoot: dir,
-          daemon: true,
-          verifyArtifacts: true,
-          mode: 'auto',
-          resume: true,
-          maxRetries: 1,
-          config: { rebase_resolution_attempts: 0 },
-          git: fakeGit,
-          shipmentEvidence: validShipmentEvidence,
-        }).run();
-
-        expect(completed).toBe(true);
-        expect(order[0]).toBe('coverage_binding');
-        expect(order).not.toContain('acceptance_specs');
-        expect(order).not.toContain('build');
       });
     });
 
