@@ -79,6 +79,7 @@ const RESTACK_REGION_ACCESS_CLASSIFICATIONS: Readonly<Record<string, Classificat
   'engine/daemon-rekick.ts:readKickbackLedger(path)': 'whole-feature-only',
   'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)': 'child-aware',
   'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)': 'child-aware',
+  'engine/restack/restack-transition.ts:readVerdict(worktree,gate,range.child)': 'child-aware',
   'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)': 'child-aware',
 };
 
@@ -282,6 +283,7 @@ describe('child-region flat-access audit', () => {
       'engine/daemon-rekick.ts:readKickbackLedger(path)',
       'engine/daemon-rekick.ts:readKickbackLedger(path,executionChild)',
       'engine/daemon-rekick.ts:readKickbackLedger(path,cursorChild)',
+      'engine/restack/restack-transition.ts:readVerdict(worktree,gate,range.child)',
       'engine/restack/restack-transition.ts:readVerdict(options.worktree,gate,range.child)',
     ]);
   });
