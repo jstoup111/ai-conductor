@@ -1675,3 +1675,66 @@ Three APPROVED ADRs carry 2026-10-23 #3212 amendment notes in this change set, s
 **Done when:**
 - Task 22 is satisfied by this task.
 - The repair for task rem-as-built-rem-vg3-ab-3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s4-4: In src/conductor/src/engine/restack/restack-transition.ts normalizedReplayComparison, strip inherited rem-* plan blocks from both trees before compareReplayTree, and normalize 'unproved' results instead of returning early on any non-'changed' kind. Restrict the fallback relevant-path set to child-owned paths instead of tuple.previous..tuple.head. Add a fixture test where child 2 and its new parent both append rem blocks and the parent also changes code, asserting the outcome is 'unchanged' and wouldInvalidate is empty
+**Gate:** prd-audit
+**Rationale:** Verified (95%): restack-transition.ts:96 still has `if (comparison.kind !== 'changed') return comparison;`, so a merge-tree 'unproved' result is never normalized. Owner task rem-prd-audit-rem-vg3-s4-4 is marked completed, but the repair did not land. The approved architecture covers this, so it is a conforming implementation and test repair for BUILD.
+**Criterion:** S4.4
+**Parent task:** rem-prd-audit-rem-vg3-s4-4
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s4-4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s5-1: In src/conductor/src/engine/routing/routed-exit.ts, derive the leaf from resolveSealedLeaf in both selectNextHost and returnToLeaf instead of `hosts.length - 1` / `Math.max(hosts)`, and treat every allocated host below the sealed leaf as a child host. Add a test for a round with hosts {1,2} and an unallocated leaf 3: after host 1's exit queues child 2, selectNextHost returns child-host 2 before 'queue', and returnToLeaf targets leaf 3
+**Gate:** prd-audit
+**Rationale:** Verified (95%): routed-exit.ts:73 uses `leafIndex = hosts.length - 1` and :195 uses `Math.max(...hosts)` as the leaf. Hosts come from allocation keys, which need not include the sealed leaf. The parking path already uses resolveSealedLeaf, so the fix is a conforming implementation change within Task 19's recorded-order contract.
+**Criterion:** S5.1
+**Parent task:** 19
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s5-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s6-1: In src/conductor/src/engine/conductor.ts, after a routed exit whose reconciliation records leafReturn, reload the leaf's full conduct state from disk into state, persistedStateSnapshot and stateStore, including the restaged post-region steps, before selecting the next gate. Add a test showing that prd_audit, architecture_review_as_built, manual_test and the configured custom steps are pending in memory, and that the next commitStateChanges raises no CAS mismatch
+**Gate:** prd-audit
+**Rationale:** Verified (90%): restageLeafGates writes pending state directly to disk, while activateChildRegionState reloads only CHILD_REGION_STEPS and resets persistedStateSnapshot from stale memory. The next CAS write therefore expects 'done' against disk 'pending'. Owner task rem-prd-audit-rem-vg3-s6-1 is completed but has no Task 25/26 test. This is a conforming BUILD repair.
+**Criterion:** S6.1
+**Parent task:** rem-prd-audit-rem-vg3-s6-1
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s6-1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s6-2: In src/conductor/src/engine/routing/routed-exit.ts restageLeafGates, write the re-pended verdicts without a kickback.from attribution, or with a restaging marker that conductor.ts scanKickbackVerdicts skips, so the scan never charges them as kickback laps. Add a Task 26 test: snapshot the kickback ledger file before the return, run the return and then a leaf build_review completion, and assert the ledger is byte-identical
+**Gate:** prd-audit
+**Rationale:** Verified (90%): routed-exit.ts:172 stamps restaging verdicts with `kickback: { from: 'build_review' }`. scanKickbackVerdicts charges unsatisfied verdicts whose kickback.from matches the step just run, so a later build_review run bumps the ledger. That breaks Task 26's unchanged-caps contract. This is an implementation repair plus the missing ledger byte-identity test.
+**Criterion:** S6.2
+**Parent task:** 26
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s6-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-vg4-s6-8: In src/conductor/src/engine/conductor.ts advanceTail, handle a 'parked' selectNextGate decision with an explicit park/consume-queue outcome instead of returning steps.length, and make the step loop treat it as non-convergence: consume the queue when non-empty, otherwise stop without completeRun, loop_converged or DONE. Add a Task 24 test: with child 2 queued and no marker, no leaf gate, post-region custom step, FINISH or publication step is recorded, and no .pipeline/DONE is written
+**Gate:** prd-audit
+**Rationale:** Verified (95%): conductor.ts:16301 maps a 'parked' selector decision to `steps.length`. The loop then exits into completeRun, which marks the feature complete and writes DONE. Owner task rem-prd-audit-rem-vg3-s6-8 is completed but ineffective. This is a conforming BUILD repair.
+**Criterion:** S6.8
+**Parent task:** rem-prd-audit-rem-vg3-s6-8
+**Done when:**
+- [test] S6.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-vg4-s6-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg4-ab-f4e-1: In src/conductor/src/engine/conductor.ts, near the same-loop queue-admission branch at line 15328, accept the execution source produced for an admitted revalidate round ('routed-host' bound to the admitted child and route, or 'revalidating') and enter the admitted region instead of HALTing. Add a test showing that queue admission of child 2 in the same loop enters child 2's revalidate region without a HALT
+**Gate:** as-built
+**Rationale:** Verified (95%): conductor.ts:15328 requires nextExecution.source === 'revalidating' after queue admission. Admission writes a marker, so child-cursor projects routedRepair and execution-child returns 'routed-host'. Every successful same-loop admission therefore HALTs. Task 33's contract is clear, so this is an implementation repair.
+**Parent task:** 33
+**Governing clause:** Task 33
+**Done when:**
+- Task 33 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg4-ab-f4e-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-vg4-ab-f4e-2: In src/conductor/src/engine/conductor.ts completeRun, refuse to commit feature_status 'complete', emit feature_complete or write .pipeline/DONE while a routing marker, an open round or a non-empty revalidation queue exists, and return to queue consumption or parking instead. Add a test showing that completeRun with child 2 queued writes no DONE and emits no feature_complete
+**Gate:** as-built
+**Rationale:** Verified (95%): this is the same defect as S6.8. The parked selector result at conductor.ts:16301 reaches completeRun at :15436, which writes feature_complete and daemon DONE. The primary fix is rem-vg4-s6-8. This task adds a completion guard so that no other path can mark the feature done while routed work is outstanding.
+**Parent task:** rem-prd-audit-rem-vg3-s6-8
+**Governing clause:** Task rem-prd-audit-rem-vg3-s6-8
+**Done when:**
+- Task rem-prd-audit-rem-vg3-s6-8 is satisfied by this task.
+- The repair for task rem-as-built-rem-vg4-ab-f4e-2 is committed and its targeted tests pass.
