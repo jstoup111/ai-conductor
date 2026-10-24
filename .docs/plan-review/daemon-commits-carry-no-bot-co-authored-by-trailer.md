@@ -1,10 +1,10 @@
 # Plan review
 
-Integrity: sha256:45fe83d55037321cbeb9761d99a412874d66f102bac80e2254e5fcdd6e219aad
+Integrity: sha256:abe5c71524a22dee979af52be6a2da478a373223ff2158d6b65d565046a36c2e
 
 ```json
 {
-  "round": 1,
+  "round": 2,
   "authoringHost": "claude",
   "reviewerProvider": "codex",
   "independence": "cross-provider",
@@ -38,9 +38,9 @@ Integrity: sha256:45fe83d55037321cbeb9761d99a412874d66f102bac80e2254e5fcdd6e219a
       "adr-2026-09-11-github-operation-ownership#D9": "sha256:18fc8bf024a86b8f1c91bf314438877c5f0137d90bf8bc72331c61f46ccd006a"
     },
     "artifactDigests": {
-      ".docs/coherence/daemon-commits-carry-no-bot-co-authored-by-trailer.md": "sha256:f05af62d55af30dd20c7eb44fca2b74fb2bab5a98423c3944e9da974b16eb67d"
+      ".docs/coherence/daemon-commits-carry-no-bot-co-authored-by-trailer.md": "sha256:69d4fe4b3049cbfef2c7b8204c87260a1d22c7e762371a43dd2864fe6ddedefc"
     },
-    "digest": "sha256:2727fdbe32801787740496cdae1e19ef3b869c7ea1fbcd81f328d4ead3caaa8d"
+    "digest": "sha256:ad799559646523e2b0b5f4f8e5b8aa6b9c0d3772dee93e2a99e89289fd818e87"
   }
 }
 ```
