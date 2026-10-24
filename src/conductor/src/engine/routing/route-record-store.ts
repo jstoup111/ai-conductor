@@ -1,5 +1,5 @@
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { journalRefFor, readRestackJournal, type ReadRestackJournalResult } from '../restack/restack-journal.js';
+import { journalRefFor, readRestackJournal, type ReadRestackJournalResult, type RestackJournal } from '../restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../restack/restack-types.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing-refs.js';
 import {
@@ -61,7 +61,8 @@ export type RoutingTransactionOp =
   | { readonly kind: 'replace-marker'; readonly previous: ReadRepairMarkerResult & { readonly kind: 'marker' }; readonly marker: RepairMarker }
   | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
-  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha };
+  | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
+  | { readonly kind: 'delete-marker'; readonly old: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
 /** Every newly admitted route seals its authored-task denominator. */
@@ -200,6 +201,9 @@ export async function writeRoutingTransaction(
         case 'update-marker':
           lines.push(`update ${repairMarkerRefFor(slug)} ${op.new} ${op.old}`);
           break;
+        case 'delete-marker':
+          lines.push(`delete ${repairMarkerRefFor(slug)} ${op.old}`);
+          break;
       }
     }
     // Keep the ordinary record update first for compatibility with Git's
@@ -235,6 +239,41 @@ export function transitionHost(
   if (from === undefined || !isLegalHostTransition(from, to)) return { kind: 'illegal-transition' };
   const record = { ...stored.record, hosts: { ...stored.record.hosts, [host]: to } };
   return { kind: 'updated', record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit)) };
+}
+
+/** Applies the host state recorded when a routed repair leaves the restack. */
+export function routedRecordAfterExit(
+  stored: StoredRouteRecord,
+  host: import('../child-context.js').ChildId,
+  outcome: 'restacked' | 'done',
+): ReturnType<typeof transitionHost> {
+  return transitionHost(stored, host, outcome, { credit: false });
+}
+
+/**
+ * Builds the route and repair-marker portion of a routed restack transaction.
+ * The caller owns the write; this helper deliberately performs no I/O.
+ */
+export function routedAppliedLines(
+  slug: string,
+  journal: RestackJournal | ReadRestackJournalResult,
+  ownerOpId: RestackOpId,
+): readonly string[] | 'refused' {
+  let stored: ReadRestackJournalResult;
+  if ('kind' in journal) {
+    stored = journal;
+  } else {
+    const routed = journal.routed;
+    if (routed === undefined) return 'refused';
+    stored = { kind: 'journal', slug, blob: routed.routeOld, journal };
+  }
+  if (!routingFenceOpen(stored, ownerOpId) || stored.kind !== 'journal') return 'refused';
+  const routed = stored.journal.routed;
+  if (routed === undefined || routed.routeNew === undefined) return 'refused';
+  return [
+    `update ${routeRecordRefFor(slug, routed.roundId)} ${routed.routeNew} ${routed.routeOld}`,
+    `delete ${repairMarkerRefFor(slug)} ${routed.markerOld}`,
+  ];
 }
 
 
