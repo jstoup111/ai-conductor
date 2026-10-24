@@ -160,7 +160,7 @@ describe('plan-slices consumer boundary', () => {
     expect(await git(['rev-parse', 'HEAD'], worktreePath)).toBe(headBeforeLanding);
   });
 
-  it('keeps slice parsing and the stacked-PR flag at their intended consumers', async () => {
+  it('allows only land-spec and slice-topology to import plan-slices', async () => {
     const sources = await productionSources();
     const planSliceImporters = sources
       .filter(({ source }) => /from\s*['"][^'"]*plan-slices\.js['"]/.test(source))
