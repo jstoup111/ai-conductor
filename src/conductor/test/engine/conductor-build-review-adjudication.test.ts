@@ -280,6 +280,20 @@ function customActionJudgement(sourceId: string): unknown {
   };
 }
 
+function customIndexOnlyActionJudgement(sourceId: string): unknown {
+  return {
+    ...customActionJudgement(sourceId),
+    cases: [{
+      caseRef: 'portable-case', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The newly admitted task repairs the portable policy boundary.',
+      effect: { kind: 'action', route: 'build', tasks: [{
+        title: 'Repair the newly admitted portable policy boundary.', admittedTaskIds: ['21'],
+        admissionRationale: 'Task 21 owns the newly discovered repair.',
+      }] },
+    }],
+  };
+}
+
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -287,6 +301,12 @@ afterEach(async () => {
 
 interface FixtureOptions {
   readonly judgement?: unknown;
+  readonly remediateJudgements?: readonly unknown[];
+  readonly planText?: string;
+  /** Script the provider boundary without letting raw provider output reach production code. */
+  readonly remediateResults?: readonly StepRunResult[];
+  /** Exercises the distinct post-dispatch judgement-read failures. */
+  readonly remediationArtifact?: 'missing' | 'unparseable';
   /** Rubric ids the operator has covered with an exact reduced-coverage decision. */
   readonly infrastructure?: 'none' | 'covered' | 'uncovered';
   /**
@@ -338,7 +358,7 @@ async function fixture(options: FixtureOptions = {}) {
   const feature = { version: 'v1' as const, repository: projectRoot, feature: 'adjudicated-feature' };
   await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
   await mkdir(join(projectRoot, '.docs', 'plans'), { recursive: true });
-  await writeFile(join(projectRoot, '.docs', 'plans', 'feature.md'), '# Plan\n\n### Task 32: shared outcome\n**Files:** src/portable.ts\n', 'utf8');
+  await writeFile(join(projectRoot, '.docs', 'plans', 'feature.md'), options.planText ?? '# Plan\n\n### Task 32: shared outcome\n**Files:** src/portable.ts\n', 'utf8');
   await writeFile(join(projectRoot, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }, { id: '32', status: 'in_progress' }] }), 'utf8');
   await options.seedPipeline?.(projectRoot);
 
@@ -368,7 +388,18 @@ async function fixture(options: FixtureOptions = {}) {
       if (step === 'build') throw new Error('stop after BUILD dispatch');
       if (step === 'remediate') {
         remediateDispatches += 1;
-        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify(options.judgement ?? (options.reRaised ? reRaisedActionJudgement() : actionJudgement())), 'utf8');
+        const result = options.remediateResults?.[remediateDispatches - 1];
+        if (result !== undefined) {
+          if (result.success) {
+            if (options.remediationArtifact === 'unparseable') {
+              await writeFile(join(projectRoot, '.pipeline/remediation.json'), '{not-json', 'utf8');
+            } else if (options.remediationArtifact !== 'missing') {
+              await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify(options.remediateJudgements?.[remediateDispatches - 1] ?? options.judgement ?? (options.reRaised ? reRaisedActionJudgement() : actionJudgement())), 'utf8');
+            }
+          }
+          return result;
+        }
+        await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify(options.remediateJudgements?.[remediateDispatches - 1] ?? options.judgement ?? (options.reRaised ? reRaisedActionJudgement() : actionJudgement())), 'utf8');
         return { success: true };
       }
       if (step === 'build_review') {
@@ -515,6 +546,70 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
+  it.each([
+    [{ processErrorCode: 'E2BIG' }, ['claude subprocess exited without a classifiable result: processErrorCode=E2BIG']],
+    [{ exitCode: 137, signal: 'SIGKILL' }, ['exitCode=137', 'signal=SIGKILL']],
+    [undefined, ['claude subprocess exited without a classifiable result:']],
+  ] as const)('writes only provider exit facts when remediate dispatch fails', async (exitFacts, expected) => {
+    const run = await fixture({
+      remediateResults: [{
+        success: false,
+        provider: 'claude',
+        ...(exitFacts === undefined ? {} : { exitFacts }),
+        output: '/home/secret/token-abc',
+        // Provider adapters retain this raw detail, but it must not be a halt input.
+        stderr: '/home/secret/token-abc',
+      } as StepRunResult],
+    });
+
+    const halt = await run.haltMarker();
+    expect(halt).toContain('remediate judgement failed:');
+    for (const text of expected) expect(halt).toContain(text);
+    expect(halt).not.toContain('/home/secret/token-abc');
+    const factKeys = [...halt.matchAll(/(\w+)=/g)].map((match) => match[1]!);
+    expect(factKeys).toEqual(
+      expect.arrayContaining(exitFacts === undefined ? [] : Object.keys(exitFacts)),
+    );
+    expect(factKeys.every((key) => ['processErrorCode', 'exitCode', 'signal', 'stdoutBytes', 'stderrBytes'].includes(key))).toBe(true);
+    if (exitFacts === undefined) expect(factKeys).toEqual([]);
+  });
+
+  it.each(['missing', 'unparseable'] as const)('keeps a successful dispatch %s judgement read failure distinct from provider exit facts', async (remediationArtifact) => {
+    const run = await fixture({
+      remediationArtifact,
+      remediateResults: [{ success: true, provider: 'claude', exitFacts: { processErrorCode: 'E2BIG' } }],
+    });
+
+    const halt = await run.haltMarker();
+    expect(halt).toContain('remediate judgement failed:');
+    expect(halt).not.toContain('claude subprocess exited without a classifiable result');
+    expect(halt).not.toContain('processErrorCode=E2BIG');
+  });
+
+  it('labels provider failure in the expansion round and retains that round\'s exit facts', async () => {
+    const source = projectBuildReviewAggregateSources(customAggregate())![0]!;
+    const run = await fixture({
+      custom: true,
+      planText: '# Plan\n\n### Task 32: shared outcome\n**Files:** src/portable.ts\n\n### Task 21: expanded outcome\n**Files:** src/later.ts\n',
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline/task-status.json'), JSON.stringify({
+          tasks: [{ id: '1', status: 'completed' }, { id: '21', status: 'in_progress' }, { id: '32', status: 'in_progress' }],
+        }), 'utf8');
+      },
+      remediateJudgements: [customIndexOnlyActionJudgement(buildReviewAdjudicationSourceId(source))],
+      remediateResults: [
+        { success: true },
+        { success: false, provider: 'claude', exitFacts: { exitCode: 137, signal: 'SIGKILL' } },
+      ],
+    });
+
+    const halt = await run.haltMarker();
+    expect(run.remediateDispatches()).toBe(2);
+    expect(halt).toContain('expansion round');
+    expect(halt).toContain('exitCode=137');
+    expect(halt).toContain('signal=SIGKILL');
+  });
+
   async function expectRefusedDecisionStopHalt(blockedConsistency: boolean) {
     const customSource = projectBuildReviewAggregateSources(customAggregate())![0]!;
     const sourceId = buildReviewAdjudicationSourceId(customSource);

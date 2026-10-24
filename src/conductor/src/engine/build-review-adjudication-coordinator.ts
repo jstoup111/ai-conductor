@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 
 import { resolveFeaturePlanPath } from './artifacts.js';
+import { formatProviderExitFacts } from '../execution/provider-diagnostics.js';
+import type { ProviderExitFacts } from '../execution/llm-provider.js';
 
 import {
   assembleBuildReviewAdjudicationContext,
@@ -38,6 +40,21 @@ type RemediationCaseLifecycleEvent = Extract<ConductorEvent, {
     | 'remediation_case_reconciled' | 'remediation_effect_reserved' | 'remediation_effect_applied'
     | 'remediation_effect_failed' | 'remediation_semantic_repeat_halt' | 'remediation_case_refuted';
 }>;
+
+/**
+ * A failed provider dispatch is distinct from a successful dispatch whose
+ * persisted judgement cannot be read. Its fields are intentionally bounded so
+ * provider output never reaches an operator-facing halt.
+ */
+export class RemediateDispatchError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly exitFacts?: ProviderExitFacts,
+  ) {
+    super('remediate dispatch failed');
+    this.name = 'RemediateDispatchError';
+  }
+}
 
 type OperatorRetirementTransition = {
   readonly caseId: string;
@@ -822,7 +839,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       ...(expansionTaskIds === undefined ? {} : { expansionTaskIds }),
     });
     let judgement: RemediationCaseJudgement;
-    try { judgement = await input.judge(dispatchContext); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }
+    try {
+      judgement = await input.judge(dispatchContext);
+    } catch (error) {
+      const detail = error instanceof RemediateDispatchError
+        ? `remediate judgement failed: ${formatProviderExitFacts(error.provider, error.exitFacts ?? {})}${round === 1 ? ' (expansion round)' : ''}`
+        : `remediate judgement failed: ${error instanceof Error ? error.message : String(error)}`;
+      return failUnlessAccepted(detail, { settleAbsentAttempted: true });
+    }
     // The context, not the judge, selects the case contract.  A custom lap's
     // case-v2 consistency decision and admission evidence cannot be shed by
     // answering in the older mode, whose acts would all be authorized.

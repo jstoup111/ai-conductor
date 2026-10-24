@@ -1793,7 +1793,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       emit: async (event) => { events.push(event.type); },
     });
 
-    expect(result).toEqual({ ok: false, detail: 'remediate judgement failed' });
+    expect(result).toEqual({ ok: false, detail: 'remediate judgement failed: provider unavailable' });
     expect(events).toEqual(['remediation_adjudication_started', 'remediation_adjudication_failed']);
   });
 
@@ -3942,7 +3942,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
     });
 
-    expect(result).toEqual({ ok: false, detail: 'remediate judgement failed' });
+    expect(result).toEqual({ ok: false, detail: 'remediate judgement failed: provider unavailable' });
   });
 
   it('hands the judge the case-v1 contract, sourcing plan and task evidence from the worktree', async () => {

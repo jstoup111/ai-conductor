@@ -44,6 +44,7 @@ import {
   describeBuildReviewDecisionStops,
   describeBuildReviewScopeIncompleteFaults,
 } from './build-review-outcome.js';
+import { RemediateDispatchError } from './build-review-adjudication-coordinator.js';
 import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
   appendBuildReviewWorkOrderContext,
@@ -13820,7 +13821,9 @@ export class Conductor {
                       const dispatched = await this.stepRunner.run('remediate', state, {
                         retryReason: `Adjudicate this complete build-review context only; write ${requestedMode} remediation output.\n${JSON.stringify(context)}`,
                       });
-                      if (!dispatched.success) throw new Error('remediate dispatch failed');
+                      if (!dispatched.success) {
+                        throw new RemediateDispatchError(dispatched.provider ?? 'unknown', dispatched.exitFacts);
+                      }
                       const judgement = await readRemediationCaseJudgement(this.projectRoot, state.session_started_at);
                       if (!judgement.ok) throw new Error(judgement.reason);
                       return judgement.judgement;
