@@ -15400,7 +15400,12 @@ export class Conductor {
                 // CAS baseline while selecting those gates.
                 await this.restoreWholeFeatureState(state);
                 activeChild = undefined;
-                i = indexOf('prd_audit') - 1;
+                // `returnToLeaf` intentionally re-pends manual_test as well
+                // as the audit gates.  Re-enter at the first re-pended tail
+                // gate: prd_audit depends on manual_test, so jumping straight
+                // to it would halt on its own prerequisite before any
+                // whole-feature validation could resume.
+                i = indexOf('manual_test') - 1;
                 continue;
               }
               const next = await this.resolveActiveChild(this.projectRoot, slug);
