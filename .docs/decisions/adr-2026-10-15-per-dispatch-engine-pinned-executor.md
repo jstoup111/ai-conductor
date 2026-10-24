@@ -72,6 +72,11 @@ The config key `executor_isolation: child | in-process` selects the adapter. It 
 `child`. `in-process` keeps today's behavior as an operator rollback lever and is the only mode in
 which the per-dispatch pin of D2 does not apply.
 
+> **Amended 2026-10-24 by #3333:** The rollback lever is retired. The child executor is the daemon's only
+> feature executor: the in-process adapter and the `executor_isolation` key are removed, and a config
+> that still sets the key fails validation as an unknown top-level key. The per-dispatch pin of D2
+> applies to every dispatch.
+
 ### D2 — The engine version is pinned per dispatch in the WorkOrder
 At claim time the dispatcher resolves the floating `dist` symlink to a concrete immutable
 `dist-versions/«id»`. It records `engineVersionId` in the WorkOrder beside `baseSha`, along with a
@@ -227,6 +232,10 @@ The operator declined the proposed three-spec split on 2026-10-15. The plan carr
 | A4 | Only the self-host daemon should run the cadence rebuild job; consumer daemons adopt shared-install rebuilds through per-dispatch resolution | inferred | 90% | yes | Consumers would need their own rebuild cadence to satisfy outcome 3 | APPROVED by operator 2026-10-15 |
 | A5 | Most engine fixes land in executor-side code (conductor, steps, gates), so supervisor staleness bounded by D7 is acceptable | inferred | 75% | no | Supervisor-side fixes lag up to the age cap | n/a |
 
+> **Amended 2026-10-24 by #3333:** A2's mitigation no longer includes the in-process rollback lever, which
+> is removed. Child-mode coverage now rests on the parity test and on daemon tests that run the
+> production child path through an injected in-memory fork.
+
 ## Consequences
 
 ### Positive
@@ -243,9 +252,15 @@ The operator declined the proposed three-spec split on 2026-10-15. The plan carr
 - Supervisor-side fixes can lag up to `supervisor_max_stale_hours`.
 - Each feature pays a child-process start (module load) per dispatch.
 - Two executor adapters (child and in-process) exist until the rollback lever is retired.
+
+  > **Amended 2026-10-24 by #3333:** The rollback lever is retired; only the child adapter remains.
+
 - More engine versions are retained while long-running executors pin older builds.
 - Total memory ceiling grows to (concurrency + 1) times the per-process heap cap.
 
 ### Follow-up Actions
-- [ ] Retire `executor_isolation: in-process` once child mode has run a full release cycle without
+- [x] Retire `executor_isolation: in-process` once child mode has run a full release cycle without
   a rollback (separate intake).
+
+> **Amended 2026-10-24 by #3333:** Done, ahead of the release-cycle precondition, by operator decision after
+> the two paths drifted and halted every child dispatch (fixed by #3331).
