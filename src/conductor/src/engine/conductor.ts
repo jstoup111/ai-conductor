@@ -15250,7 +15250,6 @@ export class Conductor {
             step.name === 'build_review' &&
             activeChild !== undefined &&
             activeChildRequiresClosure &&
-            !activeChild.isLeaf &&
             CHILD_REGION_STEPS.every((regionStep) => {
               const status = getStepStatus(state, regionStep);
               return status === 'done' || status === 'skipped';
@@ -15271,7 +15270,14 @@ export class Conductor {
                 // requestRoutedExit supplies the durable diagnostic (including
                 // a restack HALT where appropriate); do not replace it with a
                 // generic conductor refusal.
-                await this.haltChildRegionRefusal(exited.detail);
+                const existingHalt = await readHaltMarkerContent(this.projectRoot);
+                if (existingHalt?.trim()) {
+                  const body = existingHalt.trim();
+                  const prUrl = await this.surfaceRemediationPr(body);
+                  await this.emitLoopHalt(body, prUrl);
+                } else {
+                  await this.haltChildRegionRefusal(exited.detail);
+                }
                 return;
               }
               const drained = await drainRoutingOutboxes(
