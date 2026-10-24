@@ -86,31 +86,42 @@ async function recordPositions(projectRoot: string, slug: string, positions: rea
 }
 
 /**
- * A restack fixture needs its topology artifacts to be part of the checked-out
- * history.  Leaving them untracked makes the protected-artifact guard reject a
- * later rewrite because it cannot establish the plan's provenance.
+ * A restack fixture needs its topology artifacts to be visible from the
+ * checked-out commit.  Adding an ordinary fixture commit after a stack has
+ * been assembled changes the range under test: the executor quite correctly
+ * treats that commit as feature work and replays it.  Instead, attach a local
+ * replacement object to the existing tip.  Git resolves its tree (and the
+ * protected-artifact guard can therefore seal the plan), while branch refs
+ * and the fixture's domain-commit identities remain unchanged.
  *
  * Fixtures that are still assembling their initial commit intentionally have
  * no HEAD; their caller owns that first commit and this remains a no-op.
  */
-async function commitSealedTopology(
+async function sealTopologyAtHead(
   projectRoot: string,
   planPath: string,
   storiesPath: string,
 ): Promise<void> {
   if (!existsSync(join(projectRoot, '.git'))) return;
   try {
-    await runFile('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectRoot });
+    const head = (await runFile('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectRoot })).stdout.trim();
     const paths = [
       isAbsolute(planPath) ? planPath.slice(projectRoot.length + 1) : planPath,
       storiesPath,
     ];
     await runFile('git', ['add', '--', ...paths], { cwd: projectRoot });
-    try {
-      await runFile('git', ['diff', '--cached', '--quiet', '--', ...paths], { cwd: projectRoot });
-    } catch {
-      await runFile('git', ['commit', '-qm', 'fixture: seal slice topology', '--', ...paths], { cwd: projectRoot });
-    }
+    const tree = (await runFile('git', ['write-tree'], { cwd: projectRoot })).stdout.trim();
+    const [parents, subject] = await Promise.all([
+      runFile('git', ['show', '-s', '--format=%P', head], { cwd: projectRoot }),
+      runFile('git', ['show', '-s', '--format=%s', head], { cwd: projectRoot }),
+    ]);
+    const replacement = (await runFile('git', [
+      'commit-tree', tree,
+      ...parents.stdout.trim().split(/\s+/).filter(Boolean).flatMap((parent) => ['-p', parent]),
+      '-m', subject.stdout.trim(),
+    ], { cwd: projectRoot })).stdout.trim();
+    await runFile('git', ['replace', head, replacement], { cwd: projectRoot });
+    await runFile('git', ['reset', '--mixed', 'HEAD'], { cwd: projectRoot });
   } catch {
     // Non-Git and injected-filesystem fixtures use their caller's seam.
   }
@@ -141,7 +152,7 @@ export async function writeSliceTopologyFixture(
   await fs.mkdir(join(projectRoot, '.docs', 'stories'));
   await fs.writeFile(planPath, planText(fixture, storiesPath));
   await fs.writeFile(join(projectRoot, '.docs', 'stories', `${fixture.slug}.md`), storiesText(fixture));
-  await commitSealedTopology(projectRoot, planPath, storiesPath);
+  await sealTopologyAtHead(projectRoot, planPath, storiesPath);
   const positions = [...new Set(Object.values(fixture.sliceMembership.taskSlices))].sort((left, right) => left - right);
   await recordPositions(projectRoot, fixture.slug, positions);
 }

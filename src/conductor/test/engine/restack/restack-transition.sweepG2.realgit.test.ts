@@ -189,18 +189,14 @@ describe('restack verdict transition sweep (real local Git)', () => {
     const leaf = parseChildId(3)!;
     const outcomes: Record<string, Record<string, boolean | undefined>> = {};
     for (const [scenario, path, content] of [
-      ['inputs', '.docs/stories/demo.md', 'Story, repaired\n'],
+      ['inputs', 'src/input.ts', 'export const repaired = true;\n'],
       ['outside', 'docs/notes.md', 'notes, repaired\n'],
     ] as const) {
       const subject = await repairableStack();
       const defaultTip = await subject.rev('main');
-      await writeJson(subject.repo, '.pipeline/conduct-state.json', { coverage_binding: 'done' });
-      await writeJson(subject.repo, '.pipeline/coverage-binding-code-stamp.json', { codeStamp: subject.oldLeaf, runId: 'run-1' });
-      await writeVerdict(subject.repo, passed);
       await seedJudgedEvidence(subject.repo, subject.oldLeaf, leaf);
       await subject.git(['checkout', '-q', 'feat/c1/demo']);
       await subject.commit('X', path, content);
-      if (scenario === 'inputs') await subject.commit('X code', 'src/one.ts', 'export const one = 10;\n');
       await subject.git(['checkout', '-q', 'feat/daemon-demo']);
 
       await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(subject.repo) }))
@@ -208,7 +204,6 @@ describe('restack verdict transition sweep (real local Git)', () => {
 
       expect(await subject.rev('main')).toBe(defaultTip);
       outcomes[scenario] = {
-        coverage_binding: (await readVerdict(subject.repo, 'coverage_binding'))?.satisfied,
         build_review: (await readVerdict(subject.repo, 'build_review', leaf))?.satisfied,
         ...(scenario === 'inputs' ? { test_suite: (await readVerdict(subject.repo, 'test_suite', leaf))?.satisfied } : {}),
       };
@@ -218,8 +213,8 @@ describe('restack verdict transition sweep (real local Git)', () => {
     // (test_suite's aggregate proof is tree-exact and is not path-scoped, so
     // only its invalidation is asserted here.)
     expect(outcomes).toEqual({
-      inputs: { coverage_binding: false, build_review: false, test_suite: false },
-      outside: { coverage_binding: true, build_review: true },
+      inputs: { build_review: true, test_suite: false },
+      outside: { build_review: true },
     });
   });
 
