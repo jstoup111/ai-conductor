@@ -43,6 +43,8 @@ export interface SelectorInput {
 
 export type SelectorDecision =
   | { kind: 'run'; step: StepName; reason: string }
+  /** Routing has durable work, but no gate is currently runnable until preflight consumes it. */
+  | { kind: 'parked'; reason: string }
   | { kind: 'done'; reason: string };
 
 /**
@@ -114,6 +116,9 @@ function findNextGateInRegion(input: SelectorInput): number {
 export function selectNextGate(input: SelectorInput): SelectorDecision {
   const idx = findNextGateInRegion(input);
   if (idx === -1) {
+    if (input.routedParking !== undefined) {
+      return { kind: 'parked', reason: `routed ${input.routedParking.kind} work is awaiting admission` };
+    }
     return { kind: 'done', reason: 'all gates in the looped region are satisfied' };
   }
 

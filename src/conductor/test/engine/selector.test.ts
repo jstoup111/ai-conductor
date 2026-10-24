@@ -102,7 +102,7 @@ describe('engine/selector — selectNextGate', () => {
     });
 
     expect(selectNextGate(withParking(fixture, { kind: 'child', child: 1 }))).toEqual({
-      kind: 'done',
+      kind: 'parked',
       reason: expect.any(String),
     });
   });
@@ -126,7 +126,7 @@ describe('engine/selector — selectNextGate', () => {
       steps: stepsWithPostRegionCustomStep(),
     }, { kind: 'child', child: 1 }));
 
-    expect(decision.kind).toBe('done');
+    expect(decision.kind).toBe('parked');
   });
 
   it('parks the leaf host on only its region steps while leaf gates are pending', () => {
@@ -168,7 +168,7 @@ describe('engine/selector — selectNextGate', () => {
       { kind: 'leaf-host' },
     ));
 
-    expect(decision.kind).toBe('done');
+    expect(decision.kind).toBe('parked');
   });
 
   it('parks a revalidation queue before leaf gates and post-region work', () => {
@@ -191,7 +191,7 @@ describe('engine/selector — selectNextGate', () => {
       steps: stepsWithPostRegionCustomStep(),
     }, { kind: 'queue' }));
 
-    expect(decision.kind).toBe('done');
+    expect(decision.kind).toBe('parked');
   });
 
   it('keeps existing selector decisions when routed parking is absent', () => {

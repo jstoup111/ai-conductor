@@ -64,7 +64,9 @@ export type RoutingTransactionOp =
   | { readonly kind: 'update-branch'; readonly ref: string; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'create-pin'; readonly ref: string; readonly new: CommitSha }
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
-  | { readonly kind: 'delete-marker'; readonly old: CommitSha };
+  | { readonly kind: 'delete-marker'; readonly old: CommitSha }
+  /** A value-only fence for authority refs not otherwise written by this transaction. */
+  | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
 /** Every newly admitted route seals its authored-task denominator. */
@@ -219,6 +221,9 @@ export async function writeRoutingTransaction(
           break;
         case 'delete-marker':
           lines.push(`delete ${repairMarkerRefFor(slug)} ${op.old}`);
+          break;
+        case 'verify-ref':
+          lines.push(`verify ${op.ref} ${op.value}`);
           break;
       }
     }

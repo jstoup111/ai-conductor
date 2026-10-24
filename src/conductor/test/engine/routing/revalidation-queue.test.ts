@@ -132,6 +132,7 @@ describe('revalidation queue generations', () => {
       if (acknowledged.kind !== 'record') throw new Error('expected pinned revalidate record');
       await expect(acknowledgeQueueEntry(subject.repo, 'demo', acknowledged, child(2), { git: subject.git }))
         .resolves.toEqual({ kind: 'acknowledged', leavesRoundOpen: false });
+      expect((await subject.git(['show-ref', '--verify', '--hash', `refs/conductor/demo/routes/r1`])).exitCode).toBe(0);
       await expect(readRepairMarker(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'absent' });
       await expect(readRevalidationQueue(subject.repo, 'demo', { git: subject.git })).resolves.toMatchObject({
         kind: 'queue', queue: { generation: 5, entries: [expect.objectContaining({ child: 4 })], outbox: [expect.objectContaining({ event: expect.objectContaining({ type: 'child_revalidated', outcome: 'passed' }) })] },

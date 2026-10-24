@@ -113,11 +113,19 @@ export async function acknowledgeQueueEntry(
     if (other.kind !== 'record') return { kind: 'unavailable' };
     if (other.record.phase !== 'closed') { otherRoundOpen = true; break; }
   }
-  const leavesRoundOpen = queueWithEvent.entries.length === 0 && !otherRoundOpen;
+  // A revalidate round with no more queue work deliberately stays open for
+  // returnToLeaf. Audit rounds, however, retain their recorded host sequence;
+  // acknowledging one queued host must never close away a later pending host.
+  const leavesRoundOpen = stored.record.kind === 'revalidate'
+    && queueWithEvent.entries.length === 0
+    && !otherRoundOpen;
   const done = transitionHost(stored, host, 'done', { credit: false });
   if (done.kind !== 'updated') return { kind: 'stale' };
-  const record = leavesRoundOpen ? done.record : { ...done.record, phase: 'closed' as const };
+  const record = stored.record.kind === 'audit' || leavesRoundOpen
+    ? done.record
+    : { ...done.record, phase: 'closed' as const };
   const wrote = await writeRoutingTransaction(worktree, slug, [
+    { kind: 'verify-ref', ref: `refs/conductor/${slug}/closed/c${host}`, value: entry.closureSha },
     { kind: 'update-record', previous: stored, record },
     { kind: 'delete-marker', old: marker.blob },
     { kind: 'update-queue', previous: queue, queue: queueWithEvent },

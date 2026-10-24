@@ -219,6 +219,7 @@ import { admitRound } from './routing/round-admission.js';
 import { reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { requestRoutedExit } from './routing/routed-exit.js';
+import { consumeLowestQueued } from './routing/revalidation-queue.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
@@ -822,7 +823,7 @@ export class Conductor {
     slug: string,
     state: ConductState,
   ): Promise<boolean> {
-    if (execution.source !== 'routed-host') return true;
+    if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return true;
 
     const hostEntry = await this.enterHostRegion({
       worktree: this.projectRoot,
@@ -7629,7 +7630,8 @@ export class Conductor {
               // A routed host already owns its closure, but it still needs its
               // BUILD-region exit.  Only revalidation has a separate exit
               // protocol at this point in the lifecycle.
-              activeChildRequiresClosure = execution.source === 'cursor' || execution.source === 'routed-host';
+              activeChildRequiresClosure = execution.source === 'routed-host'
+                || (execution.source === 'cursor' && !target.isLeaf);
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
@@ -15300,7 +15302,31 @@ export class Conductor {
                 await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
                 return;
               }
-              if (reconciled.kind === 'none' || reconciled.kind === 'deferred' || reconciled.kind === 'aborted') {
+              if (reconciled.kind === 'deferred') {
+                const consumed = await consumeLowestQueued(this.projectRoot, slug);
+                if (consumed.kind === 'unavailable') {
+                  await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
+                  return;
+                }
+                if (consumed.kind === 'admitted') {
+                  const next = await this.resolveActiveChild(this.projectRoot, slug);
+                  const nextExecution = resolveExecutionChild(next, slug);
+                  if (nextExecution.source !== 'revalidating') {
+                    await this.haltChildRegionRefusal('queued child was not admitted into a revalidate round');
+                    return;
+                  }
+                  activeChild = nextExecution.target;
+                  await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
+                  i = indexOf('acceptance_specs') - 1;
+                  continue;
+                }
+              }
+              if (reconciled.kind === 'none' || reconciled.kind === 'aborted') {
+                const next = await this.resolveActiveChild(this.projectRoot, slug);
+                const nextExecution = resolveExecutionChild(next, slug);
+                if (nextExecution.source === 'cursor') {
+                  await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
+                }
                 activeChild = undefined;
                 i = indexOf('prd_audit') - 1;
                 continue;
@@ -16258,6 +16284,11 @@ export class Conductor {
       regionStart: topo.regionStart,
       ...(routedParking === undefined ? {} : { routedParking }),
     });
+    if (decision.kind === 'parked') {
+      // Preflight owns queue admission. End this pass without producing a
+      // terminal marker so the next dispatch can consume the durable queue.
+      return steps.length;
+    }
     if (decision.kind === 'done') {
       await writeFile(
         join(this.projectRoot, DONE_MARKER),
