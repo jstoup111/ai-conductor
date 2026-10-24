@@ -27,6 +27,10 @@ import type { ConductorEvent } from '../types/events.js';
 const GATES = new Set<string>(KICKBACK_BUDGET_GATES);
 const WHOLE_FEATURE_GATES = new Set(['prd_audit', 'architecture_review_as_built', 'manual_test']);
 
+function childCursorRefusal(cursor: Awaited<ReturnType<typeof resolveActiveChildForCurrentFeature>>): string {
+  return cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
+}
+
 function defaultsToExecutionChild(gate: string | undefined): boolean {
   return gate !== undefined && !WHOLE_FEATURE_GATES.has(gate) && gate === 'build_review';
 }
@@ -157,7 +161,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   if (command.action === 'inspect') {
     const cursor = await resolveActiveChildForCurrentFeature(worktree);
     if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
-      print(`kickback-budget: active child resolution refused (${cursor.kind}).`);
+      print(`kickback-budget: active child resolution refused (${childCursorRefusal(cursor)}).`);
       return 1;
     }
     // `inspect` has no gate selector, so retain its established region view;
@@ -259,7 +263,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   if (restackChild !== undefined) {
     const activeCursor = await resolveActiveChildForCurrentFeature(worktree);
     if (activeCursor.kind !== 'active' && activeCursor.kind !== 'repair-pending') {
-      print(`kickback-budget: active child resolution refused (${activeCursor.kind}).`);
+      print(`kickback-budget: active child resolution refused (${childCursorRefusal(activeCursor)}).`);
       return 1;
     }
     // Restack cap evidence belongs to the cursor range (normally the leaf);

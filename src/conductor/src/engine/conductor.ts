@@ -881,8 +881,8 @@ export class Conductor {
         return `child ${cursor.child} failed active-child check ${cursor.check}`;
       case 'repair-pending':
         return `child stack repair is pending for closed child ${cursor.repairChildren.join(', ')}`;
-      case 'envelope-missing':
-        return 'coverage-binding envelope is missing while child state exists';
+      case 'topology-unavailable':
+        return `slice topology is unavailable while child state exists (${cursor.cause})`;
       case 'detached-head':
         return 'worktree is in detached HEAD while resolving the active child';
       case 'git-error':
@@ -2798,9 +2798,6 @@ export class Conductor {
       return true;
     }
     if (cursor.kind === 'no-child') return true;
-    // A DECIDE change voided coverage binding. Resume re-runs coverage_binding
-    // first; BUILD-region entry resolves the child once the envelope is rebound.
-    if (cursor.kind === 'envelope-missing' && cursor.voided && getStepStatus(state, 'coverage_binding') !== 'done') return true;
 
     await this.haltChildRegionRefusal(this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
     return false;
